@@ -530,12 +530,15 @@ barrier mail.receiver.publish.after mail_receiver.go
 barrier mail.receiver.publish.before mail_receiver.go
 barrier mail.receiver.retire.after mail_receiver.go
 barrier mail.receiver.retire.before mail_receiver.go
+barrier mail.send.checkpoint.after mail_send_checkpoint.go
+barrier mail.send.checkpoint.before mail_send_checkpoint.go
 barrier mail.send.copy.after mail_send.go
 barrier mail.send.copy.before mail_send.go
 barrier mail.send.deposit.after mail_send_local.go
 barrier mail.send.deposit.before mail_send_local.go
 barrier mail.send.gate.after mail_send_gate.go
 barrier mail.send.gate.before mail_send_gate.go
+barrier mail.send.use.wait mail_send_checkpoint.go
 barrier mail.send.watch.after mail_send_result.go
 barrier mail.send.watch.before mail_send_result.go
 barrier mail.spam.teach.after mail_spam.go
