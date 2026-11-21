@@ -47,6 +47,15 @@ const (
 type McpErrorData struct {
 	// Whether the same call may be sent again as it is.
 	Retryable bool `json:"retryable"`
+	// EVS_DROPPED's drop (§16.5's evs_read row), absent from every other error.
+	Drop *McpErrorDrop `json:"drop,omitempty"`
+}
+
+// The drop that took a version: its id, its signer, a repo admin, and its window's end, ms; ids only (I-13).
+type McpErrorDrop struct {
+	DropId          string `json:"drop_id"`
+	SignerId        string `json:"signer_id"`
+	NotBeforeMillis int64  `json:"not_before_millis"`
 }
 
 // err's code and retryable bit when it is a JSON-RPC error, as a handler returns or the wire carries one; ok false
