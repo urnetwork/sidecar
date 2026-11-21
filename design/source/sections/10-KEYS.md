@@ -214,7 +214,9 @@ Rotate: one algorithm for every cause and every rotator
    revocation this rotation answers (owner decision 128) or, after api's reap of an uncovered ephemeral
    agent, of its admission (§7.10)
 2  g = the newest generation (GET gen/<g+1> answers 404); RK' = 32 random bytes; persist RK' and the
-   GenRotate draft in my keychain
+   GenRotate draft in my keychain; a stored draft is reused only while its time_ms is within
+   RotateDraftMaxAge (5 min, under 10.6's 10 min of claim skew) of now and its group_id is my pinned
+   group, else dropped and drawn afresh, as one whose delivery set changed is (owner decision 666)
 3  stage deliveries for g+1, each a STAGED KeyDelivery at wrap/<g+1>/<c8>/<recipient>/<k8> (10.6), c8 =
    hex(C_{g+1}[0:8]), in batches of at most 256, up to 4 at once, RecoveryWraps by their own batch route
    (10.14), reading the recipients' ReaderKeys, and a config rotator its forwarding Delegations' reader keys,
@@ -232,8 +234,10 @@ Rotate: one algorithm for every cause and every rotator
               my wrap; else go to 1, rotating at g+2
      unknown  GET gen/<g+1>: my commitment = done; another = 412; 404 = repeat 4 with the same bytes
 5  seal content to g+1; delete my keychain draft
-retry      the GenRotate bytes, named by their commitment; every delivery precedes the claim, so a crash before
-           4 leaves only staged objects, which GC removes after 24 h, and one after it a complete generation;
+retry      the GenRotate bytes, named by their commitment, a restart resuming from the draft within step 2's
+           bound and re-staging every delivery under a fresh RK' past it; every delivery precedes the claim,
+           so a crash before 4 leaves only staged objects, which GC removes after 24 h, and one after it a
+           complete generation;
            a recipient whose ReaderKey appears or changes later gets a LATE delivery to that key from any
            holder but a read_only one (10.6's late wraps, 10.9)
 remove X   a writer leaf commits Remove(X) at epoch e+1 (the revoking device first, 10.9); then any writer
@@ -810,7 +814,7 @@ after     later rotations run as usual; in §19.10's groups step a re-seeded liv
           takes while repo/ reads keying or deleted (10.6's checks row; owner decision 618)
 ```
 
-A repo re-seeded as deleted (§11.13) takes only that GroupForm, with its epoch 0 and ladder, while deleted (owner decision 82): devices open its files from their cached RK_g once it is restored, its readers rejoin by KF2 and late wraps, and a shred deletes the group. Slots return from owner devices' mirrors (§11.13). Repos no device holds are lost (§2.18).
+A repo re-seeded as deleted (§11.13) takes only that GroupForm, with its epoch 0 and ladder, while deleted (owner decision 82), which leaves the re-former's keychain record at its finishing phase; the re-former's gkm client resumes that record by itself at its syncs once gkm takes the rotation's writes (repo/ active), at most once a `ReformResumeInterval` (15 min) while gkm refuses them, so once the repo is restored, however and on whichever device, its next sync rotates to g+1, staging each reading member's RecoveryWrap, then makes the pending Adds; a sync never drafts a re-form, and a call to re-seed or resume that finds no record answers the group the device pins (owner decision 663; §19.10's groups row). Devices open its files from their cached RK_g once it is restored, its readers rejoin by KF2 and late wraps, and a shred deletes the group. Slots return from owner devices' mirrors (§11.13). Repos no device holds are lost (§2.18).
 
 **Key domains ([R:product] S4)**, each its own repo and group, take §8.5's kind defaults as readers (owner-bound kinds: owner decision 126).
 

@@ -146,7 +146,8 @@ type SidecarEvent struct { // AddEventCallback, `ur status`, the sdk listener (�
 	                             // readerkey row; owner decision 358)
 	State       SidecarState
 	Reason      SidecarStateReason // Unenrolled: expired, refused, parent_lost, session_ended, keystore_lost;
-	                               // Offline: the failed store a generation could not start on (5.9's
+	                               // Offline: subprotocol_store_failed, the damaged sealed file in the
+	                               // network's subprotocol store a generation could not start on (5.9's
 	                               // Failed; owner decision 616); Revoked: signed (§18.5's GetStateReason)
 	GroupId     *Id // membership kinds: the §10 group
 	SidecarId   *Id // membership kinds: the leaf or wrapped reader; admission_alarm: the admitted sidecar;
@@ -271,8 +272,9 @@ type SidecarSettings struct { // validate refuses every number that is not posit
 	                             // counting by its size, so one 256 KiB body takes a quarter of the queue
 	MemoryBudgetByteCount int64 // contains §6's process-wide reassembly, idempotency and credit caps; proving
 	                            // (§14) sits outside it, under the injected prover's own MemoryMaxByteCount
-	                            // (2,240 MiB: two loaded shapes and one proof in flight, kept by counting and a
-	                            // collection after each proof; DESIGN-DETAILS.md section 3, 3.2.8):
+	                            // (2,496 MiB: two loaded shapes and one proof in flight, kept by counting and a
+	                            // collection after each proof; owner decision 647; DESIGN-DETAILS.md section
+	                            // 3, 3.2.8):
 	                            // SmtpSenderSettings.ProverConcurrency defaults to 1, and a host records p/ only
 	                            // after Prover.Measure finishes inside that bound, one that cannot recording
 	                            // none and only queueing
