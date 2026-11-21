@@ -261,8 +261,9 @@ func (self *socketAdmission) allows(policy SocketPolicy, request *socketAdmissio
 			return socketSystemPublishHeld(policy, sidecarId, now)
 		}
 		listenerSubject := AclSidecarSubject(sidecarId)
-		return policy.MayListen(listenerSubject, AclSocketName{PublicName: self.name}, now).Allowed &&
-			policy.MayPublish(listenerSubject, socketTlsHost(self.name), now).Allowed
+		grants := socketGrantsAt(policy)
+		return grants.MayListen(listenerSubject, AclSocketName{PublicName: self.name}, now).Allowed &&
+			grants.MayPublish(listenerSubject, socketTlsHost(self.name), now).Allowed
 	case SocketNamespaceSmtp:
 		return policy.MayListen(AclSidecarSubject(sidecarId), AclSocketName{PublicName: self.name}, now).Allowed
 	}
