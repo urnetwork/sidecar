@@ -6,8 +6,9 @@
 //
 //	network  the call's network resolved by §5.8's rules and ready (server.go's middleware), read as an
 //	         McpToolNetwork with a policy installed, else refused
-//	input    the arguments against the tool's input schema, network among them and no key it does not name; a
-//	         refusal's text is constant, never the schema validator's, which can quote a value
+//	input    the arguments against the tool's input schema, network among them, and uses for a tool that takes it,
+//	         and no key it does not name; a refusal's text is constant, never the schema validator's, which can quote
+//	         a value
 //	guard    McpGuard on what the call would touch (spec.Targets)
 //	allow    §8's local allow for the session's subject, the sidecar every in-daemon agent shares (owner decision 6;
 //	         §5.5), on each McpAccess the call needs (spec.Access)
@@ -25,6 +26,11 @@
 // every other tool sets openWorldHint false, since the protocol's default is true. A description is the spec's
 // constant, so no tool list holds a variable (D-MCP-3), and the tool list is the catalog, fixed before any session
 // starts (catalog.go). Nothing here logs a call's arguments or result (I-13).
+//
+// uses: a tool whose spec takes it (spec.MultiUse) gets an optional uses, an integer of at least 1, which the wrapper
+// adds to its input schema as it adds network and hands its handler apart from In (McpUses): how many distinct actions
+// the agent asks one approval to cover, 2 or more asking for a template (§16.6's multi-use row). Only mail_send takes
+// it (owner decision 613; catalog.go holds every other tool to none), so every other O tool files one use.
 
 package mcp
 
@@ -34,6 +40,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
@@ -70,6 +77,9 @@ func (self McpTier) String() string {
 // The argument every tool takes (16.4): which network the call acts on, resolved before the tool runs.
 const mcpNetworkArgumentName = "network"
 
+// The argument a tool whose spec is MultiUse takes: the uses its agent asks one approval to cover (owner decision 613).
+const mcpUsesArgumentName = "uses"
+
 // One tool's constant spec. Every function is called per call, before the handler, with the decoded input.
 type McpToolSpec[In any] struct {
 	Name string
@@ -79,6 +89,11 @@ type McpToolSpec[In any] struct {
 	// A W tool that may also run an outward action through Authorize, as evs_write does for agent-config files and
 	// mail_send for outside recipients (§16.5): it sets openWorldHint.
 	MayAct bool
+	// The tool takes an optional uses, the count of distinct actions its agent asks one approval to cover, 2 or more
+	// asking for a template, which the handler reads with McpUses and In never names (§16.5's mail_send; owner
+	// decision 613). Only a tool that files an outward action, O or MayAct, takes it, and §16.5 gives it to mail_send
+	// alone, which the catalog holds (checkMcpCatalog).
+	MultiUse bool
 	// What the call would touch, for McpGuard. Nil touches nothing the guard names.
 	Targets func(call *McpCall, in *In) ([]McpTarget, error)
 	// The grants the call needs from §8's local evaluation, every one allowed or the call is refused. Required: a tool
@@ -95,8 +110,8 @@ type McpToolSpec[In any] struct {
 type McpToolHandler[In, Out any] func(ctx context.Context, call *McpCall, in *In, result *McpResult) (*Out, error)
 
 // Registers a tool on catalog. Panics, as go-sdk's AddTool does, on a spec that cannot serve: no name or description,
-// an unknown tier, no Access, a name taken, input or output types with no JSON schema, or an input that names
-// network itself.
+// an unknown tier, no Access, a name taken, input or output types with no JSON schema, an input that names network or
+// uses itself, or uses taken by a tool that files no outward action.
 func AddTool[In, Out any](catalog *McpCatalog, spec *McpToolSpec[In], handler McpToolHandler[In, Out]) {
 	if spec == nil || spec.Name == "" || spec.Description == "" || handler == nil || spec.Access == nil {
 		panic("mcp.AddTool: a spec needs a name, a description, an Access function and a handler")
@@ -106,6 +121,9 @@ func AddTool[In, Out any](catalog *McpCatalog, spec *McpToolSpec[In], handler Mc
 	}
 	if spec.Covering != nil && spec.Tier != McpTierOutward {
 		panic(fmt.Sprintf("mcp.AddTool %q: only an O tool takes a covering grant", spec.Name))
+	}
+	if spec.MultiUse && spec.Tier != McpTierOutward && !spec.MayAct {
+		panic(fmt.Sprintf("mcp.AddTool %q: only a tool that files an outward action takes uses", spec.Name))
 	}
 	inSchema, err := jsonschema.For[In](nil)
 	if err != nil {
@@ -117,12 +135,25 @@ func AddTool[In, Out any](catalog *McpCatalog, spec *McpToolSpec[In], handler Mc
 	if _, named := inSchema.Properties[mcpNetworkArgumentName]; named {
 		panic(fmt.Sprintf("mcp.AddTool %q: the input names network itself", spec.Name))
 	}
+	if _, named := inSchema.Properties[mcpUsesArgumentName]; named {
+		// uses is the wrapper's to add, so a schema names it exactly where the spec takes it (McpToolSpec.MultiUse)
+		panic(fmt.Sprintf("mcp.AddTool %q: the input names uses itself", spec.Name))
+	}
 	if inSchema.Properties == nil {
 		inSchema.Properties = map[string]*jsonschema.Schema{}
 	}
 	inSchema.Properties[mcpNetworkArgumentName] = &jsonschema.Schema{
 		Type:        "string",
 		Description: "the network to act on, by id or name; omitted, the project's or the only one",
+	}
+	if spec.MultiUse {
+		inSchema.Properties[mcpUsesArgumentName] = &jsonschema.Schema{
+			Type:    "integer",
+			Minimum: jsonschema.Ptr(1.0),
+			Description: "how many calls one approval may cover: 2 or more asks a person to approve a template of this " +
+				"call, each later call inside it spending one use, and answers approval_pending with the template's id " +
+				"until it is approved; omitted or 1, this call alone",
+		}
 	}
 	inResolved, err := inSchema.Resolve(nil)
 	if err != nil {
@@ -163,7 +194,9 @@ func AddTool[In, Out any](catalog *McpCatalog, spec *McpToolSpec[In], handler Mc
 		}
 		return result, nil
 	}
-	catalog.add(&mcpCatalogTool{tool: tool, tier: spec.Tier, mayAct: spec.MayAct, targeted: spec.Targets != nil, handler: wrapped})
+	catalog.add(&mcpCatalogTool{
+		tool: tool, tier: spec.Tier, mayAct: spec.MayAct, multiUse: spec.MultiUse, targeted: spec.Targets != nil, handler: wrapped,
+	})
 }
 
 // The outputSchema every tool declares: the envelope, its data the handler's output, either form validating
@@ -217,7 +250,7 @@ func mcpRunTool[In, Out any](
 		return nil, nil, false, errMcpNoPolicy
 	}
 
-	in, err := mcpDecodeInput[In](inResolved, arguments)
+	in, uses, err := mcpDecodeInput[In](inResolved, arguments, spec.MultiUse)
 	if err != nil {
 		return nil, nil, false, err
 	}
@@ -266,7 +299,7 @@ func mcpRunTool[In, Out any](
 
 	meter := &mcpMeter{}
 	result := newMcpResult(call)
-	out, err := handler(withMcpCovering(withMcpMeter(ctx, meter), covering), call, in, result)
+	out, err := handler(withMcpUses(withMcpCovering(withMcpMeter(ctx, meter), covering), uses), call, in, result)
 	if err != nil {
 		return nil, nil, covering.covered, err
 	}
@@ -320,32 +353,58 @@ func McpCoveringGrant(ctx context.Context) ([]byte, bool) {
 	return covering.grantId, true
 }
 
-// arguments decoded into In: valid against the input schema, which refuses a key it does not name, then decoded
-// without network, which the middleware resolved. Every refusal is errMcpInvalidArguments, whose text is constant.
-func mcpDecodeInput[In any](inResolved *jsonschema.Resolved, arguments []byte) (*In, error) {
+// The context key of a call's uses.
+type mcpUsesContextKey struct{}
+
+// ctx carrying uses.
+func withMcpUses(ctx context.Context, uses uint32) context.Context {
+	return context.WithValue(ctx, mcpUsesContextKey{}, uses)
+}
+
+// The uses the call ctx runs names (McpToolSpec.MultiUse): 2 or more asks for a template, 1 for this action alone. 0
+// where the call names none, or its tool takes none, which is this action alone too.
+func McpUses(ctx context.Context) uint32 {
+	uses, _ := ctx.Value(mcpUsesContextKey{}).(uint32)
+	return uses
+}
+
+// arguments decoded into In, and the uses a multiUse tool's call names, 0 for none: valid against the input schema,
+// which refuses a key it does not name, then decoded without network, which the middleware resolved, and without uses,
+// which the handler reads apart (McpUses). Every refusal is errMcpInvalidArguments, whose text is constant.
+func mcpDecodeInput[In any](inResolved *jsonschema.Resolved, arguments []byte, multiUse bool) (*In, uint32, error) {
 	var instance any
 	if err := json.Unmarshal(arguments, &instance); err != nil {
-		return nil, errMcpInvalidArguments
+		return nil, 0, errMcpInvalidArguments
 	}
 	object, ok := instance.(map[string]any)
 	if !ok {
-		return nil, errMcpInvalidArguments
+		return nil, 0, errMcpInvalidArguments
 	}
 	if err := inResolved.Validate(instance); err != nil {
-		return nil, errMcpInvalidArguments
+		return nil, 0, errMcpInvalidArguments
 	}
 	delete(object, mcpNetworkArgumentName)
+	uses := uint32(0)
+	if value, named := object[mcpUsesArgumentName]; named && multiUse {
+		// the schema held it to an integer of at least 1; past uint32's range it is no count a request names
+		count, ok := value.(float64)
+		if !ok || count < 1 || math.MaxUint32 < count || count != math.Trunc(count) {
+			return nil, 0, errMcpInvalidArguments
+		}
+		uses = uint32(count)
+		delete(object, mcpUsesArgumentName)
+	}
 	stripped, err := json.Marshal(object)
 	if err != nil {
-		return nil, errMcpInvalidArguments
+		return nil, 0, errMcpInvalidArguments
 	}
 	decoder := json.NewDecoder(bytes.NewReader(stripped))
 	decoder.DisallowUnknownFields()
 	in := new(In)
 	if err := decoder.Decode(in); err != nil {
-		return nil, errMcpInvalidArguments
+		return nil, 0, errMcpInvalidArguments
 	}
-	return in, nil
+	return in, uses, nil
 }
 
 // err as it may reach the caller: an error whose text holds a credential or a token form becomes "the tool failed",
