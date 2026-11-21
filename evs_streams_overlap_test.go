@@ -1,6 +1,7 @@
 //go:build !sidecar_http
 
-// Overlapping calls on one EvsClient for the streams read and the directory's cards read (evs_pin_walk.go), on T2:
+// Overlapping calls on one EvsClient for the streams read, record streams' read and the directory's cards read
+// (evs_pin_walk.go), on T2:
 // record_evs_test.go's world, every device its own EvsClient against an evsservice.EvsEngine. A read whose answer evs
 // served before another call of the same client read the ref to a newer head stands as read, with no alarm, the pin
 // where the other call raised it; and a head below the pin a read asked at is still a regression, alarmed. Before the
@@ -24,7 +25,9 @@ import (
 
 // A reader of a repo on the world whose events are kept.
 type evsWatchedReader struct {
-	client *sidecar.EvsClient
+	sidecarId sidecar.Id
+	store     sidecar.SidecarStore
+	client    *sidecar.EvsClient
 
 	stateLock sync.Mutex
 	events    []sidecar.SidecarEvent
@@ -37,8 +40,8 @@ func newEvsWatchedReader(t *testing.T, world *recordEvsWorld, repoId sidecar.Id,
 	if err := world.Grant(repoId, readerId, scope); err != nil {
 		t.Fatal(err)
 	}
-	watched := &evsWatchedReader{}
-	watched.client = world.newClient(readerId, sidecartest.NewFakeStore().Root(), func(args *sidecar.EvsClientArgs) {
+	watched := &evsWatchedReader{sidecarId: readerId, store: sidecartest.NewFakeStore().Root()}
+	watched.client = world.newClient(readerId, watched.store, func(args *sidecar.EvsClientArgs) {
 		args.Emit = func(event sidecar.SidecarEvent) {
 			watched.stateLock.Lock()
 			defer watched.stateLock.Unlock()
@@ -109,6 +112,11 @@ func (self *evsWorldHold) let() {
 // POST .../read.
 func evsWorldIsRead(request *http.Request) bool {
 	return request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/read")
+}
+
+// GET .../log, a walk's page of statements.
+func evsWorldIsLog(request *http.Request) bool {
+	return request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/log")
 }
 
 // A streams read evs answered before another streams read of the same client read the stream to a newer head stands
@@ -258,5 +266,55 @@ func TestDirectoryEvsCardsReadBelowThePinItAskedAtIsARegression(t *testing.T) {
 	}
 	if alarms := reader.alarms(); len(alarms) != 1 || alarms[0].Kind != sidecar.SidecarEventHeadAlarm || alarms[0].HeadAlarm != sidecar.SidecarHeadAlarmFork {
 		t.Errorf("alarms %v", alarms)
+	}
+}
+
+// A record stream's read (RecordEvsStreams.ReadStream: pinnedHead, the stream's whole history from C_0, then the pin)
+// stands, with no alarm, though another read of the same client read the stream to a newer head while it walked: that
+// read's raise walked over its head, and the pin stays where it raised it. Before the change the walk's raise was held
+// to the live pin and refused as a regression with head_alarm.
+func TestRecordEvsStreamsReadAnsweredBeforeAnotherReadRaisedThePinStands(t *testing.T) {
+	world := newEvsStreamsWorld(t, 1)
+	writer := world.writers[0]
+	reader := newEvsWatchedReader(t, world.world, world.repoId, sidecartest.RecordStreamsScope{Read: true, Write: true})
+	streams := world.world.streamsOn(reader.sidecarId, reader.client, reader.store)
+	refId, err := reader.client.Repo(world.repoId).RefIdOf(t.Context(), sidecar.RecordStreamRefName(writer))
+	if err != nil {
+		t.Fatal(err)
+	}
+	world.append(t, writer, 1, 1)
+	if versions, err := streams.ReadStream(t.Context(), world.repoId, writer, 0); err != nil || len(versions) != 1 {
+		t.Fatalf("the first read: %d %v", len(versions), err)
+	}
+	world.append(t, writer, 2, 1)
+	hold := holdEvsWorldServe(t, world.world, evsWorldIsLog)
+	type read struct {
+		versions []*sidecar.RecordStreamVersion
+		err      error
+	}
+	reads := make(chan read, 1)
+	go func() {
+		versions, err := streams.ReadStream(context.Background(), world.repoId, writer, 0)
+		reads <- read{versions: versions, err: err}
+	}()
+	<-hold.held
+	world.append(t, writer, 3, 1)
+	beside := world.world.streamsOn(reader.sidecarId, reader.client, reader.store)
+	if versions, err := beside.ReadStream(t.Context(), world.repoId, writer, 0); err != nil || len(versions) != 3 {
+		t.Fatalf("the read beside it: %d %v", len(versions), err)
+	}
+	hold.let()
+	answer := <-reads
+	if answer.err != nil {
+		t.Fatalf("the held read: %v", answer.err)
+	}
+	if len(answer.versions) != 2 || answer.versions[1].Version != 2 {
+		t.Fatalf("the held read's versions %d", len(answer.versions))
+	}
+	if alarms := reader.alarms(); len(alarms) != 0 {
+		t.Errorf("alarms %v", alarms)
+	}
+	if pinned := reader.pinVersion(t, world.repoId, refId); pinned != 3 {
+		t.Errorf("the pin %d", pinned)
 	}
 }
