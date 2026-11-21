@@ -4,7 +4,10 @@
 // named "<row> <clause>", so its explorer's traces are its own and a replay never takes another clause's order.
 //
 // The rules are CheckRow's: the fixed schedule, its twin when it refuses something, the explorer's seeds over both,
-// every write's lost response when the row is on the unknown list, and a replay of every committed trace.
+// in the short form where the fixed run passed no barrier, the schedule has no Background step and nothing else left a
+// seed anything to order (QD-1151; explore.go), every write's lost response when the row is on the unknown list, and a
+// replay of every committed trace. A registered clause that takes the short form on the gate's build fails unless the
+// gate's rules item names its case, as a registered case does (rules.go).
 
 package fault
 
@@ -62,13 +65,19 @@ func CheckClause(ctx context.Context, rowId string, clause string, builder Build
 		report.Twin = RunTwin(ctx, fixed, settings.Net)
 		report.fail(report.Twin)
 	}
-	report.Explore = Explore(ctx, named, settings)
+	report.Explore = exploreAfter(ctx, named, report.Fixed, settings)
 	report.Failures = append(report.Failures, report.Explore.Failures...)
 	report.Errors = append(report.Errors, report.Explore.TraceErrors...)
 	if twin != nil {
-		report.ExploreTwin = Explore(ctx, twin, settings)
+		report.ExploreTwin = exploreAfter(ctx, twin, report.Twin, settings)
 		report.Failures = append(report.Failures, report.ExploreTwin.Failures...)
 		report.Errors = append(report.Errors, report.ExploreTwin.TraceErrors...)
+	}
+	// a clause registered under this name, which the gate shows with its case, on the build the gate runs
+	if registration := LookupClause(rowId, clause); sidecartest.HooksLinked && registration != nil {
+		if testCase := DefaultCatalog().Case(rowId, registration.Case); testCase != nil {
+			report.Errors = append(report.Errors, report.oneOrderErrors(testCase)...)
+		}
 	}
 	if row.Unknown {
 		failures, lostWrites := EveryWrite(ctx, named, settings.Net)

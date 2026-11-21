@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -725,5 +726,350 @@ func TestCheckRowReplaysATwinsCommittedTraces(t *testing.T) {
 	report := CheckRow(t.Context(), &Registration{Row: "FS-2", Tiers: []Tier{TierT2}, Build: Twin(toyQuotaRefusal(quota), toyQuotaSuccess(quota))}, settings)
 	if report.Failed() || len(report.Replays) != 1 || report.Replays[0].Id != "FS-2 twin" {
 		t.Errorf("%s; replays %v", report, report.Replays)
+	}
+}
+
+// How a toy for the explorer's short form (QD-1151) runs: writerA then writerB each put an object of their own, a step
+// each, so a seed has nothing to order, unless one of these gives it something.
+type toyOrder struct {
+	// writerB passes a barrier before its put from this build on, 1 for every build; 0 for none
+	barrierFromBuild int
+	// writerA's step is a Background one, so its action waits for the baton beside writerB's
+	background bool
+	// writerA's step ends when a fault on its put fires, which writerA takes in its stride
+	faultFired bool
+	// writerA's action starts evs1's and evs2's puts as runs of their own and waits for both with the baton given up,
+	// as EvsWorld's duplicate push does
+	ownRuns bool
+
+	stateLock sync.Mutex
+	// the schedules built so far
+	builds int
+	// each build's own runs, in the order they took the baton
+	ownRunOrders [][]string
+}
+
+func (self *toyOrder) builder() Builder {
+	return func(net *Net) *Schedule {
+		var build int
+		func() {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			self.builds += 1
+			build = self.builds
+			self.ownRunOrders = append(self.ownRunOrders, []string{})
+		}()
+		put := func(ctx context.Context, net *Net, key string) error {
+			cluster, err := net.Host().Blobs.FirstCluster()
+			if err != nil {
+				return err
+			}
+			_, err = cluster.PutIfNoneMatch(ctx, key, []byte("v"), nil)
+			return err
+		}
+		writerA := func(ctx context.Context, net *Net) error {
+			if !self.ownRuns {
+				err := put(ctx, net, "toy/a")
+				if self.faultFired {
+					return nil
+				}
+				return err
+			}
+			runs := []*sidecartest.ActorRun{}
+			for _, name := range []string{"evs1", "evs2"} {
+				actor := net.Actors().Actor(net.Context(), name)
+				runs = append(runs, net.Barriers().Start(actor, func() error {
+					func() {
+						self.stateLock.Lock()
+						defer self.stateLock.Unlock()
+						self.ownRunOrders[build-1] = append(self.ownRunOrders[build-1], name)
+					}()
+					return put(actor.Context(), net, "toy/"+name)
+				}))
+			}
+			net.Barriers().Blocking(func() {
+				for _, run := range runs {
+					select {
+					case <-run.Ended():
+					case <-ctx.Done():
+						return
+					}
+				}
+			})
+			var err error
+			for _, run := range runs {
+				err = errors.Join(err, run.Err())
+			}
+			return errors.Join(err, ctx.Err())
+		}
+		writerB := func(ctx context.Context, net *Net) error {
+			if 0 < self.barrierFromBuild && self.barrierFromBuild <= build {
+				net.Barriers().Hit("toy.order.before_put", "")
+			}
+			return put(ctx, net, "toy/b")
+		}
+		stepA := &Step{Actor: "writerA", Action: writerA, Background: self.background}
+		if self.faultFired {
+			stepA.Fault = &FaultPlan{Op: sidecartest.FaultOpPut, KeyPrefix: "toy/a", Result: FailBeforeApply}
+			stepA.Await = FaultFired
+		}
+		steps := []*Step{stepA, {Actor: "writerB", Action: writerB}}
+		if self.background || self.faultFired {
+			steps = append(steps, &Step{Actor: "writerA", Join: true})
+		}
+		return &Schedule{Id: "toy-order", Steps: steps}
+	}
+}
+
+// The toy as a registration of FS-2's, which is on no unknown list and has no trace committed in toyRuleSettings'
+// directory, so CheckRow runs it fixed and under the explorer alone. It is not FS-2's registered case, so the rules
+// item's list does not reach it.
+func (self *toyOrder) registration() *Registration {
+	return &Registration{Row: "FS-2", Tiers: []Tier{TierT2}, Build: self.builder()}
+}
+
+// A schedule whose fixed run passes no barrier, with no Background step, runs one seed, in CheckRow and CheckClause
+// alike and on the nightly seeds as on a merge's: every seed would take the fixed run's order, and the report says so.
+func TestABarrierFreeScheduleRunsOneSeed(t *testing.T) {
+	toy := &toyOrder{}
+	report := CheckRow(t.Context(), toy.registration(), toyRuleSettings(t))
+	if report.Failed() || !report.Explore.OneOrder || !slices.Equal(report.Explore.Seeds, []int64{1}) {
+		t.Fatalf("%s", report)
+	}
+	// the fixed run and the first seed's
+	if toy.builds != 2 {
+		t.Errorf("the row built %d schedules", toy.builds)
+	}
+	if text := report.String(); !strings.Contains(text, "FS-2: 1 seed run (1), 0 failed; no barrier passed: every seed takes this order.") {
+		t.Errorf("report %q", text)
+	}
+	if why := exploreOrderChoice((&toyOrder{}).builder()(nil), report.Fixed); why != "" {
+		t.Errorf("the plain toy leaves a seed something to order: %s", why)
+	}
+
+	clause := CheckClause(t.Context(), "FS-2", "toy order", (&toyOrder{}).builder(), toyRuleSettings(t))
+	if clause.Failed() || !clause.Explore.OneOrder || !slices.Equal(clause.Explore.Seeds, []int64{1}) || !strings.Contains(clause.String(), ExploreOneOrderText) {
+		t.Fatalf("%s", clause)
+	}
+
+	nightly := toyRuleSettings(t)
+	nightly.Seeds = NightlySeeds()
+	report = CheckRow(t.Context(), (&toyOrder{}).registration(), nightly)
+	if report.Failed() || !report.Explore.OneOrder || !slices.Equal(report.Explore.Seeds, []int64{1}) {
+		t.Fatalf("on the nightly seeds: %s", report)
+	}
+}
+
+// One barrier event in the fixed run's trace brings back every seed, in CheckRow and CheckClause alike, and the report
+// says nothing of the short form.
+func TestOneBarrierEventBringsBackEverySeed(t *testing.T) {
+	toy := &toyOrder{barrierFromBuild: 1}
+	report := CheckRow(t.Context(), toy.registration(), toyRuleSettings(t))
+	if report.Failed() || report.Explore.OneOrder || !slices.Equal(report.Explore.Seeds, MergeSeeds()) {
+		t.Fatalf("%s", report)
+	}
+	barrierEvents := []string{}
+	for _, event := range report.Fixed.Events {
+		if event.Kind != sidecartest.BarrierRan {
+			barrierEvents = append(barrierEvents, event.String())
+		}
+	}
+	if len(barrierEvents) != 1 || !strings.Contains(barrierEvents[0], "toy.order.before_put") {
+		t.Fatalf("the fixed run's barrier events: %v", barrierEvents)
+	}
+	if text := report.String(); !strings.Contains(text, "FS-2: 10 seeds run (1 to 10), 0 failed.") || strings.Contains(text, ExploreOneOrderText) {
+		t.Errorf("report %q", text)
+	}
+
+	clause := CheckClause(t.Context(), "FS-2", "toy order", (&toyOrder{barrierFromBuild: 1}).builder(), toyRuleSettings(t))
+	if clause.Failed() || clause.Explore.OneOrder || !slices.Equal(clause.Explore.Seeds, MergeSeeds()) {
+		t.Fatalf("%s", clause)
+	}
+}
+
+// A Background step brings back every seed, though the fixed run passes no barrier: its action waits for the baton
+// beside the next step's, and a seed chooses between them. CheckRow and CheckClause alike.
+func TestABackgroundStepBringsBackEverySeed(t *testing.T) {
+	toy := &toyOrder{background: true}
+	report := CheckRow(t.Context(), toy.registration(), toyRuleSettings(t))
+	if report.Failed() || report.Explore.OneOrder || !slices.Equal(report.Explore.Seeds, MergeSeeds()) {
+		t.Fatalf("%s", report)
+	}
+	if why := exploreOrderChoice((&toyOrder{background: true}).builder()(nil), report.Fixed); why != "step 0 is a Background step" {
+		t.Errorf("the Background step reads %q", why)
+	}
+
+	clause := CheckClause(t.Context(), "FS-2", "toy order", (&toyOrder{background: true}).builder(), toyRuleSettings(t))
+	if clause.Failed() || clause.Explore.OneOrder || !slices.Equal(clause.Explore.Seeds, MergeSeeds()) {
+		t.Fatalf("%s", clause)
+	}
+}
+
+// A step that ends when its fault fires brings back every seed too, as a Background step does, since its action may
+// run on parked and wait for the baton beside a later step's. Here the fixed run passes no barrier and its baton moves
+// once as each action begins, so the step is what brings them back.
+func TestAStepEndingWhenItsFaultFiresBringsBackEverySeed(t *testing.T) {
+	toy := &toyOrder{faultFired: true}
+	report := CheckRow(t.Context(), toy.registration(), toyRuleSettings(t))
+	if report.Failed() || report.Explore.OneOrder || !slices.Equal(report.Explore.Seeds, MergeSeeds()) {
+		t.Fatalf("%s", report)
+	}
+	if !slices.Equal(report.Fixed.Trace, []string{(&sidecartest.BarrierEvent{Kind: sidecartest.BarrierRan, Actor: "writerA"}).String(), (&sidecartest.BarrierEvent{Kind: sidecartest.BarrierRan, Actor: "writerB"}).String()}) {
+		t.Fatalf("the fixed run's trace %v", report.Fixed.Trace)
+	}
+	if why := exploreOrderChoice((&toyOrder{faultFired: true}).builder()(nil), report.Fixed); why != "step 0 ends when its fault fires, and its action may run on" {
+		t.Errorf("the fault's step reads %q", why)
+	}
+}
+
+// An action that starts runs of its own and waits on them with the baton given up, as EvsWorld's duplicate push does,
+// brings back every seed, though no barrier is passed: the runs wait for the baton together, and the seeds order them.
+// A first seed that happens to take the fixed run's order would pass the trace's comparison alone, so the baton's moves
+// are what tell.
+func TestAnActionStartingRunsOfItsOwnBringsBackEverySeed(t *testing.T) {
+	toy := &toyOrder{ownRuns: true}
+	report := CheckRow(t.Context(), toy.registration(), toyRuleSettings(t))
+	if report.Failed() || report.Explore.OneOrder || !slices.Equal(report.Explore.Seeds, MergeSeeds()) {
+		t.Fatalf("%s", report)
+	}
+	for _, event := range report.Fixed.Events {
+		if event.Kind != sidecartest.BarrierRan {
+			t.Fatalf("the fixed run passed a barrier, so the baton is not what is tested: %s", event)
+		}
+	}
+	if why := exploreOrderChoice((&toyOrder{ownRuns: true}).builder()(nil), report.Fixed); why != "the baton moved 5 times in the fixed run, not once as each of its 2 actions began" {
+		t.Errorf("the toy's own runs read %q", why)
+	}
+	// build 1 is the fixed run, and builds 2 to 11 are seeds 1 to 10
+	fixedOrder := []string{"evs1", "evs2"}
+	if !slices.Equal(toy.ownRunOrders[0], fixedOrder) || len(toy.ownRunOrders) != 11 {
+		t.Fatalf("the runs' orders %v", toy.ownRunOrders)
+	}
+	sameSeed, otherSeed := int64(0), int64(0)
+	for index, order := range toy.ownRunOrders[1:] {
+		switch {
+		case slices.Equal(order, fixedOrder) && sameSeed == 0:
+			sameSeed = int64(index + 1)
+		case !slices.Equal(order, fixedOrder) && otherSeed == 0:
+			otherSeed = int64(index + 1)
+		}
+	}
+	if otherSeed == 0 {
+		t.Fatalf("no seed ordered the runs other than the fixed run did: %v", toy.ownRunOrders)
+	}
+	if sameSeed == 0 {
+		t.Fatalf("no seed ordered the runs as the fixed run did: %v", toy.ownRunOrders)
+	}
+
+	// a first seed in the fixed run's order, its trace the fixed run's, and every seed still runs
+	settings := toyRuleSettings(t)
+	settings.Seeds = []int64{sameSeed, otherSeed}
+	report = CheckRow(t.Context(), (&toyOrder{ownRuns: true}).registration(), settings)
+	if report.Failed() || report.Explore.OneOrder || !slices.Equal(report.Explore.Seeds, settings.Seeds) {
+		t.Fatalf("seed %d first: %s", sameSeed, report)
+	}
+	first := runBuilt(t.Context(), (&toyOrder{ownRuns: true}).builder(), settings.Net, func(schedule *Schedule) { schedule.Seed = sameSeed })
+	if first.Err != nil || !slices.Equal(first.Trace, report.Fixed.Trace) {
+		t.Errorf("seed %d's trace %v, and the fixed run's %v", sameSeed, first.Trace, report.Fixed.Trace)
+	}
+}
+
+// A first seed that leaves the fixed run's order brings back every seed: here the fixed run passes no barrier, and the
+// first seed's run, a later build, passes one.
+func TestAFirstSeedLeavingTheFixedOrderBringsBackEverySeed(t *testing.T) {
+	toy := &toyOrder{barrierFromBuild: 2}
+	report := CheckRow(t.Context(), toy.registration(), toyRuleSettings(t))
+	if report.Failed() || report.Explore.OneOrder || !slices.Equal(report.Explore.Seeds, MergeSeeds()) {
+		t.Fatalf("%s", report)
+	}
+	if why := exploreOrderChoice((&toyOrder{}).builder()(nil), report.Fixed); why != "" {
+		t.Fatalf("the fixed run left a seed something to order, %s, so the first seed is not what is tested", why)
+	}
+}
+
+// A registered case, twin or clause that takes the short form on the gate's build fails unless the gate's rules item
+// names its case: the toy's report, read as FS-2's, which the item leaves out, fails, and the same read as FS-116's, a
+// case it names, does not; an explorer that ran every seed fails nothing, nor does a case the item names whose run did.
+func TestAShortFormForACaseTheRulesItemLeavesOutFails(t *testing.T) {
+	catalog := DefaultCatalog()
+	report := CheckRow(t.Context(), (&toyOrder{}).registration(), toyRuleSettings(t))
+	if report.Failed() || !report.Explore.OneOrder {
+		t.Fatalf("%s", report)
+	}
+	if errs := report.oneOrderErrors(catalog.Case("FS-2", "")); len(errs) != 1 || !strings.Contains(errs[0].Error(), "does not name FS-2 among the cases it runs one seed for") {
+		t.Errorf("FS-2's short form: %v", errs)
+	}
+	if errs := report.oneOrderErrors(catalog.Case("FS-116", "")); len(errs) != 0 {
+		t.Errorf("FS-116's short form: %v", errs)
+	}
+
+	every := CheckRow(t.Context(), (&toyOrder{barrierFromBuild: 1}).registration(), toyRuleSettings(t))
+	if every.Failed() || every.Explore.OneOrder {
+		t.Fatalf("%s", every)
+	}
+	if errs := every.oneOrderErrors(catalog.Case("FS-2", "")); len(errs) != 0 {
+		t.Errorf("FS-2's every seed: %v", errs)
+	}
+	if errs := every.oneOrderErrors(catalog.Case("FS-116", "")); len(errs) != 0 {
+		t.Errorf("FS-116's every seed: %v", errs)
+	}
+
+	// a twin's short form is held as its schedule's is
+	twin := &RowReport{
+		Case:        catalog.Case("FS-2", ""),
+		Explore:     &ExploreReport{Id: "FS-2", Seeds: MergeSeeds()},
+		ExploreTwin: &ExploreReport{Id: "FS-2 twin", Seeds: []int64{1}, OneOrder: true},
+	}
+	if errs := twin.oneOrderErrors(catalog.Case("FS-2", "")); len(errs) != 1 || !strings.HasPrefix(errs[0].Error(), "FS-2 twin: ") {
+		t.Errorf("the twin: %v", errs)
+	}
+}
+
+// The gate's rules item names the cases a schedule of which the explorer runs in its short form at each gate that
+// carries them, FS-44 to FS-118's at M2's exit and FS-27 at M3's, and none elsewhere; each case it can name is a catalog
+// case with a T2 builder registered; and FS-116's registered case, the cheapest of them, takes the short form under the
+// rules, whose report says so.
+func TestTheRulesItemNamesTheCasesTheExplorerRunsOneSeedFor(t *testing.T) {
+	catalog := DefaultCatalog()
+	for _, name := range exploreOneOrderCases() {
+		rowId, caseName, _ := strings.Cut(name, " ")
+		testCase := catalog.Case(rowId, caseName)
+		if testCase == nil || testCase.String() != name {
+			t.Errorf("%s is no catalog case", name)
+			continue
+		}
+		if Lookup(rowId, caseName, TierT2) == nil {
+			t.Errorf("%s has no T2 builder registered, so no schedule of it takes the short form", name)
+		}
+	}
+	if names := gateOneOrderCases(catalog, gateM2OutGate); !slices.Equal(names, []string{"FS-44", "FS-45", "FS-47", "FS-61", "FS-116", "FS-117", "FS-118"}) {
+		t.Errorf("M2's exit names %v", names)
+	}
+	if names := gateOneOrderCases(catalog, gateM3OutGate); !slices.Equal(names, []string{"FS-27"}) {
+		t.Errorf("M3's exit names %v", names)
+	}
+	gates := 0
+	for _, gate := range GateNames() {
+		catalogGate := gateCatalogName(gate)
+		if catalogGate == "" {
+			continue
+		}
+		gates += 1
+		item := gateRulesItem(catalog, catalogGate).Item
+		want := "(QD-1151; the cases with a schedule taking it: none at this gate)"
+		if names := gateOneOrderCases(catalog, catalogGate); 0 < len(names) {
+			want = "(QD-1151; the cases with a schedule taking it: " + strings.Join(names, ", ") + ")"
+		}
+		if !strings.Contains(item, want) {
+			t.Errorf("%s's rules item does not say %s: %q", gate, want, item)
+		}
+	}
+	if gates == 0 {
+		t.Error("no gate carries a rules item")
+	}
+
+	report := CheckRow(t.Context(), Lookup("FS-116", "", TierT2), toyRuleSettings(t))
+	if report.Failed() || !report.Explore.OneOrder || !slices.Equal(report.Explore.Seeds, []int64{1}) || !strings.Contains(report.String(), ExploreOneOrderText) {
+		t.Errorf("%s", report)
 	}
 }
