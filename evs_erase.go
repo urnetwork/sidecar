@@ -395,6 +395,22 @@ const evsChainSlotKeyIndex = 0
 // slot the list lacks: an erasure never counts such a list whole.
 var ErrEvsSlotKeysIncomplete = errors.New("evs: a path's history not walked to its first version")
 
+// The authenticated versions an eraser may use for slot discovery. A displayable prefix does not prove that
+// all older keys were found. Keep the proof and the versions from the same fresh walk.
+func (self *EvsRepo) erasureVersions(ctx context.Context, refName []byte, path string) ([]*EvsHistoryVersion, error) {
+	history, err := self.History(ctx, &EvsReadArgs{RefName: refName, Path: path, Fresh: true})
+	if err != nil {
+		return nil, err
+	}
+	if history.Whole && !history.BelowUnknown && len(history.Versions) != 0 {
+		last := history.Versions[len(history.Versions)-1]
+		if !last.Removed && (last.Version == 1 || last.Created) {
+			return history.Versions, nil
+		}
+	}
+	return nil, fmt.Errorf("%w: %d versions walked", ErrEvsSlotKeysIncomplete, len(history.Versions))
+}
+
 // The key of every slot a version of each path names, by the paths' verified histories, each once, in the paths'
 // order and newest version first: what an ERASE of the paths lists, and a CLOSURE's list for the files it rewrites
 // (§11.12's closure and versionless rows). A version the history shows names its slots whether or not its content
@@ -412,26 +428,14 @@ var ErrEvsSlotKeysIncomplete = errors.New("evs: a path's history not walked to i
 // such as one ending at a removal or at a version that names the one it replaced, is short: ErrEvsSlotKeysIncomplete,
 // with no list.
 func (self *EvsRepo) SlotKeysOf(ctx context.Context, refName []byte, paths []string) ([]*EvsErasedKey, error) {
-	// the walk's last version is the path's first: version 1, or a creation evs answered nothing below, the walk
-	// neither cut at its bound nor stopped where evs could not read
-	whole := func(history *EvsHistory) bool {
-		if len(history.Versions) == 0 || !history.Whole || history.BelowUnknown {
-			return false
-		}
-		last := history.Versions[len(history.Versions)-1]
-		return !last.Removed && (last.Version == 1 || last.Created)
-	}
 	keys := []*EvsErasedKey{}
 	named := map[Id]bool{}
 	for _, path := range paths {
-		history, err := self.History(ctx, &EvsReadArgs{RefName: refName, Path: path, Fresh: true})
+		versions, err := self.erasureVersions(ctx, refName, path)
 		if err != nil {
 			return nil, err
 		}
-		if !whole(history) {
-			return nil, fmt.Errorf("%w: %d versions walked", ErrEvsSlotKeysIncomplete, len(history.Versions))
-		}
-		for _, version := range history.Versions {
+		for _, version := range versions {
 			for _, slotId := range version.SlotIds {
 				if !named[slotId] {
 					named[slotId] = true
