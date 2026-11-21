@@ -178,6 +178,7 @@ type urAclResolution struct {
 // A save's preview, as acl.push.plan answers it.
 type urAclPlanReply struct {
 	NeedMembers  []string             `json:"need_members,omitempty"`
+	PreviewOnly  bool                 `json:"preview_only,omitempty"`
 	Digest       string               `json:"digest"`
 	Tests        *urAclTestReply      `json:"tests"`
 	Readers      []*urAclReaderChange `json:"readers,omitempty"`
@@ -197,7 +198,7 @@ func urAclIds(ids []sidecar.Id) []string {
 }
 
 func urAclPlanReplyOf(plan *sidecar.AclSavePlan) *urAclPlanReply {
-	reply := &urAclPlanReply{Digest: hex.EncodeToString(plan.Digest[:]), Tests: urAclTestReplyOf(plan.Tests)}
+	reply := &urAclPlanReply{Digest: hex.EncodeToString(plan.Digest[:]), Tests: urAclTestReplyOf(plan.Tests), PreviewOnly: plan.PreviewOnly}
 	preview := plan.Preview
 	for _, change := range preview.Readers {
 		reply.Readers = append(reply.Readers, &urAclReaderChange{RepoId: change.RepoId.String(), Added: urAclIds(change.Added), Removed: urAclIds(change.Removed)})
@@ -451,6 +452,10 @@ func (self *urCli) printAclPlan(reply *urAclPlanReply) {
 			}
 		case resolution.Kind == "client" && resolution.Id == "":
 			self.printf("client %s has no binding and stays a literal client id\n", resolution.Text)
+		case resolution.Kind == "member_scope":
+			self.printf("scope %s belongs to member %s\n", resolution.Text, resolution.Id)
+		case resolution.Kind == "tag_scope":
+			self.printf("scope %s belongs to tag %s\n", resolution.Text, resolution.Id)
 		default:
 			self.printf("%s %s resolves to %s\n", resolution.Kind, resolution.Text, resolution.Id)
 		}
@@ -504,6 +509,9 @@ func runUrAclPush(ctx context.Context, cli *urCli, path string) error {
 	cli.printAclPlan(plan)
 	if err := cli.printAclTests(source, plan.Tests); err != nil {
 		return fmt.Errorf("nothing saved: %w", err)
+	}
+	if plan.PreviewOnly {
+		return errors.New("saving this preview requires a writable config ref on this device")
 	}
 	confirmed, err := confirmOnTty(cli, "sign and save this policy as the network's?")
 	if err != nil {

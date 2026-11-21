@@ -31,6 +31,7 @@ package main
 import (
 	"context"
 	"crypto/hpke"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -894,6 +895,16 @@ type urNetworkConfigHeads struct {
 }
 
 var _ sidecar.ConfigHeadAnchorReader = (*urNetworkConfigHeads)(nil)
+var _ sidecar.ConfigHeadTipReader = (*urNetworkConfigHeads)(nil)
+
+// The current verified head that the enrolled device previews its ACL edits against.
+func (self *urNetworkConfigHeads) CurrentConfigHead(ctx context.Context) (*sidecar.ConfigHead, uint64, [sha256.Size]byte, error) {
+	reader, err := self.clients.headReader(nil)
+	if err != nil {
+		return nil, 0, [sha256.Size]byte{}, err
+	}
+	return reader.CurrentConfigHead(ctx)
+}
 
 // Only the verified heads already held by this daemon, with no network read.
 func (self *urNetworkConfigHeads) CachedConfigHead(version uint64, chain []byte) *sidecar.ConfigHead {

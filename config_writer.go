@@ -73,11 +73,15 @@ type ConfigHeadPush struct {
 	Payload []byte
 }
 
-// The config repo's file-mode main ref as a config writer saves heads to it (§11.8): EvsClient's for the config kind,
-// or a test's fake.
-type ConfigHeadRef interface {
-	// The head the ref holds now, its version and C_v; a nil head at version 0 before the first push.
+// The current verified main-ref head, including a pending head that no base names yet.
+type ConfigHeadTipReader interface {
+	// A nil head at version 0 before the first push.
 	CurrentConfigHead(ctx context.Context) (*ConfigHead, uint64, [sha256.Size]byte, error)
+}
+
+// The config repo's file-mode main ref as a writer saves heads to it (§11.8).
+type ConfigHeadRef interface {
+	ConfigHeadTipReader
 	// Signs, and does not send, the push that makes head the ref's version after version: its Signed EvsPush and the
 	// chain value it gives.
 	PrepareConfigHead(ctx context.Context, head *ConfigHead, version uint64) (*ConfigHeadPush, error)
