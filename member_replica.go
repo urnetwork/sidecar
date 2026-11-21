@@ -35,7 +35,7 @@ type MemberReplica struct {
 func (self *Sidecar) OpenMemberReplica(ctx context.Context) (*MemberReplica, error) {
 	self.memberReplicaLock.Lock()
 	defer self.memberReplicaLock.Unlock()
-	if self.ctx.Err() != nil || ctx.Err() != nil {
+	if self.ctx == nil || self.ctx.Err() != nil || ctx.Err() != nil {
 		return nil, ErrSidecarClosed
 	}
 	identity := self.Identity()
@@ -163,6 +163,7 @@ func (self *MemberReplica) open() error {
 	if err != nil {
 		return err
 	}
+	self.evs.EnablePrefixRules(running.EvsPrefixRulesArgs())
 	// A signed-in member child may have no invitation anchor. The follower records the
 	// first self-verified genesis of this network for its admitter's safety-number comparison.
 	settings := DefaultSidecarConfigFollowerSettings()
@@ -292,6 +293,7 @@ func (self *memberReplicaKeys) AuthAdvanced(view GkmAuthView) {
 	defer self.scopesLock.Unlock()
 	self.GkmGroupClient.AuthAdvanced(view)
 	self.setScopes()
+	self.replica.hints.Resync()
 }
 
 // The rows-only pass can ask for the config repo's key alone.

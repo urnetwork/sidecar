@@ -317,6 +317,9 @@ func (self *SidecarConfigFollower) Close() {
 
 // Keeps the function that takes the component off the Sidecar, or calls it at once when the follower closed meanwhile.
 func (self *SidecarConfigFollower) setRemove(remove func()) {
+	if remove == nil {
+		return
+	}
 	closed := func() bool {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()

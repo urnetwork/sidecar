@@ -34,6 +34,5 @@ func (self *SidecarConfigFollower) Attach(env *SidecarEnv) error {
 // The connect component subscribes at attachment, including while the follower is joining.
 // Public reads use Evs only after the enrolled anchor has been checked.
 func (self *MemberReplica) EvsComponent() *EvsComponent {
-	self.evs.EnablePrefixRules(self.running.EvsPrefixRulesArgs())
 	return NewEvsComponent(self.evs)
 }
