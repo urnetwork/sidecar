@@ -47,6 +47,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -91,9 +92,6 @@ type gkmCreateDraft struct {
 func (self *GkmGroupClient) DraftGroup(ctx context.Context, args *GkmCreateGroupArgs) (*EvsRepoKey, error) {
 	if args == nil || args.RepoId == (Id{}) || args.Kind != protocol.RepoKind_REPO_KIND_CONFIG {
 		return nil, fmt.Errorf("%w: only the config repo's group is drafted before its network's base 1", ErrGkmMalformed)
-	}
-	if self.args.Mls == nil {
-		return nil, fmt.Errorf("%w: a sidecar that holds no leaf creates no group", ErrGkmUnavailable)
 	}
 	if !self.holdsState() {
 		return nil, fmt.Errorf("%w: this process does not hold the network's state", ErrGkmUnavailable)
@@ -157,9 +155,6 @@ func (self *GkmGroupClient) CreateGroup(ctx context.Context, args *GkmCreateGrou
 	if args == nil || args.RepoId == (Id{}) || args.Kind == protocol.RepoKind_REPO_KIND_UNSPECIFIED {
 		return nil, fmt.Errorf("%w: a group needs its repo and kind", ErrGkmMalformed)
 	}
-	if self.args.Mls == nil {
-		return nil, fmt.Errorf("%w: a sidecar that holds no leaf creates no group", ErrGkmUnavailable)
-	}
 	manager := self.manager(args.RepoId)
 	manager.flowLock.Lock()
 	defer manager.flowLock.Unlock()
@@ -194,7 +189,7 @@ func (self *gkmGroupManager) createInFlow(ctx context.Context, args *GkmCreateGr
 		draft := record.create
 		if draft == nil || len(draft.request) == 0 {
 			// a bootstrap draft's id and RK_1 are its own (DraftGroup); any other creation draws them here
-			draft, err = self.draftCreate(state, args, draft)
+			draft, err = self.draftCreate(ctx, state, args, draft)
 			if err != nil {
 				return nil, err
 			}
@@ -254,19 +249,25 @@ func (self *gkmGroupManager) createInFlow(ctx context.Context, args *GkmCreateGr
 		if err := client.putHeldGeneration(self.repoId, first); err != nil {
 			return nil, err
 		}
-		group, err := client.loadGroup(draft.groupId)
-		if err != nil {
-			return nil, err
-		}
-		headerBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(&protocol.GkmCommitHeader{Generation: 1, Auth: generation.Rotate.GetAuth()})
-		if err != nil {
-			return nil, err
+		var group MlsGroup
+		var headerBytes []byte
+		if client.args.Mls != nil {
+			group, err = client.loadGroup(draft.groupId)
+			if err != nil {
+				return nil, err
+			}
+			headerBytes, err = proto.MarshalOptions{Deterministic: true}.Marshal(&protocol.GkmCommitHeader{Generation: 1, Auth: generation.Rotate.GetAuth()})
+			if err != nil {
+				return nil, err
+			}
 		}
 		err = client.advancePins(self.repoId, func(pins *gkmRepoPins) {
 			pins.groupId = draft.groupId
-			pins.epoch = group.Epoch()
-			pins.epochAuthenticator = group.EpochAuthenticator()
-			pins.epochHeader = headerBytes
+			if group != nil {
+				pins.epoch = group.Epoch()
+				pins.epochAuthenticator = group.EpochAuthenticator()
+				pins.epochHeader = headerBytes
+			}
 			pins.generation = 1
 			pins.commitment = bytes.Clone(generation.Rotate.GetCommitment())
 		})
@@ -281,7 +282,7 @@ func (self *gkmGroupManager) createInFlow(ctx context.Context, args *GkmCreateGr
 // Step 2: the group's id, its MLS state, RK_1 and the whole POST /gkm/groups request. drawn is a bootstrap draft whose
 // id and RK_1 stand (DraftGroup), nil to draw both here. A bootstrap draft's MLS group a kill left made is taken as it
 // stands at epoch 0, since an engine makes no second group under one id.
-func (self *gkmGroupManager) draftCreate(state GkmAuthView, args *GkmCreateGroupArgs, drawn *gkmCreateDraft) (*gkmCreateDraft, error) {
+func (self *gkmGroupManager) draftCreate(ctx context.Context, state GkmAuthView, args *GkmCreateGroupArgs, drawn *gkmCreateDraft) (*gkmCreateDraft, error) {
 	client := self.client
 	groupId := Id{}
 	if drawn != nil {
@@ -292,7 +293,7 @@ func (self *gkmGroupManager) draftCreate(state GkmAuthView, args *GkmCreateGroup
 	}
 	urGroup := &MlsUrGroup{NetworkId: args.NetworkId, RepoId: args.RepoId, Kind: args.Kind, OwnerMemberId: args.OwnerMemberId}
 	var group MlsGroup
-	if drawn != nil {
+	if client.args.Mls != nil && drawn != nil {
 		loaded, err := client.args.Mls.LoadGroup(groupId)
 		switch {
 		case err == nil && loaded.Epoch() != 0:
@@ -303,7 +304,7 @@ func (self *gkmGroupManager) draftCreate(state GkmAuthView, args *GkmCreateGroup
 			return nil, err
 		}
 	}
-	if group == nil {
+	if client.args.Mls != nil && group == nil {
 		created, err := client.args.Mls.CreateGroup(groupId, urGroup)
 		if err != nil {
 			return nil, err
@@ -315,7 +316,11 @@ func (self *gkmGroupManager) draftCreate(state GkmAuthView, args *GkmCreateGroup
 	if err != nil {
 		return nil, err
 	}
-	targets, err := self.deliverySet(context.Background(), state, holders, now, group.Roster(), false)
+	var roster []MlsMember
+	if group != nil {
+		roster = group.Roster()
+	}
+	targets, err := self.deliverySet(ctx, state, holders, now, roster, false)
 	if err != nil {
 		return nil, err
 	}
@@ -347,26 +352,28 @@ func (self *gkmGroupManager) draftCreate(state GkmAuthView, args *GkmCreateGroup
 	if err != nil {
 		return nil, err
 	}
-	kek, err := MlsKek(group, self.repoId)
-	if err != nil {
-		return nil, err
+	create := &protocol.GkmGroupCreateRequest{Form: signedForm, GenRotate: signedRotate}
+	if group != nil {
+		kek, err := MlsKek(group, self.repoId)
+		if err != nil {
+			return nil, err
+		}
+		genWrap, err := SealGkmGenWrap(key, groupId, group.Epoch(), kek)
+		clear(kek)
+		if err != nil {
+			return nil, err
+		}
+		groupInfo, err := group.GroupInfo()
+		if err != nil {
+			return nil, err
+		}
+		sealedGroupInfo, err := SealGkmGroupInfo(key, groupId, group.Epoch(), groupInfo)
+		if err != nil {
+			return nil, err
+		}
+		create.GenWrap, create.SealedGroupInfo, create.CipherSuite = genWrap, sealedGroupInfo, uint32(mlsCipherSuiteXWing)
 	}
-	genWrap, err := SealGkmGenWrap(key, groupId, group.Epoch(), kek)
-	clear(kek)
-	if err != nil {
-		return nil, err
-	}
-	groupInfo, err := group.GroupInfo()
-	if err != nil {
-		return nil, err
-	}
-	sealedGroupInfo, err := SealGkmGroupInfo(key, groupId, group.Epoch(), groupInfo)
-	if err != nil {
-		return nil, err
-	}
-	request, err := proto.MarshalOptions{Deterministic: true}.Marshal(&protocol.GkmGroupCreateRequest{
-		Form: signedForm, GenRotate: signedRotate, GenWrap: genWrap, SealedGroupInfo: sealedGroupInfo, CipherSuite: uint32(mlsCipherSuiteXWing),
-	})
+	request, err := proto.MarshalOptions{Deterministic: true}.Marshal(create)
 	if err != nil {
 		return nil, err
 	}
@@ -380,6 +387,10 @@ func (self *gkmGroupManager) postCreate(ctx context.Context, draft *gkmCreateDra
 	request := &protocol.GkmGroupCreateRequest{}
 	if err := proto.Unmarshal(draft.request, request); err != nil {
 		return false, fmt.Errorf("%w: a creation draft's request", ErrGkmMalformed)
+	}
+	if client.KeyDeliveryOnly() {
+		// An interrupted older draft can still file its original signed form and generation.
+		request.GenWrap, request.SealedGroupInfo, request.CipherSuite = nil, nil, 0
 	}
 	for sendCount := 0; sendCount < max(1, client.settings.CommitSendCount); sendCount += 1 {
 		err := client.args.Api.CreateGroup(ctx, self.repoId, request)
@@ -424,9 +435,28 @@ func (self *gkmGroupManager) finishCreate(ctx context.Context, state GkmAuthView
 	if group, err := client.loadGroup(groupId); err == nil {
 		roster = group.Roster()
 	}
+	// Gen/1 is claimed before its wraps are staged. A restarted creator preserves the signed generation and
+	// its reader deliveries, but must seal recovery wraps to bindings still effective when it finishes.
+	changed := client.KeyDeliveryOnly() && draftState.Pin().GetVersion() != state.Pin().GetVersion()
+	if changed {
+		holders = slices.DeleteFunc(holders, func(holder GkmHolder) bool { return holder.Kind == GkmHolderRecovery })
+	}
 	targets, err := self.deliverySet(ctx, draftState, holders, at, roster, false)
 	if err != nil {
 		return nil, err
+	}
+	if changed {
+		now := client.clock.Now()
+		current, err := KeyHolders(state, self.repoId, now)
+		if err != nil {
+			return nil, err
+		}
+		recovery := slices.DeleteFunc(current, func(holder GkmHolder) bool { return holder.Kind != GkmHolderRecovery })
+		wraps, err := self.deliverySet(ctx, state, recovery, now, nil, false)
+		if err != nil {
+			return nil, err
+		}
+		targets = append(targets, wraps...)
 	}
 	if err := self.stageDeliveries(ctx, state, groupId, first.key, targets); err != nil {
 		return nil, err

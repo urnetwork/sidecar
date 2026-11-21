@@ -109,6 +109,7 @@ type ConfigHeadCheck struct {
 
 // What the head check found.
 type ConfigHeadFacts struct {
+	recoveryBodies map[Id]*configRecoveryBody
 	// The ServiceSettings record the head holds, nil for none, so the defaults hold (§7.9's ServiceSettings).
 	Settings *protocol.ServiceSettings
 	// The VersioningRules record the head holds, nil for none, so the platform rule holds (§7.9, §11.7).
@@ -217,6 +218,9 @@ func (self *ConfigLog) applyBase(state *ConfigState, kept *configKeptEntry, rows
 		if facts == nil {
 			facts = &ConfigHeadFacts{}
 		}
+		// This reader already authenticated every effective binding through folded_through, even when its
+		// head reader only supplies settings. The unfolded tail is applied below.
+		facts.recoveryBodies = compileRows.recoveryBodies
 		if err := CheckServiceSettings(facts.Settings); err != nil {
 			return nil, self.baseFork(kept, "config head: service_settings: %v", err)
 		}
@@ -322,6 +326,7 @@ func (self *ConfigLog) foldRows(state *ConfigState, header *bridge.ProjectionHea
 		if compileRows, err = configCompileRowsFromRows(rows); err != nil {
 			return nil, err
 		}
+		compileRows.recoveryBodies = state.base.recoveryBodies
 	} else {
 		chain, ok := state.chainAt(foldedThrough)
 		if !ok {
@@ -400,6 +405,8 @@ func (self *ConfigLog) holdHeadFacts(state *ConfigState, rows *bridge.Projection
 	if !configRowsSettingsMatch(rows.GetSettings(), facts.Settings) {
 		return errors.New("rows: settings are not the config head's")
 	}
+	state.recoveryBodies = facts.recoveryBodies
+	state.base.recoveryBodies = facts.recoveryBodies
 	state.headSettings, state.headSettingsKnown, state.headVersioningRules = facts.Settings, true, facts.VersioningRules
 	return nil
 }

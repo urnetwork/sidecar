@@ -30,17 +30,63 @@ func (self *Sidecar) GkmGroupClientArgs(api GkmGroupApi, mls MlsEngine) (*GkmGro
 		return nil, fmt.Errorf("%w: gkm needs an enrolled network", errInvalidSettings)
 	}
 	return &GkmGroupClientArgs{
-		SidecarId: identity.SidecarId,
-		NetworkId: *networkId,
-		Api:       api,
-		Sign:      self.Sign,
-		Secrets:   self.instance.secrets(*networkId, gkmUpkeepSecretsNamespace),
-		Mls:       mls,
-		Alarm:     self.raiseGkmAlarm,
-		Settings:  self.settings.Gkm,
-		Clock:     self.clock,
-		Log:       self.log,
+		SidecarId:              identity.SidecarId,
+		NetworkId:              *networkId,
+		Api:                    api,
+		Sign:                   self.Sign,
+		Secrets:                self.instance.secrets(*networkId, gkmUpkeepSecretsNamespace),
+		Mls:                    mls,
+		RecoveryKeyAt:          self.gkmRecoveryKeyAt,
+		OwnRecoveryKey:         self.sealOwnRecoveryBinding,
+		AwaitingRecoveryAnchor: self.RecoveryAwaitingAnchor,
+		Alarm:                  self.raiseGkmAlarm,
+		Settings:               self.settings.Gkm,
+		Clock:                  self.clock,
+		Log:                    self.log,
 	}, nil
+}
+
+// Reads an already-held generation directly from the encrypted keychain. Config callbacks can run inside a
+// group flow, so opening a sealed statement must not re-enter a group manager or perform an unauthenticated fetch.
+func (self *Sidecar) GkmHeldKey(repoId Id, generation uint64) *EvsRepoKey {
+	networkId := self.enrolledNetworkId()
+	if networkId == nil || self.instance == nil {
+		return nil
+	}
+	encoded, err := self.instance.secrets(*networkId, gkmUpkeepSecretsNamespace).Get(gkmGenerationRecordName(repoId, generation))
+	if err != nil {
+		return nil
+	}
+	defer clear(encoded)
+	held, err := decodeGkmHeldGeneration(encoded)
+	if err != nil || held.poisoned {
+		return nil
+	}
+	return held.key
+}
+
+func (self *Sidecar) gkmRecoveryKeyAt(view GkmAuthView, memberId Id) (*GkmRecoveryKey, error) {
+	state, ok := view.(*ConfigState)
+	if !ok {
+		return nil, ErrGkmKeyMissing
+	}
+	repoId, err := IdFromBytes(state.Genesis().GetConfigRepoId())
+	if err != nil {
+		return nil, err
+	}
+	return state.recoveryKey(memberId, func(generation uint64) *EvsRepoKey { return self.GkmHeldKey(repoId, generation) })
+}
+
+// A cold follower can start on a folded head instead of observing the original RecoveryBind entry.
+func (self *Sidecar) sealOwnRecoveryBinding(key *GkmRecoveryKey) error {
+	authority := self.authority()
+	if authority == nil {
+		return ErrSidecarActNoAuthority
+	}
+	if err := self.keepRecoveryPublicKey(key.BindingKeySha256, key.XwingPublicKey); err != nil {
+		return err
+	}
+	return self.syncRecoverySeal(authority, authority.Pin())
 }
 
 // Whether the network's keychain under gkm's namespace holds RK_g of some generation of the repo, read with no state

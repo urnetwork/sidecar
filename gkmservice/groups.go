@@ -412,27 +412,29 @@ func (self *GkmEngine) serveGroupCreate(request *GkmRequest) {
 	if !request.AuthorizeRepo(form.repoId) || !self.checkFormSigner(request, form) {
 		return
 	}
-	if !self.checkEpochZeroUpload(request, createRequest.GetGenWrap(), createRequest.GetSealedGroupInfo(), createRequest.GetCipherSuite()) {
-		return
-	}
 	generationBytes, generation, ok := self.checkFirstGeneration(request, form, createRequest.GetGenRotate())
 	if !ok {
 		return
 	}
-	epochZero := &protocol.GkmEpochObject{
-		Header:              &protocol.GkmCommitHeader{Generation: 1, Auth: generation.Rotate.GetAuth()},
-		Uploader:            request.SidecarId.Bytes(),
-		TimeMs:              request.Now().UnixMilli(),
-		GenWrap:             createRequest.GetGenWrap(),
-		SealedGroupInfo:     createRequest.GetSealedGroupInfo(),
-		GroupInfoGeneration: 1,
-		NetworkId:           request.Principal.NetworkId.Bytes(),
-		CipherSuite:         createRequest.GetCipherSuite(),
-	}
-	// a repo's creation writes are §11.13's P1 (plan-EVSB-write-classes): the owner marker, the form, epoch/0 and
-	// gen/1, every one on the repo's cluster, so the request's ctx carries their class from here
 	prices := self.settings.Prices
-	writeCtx, ok := request.SpendWrites(request.Cluster, "", prices.create(gkmGroupOwnerByteCount)+prices.create(len(form.raw))+prices.create(proto.Size(epochZero))+prices.create(len(generationBytes)))
+	byteCharge := prices.create(gkmGroupOwnerByteCount) + prices.create(len(form.raw)) + prices.create(len(generationBytes))
+	var epochZero *protocol.GkmEpochObject
+	if self.settings.DraftMls && (len(createRequest.GetGenWrap()) != 0 || len(createRequest.GetSealedGroupInfo()) != 0 || createRequest.GetCipherSuite() != 0) {
+		if !self.checkEpochZeroUpload(request, createRequest.GetGenWrap(), createRequest.GetSealedGroupInfo(), createRequest.GetCipherSuite()) {
+			return
+		}
+		epochZero = &protocol.GkmEpochObject{
+			Header:   &protocol.GkmCommitHeader{Generation: 1, Auth: generation.Rotate.GetAuth()},
+			Uploader: request.SidecarId.Bytes(), TimeMs: request.Now().UnixMilli(), GenWrap: createRequest.GetGenWrap(),
+			SealedGroupInfo: createRequest.GetSealedGroupInfo(), GroupInfoGeneration: 1,
+			NetworkId: request.Principal.NetworkId.Bytes(), CipherSuite: createRequest.GetCipherSuite(),
+		}
+		byteCharge += prices.create(proto.Size(epochZero))
+	} else if len(createRequest.GetGenWrap()) != 0 || len(createRequest.GetSealedGroupInfo()) != 0 || createRequest.GetCipherSuite() != 0 || generation.Rotate.GetLeafWrap() != nil {
+		request.BadRequest()
+		return
+	}
+	writeCtx, ok := request.SpendWrites(request.Cluster, "", byteCharge)
 	if !ok {
 		return
 	}
@@ -441,7 +443,7 @@ func (self *GkmEngine) serveGroupCreate(request *GkmRequest) {
 	if !ok || !self.fileForm(request, form, seq) {
 		return
 	}
-	if !self.createEpochZero(request, form.groupId, epochZero) {
+	if epochZero != nil && !self.createEpochZero(request, form.groupId, epochZero) {
 		return
 	}
 	if !request.CheckRepoWritable() {
@@ -480,24 +482,26 @@ func (self *GkmEngine) serveReform(request *GkmRequest) {
 	if !self.checkFormSigner(request, form) {
 		return
 	}
-	if !self.checkEpochZeroUpload(request, reformRequest.GetGenWrap(), reformRequest.GetSealedGroupInfo(), reformRequest.GetCipherSuite()) {
-		return
-	}
-	epochZero := &protocol.GkmEpochObject{
-		// no auth pin: epoch 1's floor is gen/<form.generation>'s (DESIGN-DETAILS 6.2.2), which the ladder writes
-		// before the group takes a commit (reform.go)
-		Header:              &protocol.GkmCommitHeader{Generation: form.body.GetGeneration()},
-		Uploader:            request.SidecarId.Bytes(),
-		TimeMs:              request.Now().UnixMilli(),
-		GenWrap:             reformRequest.GetGenWrap(),
-		SealedGroupInfo:     reformRequest.GetSealedGroupInfo(),
-		GroupInfoGeneration: form.body.GetGeneration(),
-		NetworkId:           request.Principal.NetworkId.Bytes(),
-		CipherSuite:         reformRequest.GetCipherSuite(),
-	}
-	// a re-form's writes queue as P1, each on the repo's cluster, so the request's ctx carries their class from here
 	prices := self.settings.Prices
-	writeCtx, ok := request.SpendWrites(request.Cluster, "", prices.create(gkmGroupOwnerByteCount)+prices.create(len(form.raw))+prices.create(proto.Size(epochZero)))
+	charge := prices.create(gkmGroupOwnerByteCount) + prices.create(len(form.raw))
+	var epochZero *protocol.GkmEpochObject
+	if len(reformRequest.GetGenWrap()) != 0 || len(reformRequest.GetSealedGroupInfo()) != 0 || reformRequest.GetCipherSuite() != 0 {
+		if !self.settings.DraftMls {
+			request.BadRequest()
+			return
+		}
+		if !self.checkEpochZeroUpload(request, reformRequest.GetGenWrap(), reformRequest.GetSealedGroupInfo(), reformRequest.GetCipherSuite()) {
+			return
+		}
+		epochZero = &protocol.GkmEpochObject{
+			Header:   &protocol.GkmCommitHeader{Generation: form.body.GetGeneration()},
+			Uploader: request.SidecarId.Bytes(), TimeMs: request.Now().UnixMilli(), GenWrap: reformRequest.GetGenWrap(),
+			SealedGroupInfo: reformRequest.GetSealedGroupInfo(), GroupInfoGeneration: form.body.GetGeneration(),
+			NetworkId: request.Principal.NetworkId.Bytes(), CipherSuite: reformRequest.GetCipherSuite(),
+		}
+		charge += prices.create(proto.Size(epochZero))
+	}
+	writeCtx, ok := request.SpendWrites(request.Cluster, "", charge)
 	if !ok {
 		return
 	}
@@ -506,7 +510,7 @@ func (self *GkmEngine) serveReform(request *GkmRequest) {
 	if !ok || !self.fileForm(request, form, seq) {
 		return
 	}
-	if !self.createEpochZero(request, form.groupId, epochZero) {
+	if epochZero != nil && !self.createEpochZero(request, form.groupId, epochZero) {
 		return
 	}
 	request.Reply(nil)

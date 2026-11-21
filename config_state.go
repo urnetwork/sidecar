@@ -132,10 +132,11 @@ func (self ConfigSigner) RowsSigner() []byte {
 
 // A base a state stands on.
 type configBase struct {
-	n      uint64
-	chain  [sha256.Size]byte
-	timeMs int64
-	header *bridge.ProjectionHeader
+	recoveryBodies map[Id]*configRecoveryBody
+	n              uint64
+	chain          [sha256.Size]byte
+	timeMs         int64
+	header         *bridge.ProjectionHeader
 }
 
 // One base's (n, A_n) kept for ConfigLogSettings.BasePinRetention.
@@ -199,6 +200,7 @@ type ConfigState struct {
 	// the ServiceSettings the base's config head holds, nil for none, and whether the head was opened to see them
 	headSettings      *protocol.ServiceSettings
 	headSettingsKnown bool
+	recoveryBodies    map[Id]*configRecoveryBody
 	// the VersioningRules the base's config head holds, nil for none; known by headSettingsKnown (config_versioning.go)
 	headVersioningRules *protocol.VersioningRules
 	proposals           map[[sha256.Size]byte]*configProposal
@@ -720,6 +722,7 @@ func configCopyState(state *ConfigState) *ConfigState {
 		settings:            state.settings,
 		headSettings:        state.headSettings,
 		headSettingsKnown:   state.headSettingsKnown,
+		recoveryBodies:      state.recoveryBodies,
 		headVersioningRules: state.headVersioningRules,
 		proposals:           state.proposals,
 		indexers:            state.indexers,

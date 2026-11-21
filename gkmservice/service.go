@@ -163,6 +163,9 @@ func NewGkmEngine(ctx context.Context, host *sidecar.ServiceHost, settings *GkmS
 	}
 	mux := http.NewServeMux()
 	for _, route := range gkmRoutes {
+		if route.DraftMls && !settings.DraftMls {
+			continue
+		}
 		serve := route.Serve
 		if testServe, ok := deps.testServes[route.Pattern]; ok {
 			serve = testServe

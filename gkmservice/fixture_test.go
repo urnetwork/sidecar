@@ -38,6 +38,7 @@ type fakeGkmAuthKey struct {
 
 // T2's GkmAuthState: what a test says gkm's newest verified state holds. Safe for concurrent use.
 type fakeGkmAuthState struct {
+	recovery  map[sidecar.Id]*RecoveryWrapCoverage
 	stateLock sync.Mutex
 	// every answer unknown, as a network whose state is not loaded
 	unloaded bool
@@ -85,6 +86,7 @@ type fakeGkmHoldersDroppedAsk struct {
 
 func newFakeGkmAuthState() *fakeGkmAuthState {
 	return &fakeGkmAuthState{
+		recovery:          map[sidecar.Id]*RecoveryWrapCoverage{},
 		revokedSidecarIds: map[sidecar.Id]bool{},
 		sidecarFacts:      map[sidecar.Id]*GkmSidecarFacts{},
 		honoredRights:     map[fakeGkmAuthKey]sidecar.AclEvsRights{},
@@ -464,6 +466,7 @@ func newGkmFixtureWith(t *testing.T, adjust func(settings *GkmServiceSettings, d
 		settings:   DefaultGkmServiceSettings(),
 		networkId:  networkId,
 	}
+	fixture.settings.DraftMls = true
 	fixture.deps = &GkmEngineDeps{AuthState: fixture.auth, ServiceLog: fixture.serviceLog}
 	if adjust != nil {
 		adjust(fixture.settings, fixture.deps)
@@ -672,4 +675,29 @@ func (self *gkmFixture) clientOf(sidecarId sidecar.Id) sidecar.Id {
 	clientId := testId("push-" + string(sidecarId[:10]))
 	self.host.Push.BindSidecar(connect.Id(sidecarId), connect.Id(clientId))
 	return clientId
+}
+
+func (self *fakeGkmAuthState) RecoveryCoverage(principal *sidecar.Principal, memberId sidecar.Id, now time.Time) (*RecoveryWrapCoverage, GkmAuthAnswer) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.unloaded {
+		return nil, GkmAuthUnknown
+	}
+	row := self.recovery[memberId]
+	if row == nil {
+		return nil, GkmAuthDenied
+	}
+	return row, GkmAuthAllowed
+}
+
+func (self *fakeGkmAuthState) RepoRecoveryBindings(principal *sidecar.Principal, repoId sidecar.Id, now time.Time) (map[sidecar.Id][]byte, GkmAuthAnswer) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	bindings := map[sidecar.Id][]byte{}
+	for memberId, coverage := range self.recovery {
+		if slices.Contains(coverage.RepoIds, repoId) {
+			bindings[memberId] = coverage.Current
+		}
+	}
+	return bindings, GkmAuthAllowed
 }
