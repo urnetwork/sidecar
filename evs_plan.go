@@ -1330,7 +1330,7 @@ func (self *EvsRepo) planEpochs(ctx context.Context, plan *EvsWritePlan) error {
 			if !planned.Remove {
 				continue
 			}
-			row, err := self.lookup(ctx, plan.RefId, planned.Path)
+			row, _, err := self.lookup(ctx, plan.RefId, planned.Path)
 			if err != nil {
 				return err
 			}
