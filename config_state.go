@@ -172,6 +172,8 @@ func (self *configProposal) windowed() bool {
 
 // §7.9's S(n).
 type ConfigState struct {
+	// The last verified projection's scope declarations, in label order and immutable between bases.
+	teamScopes   []*bridge.TeamScopeRow
 	networkId    Id
 	genesis      *bridge.Genesis
 	genesisChain [sha256.Size]byte
@@ -592,6 +594,9 @@ func (self *ConfigState) Rows() *bridge.ProjectionRows {
 		}
 	}
 	rows.Settings = proto.Clone(self.Settings()).(*bridge.ProjectionSettings)
+	for _, scope := range self.teamScopes {
+		rows.TeamScopes = append(rows.TeamScopes, proto.Clone(scope).(*bridge.TeamScopeRow))
+	}
 	rows.Proposals = self.openProposalRows()
 	rows.Ring = self.ringRows()
 	for _, key := range self.indexerKeys() {
@@ -698,6 +703,7 @@ type configStateBuilder struct {
 func configCopyState(state *ConfigState) *ConfigState {
 	return &ConfigState{
 		networkId:           state.networkId,
+		teamScopes:          state.teamScopes,
 		genesis:             state.genesis,
 		genesisChain:        state.genesisChain,
 		n:                   state.n,
