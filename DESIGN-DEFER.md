@@ -33,7 +33,7 @@ A design-records pass that folds a deferral adds its entry here in the same chan
 
 ## Index
 
-99 entries, grouped by the DESIGN.md section that owns the deferred thing. "Described in" lists the subsections of DESIGN.md that point at the entry.
+101 entries, grouped by the DESIGN.md section that owns the deferred thing. "Described in" lists the subsections of DESIGN.md that point at the entry.
 
 | Section | Entry | Stage | Described in |
 |---|---|---|---|
@@ -132,6 +132,8 @@ A design-records pass that folds a deferral adds its entry here in the same chan
 | [§21 Abuse, safety, and legal process](#s21) | [Preservation holds, turned on](#abuse-preservation-holds) | Built at M5, off until counsel confirms | §21.18 |
 |  | [§21's v1 set](#abuse-v1) | v1 (M6, M10) | §21.18 |
 | [§22 Testing and verification](#s22) | [The synthetic main network](#test-synthetic-main-network) | Later | §22.17 |
+|  | [The drop extension's liveness on two instances](#test-drop-liveness-two-instances) | Review phase | §22.8 |
+|  | [FS-43 to FS-45 on a T3 quota tier](#test-quota-t3-tier) | Review phase | §22.8 |
 |  | [§22's v1 set](#test-v1) | v1 (M6, M10) | §22.17 |
 | [§23 Phasing, milestones, and rollout](#s23) | [RS3, recURd's assurance stage](#phase-rs3-assurance-stage) | Later | §20.16, §23.4 |
 |  | [Compliance mappings](#phase-compliance-mappings) | Later, with RS3 | §23.4 |
@@ -1431,6 +1433,32 @@ A design-records pass that folds a deferral adds its entry here in the same chan
 - **Dark in code.** Nothing is built.
 - **Held.** Nothing: no task or track waits on it.
 - **To bring back.** A network on main set aside for it, the scenarios packaged to run against production under §2.8's rules, and alert classes for their failures.
+
+<a id="test-drop-liveness-two-instances"></a>
+### The drop extension's liveness on two instances
+
+*Review phase. DESIGN.md: §22.8.*
+
+- **Deferred.** TLC's check of `EvsCommit.tla`'s drop extension's liveness, F2DropsEnd and the spec's other properties under weak fairness, with the drop job running in two instances once one lease lapses (§22.8's model row; owner decision 648, whose answer leaves the two instances to the review phase; ledger id QD-1119; the plan's EVSB-M10-07).
+- **Why.** The owner accepted the live-drop mode on one instance, as EVSB-M10-07 ran the drop stories by hand; the question priced it as a liveness run per drop story at every gate where the spec's sources changed, and two instances multiply those runs' states. DESIGN.md gives no other reason.
+- **Launch instead.** M10's exit needs the live-drop mode: each drop story under the spec's weak-fairness properties on one instance, beside the drop extension's twins and stories (§22.8's model row; §22.10's format 2 row).
+- **Lost.** No gate checks that every executing drop still ends while two job instances act on it, a lapsed lease's owner and the instance that took the job over.
+- **Dark in code.** run-tlc.sh's live-drop group runs each drop story on one instance; no two-instance liveness configuration is written.
+- **Held.** Nothing: no task or track waits on it.
+- **To bring back.** A two-instance configuration for each drop story's liveness run, recorded in modelled.yml as a mode M10's exit needs, with its states and time measured.
+
+<a id="test-quota-t3-tier"></a>
+### FS-43 to FS-45 on a T3 quota tier
+
+*Review phase. DESIGN.md: §22.8.*
+
+- **Deferred.** A T3 quota tier for §22.8's rules, server's Quota over the private stores on the Net's clock and fault queue, as SetEvsTier gives evs, with FS-43 to FS-45 run on it, so the unknown rule loses their writes' answers at server's own Postgres commits and Redis calls (§22.8's unknown row; owner decision 670, whose answer leaves this, the question's third option, to the review phase; ledger id QD-1155).
+- **Why.** The owner took the fake hosts' writing calls on T2 now, which keeps every unknown row honest without each author listing its host writes, and left for later the T3 tier, which neither server's sidecart3 nor quotahost has yet. DESIGN.md gives no other reason.
+- **Launch instead.** On T2 the unknown rule loses, one at a time, the answer of each call the fake hosts declare as a write, the Quota's ReportUsage and CountRate, a Lease that draws and the Close that settles a lease among them, so FS-44's and FS-45's runs on the Net's fake Quota lose their host writes' answers; their T3 legs run as quotahost's own tests (§22.8's unknown row).
+- **Lost.** No run under §22.8's rules holds FS-43 to FS-45 to the unknown rule over server's real Quota, so a lost answer at one of its Postgres commits or Redis calls is caught only where quotahost's own tests lose it.
+- **Dark in code.** sidecartest/fault runs FS-44 and FS-45 on the Net's fake Quota (fs44.go, fs45.go); it has an evs tier and an ACL exchange tier (SetEvsTier, SetAclExchangeTier) and no quota tier.
+- **Held.** Nothing: no task or track waits on it.
+- **To bring back.** A quota tier like SetEvsTier, server's Quota over the private stores on the Net's clock and queue, which sidecart3 sets as it sets the evs tier, and FS-43 to FS-45 run on it, each run's writes counted at its Postgres commits and Redis calls.
 
 <a id="test-v1"></a>
 ### §22's v1 set

@@ -684,6 +684,10 @@ message ErasureBody {                       // erasure: §16.8's entry in the er
   repeated bytes entry_ids = 2;             // <= 1,024; a larger erasure writes several
   uint32 reason = 3;                        // 1 person, 2 retention, 3 moderation, 4 revocation
   bytes request_id = 4;                     // reason 4: the DirectoryErasureRequest
+  repeated bytes announcement_ids = 5;      // reason 3: the 16 B announcement ids a moderation took off a card,
+                                            // which every ERASE note of its erasure names (§16.11's moderation
+                                            // row; owner decision 664); never an entry's id, which entry_ids
+                                            // alone names
 }
 message InventoryBody {                     // inventory: one a sidecar a UTC day it ran anything
   bytes sponsor_member_id = 1;              // the member, or a tagged sidecar's sponsor
@@ -1340,10 +1344,10 @@ T           per-run totals (tokens by model and reported amounts) go to T by def
 ```
 
 ```text
-ur record cost [--log l] [--since t] [--until t] [--by project|model|month] [--map file] [--format text|csv|jsonl]
+ur record cost [--log l] [--since t] [--until t] [--by project|client|model|month] [--map file] [--format text|csv|jsonl]
 ```
 
-`ur record cost` reads one log, the vault by default, and sums, per run, only the newest `cost` entry by seq in its writer's chain, since a re-opened run writes a newer entry of whole-run totals and a seq counts one (log, writer) chain. `--map` is a local file of `project,client` lines, which gives P5:845's per-client view with nothing new in any log. There is no `--by member` and no ranking of people (MK2:774). A group holding fewer than 5 members folds into `other` (owner decision 302), a minimum group size that REC:259 says may narrow works-council exposure and that needs legal review. Admins hold the entries regardless, so this shapes the tool and is no privacy control.
+`ur record cost` reads one log, the vault by default, and sums, per run, only the newest `cost` entry by seq in its writer's chain, since a re-opened run writes a newer entry of whole-run totals and a seq counts one (log, writer) chain. `--map` is a local file of `project,client` lines, which gives P5:845's per-client view with nothing new in any log: under `--by project` a mapped project shows as its client, and `--by client` needs a map naming a project's client, refused before the daemon is asked without one, a project the map names no client for showing as `(no client)` (DESIGN.md §7.9's Settings fields, whose `ur admin settings` sets `record_cost`; owner decision 657). There is no `--by member` and no ranking of people (MK2:774). A group holding fewer than 5 members folds into `other` (owner decision 302), a minimum group size that REC:259 says may narrow works-council exposure and that needs legal review. Admins hold the entries regardless, so this shapes the tool and is no privacy control.
 
 ### 13.2 What the record costs
 
