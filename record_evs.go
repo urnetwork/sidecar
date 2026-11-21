@@ -844,7 +844,11 @@ func (self *RecordEvsStreams) keepStreamReplay(key recordStreamKey, replay *reco
 
 // Verifies the canonical ref's complete signed history through its fresh head before pinning it. The walk holds
 // kind, mode and owner constant. Check the last statement for those values, including when the head was already pinned.
+// The head is held to the pin its read asked at and pinned with the walk, the read in flight until then, so a head
+// another call of the client raised the pin past meanwhile stands where that raise's walk places it (evs_pin_walk.go).
 func (self *RecordEvsStreams) streamHead(ctx context.Context, repo *EvsRepo, refId Id, writerSidecarId Id, headOnly bool) (*EvsVerifiedHead, error) {
+	done := self.client.pins.beginRead(repo.repoId, refId)
+	defer done()
 	head, err := repo.pinnedHead(ctx, refId)
 	if err != nil {
 		return nil, recordEvsRefusal(err)
@@ -889,9 +893,8 @@ func (self *RecordEvsStreams) streamHead(ctx context.Context, repo *EvsRepo, ref
 	if head.Chain != chain {
 		return nil, fmt.Errorf("%w: the record stream does not chain to the fresh head", ErrEvsChainBroken)
 	}
-	if err := self.client.verifier.checkPinOnWalk(repo.repoId, refId, walked); err != nil {
-		return nil, err
-	}
+	// the walk from C_0, which Pin holds to the pin as it stands and the chains other raises kept: a version of it on
+	// another chain than the store holds is a fork, alarmed
 	head.Statements = walked
 	if err := self.client.verifier.Pin(head); err != nil {
 		return nil, err

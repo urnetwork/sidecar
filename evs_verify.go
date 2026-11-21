@@ -189,6 +189,17 @@ type EvsVerifiedHead struct {
 	// judges it (EvsPinStore.raiseRead), and one built any other way, with none, as Raise does.
 	ask       *evsPinAsk
 	fromChain [sha256.Size]byte
+	// A walk read a page at a time, which keeps no statement: C at each version after FromVersion it passed, in order,
+	// where Statements is empty (evsWalkTrail), what its raise is judged by
+	walkChains [][sha256.Size]byte
+	// The walk starts at its reader's own verified state, a copy's, a mirror's, a mount's or a replay's, not at a pin
+	// of this store's: a start above the pin that nothing the store holds places raises as Raise raises one
+	ownStart bool
+	// A page of the history, ending where its read stopped short of the head: below the pin it raises nothing and is
+	// no regression (evs_pin_walk.go)
+	page bool
+	// Pin raised it, or found the pin past it and so raised nothing
+	pinned bool
 }
 
 // C at version as the head's walk verified it, false where it holds none: its own, its walk's start's or a walked
@@ -205,7 +216,25 @@ func (self *EvsVerifiedHead) chainAt(version uint64) ([sha256.Size]byte, bool) {
 	if statement, ok := self.StatementAt(version); ok {
 		return statement.Chain, true
 	}
+	if self.FromVersion < version && version <= self.FromVersion+uint64(len(self.walkChains)) {
+		return self.walkChains[version-self.FromVersion-1], true
+	}
 	return [sha256.Size]byte{}, false
+}
+
+// Each version the head's walk verified after FromVersion, and C there, in order: its statements', or a paged walk's
+// chains.
+func (self *EvsVerifiedHead) walked(yield func(version uint64, chain [sha256.Size]byte) bool) {
+	for _, statement := range self.Statements {
+		if !yield(statement.Version, statement.Chain) {
+			return
+		}
+	}
+	for i, chain := range self.walkChains {
+		if !yield(self.FromVersion+uint64(i)+1, chain) {
+			return
+		}
+	}
 }
 
 // The statement at version, false when the walk does not hold it.
@@ -729,37 +758,6 @@ func (self *EvsVerifier) pageLog(ctx context.Context, read *EvsHeadRead, spentBy
 	return statements, false, nil
 }
 
-// The pin rule (I-16): a head below the ref's pin, or at it with another chain, is a fork, alarmed with both
-// RefHeads, unless a verified reseed lowered the pin to exactly that head first. It judges against the pin as it
-// stands now, which is the readers' rule only where nothing else raises the pin while they read; VerifyHead judges a
-// head against the pin its read asked at.
-func (self *EvsVerifier) checkPin(repoId Id, refId Id, version uint64, chain [sha256.Size]byte) error {
-	pin, ok, err := self.client.pins.Pin(repoId, refId)
-	if err != nil || !ok {
-		return err
-	}
-	if version < pin.Version || (version == pin.Version && chain != pin.Chain) {
-		self.alarmFork(repoId, refId, pin, version, chain)
-		return ErrEvsHeadForked
-	}
-	return nil
-}
-
-// Checks that the walk passes through the pin as it stands now: C at the pin's version equals the pin's chain.
-func (self *EvsVerifier) checkPinOnWalk(repoId Id, refId Id, walked []*EvsVerifiedStatement) error {
-	pin, ok, err := self.client.pins.Pin(repoId, refId)
-	if err != nil || !ok {
-		return err
-	}
-	for _, statement := range walked {
-		if statement.Version == pin.Version && statement.Chain != pin.Chain {
-			self.alarmFork(repoId, refId, pin, statement.Version, statement.Chain)
-			return ErrEvsHeadForked
-		}
-	}
-	return nil
-}
-
 // head_alarm's fork (plan-EVS1-evs-events): SidecarId nil, Evidence this device's RefHead and evs's.
 func (self *EvsVerifier) alarmFork(repoId Id, refId Id, pin *EvsPin, version uint64, chain [sha256.Size]byte) {
 	mine, _ := proto.Marshal(&protocol.RefHead{RepoId: repoId.Bytes(), RefId: refId.Bytes(), Version: pin.Version, Chain: pin.Chain[:]})
@@ -775,10 +773,12 @@ func (self *EvsVerifier) alarmFork(repoId Id, refId Id, pin *EvsPin, version uin
 }
 
 // Pins a verified head durably, before anything it backs is shown: raised to its version and chain, its group from
-// the head's generation pin, and, past the budget, the gap marked and evs_gap raised. A head VerifyHead verified is
-// judged again as it is raised, against the pin it was read at and the pin as it then stands (EvsPinStore.raiseRead):
-// one another read raised the pin past stands with nothing raised where the store places it on the pinned history,
-// and answers ErrEvsReadStale, with no alarm, where it cannot; a regression or a fork refuses with the alarm.
+// the head's generation pin, and, past the budget, the gap marked and evs_gap raised. A head read at an ask, by
+// VerifyHead or by a reader that walks its statements itself (evs_pin_walk.go), is judged again as it is raised,
+// against the pin it was read at and the pin as it then stands (EvsPinStore.raiseRead): one another read raised the
+// pin past stands with nothing raised where the store places it on the pinned history, and answers ErrEvsReadStale,
+// with no alarm, where it cannot; a regression or a fork refuses with the alarm. A page of a history raises the pin to
+// its end where that stands above it, and below the pin raises nothing.
 func (self *EvsVerifier) Pin(verified *EvsVerifiedHead) error {
 	now := self.client.clock.Now()
 	pin := &EvsPin{
@@ -803,6 +803,8 @@ func (self *EvsVerifier) Pin(verified *EvsVerifiedHead) error {
 		if err != nil {
 			if errors.Is(err, ErrEvsPinLower) || errors.Is(err, ErrEvsPinFork) {
 				self.alarmHeadAgainst(verified, mine)
+				// a head that does not extend the pin, as VerifyHead names one, whether its check or its raise found it
+				return fmt.Errorf("%w: %w", ErrEvsHeadForked, err)
 			}
 			return err
 		}
@@ -810,7 +812,8 @@ func (self *EvsVerifier) Pin(verified *EvsVerifiedHead) error {
 		case evsPinStale:
 			return ErrEvsReadStale
 		case evsPinPassed:
-			// the pin stands past this head, on its history: nothing to raise, no gap to mark
+			// the pin stands past this head, on its history, or past a page of it: nothing to raise, no gap to mark
+			verified.pinned = true
 			return nil
 		}
 	} else if err := self.client.pins.Raise(pin); err != nil {
@@ -821,6 +824,7 @@ func (self *EvsVerifier) Pin(verified *EvsVerifiedHead) error {
 		}
 		return err
 	}
+	verified.pinned = true
 	if verified.Gap {
 		repoId, refId := verified.RepoId, verified.RefId
 		self.client.emit(SidecarEvent{Kind: SidecarEventEvsGap, RepoId: &repoId, RefId: &refId, VerifiedSince: now})
