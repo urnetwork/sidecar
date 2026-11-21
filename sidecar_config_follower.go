@@ -479,6 +479,17 @@ func (self *SidecarConfigFollower) AclEngine() *AclEngine {
 	return self.aclEngine
 }
 
+// The verified authorization engine and config client from the same standing follower. Closing or refusing the
+// follower withdraws both together, even while callers still hold its address.
+func (self *SidecarConfigFollower) StandingPolicy() (*AclEngine, *ConfigClient) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.state.Value() != SidecarConfigFollowerStanding {
+		return nil, nil
+	}
+	return self.aclEngine, self.client
+}
+
 // Moves to state for reason, unless the follower refused or closed, which it never leaves. Whether it moved.
 func (self *SidecarConfigFollower) moveTo(state SidecarConfigFollowerState, reason string) bool {
 	self.stateLock.Lock()

@@ -881,6 +881,25 @@ func (self *MailConfig) Addresses() ([]*MailAddressLookup, error) {
 	return lookups, nil
 }
 
+// Every group a verified address record names, including groups whose creator no longer has a sending grant.
+func (self *MailConfig) groupInboxes() (map[Id]bool, error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if !self.synced {
+		return nil, ErrMailConfigNotSynced
+	}
+	groups := map[Id]bool{}
+	for _, entry := range self.addressEntries {
+		if entry.unreadable || entry.standing && entry.record == nil {
+			return nil, ErrMailConfigNotSynced
+		}
+		if record := entry.record; record != nil && record.address.GetKind() == protocol.MailAddressKind_MAIL_ADDRESS_GROUP {
+			groups[record.mailboxRepoId] = true
+		}
+	}
+	return groups, nil
+}
+
 // Every burner label a reader honors, by label, burned and paused ones included, since a label is kept forever:
 // what a label drawer skips and the burner limits count. ErrMailConfigNotSynced before the first Sync.
 func (self *MailConfig) Burners() ([]*MailBurnerInfo, error) {

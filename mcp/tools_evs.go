@@ -5,9 +5,9 @@
 // files. ur://evs/{repo}/{+path} is resources_evs.go's.
 //
 //	guard      every call names what it reaches to McpGuard (§16.6's refused table, guard.go): never a secret repo,
-//	           the config's contents, the team directory, the search index's files, a mailbox's vault/ family or a
-//	           vault's harness/ config; a listing leaves such items out, and evs_list names the index's files only
-//	           when asked (include_index)
+//	           the config's contents, the team directory, the search index's files, approved-recipient records,
+//	           a mailbox's vault/ family or a vault's harness/ config. A listing omits refused items and names the
+//	           index's files only when asked (include_index)
 //	allow      §8's local allow of read, or write, on the repo for this sidecar
 //	reads      over EvsRepo, the read's purpose and run in its context, so an owner-bound repo's reader that is not
 //	           its writer deposits its receipt and awaits evs's 200 before anything decrypts (EVS1-M3-01's gate,
@@ -212,7 +212,11 @@ func mcpEvsTarget(call *McpCall, repoId sidecar.Id, operation McpRepoOperation, 
 	if network, ok := mcpToolNetworkOf(call); ok {
 		kind = network.RepoKind(repoId)
 	}
-	return McpTarget{Kind: McpTargetRepo, RepoKind: kind, Operation: operation, Ref: mcpEvsMainRef, Path: path}
+	target := McpTarget{Kind: McpTargetRepo, RepoKind: kind, Operation: operation, Ref: mcpEvsMainRef, Path: path}
+	if kind == protocol.RepoKind_REPO_KIND_GENERAL && mcpRecipientPath(path) && call.ordinaryFileRepo != nil {
+		target.OrdinaryFileRepo = call.ordinaryFileRepo(repoId)
+	}
+	return target
 }
 
 // §8's grant a call needs on repoId.

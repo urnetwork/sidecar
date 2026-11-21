@@ -663,6 +663,53 @@ func (self *MailClient) Aliases(ctx context.Context) ([]*MailAddressLookup, erro
 	return config.Addresses()
 }
 
+// The verified group inboxes for the MCP recipient guard. An unreadable record leaves a general repo unclassified.
+func (self *Sidecar) MailGroupInboxes(ctx context.Context) (map[Id]bool, error) {
+	mail, err := self.Mail()
+	if err != nil {
+		return nil, err
+	}
+	binding, _, state, err := mail.state()
+	if err != nil {
+		return nil, err
+	}
+	follower := self.ConfigFollower()
+	if follower == nil {
+		return nil, ErrMailConfigNotSynced
+	}
+	engine, _ := follower.StandingPolicy()
+	if engine != binding.Engine {
+		return nil, ErrMailConfigNotSynced
+	}
+	for _, repo := range state.Rows().GetRepos() {
+		if repo.GetKind() == protocol.RepoKind_REPO_KIND_MAILCFG && mailRepoStands(repo) && !mailRepoNetworkConfig(repo) {
+			// The network mailcfg alone cannot rule out a group in a Team scope's mailcfg.
+			return nil, ErrMailConfigNotSynced
+		}
+	}
+	config, err := mail.mailConfig()
+	if err != nil {
+		return nil, err
+	}
+	if err := config.Sync(ctx); err != nil {
+		return nil, err
+	}
+	groups, err := config.groupInboxes()
+	if err != nil {
+		return nil, err
+	}
+	standing, _ := follower.StandingPolicy()
+	if standing != engine || engine.State() != state {
+		return nil, ErrMailConfigNotSynced
+	}
+	mail.stateLock.Lock()
+	defer mail.stateLock.Unlock()
+	if mail.binding != binding || mail.config != config {
+		return nil, ErrMailConfigNotSynced
+	}
+	return groups, nil
+}
+
 // What CreateAlias creates.
 type MailAliasCreateArgs struct {
 	// <LocalPart>@<net>.<root>.
