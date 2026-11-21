@@ -11,7 +11,6 @@ import (
 	"math"
 	"net/http"
 	"slices"
-	"time"
 )
 
 // Inputs held by the writer's host. Members are email proposals from its own accepted
@@ -176,18 +175,27 @@ func (self *Sidecar) aclWriterPlan(ctx context.Context, source []byte, subjects 
 	}
 	resolver := &aclWriterSubjectResolver{writer: self, subjects: subjects, state: state}
 	return PlanAclSave(ctx, &AclSaveInput{
-		Policy: source, Head: head, State: state, Now: self.clock.Now(), Limits: aclWriterLimits(quota),
+		Policy: source, Head: head, State: state, Now: self.clock.Now(), Limits: aclWriterLimits(quota, self.aclWriterSettings()),
 		ResolveScope: state.TeamScope, Resolver: resolver,
 		ResolveNetworkLabel: func(text string) (Id, bool) {
 			id, found, err := resolver.ResolveNetwork(ctx, text)
 			return id, found && err == nil
 		},
+		RepoKeyAt: self.aclRepoKeyAt(),
 	})
 }
 
+// The writer's bounds: its SidecarSettings', or their defaults on a Sidecar built with none.
+func (self *Sidecar) aclWriterSettings() *SidecarAclWriterSettings {
+	if self.settings != nil && self.settings.AclWriter != nil {
+		return self.settings.AclWriter
+	}
+	return DefaultSidecarSettings().AclWriter
+}
+
 // §20.4's groups, requests and network shares are switches. With one enabled, acl_rules
-// bounds the compiled document. Section 13.9 separately bounds a Community publish.
-func aclWriterLimits(quota *QuotaLimits) *AclLimits {
+// bounds the compiled document. Section 13.9 separately bounds a Community publish, by settings' bound.
+func aclWriterLimits(quota *QuotaLimits, settings *SidecarAclWriterSettings) *AclLimits {
 	if quota == nil {
 		return &AclLimits{}
 	}
@@ -209,7 +217,7 @@ func aclWriterLimits(quota *QuotaLimits) *AclLimits {
 		StandingPublishes: quota.Tier == "pro" || quota.Tier == "team",
 	}
 	if quota.Tier == "free" {
-		limits.PublishMaxExpiry = 7 * 24 * time.Hour
+		limits.PublishMaxExpiry = settings.CommunityPublishMaxExpiry
 	}
 	return limits
 }

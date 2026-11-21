@@ -1691,6 +1691,14 @@ func (x *ServiceDirectorySettings) GetWorkers() DirectoryWorkersMode {
 // registers no listener as it would under indexers (D-MAIL-15). §7.9's Settings fields take 7 to 9 in the
 // order written, each network-wide, reserved before M2's freeze as directory was, so older readers ignore
 // them (D-PHASE-9).
+//
+// team_scopes is the signed source of the projection's Team scopes (QD-1163, QD-059): each label's first binding,
+// to a member or a tag atom, in label order, which an Owner or Admin creates by signing this record. Compile
+// writes the list as ProjectionRows.team_scopes, which every reader of a scope takes and nothing else
+// establishes, and holds each head to the bindings its base's rows hold: a head that drops one or binds its
+// label to another owner forks its base, so a binding never changes, its retirement's included, and
+// reassignment waits for a consented-member transition rule (DESIGN-DEFER.md). A new binding names a member
+// the log holds or a tag atom the head's tags table holds.
 type ServiceSettings struct {
 	state             protoimpl.MessageState    `protogen:"open.v1"`
 	TeamMail          TeamMailMode              `protobuf:"varint,1,opt,name=team_mail,json=teamMail,proto3,enum=urnetwork.sidecar.TeamMailMode" json:"team_mail,omitempty"`
@@ -1703,8 +1711,10 @@ type ServiceSettings struct {
 	// strict_custom_mx (QD-204)
 	RecordCost     RecordCostMode `protobuf:"varint,8,opt,name=record_cost,json=recordCost,proto3,enum=urnetwork.sidecar.RecordCostMode" json:"record_cost,omitempty"` // on (owner decision 302)
 	RecordRequired bool           `protobuf:"varint,9,opt,name=record_required,json=recordRequired,proto3" json:"record_required,omitempty"`                           // false; read from M6 and never set through MCP: each member's
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// ur install-harness writes fail-closed hooks (§16.7; owner decision 305)
+	TeamScopes    []*bridge.TeamScopeRow `protobuf:"bytes,10,rep,name=team_scopes,json=teamScopes,proto3" json:"team_scopes,omitempty"` // Team scopes' first bindings, in label order (QD-1163)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ServiceSettings) Reset() {
@@ -1798,6 +1808,13 @@ func (x *ServiceSettings) GetRecordRequired() bool {
 		return x.RecordRequired
 	}
 	return false
+}
+
+func (x *ServiceSettings) GetTeamScopes() []*bridge.TeamScopeRow {
+	if x != nil {
+		return x.TeamScopes
+	}
+	return nil
 }
 
 // An empty selector matches all.
@@ -3792,7 +3809,7 @@ const file_protocol_config_proto_rawDesc = "" +
 	"\atag_ids\x18\a \x03(\fR\x06tagIds\"\x97\x01\n" +
 	"\x18ServiceDirectorySettings\x128\n" +
 	"\x04runs\x18\x01 \x01(\x0e2$.urnetwork.sidecar.DirectoryRunsModeR\x04runs\x12A\n" +
-	"\aworkers\x18\x02 \x01(\x0e2'.urnetwork.sidecar.DirectoryWorkersModeR\aworkers\"\xe2\x03\n" +
+	"\aworkers\x18\x02 \x01(\x0e2'.urnetwork.sidecar.DirectoryWorkersModeR\aworkers\"\xa4\x04\n" +
 	"\x0fServiceSettings\x12<\n" +
 	"\tteam_mail\x18\x01 \x01(\x0e2\x1f.urnetwork.sidecar.TeamMailModeR\bteamMail\x12&\n" +
 	"\x0fstale_leaf_days\x18\x02 \x01(\rR\rstaleLeafDays\x12?\n" +
@@ -3806,7 +3823,10 @@ const file_protocol_config_proto_rawDesc = "" +
 	"mailStrict\x12B\n" +
 	"\vrecord_cost\x18\b \x01(\x0e2!.urnetwork.sidecar.RecordCostModeR\n" +
 	"recordCost\x12'\n" +
-	"\x0frecord_required\x18\t \x01(\bR\x0erecordRequired\"\xcb\x01\n" +
+	"\x0frecord_required\x18\t \x01(\bR\x0erecordRequired\x12@\n" +
+	"\vteam_scopes\x18\n" +
+	" \x03(\v2\x1f.urnetwork.sidecar.TeamScopeRowR\n" +
+	"teamScopes\"\xcb\x01\n" +
 	"\x0eVersioningRule\x12\x14\n" +
 	"\x05kinds\x18\x01 \x03(\rR\x05kinds\x12\x19\n" +
 	"\brepo_ids\x18\x02 \x03(\fR\arepoIds\x12\x1b\n" +
@@ -4071,11 +4091,12 @@ var file_protocol_config_proto_goTypes = []any{
 	(*bridge.WebAuthnEvidence)(nil),  // 61: urnetwork.sidecar.WebAuthnEvidence
 	(*bridge.ForwardScope)(nil),      // 62: urnetwork.sidecar.ForwardScope
 	(*bridge.AuthPin)(nil),           // 63: urnetwork.sidecar.AuthPin
-	(*bridge.BridgeRouteBody)(nil),   // 64: urnetwork.sidecar.BridgeRouteBody
-	(*bridge.BridgeMapBody)(nil),     // 65: urnetwork.sidecar.BridgeMapBody
-	(bridge.BridgeWithdrawMode)(0),   // 66: urnetwork.sidecar.BridgeWithdrawMode
-	(bridge.BridgeEgressMode)(0),     // 67: urnetwork.sidecar.BridgeEgressMode
-	(*bridge.BridgeAliasBody)(nil),   // 68: urnetwork.sidecar.BridgeAliasBody
+	(*bridge.TeamScopeRow)(nil),      // 64: urnetwork.sidecar.TeamScopeRow
+	(*bridge.BridgeRouteBody)(nil),   // 65: urnetwork.sidecar.BridgeRouteBody
+	(*bridge.BridgeMapBody)(nil),     // 66: urnetwork.sidecar.BridgeMapBody
+	(bridge.BridgeWithdrawMode)(0),   // 67: urnetwork.sidecar.BridgeWithdrawMode
+	(bridge.BridgeEgressMode)(0),     // 68: urnetwork.sidecar.BridgeEgressMode
+	(*bridge.BridgeAliasBody)(nil),   // 69: urnetwork.sidecar.BridgeAliasBody
 }
 var file_protocol_config_proto_depIdxs = []int32{
 	56, // 0: urnetwork.sidecar.AdminSet.header:type_name -> urnetwork.sidecar.StatementHeader
@@ -4105,35 +4126,36 @@ var file_protocol_config_proto_depIdxs = []int32{
 	3,  // 24: urnetwork.sidecar.ServiceSettings.self_admit:type_name -> urnetwork.sidecar.SelfAdmitMode
 	24, // 25: urnetwork.sidecar.ServiceSettings.directory:type_name -> urnetwork.sidecar.ServiceDirectorySettings
 	6,  // 26: urnetwork.sidecar.ServiceSettings.record_cost:type_name -> urnetwork.sidecar.RecordCostMode
-	7,  // 27: urnetwork.sidecar.VersioningRule.versioning:type_name -> urnetwork.sidecar.VersioningMode
-	26, // 28: urnetwork.sidecar.VersioningRules.rules:type_name -> urnetwork.sidecar.VersioningRule
-	56, // 29: urnetwork.sidecar.AuthorityProposal.header:type_name -> urnetwork.sidecar.StatementHeader
-	56, // 30: urnetwork.sidecar.AuthorityCosign.header:type_name -> urnetwork.sidecar.StatementHeader
-	56, // 31: urnetwork.sidecar.RecoveryVeto.header:type_name -> urnetwork.sidecar.StatementHeader
-	32, // 32: urnetwork.sidecar.ConfigFold.records:type_name -> urnetwork.sidecar.ConfigRecord
-	35, // 33: urnetwork.sidecar.ConfigNameTable.names:type_name -> urnetwork.sidecar.ConfigName
-	37, // 34: urnetwork.sidecar.ConfigAtomTable.atoms:type_name -> urnetwork.sidecar.ConfigAtomName
-	39, // 35: urnetwork.sidecar.ConfigRuleTable.rules:type_name -> urnetwork.sidecar.ConfigRuleId
-	41, // 36: urnetwork.sidecar.ConfigLabelTable.labels:type_name -> urnetwork.sidecar.ConfigRepoLabel
-	43, // 37: urnetwork.sidecar.ConfigResolution.members:type_name -> urnetwork.sidecar.ConfigMemberResolution
-	44, // 38: urnetwork.sidecar.ConfigResolution.networks:type_name -> urnetwork.sidecar.ConfigNetworkResolution
-	45, // 39: urnetwork.sidecar.ConfigResolution.clients:type_name -> urnetwork.sidecar.ConfigClientResolution
-	47, // 40: urnetwork.sidecar.BridgeLedgerManifest.files:type_name -> urnetwork.sidecar.BridgeLedgerFile
-	49, // 41: urnetwork.sidecar.BridgeLedgerAddresses.rows:type_name -> urnetwork.sidecar.BridgeLedgerAddressRow
-	51, // 42: urnetwork.sidecar.BridgeLedgerRules.rows:type_name -> urnetwork.sidecar.BridgeLedgerRuleRow
-	8,  // 43: urnetwork.sidecar.BridgeLedgerRuleRow.disposition:type_name -> urnetwork.sidecar.BridgeLedgerDisposition
-	64, // 44: urnetwork.sidecar.BridgeLedgerRuleRow.route:type_name -> urnetwork.sidecar.BridgeRouteBody
-	65, // 45: urnetwork.sidecar.BridgeLedgerRuleRow.map:type_name -> urnetwork.sidecar.BridgeMapBody
-	66, // 46: urnetwork.sidecar.BridgeLedgerRuleRow.withdraw_mode:type_name -> urnetwork.sidecar.BridgeWithdrawMode
-	53, // 47: urnetwork.sidecar.BridgeLedgerEgressSpecs.rows:type_name -> urnetwork.sidecar.BridgeLedgerEgressRow
-	67, // 48: urnetwork.sidecar.BridgeLedgerEgressRow.mode:type_name -> urnetwork.sidecar.BridgeEgressMode
-	55, // 49: urnetwork.sidecar.BridgeLedgerAliases.rows:type_name -> urnetwork.sidecar.BridgeLedgerAliasRow
-	68, // 50: urnetwork.sidecar.BridgeLedgerAliasRow.body:type_name -> urnetwork.sidecar.BridgeAliasBody
-	51, // [51:51] is the sub-list for method output_type
-	51, // [51:51] is the sub-list for method input_type
-	51, // [51:51] is the sub-list for extension type_name
-	51, // [51:51] is the sub-list for extension extendee
-	0,  // [0:51] is the sub-list for field type_name
+	64, // 27: urnetwork.sidecar.ServiceSettings.team_scopes:type_name -> urnetwork.sidecar.TeamScopeRow
+	7,  // 28: urnetwork.sidecar.VersioningRule.versioning:type_name -> urnetwork.sidecar.VersioningMode
+	26, // 29: urnetwork.sidecar.VersioningRules.rules:type_name -> urnetwork.sidecar.VersioningRule
+	56, // 30: urnetwork.sidecar.AuthorityProposal.header:type_name -> urnetwork.sidecar.StatementHeader
+	56, // 31: urnetwork.sidecar.AuthorityCosign.header:type_name -> urnetwork.sidecar.StatementHeader
+	56, // 32: urnetwork.sidecar.RecoveryVeto.header:type_name -> urnetwork.sidecar.StatementHeader
+	32, // 33: urnetwork.sidecar.ConfigFold.records:type_name -> urnetwork.sidecar.ConfigRecord
+	35, // 34: urnetwork.sidecar.ConfigNameTable.names:type_name -> urnetwork.sidecar.ConfigName
+	37, // 35: urnetwork.sidecar.ConfigAtomTable.atoms:type_name -> urnetwork.sidecar.ConfigAtomName
+	39, // 36: urnetwork.sidecar.ConfigRuleTable.rules:type_name -> urnetwork.sidecar.ConfigRuleId
+	41, // 37: urnetwork.sidecar.ConfigLabelTable.labels:type_name -> urnetwork.sidecar.ConfigRepoLabel
+	43, // 38: urnetwork.sidecar.ConfigResolution.members:type_name -> urnetwork.sidecar.ConfigMemberResolution
+	44, // 39: urnetwork.sidecar.ConfigResolution.networks:type_name -> urnetwork.sidecar.ConfigNetworkResolution
+	45, // 40: urnetwork.sidecar.ConfigResolution.clients:type_name -> urnetwork.sidecar.ConfigClientResolution
+	47, // 41: urnetwork.sidecar.BridgeLedgerManifest.files:type_name -> urnetwork.sidecar.BridgeLedgerFile
+	49, // 42: urnetwork.sidecar.BridgeLedgerAddresses.rows:type_name -> urnetwork.sidecar.BridgeLedgerAddressRow
+	51, // 43: urnetwork.sidecar.BridgeLedgerRules.rows:type_name -> urnetwork.sidecar.BridgeLedgerRuleRow
+	8,  // 44: urnetwork.sidecar.BridgeLedgerRuleRow.disposition:type_name -> urnetwork.sidecar.BridgeLedgerDisposition
+	65, // 45: urnetwork.sidecar.BridgeLedgerRuleRow.route:type_name -> urnetwork.sidecar.BridgeRouteBody
+	66, // 46: urnetwork.sidecar.BridgeLedgerRuleRow.map:type_name -> urnetwork.sidecar.BridgeMapBody
+	67, // 47: urnetwork.sidecar.BridgeLedgerRuleRow.withdraw_mode:type_name -> urnetwork.sidecar.BridgeWithdrawMode
+	53, // 48: urnetwork.sidecar.BridgeLedgerEgressSpecs.rows:type_name -> urnetwork.sidecar.BridgeLedgerEgressRow
+	68, // 49: urnetwork.sidecar.BridgeLedgerEgressRow.mode:type_name -> urnetwork.sidecar.BridgeEgressMode
+	55, // 50: urnetwork.sidecar.BridgeLedgerAliases.rows:type_name -> urnetwork.sidecar.BridgeLedgerAliasRow
+	69, // 51: urnetwork.sidecar.BridgeLedgerAliasRow.body:type_name -> urnetwork.sidecar.BridgeAliasBody
+	52, // [52:52] is the sub-list for method output_type
+	52, // [52:52] is the sub-list for method input_type
+	52, // [52:52] is the sub-list for extension type_name
+	52, // [52:52] is the sub-list for extension extendee
+	0,  // [0:52] is the sub-list for field type_name
 }
 
 func init() { file_protocol_config_proto_init() }

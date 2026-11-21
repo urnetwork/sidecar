@@ -2299,3 +2299,73 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     _D675, _D675 + "A second late fold the same day numbers the answer recorded after that: the work a directory "
     "erasure's ledger owes past its request's 30-day sweep window (676), following @@OD:673@@ and extending "
     "@@OD:675@@. ")
+
+# The third late fold (dr12-late-fold, 2026-11-21): the four questions the review's fix tracks left open, which the
+# owner had the run take over, QD-1162 to QD-1165.
+INDEX += [
+    (677, "A policy writer's later member-directory pages",
+     "A one-command admin read takes a later page's `after` member ID in its signed body, each page its own "
+     'command.'),
+    (678, 'Team scope declarations',
+     'An Owner or Admin declares a scope in signed settings; its label keeps its first binding, and reassignment '
+     'waits.'),
+    (679, '`ip:` tests and activated route grants',
+     "A save's `ip:` tests count the activated grants it can open; one it cannot open fails a deny as "
+     'indeterminate.'),
+    (680, "A delegated DNS-01 challenge's handoff",
+     "api hands a desktop's DNS-01 to certs' worker as a command with a restart-safe receipt and the real serial."),
+]
+for _n, _note in [
+        (40, ' Followed by @@OD:678@@: an Owner or Admin declares each scope in signed settings, its label never '
+             'reassigned.'),
+        (417, " Followed by @@OD:680@@: a desktop's delegated DNS-01 reaches the write only through certs' worker."),
+        (615, ' Extended by @@OD:679@@: a deny test also counts the activated route grants the head keeps.'),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 681))
+DATES.update({_n: '2026-11-21' for _n in range(677, 681)})
+_D676 = "sweep window (676), following @@OD:673@@ and extending @@OD:675@@. "
+assert DECISIONS_INTRO.count(_D676) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D676, _D676 + "A third late fold the same day numbers the four questions the review's fix tracks left open, "
+    "which the owner had the run take over: a policy writer's later member-directory pages (677), Team scope "
+    "declarations (678), following @@OD:40@@, `ip:` tests and activated route grants (679), extending @@OD:615@@, "
+    "and a delegated DNS-01 challenge's handoff (680), following @@OD:417@@. ")
+
+# The same fold: the build's three answers recorded while it ran, QD-1166 to QD-1168.
+INDEX += [
+    (681, 'A met path closed past the window',
+     'Past the window the runner still closes a path it met inside it once the path drops the document, ending '
+     'the erasure.'),
+    (682, "A begun directory erasure whose check fails",
+     "A request an ERASE names has its owed format-2 work finished whatever its check reads now, catching nothing "
+     'new.'),
+    (683, "A check-failed erasure's met paths",
+     "A request whose check now fails has its met paths closed too, and ends by a completion ERASE once all read "
+     'rewritten.'),
+]
+for _n, _note in [
+        (472, ' Refined by @@OD:682@@: a lapsed request an ERASE already names still has its owed work finished.'),
+        (604, ' Refined by @@OD:682@@: a superseded request an ERASE already names still has its owed work '
+              'finished.'),
+        (676, ' Amended by @@OD:681@@: past the window the runner also closes a path met inside it once the path '
+              'drops the document.'),
+        (676, " Extended by @@OD:682@@: a begun erasure finishes whatever its request's check reads later."),
+        (681, ' Extended by @@OD:683@@: a request whose check now fails has its met paths closed too.'),
+        (682, ' Amended by @@OD:683@@: its met paths are closed too, a completion ERASE ending an erasure whose '
+              'paths all read rewritten.'),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 684))
+DATES.update({_n: '2026-11-21' for _n in range(681, 684)})
+_D680 = "and a delegated DNS-01 challenge's handoff (680), following @@OD:417@@. "
+assert DECISIONS_INTRO.count(_D680) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D680, _D680 + "The same fold numbers the build's three answers recorded while it ran: a path the directory's "
+    "erasure runner met inside a request's window, closed past it (681), amending @@OD:676@@; a begun erasure "
+    "whose request's check now fails (682), extending @@OD:676@@ and refining @@OD:472@@ and @@OD:604@@; and that "
+    "erasure's met paths (683), extending @@OD:681@@ and amending @@OD:682@@. ")

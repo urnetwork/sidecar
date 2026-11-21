@@ -801,6 +801,8 @@ func TestConfigReservationsEqualTheDecidedList(t *testing.T) {
 			"team_mail": 1, "stale_leaf_days": 2, "self_admit": 3, "witness_bound_hours": 4, "scim_signer": 5, "directory": 6,
 			// §7.9's Settings fields (QD-204; owner decisions 302, 305)
 			"mail_strict": 7, "record_cost": 8, "record_required": 9,
+			// Team scopes' signed first bindings (QD-1163)
+			"team_scopes": 10,
 		},
 		"ServiceDirectorySettings": {"runs": 1, "workers": 2},
 		"VersioningRules":          {"rules": 1},
