@@ -166,7 +166,8 @@ type EvsHistory struct {
 	// The walk reached the path's first version: version 1, or a first creation past 1 (§11.7's versions row gives a
 	// creation its push's base + 1) below which evs answered that nothing stands. False where the walk ended at its
 	// version bound, below a creation whose number names a removal evs did not show, where evs answered nothing below
-	// a removal or below a version naming the one it replaced, at an answer that did not descend, at an overlay's
+	// a removal or below a version naming the one it replaced, where a descending answer skipped a required
+	// predecessor, at an answer that did not descend, at an overlay's
 	// base, or with BelowUnknown.
 	Whole bool
 }
@@ -208,6 +209,9 @@ type EvsHistoryVersion struct {
 	// what an erasure names to destroy the version (§11.12's closure row: "each retained version's slot keys"). None
 	// for a general repo's version, whose keys ride its segments, and for a removal.
 	SlotIds []Id
+	// The signed entry metadata with which a deposit eraser verifies the slot and bounds its CUT.
+	kind       protocol.EvsEntryKind
+	paddedSize uint64
 	// The version's push's sealed provenance, for a History that asked for it, as EvsFileInfo.Provenance reads.
 	Provenance *EvsPushProvenance
 }
@@ -244,6 +248,17 @@ type EvsWriteResult struct {
 type EvsDepositArgs struct {
 	Body io.Reader
 	Size int64
+	// A composing device can durably checkpoint the exact request before posting it and restore it on retry.
+	pending *evsDepositRequest
+	prepare func(*evsDepositRequest) error
+}
+
+// A prepared deposit. Its segments have uploaded, and only the signed request can publish the entry.
+type evsDepositRequest struct {
+	EntryId EvsToken `json:"entry_id"`
+	PushId  Id       `json:"push_id"`
+	// Deterministic protobuf, including every field of the original upload receipts.
+	Request []byte `json:"request"`
 }
 
 // A committed deposit.

@@ -9,6 +9,7 @@ package sidecar
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -102,6 +103,27 @@ func TestMailApprovedRecipientSparesTheGate(t *testing.T) {
 	if approved.ApprovedAll(ctx, testMailSendFrom, []string{recipient}) {
 		t.Fatal("a pair with no record approved")
 	}
+	template, err := NewMailTemplateAction(testMailSendFrom, []string{recipient})
+	if err != nil {
+		t.Fatal(err)
+	}
+	templateDecision := accepting.decision(t, template)
+	approved.Record(ctx, testMailSendFrom, []string{recipient}, [][]byte{templateDecision}, template.Bytes)
+	store, err := approved.store(ctx, testMailSendFrom)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := MailRecipientApprovalPath(testMailSendFrom, recipient)
+	if _, _, err := store.Read(ctx, path, approved.settings().OutcomeRecordMaxByteCount); !errors.Is(err, ErrEvsPathAbsent) {
+		t.Fatalf("a bounded template wrote a standing approval: %v", err)
+	}
+	legacy := &protocol.MailRecipientApproval{Alias: testMailSendFrom, Recipient: recipient, Decision: templateDecision, Action: template.Bytes}
+	if _, err := store.Write(ctx, []*mailStoreWrite{{Path: path, Content: testConfigMarshal(t, legacy)}}); err != nil {
+		t.Fatal(err)
+	}
+	if approved.ApprovedAll(ctx, testMailSendFrom, []string{recipient}) {
+		t.Fatal("an existing bounded template authorized another send")
+	}
 	action := testMailApprovedAction(t, testMailSendFrom, recipient)
 	decision := accepting.decision(t, action)
 	approved.Record(ctx, testMailSendFrom, []string{recipient}, [][]byte{decision}, action.Bytes)
@@ -134,7 +156,13 @@ func TestMailApprovedRecipientSparesTheGate(t *testing.T) {
 	if !approved.ApprovedAll(ctx, testMailSendFrom, []string{recipient}) {
 		t.Fatal("a removal of another pair took this one's record")
 	}
-	if removed, err := approved.Remove(ctx, " Ann@ACME.root.example ", " Someone@Outside.Example"); err != nil || !removed {
+	if approved.ApprovedAll(ctx, testMailSendFrom, []string{"Someone@outside.example"}) {
+		t.Fatal("approval for one external mailbox covered another spelling")
+	}
+	if removed, err := approved.Remove(ctx, testMailSendFrom, "Someone@Outside.Example"); err != nil || removed {
+		t.Fatalf("another mailbox removed a record: %t %v", removed, err)
+	}
+	if removed, err := approved.Remove(ctx, " Ann@ACME.root.example ", " someone@Outside.Example"); err != nil || !removed {
 		t.Fatalf("the pair as a person types it: %v %v", removed, err)
 	}
 	if approved.ApprovedAll(ctx, testMailSendFrom, []string{recipient}) {
@@ -245,7 +273,7 @@ func TestMailApprovedRecipientRecordedByAGatedSend(t *testing.T) {
 	ctx := context.Background()
 	recipient := "someone@outside.example"
 	draft := &MailSendArgs{From: testMailSendFrom, To: []string{recipient}, Subject: "Plans", Text: "Dinner at eight."}
-	plan, err := world.client.planSend(draft)
+	plan, err := world.client.planSend(t.Context(), draft)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -3062,11 +3062,13 @@ func (x *MailOutcome) GetTlsLevel() uint32 {
 }
 
 type MailOutcomeRecord struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Outcomes      []*MailOutcome         `protobuf:"bytes,1,rep,name=outcomes,proto3" json:"outcomes,omitempty"`           // one a recipient domain
-	SendId        []byte                 `protobuf:"bytes,2,opt,name=send_id,json=sendId,proto3" json:"send_id,omitempty"` // the send's 16-byte id, its o/ entry's Message-ID left side (QD-1122), which
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Outcomes []*MailOutcome         `protobuf:"bytes,1,rep,name=outcomes,proto3" json:"outcomes,omitempty"`           // one a recipient domain
+	SendId   []byte                 `protobuf:"bytes,2,opt,name=send_id,json=sendId,proto3" json:"send_id,omitempty"` // the send's 16-byte id, its o/ entry's Message-ID left side (QD-1122), which
+	//   GetSendResult and mail_send name; empty from a writer before it
+	RecipientProgress []*MailRecipientProgress `protobuf:"bytes,3,rep,name=recipient_progress,json=recipientProgress,proto3" json:"recipient_progress,omitempty"` // private retry state in outcome order in the encrypted mailbox
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *MailOutcomeRecord) Reset() {
@@ -3113,6 +3115,81 @@ func (x *MailOutcomeRecord) GetSendId() []byte {
 	return nil
 }
 
+func (x *MailOutcomeRecord) GetRecipientProgress() []*MailRecipientProgress {
+	if x != nil {
+		return x.RecipientProgress
+	}
+	return nil
+}
+
+type MailRecipientProgress struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Domain         string                 `protobuf:"bytes,1,opt,name=domain,proto3" json:"domain,omitempty"`
+	EnvelopeSha256 []byte                 `protobuf:"bytes,2,opt,name=envelope_sha256,json=envelopeSha256,proto3" json:"envelope_sha256,omitempty"` // binds the ordinals to this immutable send and its ordered recipient domain
+	Delivered      []uint32               `protobuf:"varint,3,rep,packed,name=delivered,proto3" json:"delivered,omitempty"`                         // recipient ordinals after final message acceptance
+	Refused        []uint32               `protobuf:"varint,4,rep,packed,name=refused,proto3" json:"refused,omitempty"`                             // recipient ordinals after a permanent refusal
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *MailRecipientProgress) Reset() {
+	*x = MailRecipientProgress{}
+	mi := &file_protocol_mail_proto_msgTypes[30]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MailRecipientProgress) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MailRecipientProgress) ProtoMessage() {}
+
+func (x *MailRecipientProgress) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_mail_proto_msgTypes[30]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MailRecipientProgress.ProtoReflect.Descriptor instead.
+func (*MailRecipientProgress) Descriptor() ([]byte, []int) {
+	return file_protocol_mail_proto_rawDescGZIP(), []int{30}
+}
+
+func (x *MailRecipientProgress) GetDomain() string {
+	if x != nil {
+		return x.Domain
+	}
+	return ""
+}
+
+func (x *MailRecipientProgress) GetEnvelopeSha256() []byte {
+	if x != nil {
+		return x.EnvelopeSha256
+	}
+	return nil
+}
+
+func (x *MailRecipientProgress) GetDelivered() []uint32 {
+	if x != nil {
+		return x.Delivered
+	}
+	return nil
+}
+
+func (x *MailRecipientProgress) GetRefused() []uint32 {
+	if x != nil {
+		return x.Refused
+	}
+	return nil
+}
+
 type MailProverRecord struct {
 	state              protoimpl.MessageState `protogen:"open.v1"`
 	SmtpDataProofBytes uint64                 `protobuf:"varint,1,opt,name=smtp_data_proof_bytes,json=smtpDataProofBytes,proto3" json:"smtp_data_proof_bytes,omitempty"`
@@ -3134,7 +3211,7 @@ type MailProverRecord struct {
 
 func (x *MailProverRecord) Reset() {
 	*x = MailProverRecord{}
-	mi := &file_protocol_mail_proto_msgTypes[30]
+	mi := &file_protocol_mail_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3146,7 +3223,7 @@ func (x *MailProverRecord) String() string {
 func (*MailProverRecord) ProtoMessage() {}
 
 func (x *MailProverRecord) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_mail_proto_msgTypes[30]
+	mi := &file_protocol_mail_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3159,7 +3236,7 @@ func (x *MailProverRecord) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MailProverRecord.ProtoReflect.Descriptor instead.
 func (*MailProverRecord) Descriptor() ([]byte, []int) {
-	return file_protocol_mail_proto_rawDescGZIP(), []int{30}
+	return file_protocol_mail_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *MailProverRecord) GetSmtpDataProofBytes() uint64 {
@@ -3235,7 +3312,7 @@ type MailSpamModel struct {
 
 func (x *MailSpamModel) Reset() {
 	*x = MailSpamModel{}
-	mi := &file_protocol_mail_proto_msgTypes[31]
+	mi := &file_protocol_mail_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3247,7 +3324,7 @@ func (x *MailSpamModel) String() string {
 func (*MailSpamModel) ProtoMessage() {}
 
 func (x *MailSpamModel) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_mail_proto_msgTypes[31]
+	mi := &file_protocol_mail_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3260,7 +3337,7 @@ func (x *MailSpamModel) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MailSpamModel.ProtoReflect.Descriptor instead.
 func (*MailSpamModel) Descriptor() ([]byte, []int) {
-	return file_protocol_mail_proto_rawDescGZIP(), []int{31}
+	return file_protocol_mail_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *MailSpamModel) GetVersion() uint32 {
@@ -3494,10 +3571,16 @@ const file_protocol_mail_proto_rawDesc = "" +
 	"reply_code\x18\x06 \x01(\rR\treplyCode\x12$\n" +
 	"\x0eretry_after_ms\x18\a \x01(\rR\fretryAfterMs\x12$\n" +
 	"\x0eupdate_time_ms\x18\b \x01(\x04R\fupdateTimeMs\x12\x1b\n" +
-	"\ttls_level\x18\t \x01(\rR\btlsLevel\"h\n" +
+	"\ttls_level\x18\t \x01(\rR\btlsLevel\"\xc1\x01\n" +
 	"\x11MailOutcomeRecord\x12:\n" +
 	"\boutcomes\x18\x01 \x03(\v2\x1e.urnetwork.sidecar.MailOutcomeR\boutcomes\x12\x17\n" +
-	"\asend_id\x18\x02 \x01(\fR\x06sendId\"\x8b\x03\n" +
+	"\asend_id\x18\x02 \x01(\fR\x06sendId\x12W\n" +
+	"\x12recipient_progress\x18\x03 \x03(\v2(.urnetwork.sidecar.MailRecipientProgressR\x11recipientProgress\"\x90\x01\n" +
+	"\x15MailRecipientProgress\x12\x16\n" +
+	"\x06domain\x18\x01 \x01(\tR\x06domain\x12'\n" +
+	"\x0fenvelope_sha256\x18\x02 \x01(\fR\x0eenvelopeSha256\x12\x1c\n" +
+	"\tdelivered\x18\x03 \x03(\rR\tdelivered\x12\x18\n" +
+	"\arefused\x18\x04 \x03(\rR\arefused\"\x8b\x03\n" +
 	"\x10MailProverRecord\x121\n" +
 	"\x15smtp_data_proof_bytes\x18\x01 \x01(\x04R\x12smtpDataProofBytes\x12'\n" +
 	"\x10data_bytes_per_s\x18\x02 \x01(\x04R\rdataBytesPerS\x12&\n" +
@@ -3615,7 +3698,7 @@ func file_protocol_mail_proto_rawDescGZIP() []byte {
 }
 
 var file_protocol_mail_proto_enumTypes = make([]protoimpl.EnumInfo, 14)
-var file_protocol_mail_proto_msgTypes = make([]protoimpl.MessageInfo, 32)
+var file_protocol_mail_proto_msgTypes = make([]protoimpl.MessageInfo, 33)
 var file_protocol_mail_proto_goTypes = []any{
 	(SpfVerdict)(0),               // 0: urnetwork.sidecar.SpfVerdict
 	(DkimVerdict)(0),              // 1: urnetwork.sidecar.DkimVerdict
@@ -3661,8 +3744,9 @@ var file_protocol_mail_proto_goTypes = []any{
 	(*SmtpOutboxEntry)(nil),       // 41: urnetwork.sidecar.SmtpOutboxEntry
 	(*MailOutcome)(nil),           // 42: urnetwork.sidecar.MailOutcome
 	(*MailOutcomeRecord)(nil),     // 43: urnetwork.sidecar.MailOutcomeRecord
-	(*MailProverRecord)(nil),      // 44: urnetwork.sidecar.MailProverRecord
-	(*MailSpamModel)(nil),         // 45: urnetwork.sidecar.MailSpamModel
+	(*MailRecipientProgress)(nil), // 44: urnetwork.sidecar.MailRecipientProgress
+	(*MailProverRecord)(nil),      // 45: urnetwork.sidecar.MailProverRecord
+	(*MailSpamModel)(nil),         // 46: urnetwork.sidecar.MailSpamModel
 }
 var file_protocol_mail_proto_depIdxs = []int32{
 	17, // 0: urnetwork.sidecar.MailAuthEvidence.spf:type_name -> urnetwork.sidecar.SpfResult
@@ -3699,11 +3783,12 @@ var file_protocol_mail_proto_depIdxs = []int32{
 	12, // 31: urnetwork.sidecar.MailOutcome.mode:type_name -> urnetwork.sidecar.MailSendMode
 	13, // 32: urnetwork.sidecar.MailOutcome.outcome:type_name -> urnetwork.sidecar.MailOutcomeKind
 	42, // 33: urnetwork.sidecar.MailOutcomeRecord.outcomes:type_name -> urnetwork.sidecar.MailOutcome
-	34, // [34:34] is the sub-list for method output_type
-	34, // [34:34] is the sub-list for method input_type
-	34, // [34:34] is the sub-list for extension type_name
-	34, // [34:34] is the sub-list for extension extendee
-	0,  // [0:34] is the sub-list for field type_name
+	44, // 34: urnetwork.sidecar.MailOutcomeRecord.recipient_progress:type_name -> urnetwork.sidecar.MailRecipientProgress
+	35, // [35:35] is the sub-list for method output_type
+	35, // [35:35] is the sub-list for method input_type
+	35, // [35:35] is the sub-list for extension type_name
+	35, // [35:35] is the sub-list for extension extendee
+	0,  // [0:35] is the sub-list for field type_name
 }
 
 func init() { file_protocol_mail_proto_init() }
@@ -3717,7 +3802,7 @@ func file_protocol_mail_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_protocol_mail_proto_rawDesc), len(file_protocol_mail_proto_rawDesc)),
 			NumEnums:      14,
-			NumMessages:   32,
+			NumMessages:   33,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

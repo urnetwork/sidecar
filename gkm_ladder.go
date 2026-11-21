@@ -35,6 +35,9 @@ import (
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
+// The verified repo exists but its first group has not formed yet.
+var errGkmGroupUnformed = fmt.Errorf("%w: gkm holds no group for the repo", ErrGkmKeyMissing)
+
 // Whether an error says gkm could not be reached or would not answer now, a 429 or 503 among them, rather than
 // that it refused: KF7's case, in which cached keys serve reads and deposits and everything else waits. The lb's
 // 502 or 504 is such an error (QD-876): ErrGkmNoAnswer is no *GkmError and none of the errors below, so it reads
@@ -197,7 +200,7 @@ func (self *gkmGroupManager) firstWrapInFlow(ctx context.Context, state GkmAuthV
 	}
 	signedForms := forms.GetForms()
 	if len(signedForms) == 0 {
-		return fmt.Errorf("%w: gkm holds no group for the repo", ErrGkmKeyMissing)
+		return errGkmGroupUnformed
 	}
 	// what gkm answers here binds nothing: gen/<g> names the repo, and its signer is held to the log
 	form := &protocol.GroupForm{}

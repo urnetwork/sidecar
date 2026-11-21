@@ -12,7 +12,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
-	"crypto/rand"
 	"errors"
 	"slices"
 	"strings"
@@ -25,45 +24,11 @@ import (
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
-// One device's identity key, which signs its outbox entries as Sidecar.Sign does.
-type testMailOutboxSigner struct {
-	sidecarId Id
-	key       ed25519.PrivateKey
-}
-
-func newTestMailOutboxSigner(sidecarId Id) *testMailOutboxSigner {
-	_, key, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		panic(err)
-	}
-	return &testMailOutboxSigner{sidecarId: sidecarId, key: key}
-}
-
-func (self *testMailOutboxSigner) sign(purpose string, signedType bridge.SignedType, body []byte) (*bridge.Signed, error) {
-	return &bridge.Signed{
-		Body:      body,
-		SignerId:  self.sidecarId.Bytes(),
-		Signature: ed25519.Sign(self.key, bridge.SignedBytes(purpose, signedType, body)),
-		Type:      uint32(signedType),
-	}, nil
-}
-
-func (self *testMailOutboxSigner) publicKey() ed25519.PublicKey {
-	return self.key.Public().(ed25519.PublicKey)
-}
-
 // A network's standing as GET /abuse/status would answer it.
 func testMailOutboxStanding(standing AbuseStanding, verified bool) MailOutboxStanding {
 	return func(ctx context.Context) (*AbuseStatus, error) {
 		return &AbuseStatus{Standing: standing, Verified: verified}, nil
 	}
-}
-
-// 32 random bytes, as D-MCP-11's keys are.
-func testMailOutboxEffectKey() []byte {
-	key := make([]byte, 32)
-	rand.Read(key)
-	return key
 }
 
 // An internet message whose Message-ID carries sendId, as a send names it.
@@ -104,12 +69,12 @@ func TestMailOutboxQueuesOnceUnderItsKey(t *testing.T) {
 	effectKey := testMailOutboxEffectKey()
 	sendId := newMailOutboxSendId()
 	queued, err := outbox.Queue(ctx, testMailOutboxQueueArgs(effectKey, testMailOutboxMessage(sendId)))
-	if err != nil || !queued.Created || !bytes.Equal(queued.EffectKey, effectKey) {
+	if err != nil || !queued.Created || queued.SendId != sendId || !bytes.Equal(queued.EffectKey, effectKey) {
 		t.Fatalf("the first queue %+v: %v", queued, err)
 	}
 	writesBefore := store.writeCount
-	again, err := outbox.Queue(ctx, testMailOutboxQueueArgs(effectKey, testMailOutboxMessage(sendId)))
-	if err != nil || again.Created || store.writeCount != writesBefore {
+	again, err := outbox.Queue(ctx, testMailOutboxQueueArgs(effectKey, testMailOutboxMessage(newMailOutboxSendId())))
+	if err != nil || again.Created || again.SendId != sendId || store.writeCount != writesBefore {
 		t.Fatalf("a second queue under the key %+v, %d writes: %v", again, store.writeCount-writesBefore, err)
 	}
 	path, _ := MailOutboxPath(effectKey)
@@ -176,12 +141,53 @@ func TestMailOutboxLookupFindsItsEntryAfterARestart(t *testing.T) {
 	if err := restarted.mailbox.RemoveOutbox(ctx, effectKey); err != nil {
 		t.Fatal(err)
 	}
-	if outcome, err := restarted.Lookup(ctx, nil, effectKey); err != nil || outcome.State != ApprovalOutcomeDone {
+	if outcome, err := restarted.Lookup(ctx, nil, effectKey); err != nil || outcome.State != ApprovalOutcomeDone || !bytes.Equal(outcome.EffectRef, sendId.Bytes()) {
 		t.Fatalf("an entry sent and removed, its or/ standing %+v: %v", outcome, err)
+	}
+	writesBefore := store.writeCount
+	retry := newTestMailOutbox(t, store, signer, testMailOutboxStanding(AbuseStandingStandard, true))
+	queued, err := retry.Queue(ctx, testMailOutboxQueueArgs(effectKey, testMailOutboxMessage(newMailOutboxSendId())))
+	if err != nil || queued.Created || queued.SendId != sendId || store.writeCount != writesBefore {
+		t.Fatalf("retry after removal %+v, %d writes: %v", queued, store.writeCount-writesBefore, err)
+	}
+	// An older writer could create the just-removed entry again. Its later Message-ID does not replace or/'s.
+	stale := testMailOutboxQueueArgs(effectKey, testMailOutboxMessage(newMailOutboxSendId()))
+	signed, err := SignSmtpOutboxEntry(&SmtpOutboundMessage{
+		EffectKey: effectKey, Sender: stale.Sender, Recipients: stale.Recipients, Message: stale.Message,
+	}, signer.sign)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, _ := MailOutboxPath(effectKey)
+	if _, err := store.Write(ctx, []*mailStoreWrite{{Path: path, Content: mailOutboxFileBytes(signed, stale.Message)}}); err != nil {
+		t.Fatal(err)
+	}
+	if outcome, err := restarted.Lookup(ctx, nil, effectKey); err != nil || !bytes.Equal(outcome.EffectRef, sendId.Bytes()) {
+		t.Fatalf("receipt with a recreated entry %+v: %v", outcome, err)
 	}
 	broken := newTestMailOutbox(t, &mailOutboxTestBrokenStore{}, signer, nil)
 	if outcome, err := broken.Lookup(ctx, nil, effectKey); err != nil || outcome.State != ApprovalOutcomeUncertain {
 		t.Fatalf("an unreadable mailbox %+v: %v", outcome, err)
+	}
+}
+
+// An older outcome or a raw SMTP submission can name no send id. That receipt still prevents a second entry.
+func TestMailOutboxKeepsAnOutcomeWithoutASendId(t *testing.T) {
+	ctx := t.Context()
+	store := newMailTestStore()
+	outbox := newTestMailOutbox(t, store, newTestMailOutboxSigner(testMailId(0xb1)), testMailOutboxStanding(AbuseStandingStandard, true))
+	effectKey := testMailOutboxEffectKey()
+	if err := outbox.mailbox.WriteOutcomes(ctx, effectKey, []*SmtpDomainOutcome{{Domain: "outside.example", Outcome: SmtpOutcomeSent}}); err != nil {
+		t.Fatal(err)
+	}
+	writes := store.writeCount
+	queued, err := outbox.Queue(ctx, testMailOutboxQueueArgs(effectKey, testMailOutboxMessage(newMailOutboxSendId())))
+	if err != nil || queued.Created || queued.SendId != (Id{}) || store.writeCount != writes {
+		t.Fatalf("legacy receipt %+v, %d writes: %v", queued, store.writeCount-writes, err)
+	}
+	outcome, err := outbox.Lookup(ctx, nil, effectKey)
+	if err != nil || outcome.State != ApprovalOutcomeDone || len(outcome.EffectRef) != 0 {
+		t.Fatalf("legacy outcome %+v: %v", outcome, err)
 	}
 }
 
@@ -209,17 +215,17 @@ func TestMailOutboxTwoDevicesQueueOneObject(t *testing.T) {
 	standing := testMailOutboxStanding(AbuseStandingStandard, true)
 	ctx := context.Background()
 	effectKey := testMailOutboxEffectKey()
-	message := testMailOutboxMessage(newMailOutboxSendId())
+	winnerId := newMailOutboxSendId()
 	firstOutbox := newTestMailOutbox(t, store, first, standing)
 	secondOutbox := newTestMailOutbox(t, store, second, standing)
 	// the second device's write lands between the first's read and its write
 	store.beforeWrite = func() {
-		if _, err := secondOutbox.Queue(ctx, testMailOutboxQueueArgs(effectKey, message)); err != nil {
+		if _, err := secondOutbox.Queue(ctx, testMailOutboxQueueArgs(effectKey, testMailOutboxMessage(winnerId))); err != nil {
 			t.Error(err)
 		}
 	}
-	queued, err := firstOutbox.Queue(ctx, testMailOutboxQueueArgs(effectKey, message))
-	if err != nil || queued.Created {
+	queued, err := firstOutbox.Queue(ctx, testMailOutboxQueueArgs(effectKey, testMailOutboxMessage(newMailOutboxSendId())))
+	if err != nil || queued.Created || queued.SendId != winnerId {
 		t.Fatalf("the racing first device %+v: %v", queued, err)
 	}
 	if count := len(store.paths()); count != 1 {
@@ -232,6 +238,32 @@ func TestMailOutboxTwoDevicesQueueOneObject(t *testing.T) {
 	signed := &bridge.Signed{}
 	if err := proto.Unmarshal(file.Signed, signed); err != nil || !bytes.Equal(signed.GetSignerId(), second.sidecarId.Bytes()) {
 		t.Fatalf("the object kept is not the one written first: %v", err)
+	}
+}
+
+// Another device can queue, finish and remove this effect between the first device's reads and its create.
+func TestMailOutboxRemovalDuringQueueKeepsTheCompletedSend(t *testing.T) {
+	ctx := t.Context()
+	store := newMailTestStore()
+	outbox := newTestMailOutbox(t, store, newTestMailOutboxSigner(testMailId(0xb1)), testMailOutboxStanding(AbuseStandingStandard, true))
+	effectKey, winnerId := testMailOutboxEffectKey(), newMailOutboxSendId()
+	store.beforeWrite = func() {
+		if _, err := outbox.Queue(ctx, testMailOutboxQueueArgs(effectKey, testMailOutboxMessage(winnerId))); err != nil {
+			t.Fatal(err)
+		}
+		if err := outbox.mailbox.WriteOutcomes(ctx, effectKey, []*SmtpDomainOutcome{{Domain: "outside.example", Outcome: SmtpOutcomeSent}}); err != nil {
+			t.Fatal(err)
+		}
+		if err := outbox.mailbox.RemoveOutbox(ctx, effectKey); err != nil {
+			t.Fatal(err)
+		}
+	}
+	queued, err := outbox.Queue(ctx, testMailOutboxQueueArgs(effectKey, testMailOutboxMessage(newMailOutboxSendId())))
+	if err != nil || queued.Created || queued.SendId != winnerId {
+		t.Fatalf("receipt after concurrent removal %+v: %v", queued, err)
+	}
+	if _, err := outbox.mailbox.ReadOutbox(ctx, effectKey); !errors.Is(err, ErrSmtpMailboxNotFound) {
+		t.Fatalf("completed entry was recreated: %v", err)
 	}
 }
 
@@ -285,6 +317,186 @@ func TestMailSmtpMailboxRemovesExpiredOutcomes(t *testing.T) {
 	}
 	if _, err := mailbox.ReadOutcomes(ctx, young); err != nil {
 		t.Fatalf("a record within its days: %v", err)
+	}
+}
+
+// The first read of an outcome fails, then the same stored version is readable again.
+type mailOutcomeTestReadFailure struct {
+	mailStore
+	path string
+	err  error
+}
+
+func (self *mailOutcomeTestReadFailure) Read(ctx context.Context, path string, maxByteCount int) ([]byte, uint64, error) {
+	if path == self.path && self.err != nil {
+		err := self.err
+		self.err = nil
+		return nil, 0, err
+	}
+	return self.mailStore.Read(ctx, path, maxByteCount)
+}
+
+// A completed send's durable identity survives a sweep that could not read its receipt and a process restart.
+func TestMailOutcomeSweepKeepsTheReceiptAfterAReadFailure(t *testing.T) {
+	ctx := t.Context()
+	store := newMailTestStore()
+	clock := newTestMailCredentialClock(time.UnixMilli(testMailIngestPushMillis))
+	signer := newTestMailOutboxSigner(testMailId(0xb1))
+	outbox := newTestMailOutbox(t, store, signer, testMailOutboxStanding(AbuseStandingStandard, true))
+	effectKey, sendId := testMailOutboxEffectKey(), newMailOutboxSendId()
+	if _, err := outbox.Queue(ctx, testMailOutboxQueueArgs(effectKey, testMailOutboxMessage(sendId))); err != nil {
+		t.Fatal(err)
+	}
+	if err := outbox.mailbox.WriteOutcomes(ctx, effectKey, []*SmtpDomainOutcome{{Domain: "outside.example", Outcome: SmtpOutcomeSent, UpdateTime: clock.Now()}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := outbox.mailbox.RemoveOutbox(ctx, effectKey); err != nil {
+		t.Fatal(err)
+	}
+	path, _ := MailOutcomePath(effectKey)
+	unavailable := errors.New("outcome read interrupted")
+	sweeper := newMailSmtpMailbox(&mailOutcomeTestReadFailure{mailStore: store, path: path, err: unavailable}, nil, nil, nil, clock)
+	if removed, err := sweeper.RemoveExpiredOutcomes(ctx); removed != 0 || !errors.Is(err, unavailable) {
+		t.Fatalf("sweep removed %d: %v", removed, err)
+	}
+	restarted := newTestMailOutbox(t, store, signer, nil)
+	receipt, err := restarted.Lookup(ctx, nil, effectKey)
+	if err != nil || receipt.State != ApprovalOutcomeDone || !bytes.Equal(receipt.EffectRef, sendId.Bytes()) {
+		t.Fatalf("receipt after restart %+v: %v", receipt, err)
+	}
+}
+
+// An update between the sweep's expiry check and its remove starts a new retention term at the winning version.
+func TestMailOutcomeSweepRechecksARefreshedVersion(t *testing.T) {
+	ctx := t.Context()
+	store := newMailTestStore()
+	clock := newTestMailCredentialClock(time.UnixMilli(testMailIngestPushMillis))
+	mailbox := newMailSmtpMailbox(store, nil, nil, nil, clock)
+	effectKey := testMailOutboxEffectKey()
+	write := func() {
+		t.Helper()
+		if err := mailbox.WriteOutcomes(ctx, effectKey, []*SmtpDomainOutcome{{Domain: "outside.example", Outcome: SmtpOutcomeSent, UpdateTime: clock.Now()}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write()
+	clock.Advance(mailbox.settings.OutcomeKeepDuration + time.Hour)
+	store.beforeWrite = write
+	if removed, err := mailbox.RemoveExpiredOutcomes(ctx); err != nil || removed != 0 {
+		t.Fatalf("sweep racing a refresh removed %d: %v", removed, err)
+	}
+	outcomes, err := mailbox.ReadOutcomes(ctx, effectKey)
+	if err != nil || len(outcomes) != 1 || !outcomes[0].UpdateTime.Equal(clock.Now()) {
+		t.Fatalf("refreshed outcomes %+v: %v", outcomes, err)
+	}
+	clock.Advance(mailbox.settings.OutcomeKeepDuration)
+	if removed, err := mailbox.RemoveExpiredOutcomes(ctx); err != nil || removed != 0 {
+		t.Fatalf("at the retention boundary removed %d: %v", removed, err)
+	}
+	clock.Advance(time.Millisecond)
+	if removed, err := mailbox.RemoveExpiredOutcomes(ctx); err != nil || removed != 1 {
+		t.Fatalf("past the new term removed %d: %v", removed, err)
+	}
+}
+
+// An unknown record format, an empty outcome and an undated domain establish no expiry date.
+func TestMailOutcomeSweepRequiresDatedOutcomes(t *testing.T) {
+	ctx := t.Context()
+	store := newMailTestStore()
+	clock := newTestMailCredentialClock(time.UnixMilli(testMailIngestPushMillis))
+	mailbox := newMailSmtpMailbox(store, nil, nil, nil, clock)
+	malformed, _ := MailOutcomePath(testMailOutboxEffectKey())
+	store.put(malformed, []byte{0xff})
+	for _, outcomes := range [][]*SmtpDomainOutcome{
+		nil,
+		{{Domain: "first.example", Outcome: SmtpOutcomeSent, UpdateTime: clock.Now()}, {Domain: "second.example", Outcome: SmtpOutcomeSent}},
+		{{Domain: "expired.example", Outcome: SmtpOutcomeSent, UpdateTime: clock.Now()}},
+	} {
+		if err := mailbox.WriteOutcomes(ctx, testMailOutboxEffectKey(), outcomes); err != nil {
+			t.Fatal(err)
+		}
+	}
+	clock.Advance(mailbox.settings.OutcomeKeepDuration + time.Hour)
+	if removed, err := mailbox.RemoveExpiredOutcomes(ctx); err == nil || removed != 1 || len(store.paths()) != 3 || store.file(malformed) == nil {
+		t.Fatalf("sweep removed %d, %d records remain: %v", removed, len(store.paths()), err)
+	}
+}
+
+// The runner verifies the persisted entry before reaping it. A crash leaves both versions intact, and a competing
+// update to a legacy receipt keeps its fields when the restart fills the committed send ID and removes the entry.
+func TestMailOutboxRunnerBackfillsALegacyReceiptBeforeRemoval(t *testing.T) {
+	ctx := t.Context()
+	store := newMailTestStore()
+	clock := newTestMailCredentialClock(time.UnixMilli(testMailIngestPushMillis))
+	signer := newTestMailOutboxSigner(testMailId(0xb1))
+	effectKey, sendId := testMailOutboxEffectKey(), newMailOutboxSendId()
+	outbox := newTestMailOutbox(t, store, signer, testMailOutboxStanding(AbuseStandingStandard, true))
+	args := testMailOutboxQueueArgs(effectKey, testMailOutboxMessage(sendId))
+	args.Recipients = []string{"someone@outside.example"}
+	args.ApprovalNotAfter = clock.Now()
+	if _, err := outbox.Queue(ctx, args); err != nil {
+		t.Fatal(err)
+	}
+	path, _ := MailOutcomePath(effectKey)
+	legacy := func() {
+		t.Helper()
+		record, err := SmtpMailboxOutcomeRecord([]*SmtpDomainOutcome{{Domain: "outside.example", Outcome: SmtpOutcomeSent, UpdateTime: clock.Now()}}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		record.ProtoReflect().SetUnknown([]byte{0x78, 1})
+		content, err := proto.Marshal(record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		store.put(path, content)
+	}
+	legacy()
+	pass := func() (*SmtpOutboxPass, error) {
+		t.Helper()
+		runner, err := NewSmtpOutboxRunner(&SmtpOutboxRunnerArgs{
+			Sender: &SmtpSender{}, Mailbox: newMailSmtpMailbox(store, nil, nil, nil, clock), Settings: DefaultSmtpSenderSettings(), Clock: clock,
+			Consented: func() bool { return true }, MemberDeviceKey: func(sidecarId Id) ed25519.PublicKey {
+				if sidecarId == signer.sidecarId {
+					return signer.publicKey()
+				}
+				return nil
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return runner.RunOnce(ctx)
+	}
+	crash := errors.New("batch write interrupted")
+	store.failWrite = crash
+	if p, err := pass(); !errors.Is(err, crash) || p.Removed != 0 {
+		t.Fatalf("interrupted reaping %+v: %v", p, err)
+	}
+	if _, err := outbox.mailbox.ReadOutbox(ctx, effectKey); err != nil {
+		t.Fatalf("missing original entry after interrupted write: %v", err)
+	}
+	if id, _, err := outbox.mailbox.ReadSendOutcomes(ctx, effectKey); err != nil || id != (Id{}) {
+		t.Fatalf("incomplete batch changed receipt %s: %v", id, err)
+	}
+	store.beforeWrite = func() {
+		clock.Advance(time.Minute)
+		legacy()
+	}
+	if p, err := pass(); err != nil || p.Removed != 1 || p.Sent != 0 {
+		t.Fatalf("restart %+v: %v", p, err)
+	}
+	if _, err := outbox.mailbox.ReadOutbox(ctx, effectKey); !errors.Is(err, ErrSmtpMailboxNotFound) {
+		t.Fatalf("reaped entry: %v", err)
+	}
+	receipt, err := newTestMailOutbox(t, store, signer, nil).Lookup(ctx, nil, effectKey)
+	if err != nil || receipt.State != ApprovalOutcomeDone || !bytes.Equal(receipt.EffectRef, sendId.Bytes()) {
+		t.Fatalf("post-reap receipt %+v: %v", receipt, err)
+	}
+	record := &protocol.MailOutcomeRecord{}
+	if err := proto.Unmarshal(store.file(path).content, record); err != nil || len(record.Outcomes) != 1 ||
+		record.Outcomes[0].UpdateTimeMs != uint64(clock.Now().UnixMilli()) || !bytes.Equal(record.ProtoReflect().GetUnknown(), []byte{0x78, 1}) {
+		t.Fatalf("winning receipt fields %+v: %v", record, err)
 	}
 }
 
@@ -371,6 +583,60 @@ func testMailSendOutbox(t *testing.T, world *mailClientTestWorld) map[string]*Sm
 		files[string(key)] = file
 	}
 	return files
+}
+
+// The normal submission keeps a verified domain in From and Message-ID, checks the local alias's
+// policy, and uses the strict domain's bounce address. Ownership must still hold at approval spend.
+func TestMailSubmitSelectsAndRechecksAVerifiedCustomFrom(t *testing.T) {
+	world, parts, _ := newMailSendTestWorld(t)
+	setDomains := func(entitled bool, domains ...string) {
+		world.api.stateLock.Lock()
+		defer world.api.stateLock.Unlock()
+		world.api.status = &MailNetworkStatus{Enabled: true, VerifiedDomains: domains,
+			MaySendFromCustomDomains: entitled, StrictDomains: []string{"brand.example"}}
+	}
+	setDomains(true, "brand.example")
+	signer := newTestMailOutboxSigner(world.device)
+	testMailSendBindOutbox(world, signer, testMailOutboxStanding(AbuseStandingStandard, true))
+	draft := &MailSendArgs{To: []string{"someone@outside.example"}, Subject: "Team mail", Text: "Hello"}
+	for _, from := range []string{"bo@brand.example", "ann@sub.brand.example", "ann@another.example"} {
+		draft.From = from
+		if _, err := world.client.SubmitSend(t.Context(), draft); !errors.Is(err, ErrMailSendFromRefused) {
+			t.Fatalf("unauthorized alias or domain: %v", err)
+		}
+	}
+	draft.From = "Ann@Brand.Example"
+	setDomains(false, "brand.example")
+	if _, err := world.client.SubmitSend(t.Context(), draft); !errors.Is(err, ErrMailSendFromRefused) {
+		t.Fatalf("expired Team sending entitlement: %v", err)
+	}
+	setDomains(true, "brand.example")
+	result, err := world.client.SubmitSend(t.Context(), draft)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := testMailSendOutbox(t, world)[string(result.EffectKey)]
+	if file == nil {
+		t.Fatalf("custom From was not queued: %+v", result)
+	}
+	verified, err := VerifySmtpOutboxEntry(file, func(Id) ed25519.PublicKey { return signer.publicKey() })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(verified.Message.Sender, "@b.brand.example") ||
+		!bytes.Contains(file.Message, []byte("From: ann@brand.example\r\n")) ||
+		!bytes.Contains(file.Message, []byte("Message-ID: <"+MailOutboxMessageId(result.SendId, "brand.example")+">\r\n")) {
+		t.Fatal("the signed outbox did not preserve the custom header and envelope identities")
+	}
+	gate := &mailSubmitTestGate{beforeEffect: func() { setDomains(true) }}
+	testMailSubmitRebind(world, gate)
+	draft.To = []string{"unapproved@outside.example"}
+	if _, err := world.client.SubmitSend(t.Context(), draft); !errors.Is(err, ErrSidecarEffectNotDone) || !errors.Is(err, ErrMailSendFromRefused) {
+		t.Fatalf("withdrawn ownership at approval spend: %v", err)
+	}
+	if len(testMailSendOutbox(t, world)) != 1 || len(parts.snapshot()) != 0 {
+		t.Fatal("a refused From reached delivery")
+	}
 }
 
 // A send naming members and the internet, once the gate passes it: the member part deposits, the internet part,

@@ -30,6 +30,7 @@ type FakeDnsCustomHostMapStore struct {
 	hostReadyTimes map[string]time.Time
 	// each incident's raised version, and the hosts it listed
 	incidentVersions map[sidecar.Id]uint64
+	incidentReports  map[sidecar.Id]map[string]*dnsservice.DnsMapRestoreReport
 	incidentEntries  map[sidecar.Id][]dnsservice.DnsRestoreEntry
 	// each host's network, as a row or a verified domain names it, for a listing
 	hostNetworkIds map[string]sidecar.Id
@@ -39,11 +40,18 @@ type FakeDnsCustomHostMapStore struct {
 	restoreRaiseHook func(version uint64)
 	// reads of the state, which a test waits on to know a reader has reached its wait
 	stateReads *sidecar.MonitorValue[int]
+	// reads of the incident's interface reports during a restore
+	restoreReportReads *sidecar.MonitorValue[int]
 }
 
 // How many times the state was read, and a channel that closes at the next read.
 func (self *FakeDnsCustomHostMapStore) StateReads() (int, chan struct{}) {
 	return self.stateReads.Get()
+}
+
+// How many times a restore read its reports, and a channel that closes at the next read.
+func (self *FakeDnsCustomHostMapStore) RestoreReportReads() (int, chan struct{}) {
+	return self.restoreReportReads.Get()
 }
 
 // Calls hook with the version once a restore's raise has made it, outside the store's lock, before the raise
@@ -65,11 +73,13 @@ func NewFakeDnsCustomHostMapStore() *FakeDnsCustomHostMapStore {
 		interfaces:              map[string]*dnsservice.DnsMapInterface{},
 		hostVersions:            map[string]uint64{},
 		hostReadyTimes:          map[string]time.Time{},
+		incidentReports:         map[sidecar.Id]map[string]*dnsservice.DnsMapRestoreReport{},
 		incidentVersions:        map[sidecar.Id]uint64{},
 		incidentEntries:         map[sidecar.Id][]dnsservice.DnsRestoreEntry{},
 		hostNetworkIds:          map[string]sidecar.Id{},
 		incidentEventNetworkIds: map[sidecar.Id][]sidecar.Id{},
 		stateReads:              sidecar.NewMonitorValue(0),
+		restoreReportReads:      sidecar.NewMonitorValue(0),
 	}
 }
 
@@ -127,8 +137,29 @@ func (self *FakeDnsCustomHostMapStore) raiseForRestore(incidentId sidecar.Id) (u
 		self.hostVersions[host] = version
 		delete(self.hostReadyTimes, host)
 	}
+	reports := map[string]*dnsservice.DnsMapRestoreReport{}
+	for name := range self.interfaces {
+		reports[name] = nil
+	}
+	self.incidentReports[incidentId] = reports
 	self.incidentVersions[incidentId] = version
 	return version, true, self.restoreRaiseHook
+}
+
+// Include a captured load even after the reporting interface has left the inventory.
+func (self *FakeDnsCustomHostMapStore) RestoreMapReports(ctx context.Context, root string, incidentId sidecar.Id) (map[string]*dnsservice.DnsMapRestoreReport, error) {
+	defer self.restoreReportReads.Update(func(count int) int { return count + 1 })
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	reports := map[string]*dnsservice.DnsMapRestoreReport{}
+	for name, report := range self.incidentReports[incidentId] {
+		if report != nil {
+			reports[name] = &dnsservice.DnsMapRestoreReport{Added: slices.Clone(report.Added), Dropped: slices.Clone(report.Dropped)}
+		} else if self.interfaces[name] != nil {
+			reports[name] = nil
+		}
+	}
+	return reports, nil
 }
 
 // Lists each host not yet listed under the incident, with one admin event a network the incident lists first.
@@ -259,6 +290,18 @@ func (self *FakeDnsCustomHostMapStore) RecordMapPoll(ctx context.Context, root s
 func (self *FakeDnsCustomHostMapStore) RecordMapReport(ctx context.Context, root string, report *dnsservice.DnsCustomHostMapReport, now time.Time, routeHostCount int, droppedMaxCount int) error {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
+	var incident sidecar.Id
+	var target uint64
+	for candidate, version := range self.incidentVersions {
+		if target < version && version <= report.Version {
+			target, incident = version, candidate
+		}
+	}
+	if reports := self.incidentReports[incident]; reports != nil {
+		if stored, expected := reports[report.Interface]; expected && stored == nil {
+			reports[report.Interface] = &dnsservice.DnsMapRestoreReport{Added: slices.Clone(report.Added), Dropped: slices.Clone(report.Dropped)}
+		}
+	}
 	dnsservice.ApplyDnsMapReport(self.interfaceWithLock(report.Interface), report, now, routeHostCount, droppedMaxCount)
 	return nil
 }

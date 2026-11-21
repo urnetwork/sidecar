@@ -210,6 +210,8 @@ type ConfigClient struct {
 	saveDue bool
 
 	configLog atomic.Pointer[ConfigLog]
+	// Only the newest decrypted head this client actually verified, for offline policy tests.
+	localHead atomic.Pointer[configClientLocalHead]
 	// the log a full start builds while its pages apply, nil outside one: what VerifiedState answers before configLog
 	// holds it
 	starting atomic.Pointer[ConfigLog]
@@ -240,6 +242,9 @@ type ConfigClient struct {
 	configKeyWait <-chan struct{}
 	// this device's config writer for the network, nil for none
 	writer atomic.Pointer[ConfigWriter]
+	// For a native host with a read-only follower and a ref dedicated to explicit ACL confirmation.
+	// It shares the client lifetime and has no periodic fold loop.
+	confirmedAclWriter *ConfigWriter
 }
 
 // This device's config writer for the network, nil while none runs: what an act saving a config head goes through.
@@ -249,8 +254,18 @@ func (self *ConfigClient) Writer() *ConfigWriter {
 
 // A config head this device verified at a base.
 type configVerifiedHead struct {
-	configVersion uint64
-	settings      *protocol.ServiceSettings
+	configVersion   uint64
+	settings        *protocol.ServiceSettings
+	recoveryBodies  map[Id]*configRecoveryBody
+	recoveryKnown   bool
+	versioningRules *protocol.VersioningRules
+}
+
+// Holds the decrypted head with the version and digest the client verified for offline policy tests.
+type configClientLocalHead struct {
+	version uint64
+	chain   [sha256.Size]byte
+	head    *ConfigHead
 }
 
 // A client following args.NetworkId's log, started: it restores what authlog/ kept and follows at once, then on each
@@ -1161,7 +1176,14 @@ func (self *configClientRowsSource) CheckHead(check *ConfigHeadCheck) (*ConfigHe
 	}
 	if check.Previous == nil {
 		if verified := self.client.verifiedHead(headSha256, check.Header.GetConfigVersion()); verified != nil {
-			return &ConfigHeadFacts{Settings: verified.settings}, nil
+			rows := &bridge.ProjectionRows{}
+			needsRecovery := proto.Unmarshal(check.Rows, rows) != nil
+			for _, member := range rows.GetMembers() {
+				needsRecovery = needsRecovery || len(member.GetRecoveryKeySha256()) != 0
+			}
+			if verified.recoveryKnown || !needsRecovery {
+				return &ConfigHeadFacts{Settings: verified.settings, VersioningRules: verified.versioningRules, recoveryBodies: verified.recoveryBodies}, nil
+			}
 		}
 	}
 	if self.client.args.Heads == nil {
@@ -1179,7 +1201,8 @@ func (self *configClientRowsSource) CheckHead(check *ConfigHeadCheck) (*ConfigHe
 	if err != nil {
 		return nil, err
 	}
-	self.client.rememberHead(headSha256, check.Header.GetConfigVersion(), facts.Settings)
+	self.client.rememberHead(headSha256, check.Header.GetConfigVersion(), facts, true)
+	self.client.localHead.Store(&configClientLocalHead{version: check.Header.GetConfigVersion(), chain: [sha256.Size]byte(headSha256), head: head})
 	return facts, nil
 }
 
@@ -1195,10 +1218,10 @@ func (self *ConfigClient) verifiedHead(headSha256 []byte, configVersion uint64) 
 }
 
 // Remembers a head this device verified, keeping only those its current and previous bases name once more land.
-func (self *ConfigClient) rememberHead(headSha256 []byte, configVersion uint64, settings *protocol.ServiceSettings) {
+func (self *ConfigClient) rememberHead(headSha256 []byte, configVersion uint64, facts *ConfigHeadFacts, recoveryKnown bool) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
-	self.verifiedHeads[[sha256.Size]byte(headSha256)] = &configVerifiedHead{configVersion: configVersion, settings: settings}
+	self.verifiedHeads[[sha256.Size]byte(headSha256)] = &configVerifiedHead{configVersion: configVersion, settings: facts.Settings, versioningRules: facts.VersioningRules, recoveryBodies: facts.recoveryBodies, recoveryKnown: recoveryKnown}
 }
 
 // HeadCheckAuthSource's ChainAt: A_version as the log keeps it, false before its retention point or past its pin.

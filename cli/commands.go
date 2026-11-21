@@ -112,6 +112,8 @@ type urSettings struct {
 	// the longest link's 161 B (a 63-character label, share/, a 26-character token and a 64-character fragment), so a
 	// file piped in by mistake is not read whole. A longer line is refused; zero or less refuses every line.
 	ShareLinkByteCount int
+	// The maximum ACL policy source the parser accepts (§8.8).
+	AclSourceMaxByteCount int64
 	// How long ur search waits for a page where it names no --wait and stdout is a terminal: 10 s (§16.10's wire row);
 	// off a terminal it names none, and the daemon takes the MCP tool's default. Positive.
 	SearchTerminalWait time.Duration
@@ -136,6 +138,7 @@ func defaultUrSettings() *urSettings {
 		RelayReconnectInterval:     1 * time.Second,
 		CloseTimeout:               30 * time.Second,
 		ShareLinkByteCount:         1024,
+		AclSourceMaxByteCount:      4 * 1024 * 1024,
 		SearchTerminalWait:         10 * time.Second,
 		SearchPageCount:            64,
 	}
@@ -241,7 +244,10 @@ func (self *urCli) main(ctx context.Context, args []string) int {
 		return urExitUsage
 	}
 	// Windows runs git-remote-ur.exe, and its file names keep no one case (§4.10)
-	if base := strings.TrimSuffix(strings.ToLower(filepath.Base(args[0])), ".exe"); base == urGitRemoteName {
+	// Older clones saved the helper itself as their LFS executable. Its saved argument pair is distinct from
+	// git's <remote> <url>, even for a remote named lfs-agent.
+	savedLfsAgent := len(args) == 3 && args[1] == "lfs-agent" && strings.HasPrefix(args[2], "--repo=")
+	if base := strings.TrimSuffix(strings.ToLower(filepath.Base(args[0])), ".exe"); base == urGitRemoteName && !savedLfsAgent {
 		if urGitRemoteEntry == nil {
 			fmt.Fprintln(self.stderr, "git-remote-ur: the git remote helper is not built yet")
 			return urExitFailed

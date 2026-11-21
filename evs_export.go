@@ -25,6 +25,11 @@
 // derived or stores, never exported, and .ur-index/ files are left out of every file-mode tree. A format-2 repo's
 // collected or dropped versions (M10's) refuse.
 //
+// A file-mode version whose key a committed ERASE destroyed exports as its stub and the export goes on (§11.12's
+// retention row; evs_export_file.go, evs_export_format2.go). A git-mode version's blob so erased still ends the export
+// with ErrEvsErased, as it ends the local tier's sync, which shares applyUpdate: a stub there is another blob, so its
+// tree and commit, and every commit after them, would leave the original oids D-EVS-22 keeps.
+//
 // Refs are named by the names the caller holds: nil exports main. A source a push names is replayed for its objects
 // whether or not the caller named it, and a cycle of sources refuses the version that closes it.
 //
@@ -159,21 +164,9 @@ func (self *EvsRepo) pinnedHeadFromPin(ctx context.Context, refId Id, reseed boo
 // A ref's whole history, verified from C_0 to the pinned head and pinned again: nil for a ref with no version. A
 // file-mode export reads it whole; a git-mode one pages it (evsGitExportRef).
 func (self *EvsRepo) verifiedHistory(ctx context.Context, head *EvsVerifiedHead) (*EvsVerifiedHead, error) {
-	statements, err := self.client.readLog(ctx, self.repoId, head.RefId, 1, head.Version)
+	walked, err := self.client.verifier.walkToHead(ctx, head)
 	if err != nil {
 		return nil, err
-	}
-	start := EvsChainStart(self.repoId, head.RefId)
-	walked, err := self.client.verifier.walk(self.repoId, head.RefId, 0, start, statements, head.Version)
-	if err != nil {
-		return nil, err
-	}
-	reached := start
-	if 0 < len(walked) {
-		reached = walked[len(walked)-1].Chain
-	}
-	if reached != head.Chain {
-		return nil, fmt.Errorf("%w: the history does not chain to the head", ErrEvsChainBroken)
 	}
 	verified := &EvsVerifiedHead{RepoId: self.repoId, RefId: head.RefId, Head: head.Head, Version: head.Version, Chain: head.Chain, Statements: walked}
 	if err := self.client.verifier.Pin(verified); err != nil {
@@ -656,7 +649,7 @@ func (self *evsGitExport) applyUpdate(ctx context.Context, head *EvsVerifiedHead
 		if !change.WritesEntry() {
 			continue
 		}
-		file, err := self.repo.exportBlob(ctx, self.objects, head, self.keys, statement, change)
+		file, err := self.repo.exportBlob(ctx, self.objects, head, self.keys, statement, change, "")
 		if err != nil {
 			return nil, err
 		}
@@ -914,7 +907,7 @@ func (self *evsGitExport) historyBlob(ctx context.Context, result *evsReadResult
 // One entry of a push reconstructed into a blob written to sink, its oid checked by reconstruction, and the file's
 // sealed mode and oid; nil for an entry that is no file's. A gitlink, whose oid names a commit and which has no
 // content, writes nothing and answers its mode and oid.
-func (self *EvsRepo) exportBlob(ctx context.Context, sink EvsGitObjectSink, head *EvsVerifiedHead, keys *evsReadKeys, statement *EvsVerifiedStatement, change *EvsCheckedChange) (*evsGitWrittenFile, error) {
+func (self *EvsRepo) exportBlob(ctx context.Context, sink EvsGitObjectSink, head *EvsVerifiedHead, keys *evsReadKeys, statement *EvsVerifiedStatement, change *EvsCheckedChange, path string) (*evsGitWrittenFile, error) {
 	entry := &protocol.EvsEntryVersion{}
 	if err := proto.Unmarshal(change.EntryVersion, entry); err != nil {
 		return nil, fmt.Errorf("%w: an entry that does not parse", ErrEvsEntryRefused)
@@ -925,6 +918,7 @@ func (self *EvsRepo) exportBlob(ctx context.Context, sink EvsGitObjectSink, head
 	result := &evsReadResult{refId: head.RefId, head: head, keys: keys, objects: newEvsReadObjects(self.client)}
 	defer result.objects.close()
 	verified := &EvsVerifiedPath{TokenPath: change.TokenPath, EntryBytes: change.EntryVersion, Entry: entry, Statement: statement.Statement, CommitVersion: statement.Version}
+	result.exportPath = path
 	spill := newEvsSpill(self.client.args.Store, self.client.settings.DeltaBaseMemoryByteCount)
 	defer spill.close()
 	info, err := self.reconstruct(ctx, result, verified, spill)

@@ -36,11 +36,34 @@ func (self *AclGateView) MayReceive(networkId Id, receiver AclSubject, scope Acl
 	if deny != 0 {
 		return aclDeny(deny)
 	}
+	return state.mayReceive(receiver, scope, now)
+}
+
+// Resolves a tlsa request's scope and its listen grant in one verified snapshot.
+// The empty label names the network's own receiver.
+func (self *AclGateView) MayReceiveByScopeLabel(networkId Id, receiver AclSubject, label string, now time.Time) AclDecision {
+	snapshot, deny := self.snapshot(networkId)
+	if deny != 0 {
+		return aclDeny(deny)
+	}
+	var scope AclScope
+	if label != "" {
+		var found bool
+		scope, found = snapshot.Config.TeamScope(label)
+		if !found {
+			return aclDeny(AclReasonNoState)
+		}
+	}
+	return snapshot.Acl.mayReceive(receiver, scope, now)
+}
+
+// Checks whether the receiver may listen on the mail socket named by the scope.
+func (self *AclState) mayReceive(receiver AclSubject, scope AclScope, now time.Time) AclDecision {
 	name := aclMailReceiverName
 	if scope.Label != "" {
 		name = aclMailReceiverName + "." + scope.Label
 	}
-	return state.MayListenInScope(receiver, AclSocketName{PublicName: name}, scope, now)
+	return self.MayListenInScope(receiver, AclSocketName{PublicName: name}, scope, now)
 }
 
 // Whether a subject may send mail through smtpedge: a send grant with mail_send (D-ACL-12). The From domain is
@@ -51,6 +74,23 @@ func (self *AclGateView) MaySendMail(networkId Id, subject AclSubject, now time.
 		return aclDeny(deny)
 	}
 	return state.MaySend(subject, now)
+}
+
+// The send grant and From-domain scope labels at the same verified position. An unavailable projection
+// holds the preamble. A loaded projection with no Team scope rows can authorize ordinary network mail.
+func (self *AclGateView) MaySendMailWithScopes(networkId Id, subject AclSubject, now time.Time) (AclDecision, []string) {
+	snapshot, deny := self.snapshot(networkId)
+	if deny != 0 {
+		return aclDeny(deny), nil
+	}
+	if snapshot.Config == nil {
+		return aclDeny(AclReasonNoState), nil
+	}
+	decision := snapshot.Acl.MaySend(subject, now)
+	if !decision.Allowed {
+		return decision, nil
+	}
+	return decision, snapshot.Config.TeamScopeLabels()
 }
 
 // Whether a receiver honors a mailcfg record its creator signed for an alias (§15.10): only while policy grants the

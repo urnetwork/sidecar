@@ -144,7 +144,9 @@ func TestGkmClientReachesTheEngineForItsUpkeepAndAClaim(t *testing.T) {
 		sidecarFacts:  map[sidecar.Id]*gkmservice.GkmSidecarFacts{},
 		sidecarRights: map[sidecar.Id]sidecar.AclEvsRights{},
 	}
-	engine, err := gkmservice.NewGkmEngine(ctx, host.ServiceHost(), nil, &gkmservice.GkmEngineDeps{AuthState: state})
+	legacy := gkmservice.DefaultGkmServiceSettings()
+	legacy.DraftMls = true
+	engine, err := gkmservice.NewGkmEngine(ctx, host.ServiceHost(), legacy, &gkmservice.GkmEngineDeps{AuthState: state})
 	if err != nil {
 		t.Fatal(err)
 	}

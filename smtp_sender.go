@@ -53,6 +53,7 @@ import (
 	"bytes"
 	"context"
 	cryptorand "crypto/rand"
+	"crypto/sha256"
 	"encoding/base32"
 	"encoding/hex"
 	"errors"
@@ -90,8 +91,8 @@ type SmtpSenderArgs struct {
 	// Whether a sidecar is one of the mailbox owner's consented devices (§8.5; owner decision 126), whose p/ records
 	// alone Check reads; nil counts none.
 	MemberDevice func(sidecarId Id) bool
-	// The host's last measure (SmtpProverHost.Measure), for Check's cap and delay and too_large's cap; nil
-	// reads none.
+	// The host's current completed measure (SmtpProverHost.Measure). Until it exists Send only queues
+	// and Check uses the member's prover hosts. A measured cap of zero still admits BDAT.
 	Measure func() *SmtpProverMeasure
 	// The key sets the host's last PrepareKeys reported ready, newest first, which KEYS falls back on; nil
 	// reads none.
@@ -125,8 +126,6 @@ type SmtpSenderArgs struct {
 type smtpDomainRetry struct {
 	// the last connection's send_id, which the next names as retry_of_send_id
 	retryOfSendId []byte
-	// recipients already taken, which a retry leaves out, and those still to send; nil is every recipient
-	delivered []string
 }
 
 // One network's sender. See the file header.
@@ -240,6 +239,9 @@ func (self *SmtpSender) dsnCountsSent(dsnCount uint32, hardBounceCount uint32) {
 
 // One recipient domain of a send.
 type smtpDomainPlan struct {
+	progress *smtpRecipientProgress
+	// This attempt takes over an earlier queued send.
+	resend bool
 	// lowercase, with no trailing dot
 	domain string
 	// addr-specs, the domain lowercase, in the order named, each once
@@ -416,6 +418,11 @@ func (self *SmtpSender) replay(earlier *SmtpDomainOutcome, now time.Time) (keep 
 // answer (the send is held), or a closed sender. Otherwise every domain has its outcome in the answer, in the
 // order each domain first appears among the recipients.
 func (self *SmtpSender) Send(ctx context.Context, message *SmtpOutboundMessage) (*SmtpSendResult, error) {
+	return self.send(ctx, message, nil)
+}
+
+// A member outbox supplies the verified signed body. A direct caller uses the canonical encoding of its message.
+func (self *SmtpSender) send(ctx context.Context, message *SmtpOutboundMessage, signedBody []byte) (*SmtpSendResult, error) {
 	plan, err := self.plan(message)
 	if err != nil {
 		return nil, err
@@ -434,14 +441,9 @@ func (self *SmtpSender) Send(ctx context.Context, message *SmtpOutboundMessage) 
 	stopClose := context.AfterFunc(self.ctx, cancel)
 	defer stopClose()
 
-	if self.args.Prover == nil || len(self.args.Prover.KeySet()) == 0 {
-		// a host with no ready key set only queues: its outbox entry waits for a prover host (D-SMTP-18)
-		result := &SmtpSendResult{EffectKey: bytes.Clone(message.EffectKey)}
-		now := self.clock.Now()
-		for _, domainPlan := range plan.domains {
-			result.Domains = append(result.Domains, &SmtpDomainOutcome{Domain: domainPlan.domain, Outcome: SmtpOutcomeQueued, UpdateTime: now})
-		}
-		return result, nil
+	if self.localMeasure() == nil {
+		// Its outbox entry waits for a host with a ready measured family (D-SMTP-18, QD-483).
+		return self.currentResult(ctx, plan)
 	}
 
 	earlierOutcomes, err := self.args.Mailbox.ReadOutcomes(ctx, message.EffectKey)
@@ -456,6 +458,13 @@ func (self *SmtpSender) Send(ctx context.Context, message *SmtpOutboundMessage) 
 	outcomes := &smtpOutcomeBoard{sender: self, effectKey: message.EffectKey, sendId: message.SendId}
 	result := &SmtpSendResult{EffectKey: bytes.Clone(message.EffectKey)}
 	toSend := []*smtpDomainPlan{}
+	if signedBody == nil {
+		signedBody, err = smtpOutboxEntryBody(message)
+		if err != nil {
+			return nil, err
+		}
+	}
+	envelopeHash := sha256.Sum256(signedBody)
 	for _, domainPlan := range plan.domains {
 		earlier := earlierByDomain[domainPlan.domain]
 		keep, resend := self.replay(earlier, now)
@@ -463,10 +472,17 @@ func (self *SmtpSender) Send(ctx context.Context, message *SmtpOutboundMessage) 
 			outcomes.keep(earlier)
 			continue
 		}
-		if resend {
-			result.ResentDomains = append(result.ResentDomains, domainPlan.domain)
+		domainPlan.resend = resend
+		var saved *protocol.MailRecipientProgress
+		if earlier != nil {
+			saved = earlier.progress
 		}
-		outcomes.set(&SmtpDomainOutcome{Domain: domainPlan.domain, Outcome: SmtpOutcomeQueued, UpdateTime: now}, earlier)
+		progress, err := newSmtpRecipientProgress(envelopeHash, domainPlan, saved)
+		if err != nil {
+			return nil, err
+		}
+		domainPlan.progress = progress
+		outcomes.set(&SmtpDomainOutcome{Domain: domainPlan.domain, Outcome: SmtpOutcomeQueued, UpdateTime: now, progress: progress.record}, earlier)
 		toSend = append(toSend, domainPlan)
 	}
 	// queued as each starts, before any connection, so a crash between MAIL and the result is seen
@@ -477,10 +493,18 @@ func (self *SmtpSender) Send(ctx context.Context, message *SmtpOutboundMessage) 
 	}
 	stopProgress := outcomes.progress(ctx)
 	for _, domainPlan := range toSend {
-		outcome := self.sendDomain(ctx, plan, domainPlan, earlierByDomain[domainPlan.domain])
+		if ctx.Err() != nil {
+			// Unstarted domains already have a queued claim for takeover.
+			break
+		}
+		if domainPlan.resend {
+			result.ResentDomains = append(result.ResentDomains, domainPlan.domain)
+		}
+		outcome := self.sendDomain(ctx, plan, domainPlan, earlierByDomain[domainPlan.domain], outcomes)
 		outcomes.set(outcome, earlierByDomain[domainPlan.domain])
-		if err := outcomes.write(ctx); err != nil && self.log.V(1).Enabled() {
-			self.log.Infof("[smtp]send %s: or/ was not written: %v\n", hex.EncodeToString(message.EffectKey), err)
+		if err := outcomes.writeResult(ctx); err != nil {
+			stopProgress()
+			return nil, err
 		}
 	}
 	stopProgress()
@@ -546,15 +570,12 @@ func (self *SmtpSender) keySets() [][]byte {
 	return keySets
 }
 
-// The DATA cap the host's last measure records, 0 when none.
-func (self *SmtpSender) dataProofByteCount() uint64 {
-	if self.args.Measure == nil {
-		return 0
+// A local send needs both a ready key set and its measurement. A zero DATA cap is a completed measurement.
+func (self *SmtpSender) localMeasure() *SmtpProverMeasure {
+	if self.args.Prover == nil || len(self.args.Prover.KeySet()) == 0 || self.args.Measure == nil {
+		return nil
 	}
-	if measure := self.args.Measure(); measure != nil {
-		return measure.DataProofBytes
-	}
-	return 0
+	return self.args.Measure()
 }
 
 // Waits for a proving slot, and the prover host's hold, until ctx ends.
@@ -563,6 +584,12 @@ func (self *SmtpSender) takeProvingSlot(ctx context.Context) (release func(), er
 	case self.proving <- struct{}{}:
 	case <-ctx.Done():
 		return nil, ctx.Err()
+	}
+	// Key preparation can advance while a domain waits for its slot. An unmeasured domain must
+	// leave the idle measurement running so a later pass can send.
+	if self.localMeasure() == nil {
+		<-self.proving
+		return nil, ErrSmtpProverUnmeasured
 	}
 	releaseHold := func() {}
 	if self.args.SendHold != nil {
@@ -576,12 +603,18 @@ func (self *SmtpSender) takeProvingSlot(ctx context.Context) (release func(), er
 
 // One domain's send, from its first connection to its outcome, with every immediate reconnect §14.5 and
 // DESIGN-DETAILS 3.7 allow, and the DSN an end gives.
-func (self *SmtpSender) sendDomain(ctx context.Context, plan *smtpSendPlan, domainPlan *smtpDomainPlan, earlier *SmtpDomainOutcome) *SmtpDomainOutcome {
+func (self *SmtpSender) sendDomain(ctx context.Context, plan *smtpSendPlan, domainPlan *smtpDomainPlan, earlier *SmtpDomainOutcome, board *smtpOutcomeBoard) *SmtpDomainOutcome {
 	message := plan.message
 	domain := domainPlan.domain
-	outcome := &SmtpDomainOutcome{Domain: domain}
+	progress := domainPlan.progress
+	outcome := &SmtpDomainOutcome{Domain: domain, progress: progress.record}
+	remaining := func() []string { return progress.remaining(domainPlan.recipients) }
+	pending := remaining()
 	end := func(kind SmtpOutcomeKind, dsn *SmtpDsn) *SmtpDomainOutcome {
 		outcome.Outcome = kind
+		if kind != SmtpOutcomeTooLarge {
+			outcome.progress = nil
+		}
 		outcome.UpdateTime = self.clock.Now()
 		self.forgetDomainRetry(message.EffectKey, domain)
 		if dsn != nil {
@@ -595,11 +628,12 @@ func (self *SmtpSender) sendDomain(ctx context.Context, plan *smtpSendPlan, doma
 			// past the give-up time: the message ends with a DSN
 			return end(SmtpOutcomeFailed, &SmtpDsn{
 				Outcome:    SmtpOutcomeFailed,
-				Recipients: self.dsnRecipients(domainPlan.recipients, smtpDsnStatusExpired, 0),
+				Recipients: self.dsnRecipients(remaining(), smtpDsnStatusExpired, 0),
 				Reason:     "It could not be delivered within " + smtpDurationText(self.settings.RetryGiveUpTimeout) + ". " + reason,
 			})
 		}
 		outcome.Outcome = SmtpOutcomeDeferred
+		outcome.progress = progress.record
 		outcome.RetryAfter = max(next.Sub(now), 0)
 		outcome.UpdateTime = now
 		return outcome
@@ -611,19 +645,16 @@ func (self *SmtpSender) sendDomain(ctx context.Context, plan *smtpSendPlan, doma
 	if plan.wire == nil {
 		return end(SmtpOutcomeFailed, &SmtpDsn{
 			Outcome:    SmtpOutcomeFailed,
-			Recipients: self.dsnRecipients(domainPlan.recipients, smtpDsnStatusOther, 0),
+			Recipients: self.dsnRecipients(remaining(), smtpDsnStatusOther, 0),
 			Reason:     "The message's headers could not be brought into the form a provable send needs.",
 		})
 	}
 	retryState := self.domainRetry(message.EffectKey, domain)
-	pending := slices.DeleteFunc(slices.Clone(domainPlan.recipients), func(recipient string) bool {
-		return slices.Contains(retryState.delivered, recipient)
-	})
 	if len(pending) == 0 {
-		outcome.Outcome = SmtpOutcomeSent
-		outcome.UpdateTime = self.clock.Now()
-		self.forgetDomainRetry(message.EffectKey, domain)
-		return outcome
+		if len(progress.record.Delivered) != 0 {
+			return end(SmtpOutcomeSent, nil)
+		}
+		return end(SmtpOutcomeRefused, nil)
 	}
 	// a retry's units: at most RetryUnitsPerMessagePerDay a UTC day
 	isRetry := earlier != nil
@@ -644,17 +675,22 @@ func (self *SmtpSender) sendDomain(ctx context.Context, plan *smtpSendPlan, doma
 	if err != nil {
 		return scheduled("")
 	}
-	keySets := self.keySets()
-	if len(keySets) == 0 {
+	release, err := self.takeProvingSlot(ctx)
+	if errors.Is(err, ErrSmtpProverUnmeasured) {
 		outcome.Outcome = SmtpOutcomeQueued
 		outcome.UpdateTime = self.clock.Now()
 		return outcome
 	}
-	release, err := self.takeProvingSlot(ctx)
 	if err != nil {
 		return scheduled("")
 	}
 	defer release()
+	keySets := self.keySets()
+	if len(keySets) == 0 || self.localMeasure() == nil {
+		outcome.Outcome = SmtpOutcomeQueued
+		outcome.UpdateTime = self.clock.Now()
+		return outcome
+	}
 	// the envelope as the edge derives it now, read once the slot is held so no wait for it can stale the read
 	sender := message.Sender
 	if self.args.Envelope != nil {
@@ -666,10 +702,6 @@ func (self *SmtpSender) sendDomain(ctx context.Context, plan *smtpSendPlan, doma
 
 	keySetIndex := 0
 	reconnected, envelopeRetried, resent := false, false, false
-	refused := []*SmtpDsnRecipient{}
-	// recipients a 4xx at RCPT left for the next retry
-	temporary := []string{}
-	delivered := slices.Clone(retryState.delivered)
 	retryOfSendId := retryState.retryOfSendId
 	for {
 		dsnCount, hardBounceCount := self.dsnCounts()
@@ -734,7 +766,7 @@ func (self *SmtpSender) sendDomain(ctx context.Context, plan *smtpSendPlan, doma
 			if errors.Is(connectionResult.Err, ErrSmtpDkimPublishRefused) {
 				return end(SmtpOutcomeFailed, &SmtpDsn{
 					Outcome:    SmtpOutcomeFailed,
-					Recipients: self.dsnRecipients(pending, smtpDsnStatusOther, 0),
+					Recipients: self.dsnRecipients(remaining(), smtpDsnStatusOther, 0),
 					Reason:     "This device's signing key for the sender's domain was refused, so the message could not be signed.",
 				})
 			}
@@ -751,7 +783,7 @@ func (self *SmtpSender) sendDomain(ctx context.Context, plan *smtpSendPlan, doma
 			protocol.SmtpPreambleCode_SMTP_PREAMBLE_DENIED:
 			return end(SmtpOutcomeFailed, &SmtpDsn{
 				Outcome:    SmtpOutcomeFailed,
-				Recipients: self.dsnRecipients(pending, smtpDsnStatusOther, 0),
+				Recipients: self.dsnRecipients(remaining(), smtpDsnStatusOther, 0),
 				Reason:     smtpPreambleEndReason(connectionResult.PreambleCode),
 			})
 		case protocol.SmtpPreambleCode_SMTP_PREAMBLE_OK:
@@ -762,7 +794,7 @@ func (self *SmtpSender) sendDomain(ctx context.Context, plan *smtpSendPlan, doma
 		if refusal := connectionResult.TlsRefusal; refusal != nil {
 			return end(SmtpOutcomeTlsRefused, &SmtpDsn{
 				Outcome:    SmtpOutcomeTlsRefused,
-				Recipients: self.dsnRecipients(pending, SmtpTlsRefusalStatus, 0),
+				Recipients: self.dsnRecipients(remaining(), SmtpTlsRefusalStatus, 0),
 				Reason:     refusal.Reason(),
 			})
 		}
@@ -772,16 +804,19 @@ func (self *SmtpSender) sendDomain(ctx context.Context, plan *smtpSendPlan, doma
 			return scheduled("")
 		}
 		switch {
+		case proof.RequireTlsMissing:
+			return end(SmtpOutcomeTlsRefused, &SmtpDsn{
+				Outcome:    SmtpOutcomeTlsRefused,
+				Recipients: self.dsnRecipients(remaining(), smtpDsnStatusRequireTlsMissing, 0),
+				Reason:     "The receiving mail server did not advertise REQUIRETLS after TLS was established.",
+			})
 		case proof.TooLarge:
 			byteCount, _ := plan.wire.ByteCount(SmtpModeData)
 			outcome.ByteCount = byteCount
 			outcome.CapByteCount = proof.DataProofByteCount
-			if outcome.CapByteCount == 0 {
-				outcome.CapByteCount = self.dataProofByteCount()
-			}
 			return end(SmtpOutcomeTooLarge, &SmtpDsn{
 				Outcome:      SmtpOutcomeTooLarge,
-				Recipients:   self.dsnRecipients(pending, smtpDsnStatusTooLarge, 0),
+				Recipients:   self.dsnRecipients(remaining(), smtpDsnStatusTooLarge, 0),
 				ByteCount:    outcome.ByteCount,
 				CapByteCount: outcome.CapByteCount,
 			})
@@ -801,7 +836,7 @@ func (self *SmtpSender) sendDomain(ctx context.Context, plan *smtpSendPlan, doma
 			if envelopeRetried {
 				return end(SmtpOutcomeFailed, &SmtpDsn{
 					Outcome:    SmtpOutcomeFailed,
-					Recipients: self.dsnRecipients(pending, smtpDsnStatusOther, 0),
+					Recipients: self.dsnRecipients(remaining(), smtpDsnStatusOther, 0),
 					Reason:     "The receiving mail server's replies could not be proven, even one command at a time.",
 				})
 			}
@@ -812,66 +847,67 @@ func (self *SmtpSender) sendDomain(ctx context.Context, plan *smtpSendPlan, doma
 			}
 			continue
 		case proof.Accepted:
-			delivered = append(delivered, pending...)
-			self.noteReach(message, pending, plan.wire, connectionResult.MxHost)
-			var dsn *SmtpDsn
-			if len(refused) != 0 {
-				dsn = &SmtpDsn{Outcome: SmtpOutcomeRefused, Recipients: refused}
+			for _, recipient := range pending {
+				progress.finish(recipient, true)
 			}
-			if len(temporary) != 0 {
-				// the taken are delivered; the 4xx's wait for the next retry, which leaves the delivered out
-				retryState.delivered = delivered
-				if dsn != nil {
-					self.depositDsn(ctx, plan, domain, dsn)
-				}
+			self.noteReach(message, pending, plan.wire, connectionResult.MxHost)
+			if len(remaining()) != 0 {
 				return scheduled("")
 			}
-			return end(SmtpOutcomeSent, dsn)
+			return end(SmtpOutcomeSent, nil)
 		}
 
-		// refused somewhere. A send the MX took some recipients of and refused others at RCPT resends at once to
-		// the taken alone; the refused get a DSN, and a 4xx's recipients wait for the next retry
-		codes := proof.RecipientReplyCodes
-		if len(codes) == len(pending) && !resent {
-			taken := []string{}
-			temporaryHere := []string{}
-			refusedHere := []*SmtpDsnRecipient{}
-			for i, recipient := range pending {
-				switch code := codes[i]; {
-				case 200 <= code && code < 300:
-					taken = append(taken, recipient)
-				case 500 <= code && code < 600:
-					refusedHere = append(refusedHere, &SmtpDsnRecipient{Address: recipient, Status: smtpDsnStatusOfReply(code), ReplyCode: code})
-				default:
-					temporaryHere = append(temporaryHere, recipient)
-				}
-			}
-			if 0 < len(taken) && len(taken) < len(pending) {
-				resent = true
-				refused = append(refused, refusedHere...)
-				temporary = temporaryHere
-				pending = taken
-				continue
-			}
-		}
-		// no recipient taken: the reply that ended the send speaks for every one left
+		// An RCPT reply only speaks for that address. Zero means the command was never answered.
 		code, _ := strconv.ParseUint(proof.RefusedCode, 10, 32)
-		if 500 <= code && code < 600 {
-			outcome.ReplyCode = uint32(code)
-			for _, recipient := range pending {
-				if !slices.ContainsFunc(refused, func(dsnRecipient *SmtpDsnRecipient) bool { return dsnRecipient.Address == recipient }) {
-					refused = append(refused, &SmtpDsnRecipient{Address: recipient, Status: smtpDsnStatusOfReply(uint32(code)), ReplyCode: uint32(code)})
-				}
-			}
-			if 0 < len(delivered) {
-				return end(SmtpOutcomeSent, &SmtpDsn{Outcome: SmtpOutcomeRefused, Recipients: refused})
-			}
-			return end(SmtpOutcomeRefused, &SmtpDsn{Outcome: SmtpOutcomeRefused, Recipients: refused})
+		codes := proof.RecipientReplyCodes
+		if len(codes) != 0 && len(codes) != len(pending) {
+			return scheduled("")
 		}
-		// a 4xx, or no reply code: the next retry
-		retryState.delivered = delivered
+		// A failure before RCPT, or after all RCPT commands succeeded, applies to the attempted transaction.
+		// The transcript starts with EHLO and MAIL. Replies to pipelined RCPTs after a refused MAIL
+		// describe the failed transaction, even if they carry a separate bad-sequence status.
+		mailRefused := len(proof.ReplyCodes) > 1 && (proof.ReplyCodes[1] < 200 || proof.ReplyCodes[1] >= 300)
+		transaction := mailRefused || len(codes) == 0 || !slices.ContainsFunc(codes, func(reply uint32) bool { return reply < 200 || 300 <= reply })
+		var taken []string
+		var refused []*SmtpDsnRecipient
+		for i, recipient := range pending {
+			reply := uint32(code)
+			if !transaction {
+				reply = codes[i]
+			}
+			switch {
+			case !transaction && 200 <= reply && reply < 300:
+				taken = append(taken, recipient)
+			case 500 <= reply && reply < 600:
+				progress.finish(recipient, false)
+				refused = append(refused, &SmtpDsnRecipient{Address: recipient, Status: smtpDsnStatusOfReply(reply), ReplyCode: reply})
+			}
+		}
 		if len(refused) != 0 {
 			self.depositDsn(ctx, plan, domain, &SmtpDsn{Outcome: SmtpOutcomeRefused, Recipients: refused})
+		}
+		if len(taken) > 0 && !resent {
+			// Keep permanent replies before the next connection. A takeover during that connection
+			// can still send to the accepted subset and to any address whose reply was temporary.
+			if len(refused) > 0 {
+				outcome.Outcome, outcome.UpdateTime = SmtpOutcomeQueued, self.clock.Now()
+				board.set(outcome, earlier)
+				if err := board.write(ctx); err != nil {
+					return scheduled("")
+				}
+			}
+			resent = true
+			pending = taken
+			continue
+		}
+		if len(remaining()) == 0 {
+			if len(progress.record.Delivered) > 0 {
+				return end(SmtpOutcomeSent, nil)
+			}
+			if len(refused) > 0 {
+				outcome.ReplyCode = refused[0].ReplyCode
+			}
+			return end(SmtpOutcomeRefused, nil)
 		}
 		return scheduled("")
 	}

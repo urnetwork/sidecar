@@ -250,7 +250,9 @@ type RecordReadStream struct {
 
 // One log as read.
 type recordReadLog struct {
-	logId Id
+	// Changes before the signed search view changes.
+	searchRevision uint64
+	logId          Id
 	// one Sync at a time
 	syncLock sync.Mutex
 
@@ -375,6 +377,7 @@ func (self *RecordReader) Sync(ctx context.Context, logId Id) error {
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
+		log.searchRevision++
 		log.complete = false
 	}()
 	for _, head := range heads {
@@ -839,7 +842,7 @@ func (self *RecordReader) readErasures(ctx context.Context, streams RecordStream
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	for _, erasure := range erasures {
-		for _, key := range erasure.Keys {
+		for _, key := range erasure.destroyedKeys() {
 			log.erasedKeys[*key] = true
 		}
 		// an erasure's note names its entries (record_erase.go), so the ERASE alone is its record until the erasure
@@ -894,8 +897,10 @@ func (self *RecordReader) setArchived(logId Id, entryIds []Id) {
 		switch {
 		case entry.State == RecordEntryLive && archived[entry.EntryId]:
 			entry.State = RecordEntryArchived
+			log.searchRevision++
 		case entry.State == RecordEntryArchived && !archived[entry.EntryId]:
 			entry.State = RecordEntryLive
+			log.searchRevision++
 		}
 	}
 }
@@ -905,6 +910,9 @@ func (self *RecordReader) noteExpired(logId Id, entryIds []Id) {
 	log := self.readLog(logId)
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
+	if len(entryIds) > 0 {
+		log.searchRevision++
+	}
 	for _, entryId := range entryIds {
 		log.expiredEntryIds[entryId] = true
 	}
@@ -917,6 +925,9 @@ func (self *RecordReader) noteErased(logId Id, entryIds []Id, keys []*RecordSlot
 	log := self.readLog(logId)
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
+	if len(entryIds) > 0 || len(keys) > 0 {
+		log.searchRevision++
+	}
 	for _, entryId := range entryIds {
 		log.erasedEntryIds[entryId] = true
 	}
@@ -1046,7 +1057,7 @@ func (self *RecordReader) HoldsIn(logId Id, streamId Id, leaf [sha256.Size]byte)
 // carries, or false for a note of another kind's, a mailbox's paths, say.
 func recordErasureNoteBody(erasure *RecordStreamErasure) (*protocol.ErasureBody, bool) {
 	body := &protocol.ErasureBody{}
-	if len(erasure.SealedNote) == 0 || proto.Unmarshal(erasure.SealedNote, body) != nil || !bytes.Equal(body.GetErasureId(), erasure.ErasureId[:]) {
+	if erasure.Completion || len(erasure.SealedNote) == 0 || proto.Unmarshal(erasure.SealedNote, body) != nil || !bytes.Equal(body.GetErasureId(), erasure.ErasureId[:]) {
 		return nil, false
 	}
 	return body, true

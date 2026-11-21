@@ -68,8 +68,8 @@ const (
 var (
 	// A search tool's argument outside what §16.10 takes. Constant text: it never echoes an argument.
 	ErrSearchToolArguments = errors.New("search: an argument outside §16.10's: a query or filters, and scope, group_by, sort, verify, untrusted, limit and wait_ms within their ranges")
-	// A search tool's argument for what is not built yet: scope all, or a named ref. Constant text.
-	ErrSearchToolUnbuilt = errors.New("search: scope all and a named ref are not built yet: search each network on its default refs")
+	// A network-bound tool was asked to search every network the daemon hosts.
+	ErrSearchToolUnbuilt = errors.New("search: all-network scope requires a host-wide search session")
 )
 
 // What a search tool call holds to (§16.10's search in row).
@@ -222,6 +222,7 @@ type SearchToolClaim struct {
 
 // One group as the tools return it.
 type SearchToolGroup struct {
+	Network    string `json:"network,omitempty"`
 	Key        string `json:"key"`
 	AgentLabel string `json:"agent_label,omitempty"`
 	AgentId    string `json:"agent_id,omitempty"`
@@ -263,6 +264,7 @@ type SearchToolStatus struct {
 
 // One ref's coverage in a result, or one repo or ref left out and why.
 type SearchToolCoverage struct {
+	Network        string `json:"network,omitempty"`
 	RepoId         string `json:"repo_id"`
 	RefId          string `json:"ref_id,omitempty"`
 	IndexedThrough uint64 `json:"indexed_through,omitempty"`
@@ -304,6 +306,7 @@ type SearchToolProgress struct {
 
 // One repo's status as search_status gives it.
 type SearchToolRepoStatus struct {
+	Network             string `json:"network,omitempty"`
 	RepoId              string `json:"repo_id,omitempty"`
 	IndexOn             bool   `json:"index_on"`
 	FormatSupported     bool   `json:"format_supported"`
@@ -332,6 +335,7 @@ type SearchTools struct {
 	// The team directory's folded view behind search_agents (DirectoryClient.SearchAgentsFold); nil in a personal
 	// network and before the directory exists.
 	agentsFold func(hits []SearchHit) []SearchHit
+	allowRepo  func(Id) bool
 }
 
 // Tools over engine, on networkId, judged for reader (nil judges every hit untrusted); nil settings take
@@ -350,6 +354,14 @@ func NewSearchTools(engine *SearchEngine, networkId Id, reader func() *SearchTru
 		reader = func() *SearchTrustReader { return nil }
 	}
 	return &SearchTools{engine: engine, networkId: networkId, reader: reader, settings: settings}, nil
+}
+
+// Narrows the tool view to the caller's current repo grants, including queries and status without named repos.
+// The host keeps its own view. Each paged request keeps checking the original session's grant.
+func (self *SearchTools) WithRepoAccess(allow func(Id, time.Time) bool) *SearchTools {
+	narrowed := *self
+	narrowed.allowRepo = func(repo Id) bool { return allow != nil && allow(repo, self.engine.clock.Now()) }
+	return &narrowed
 }
 
 // The search tools of this Sidecar's network: its installed engine, judged for this sidecar's member by its newest
@@ -393,25 +405,13 @@ func (self *Sidecar) searchTrustReader() *SearchTrustReader {
 	if state == nil {
 		return nil
 	}
-	memberOf := func(sidecarId Id) (Id, bool) {
-		row := state.SidecarRow(sidecarId)
-		if row == nil {
-			return Id{}, false
-		}
-		member := row.GetMemberId()
-		if len(member) == 0 {
-			member = row.GetSponsor()
-		}
-		memberId, err := IdFromBytes(member)
-		return memberId, err == nil
-	}
-	memberId, ok := memberOf(identity.SidecarId)
+	memberId, ok := state.searchWriterMember(identity.SidecarId)
 	if !ok {
 		return nil
 	}
 	return &SearchTrustReader{
 		MemberId: memberId,
-		MemberOf: memberOf,
+		MemberOf: state.searchWriterMember,
 		RepoKind: func(repoId Id) protocol.RepoKind {
 			return state.Repo(repoId).GetKind()
 		},
@@ -472,7 +472,7 @@ func searchToolRepoIds(repos []string) ([]Id, error) {
 // args as the engine's request: its partitions, repos, times and §16.10's filters, the member's expanded to its
 // sidecars by the reader's state.
 func searchToolRequest(args *SearchToolArgs, reader *SearchTrustReader, pageSize int) (*SearchRequest, error) {
-	request := &SearchRequest{Text: args.Query, Fuzzy: args.Fuzzy, Scope: SearchCached, PageSize: pageSize}
+	request := &SearchRequest{Text: args.Query, Ref: args.Ref, Fuzzy: args.Fuzzy, Scope: SearchCached, PageSize: pageSize}
 	switch {
 	case args.Latest && args.More:
 		return nil, ErrSearchToolArguments
@@ -485,7 +485,7 @@ func searchToolRequest(args *SearchToolArgs, reader *SearchTrustReader, pageSize
 	if request.Repos, err = searchToolRepoIds(args.Repos); err != nil {
 		return nil, err
 	}
-	if args.Scope == "repo" && len(request.Repos) == 0 {
+	if args.Ref == string(EvsIndexRefName) || (args.Scope == "repo" || args.Ref != "") && len(request.Repos) == 0 {
 		return nil, ErrSearchToolArguments
 	}
 	if filters := args.Filters; filters != nil {
@@ -685,7 +685,7 @@ func (self *SearchTools) toolHitOf(session Id, view *SearchHit, reader *SearchTr
 	case "announcement":
 		out.Open = &SearchToolOpen{Tool: "directory_list", Arguments: open}
 	default:
-		if !view.Withheld && !untrusted {
+		if !view.Withheld && !untrusted && view.refName == "" {
 			// a file's own or a member's: evs_read takes its repo, path and version as they are
 			open = map[string]any{"repo": out.RepoId, "path": view.Path, "version": view.Version}
 		}
@@ -755,6 +755,7 @@ func (self *SearchTools) stream(ctx context.Context, session Id, args *SearchToo
 	if err != nil {
 		return nil, "", err
 	}
+	request.allowRepo = self.allowRepo
 	stream, token, err := self.engine.open(ctx, session, request)
 	if err != nil {
 		return nil, "", err
@@ -778,7 +779,7 @@ func (self *SearchTools) Search(ctx context.Context, env *SearchToolEnv, args *S
 		!slices.Contains([]string{"", "local", "none"}, args.Verify) || !slices.Contains([]string{"", "repo", "network", "all"}, args.Scope) {
 		return nil, ErrSearchToolArguments
 	}
-	if args.Scope == "all" || args.Ref != "" {
+	if args.Scope == "all" {
 		return nil, ErrSearchToolUnbuilt
 	}
 	if include && env.Taint == nil {
@@ -850,30 +851,40 @@ func (self *SearchTools) Search(ctx context.Context, env *SearchToolEnv, args *S
 	} else {
 		result.Status.NextCursor = token
 	}
-	for _, coverage := range progress.Coverage {
-		result.Coverage = append(result.Coverage, &SearchToolCoverage{
-			RepoId: coverage.RepoId.String(), RefId: coverage.RefId.String(), IndexedThrough: coverage.IndexedThrough,
-			LatestFrom: searchToolTime(coverage.LatestFrom), All: coverage.All, State: coverage.State,
-		})
-	}
-	for _, exclusion := range progress.Excluded {
-		excluded := &SearchToolCoverage{RepoId: exclusion.RepoId.String(), State: exclusion.Reason}
-		if exclusion.RefId != nil {
-			excluded.RefId = exclusion.RefId.String()
-		}
-		result.Coverage = append(result.Coverage, excluded)
-	}
+	result.Coverage = searchToolCoverageOf(&progress)
 	if by != SearchGroupByNone {
 		groups := searchGroup(hits, withheld.hits, by, self.networkId, self.engine.clock.Now(), reader, self.engine.groups)
 		for _, group := range groups[:min(len(groups), groupCount)] {
 			result.Groups = append(result.Groups, self.toolGroupOf(env.Session, group, reader, env.Fence))
 		}
-		return result, nil
+	} else {
+		for index := range withheld.hits {
+			result.Hits = append(result.Hits, self.toolHitOf(env.Session, &withheld.hits[index], reader, env.Fence))
+		}
 	}
-	for index := range withheld.hits {
-		result.Hits = append(result.Hits, self.toolHitOf(env.Session, &withheld.hits[index], reader, env.Fence))
+	if stream.scopeEnded() {
+		return nil, ErrSearchCursorExpired
 	}
 	return result, nil
+}
+
+// Formats ref coverage and exclusion reasons together for the tool response.
+func searchToolCoverageOf(progress *SearchProgress) []*SearchToolCoverage {
+	rows := make([]*SearchToolCoverage, 0, len(progress.Coverage)+len(progress.Excluded))
+	for _, coverage := range progress.Coverage {
+		rows = append(rows, &SearchToolCoverage{
+			RepoId: coverage.RepoId.String(), RefId: coverage.RefId.String(), IndexedThrough: coverage.IndexedThrough,
+			LatestFrom: searchToolTime(coverage.LatestFrom), All: coverage.All, State: coverage.State,
+		})
+	}
+	for _, exclusion := range progress.Excluded {
+		row := &SearchToolCoverage{RepoId: exclusion.RepoId.String(), State: exclusion.Reason}
+		if exclusion.RefId != nil {
+			row.RefId = exclusion.RefId.String()
+		}
+		rows = append(rows, row)
+	}
+	return rows
 }
 
 // Runs one search_agents call.
@@ -899,7 +910,7 @@ func (self *SearchTools) Agents(ctx context.Context, env *SearchToolEnv, args *S
 	reader := self.reader()
 	request := &SearchAgentsRequest{
 		Task: args.Task, GroupCount: groupCount, Include: include, Taint: env.Taint, Reader: reader, Secret: env.Secret, Admit: env.Admit,
-		Wait: wait, Fold: self.agentsFold,
+		Wait: wait, Fold: self.agentsFold, allowRepo: self.allowRepo,
 	}
 	if request.Since, err = searchToolParseTime(args.Since); err != nil {
 		return nil, err
@@ -925,6 +936,9 @@ func (self *SearchTools) Agents(ctx context.Context, env *SearchToolEnv, args *S
 	for _, group := range agents.Groups {
 		result.Groups = append(result.Groups, self.toolGroupOf(env.Session, group, reader, env.Fence))
 	}
+	if err := self.engine.cursors.visit(env.Session, agents.cursor, nil); err != nil {
+		return nil, err
+	}
 	return result, nil
 }
 
@@ -940,7 +954,7 @@ func (self *SearchTools) Status(args *SearchStatusToolArgs) (*SearchStatusToolRe
 	}
 	result := &SearchStatusToolResult{Repos: []*SearchToolRepoStatus{}}
 	read := func(repoId *Id) error {
-		status, err := self.engine.Status(repoId)
+		status, err := self.engine.status(repoId, self.allowRepo)
 		if err != nil {
 			return err
 		}
@@ -959,6 +973,9 @@ func (self *SearchTools) Status(args *SearchStatusToolArgs) (*SearchStatusToolRe
 		return result, read(nil)
 	}
 	for _, repoId := range repoIds {
+		if self.allowRepo != nil && !self.allowRepo(repoId) {
+			continue
+		}
 		if err := read(&repoId); err != nil {
 			return nil, err
 		}
@@ -1068,6 +1085,7 @@ type daemonSearchAgentsParams struct {
 type daemonSearchStatusParams struct {
 	SearchStatusToolArgs
 	Network string `json:"network,omitempty"`
+	Scope   string `json:"scope,omitempty"`
 }
 
 // The daemon's control-mode search methods over backends: search, search.agents and search.status, each on its call's
@@ -1148,12 +1166,16 @@ func DaemonSearchMethods(backends *DaemonSearchBackends) []*DaemonMethod {
 	}
 	return []*DaemonMethod{
 		{
-			Name:    DaemonMethodSearch,
-			Network: true,
+			Name:        DaemonMethodSearch,
+			Network:     true,
+			allNetworks: daemonSearchAllScope,
 			Handler: func(ctx context.Context, call *DaemonCall) (any, error) {
 				params := &daemonSearchParams{}
 				if err := decode(call, params); err != nil {
 					return nil, err
+				}
+				if params.Scope == "all" || strings.HasPrefix(params.Cursor, daemonSearchAllPrefix) {
+					return daemonSearchAll(ctx, call, params, envOf, matcherOf)
 				}
 				tools, env, err := envOf(call)
 				if err != nil {
@@ -1190,12 +1212,37 @@ func DaemonSearchMethods(backends *DaemonSearchBackends) []*DaemonMethod {
 			},
 		},
 		{
-			Name:    DaemonMethodSearchStatus,
-			Network: true,
+			Name:        DaemonMethodSearchStatus,
+			Network:     true,
+			allNetworks: daemonSearchAllScope,
 			Handler: func(ctx context.Context, call *DaemonCall) (any, error) {
 				params := &daemonSearchStatusParams{}
 				if err := decode(call, params); err != nil {
 					return nil, err
+				}
+				if params.Scope == "all" {
+					if params.Network != "" || len(params.Repos) > 0 {
+						return nil, ErrSearchToolArguments
+					}
+					if len(call.Networks) == 0 {
+						return nil, ErrSidecarSearchUnavailable
+					}
+					out := &SearchStatusToolResult{Repos: []*SearchToolRepoStatus{}}
+					for _, network := range call.Networks {
+						tools, err := toolsOf(network.Sidecar)
+						if err != nil {
+							return nil, err
+						}
+						status, err := tools.Status(&params.SearchStatusToolArgs)
+						if err != nil {
+							return nil, err
+						}
+						for _, repo := range status.Repos {
+							repo.Network = network.NetworkId.String()
+							out.Repos = append(out.Repos, repo)
+						}
+					}
+					return out, nil
 				}
 				tools, _, err := envOf(call)
 				if err != nil {

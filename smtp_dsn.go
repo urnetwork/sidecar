@@ -33,7 +33,8 @@ type SmtpDsnRecipient struct {
 	// The addr-spec, lowercase.
 	Address string
 	// RFC 3463's enhanced status, a 5.x.x: 5.0.0 for the MX's own refusal, 5.7.10 for TLS that could not be
-	// authenticated (SmtpTlsRefusalStatus), 5.3.4 for a message too large, 4.4.7 for one that timed out.
+	// authenticated (SmtpTlsRefusalStatus), 5.7.30 for a missing REQUIRETLS extension, 5.3.4 for a message
+	// too large, 4.4.7 for one that timed out.
 	Status string
 	// The MX's reply code, when it refused the recipient; 0 otherwise.
 	ReplyCode uint32
@@ -70,6 +71,9 @@ func (self *SmtpDsn) summary() string {
 	case SmtpOutcomeRefused:
 		return fmt.Sprintf("The mail server for %s refused the message.", self.RecipientDomain)
 	case SmtpOutcomeTlsRefused:
+		if len(self.Recipients) != 0 && self.Recipients[0].Status == smtpDsnStatusRequireTlsMissing {
+			return fmt.Sprintf("The REQUIRETLS message could not be sent to %s.", self.RecipientDomain)
+		}
 		return fmt.Sprintf("The message was not sent to %s: its mail server could not be authenticated well enough.", self.RecipientDomain)
 	case SmtpOutcomeTooLarge:
 		return fmt.Sprintf("The message is %d bytes, over the %d bytes this device can prove to the mail server for %s, "+
@@ -172,6 +176,8 @@ func smtpDsnStatusOfReply(code uint32) string {
 
 // RFC 3463's statuses the sender's own ends give.
 const (
+	// RFC 8689: the MX did not advertise REQUIRETLS after STARTTLS.
+	smtpDsnStatusRequireTlsMissing = "5.7.30"
 	// A message too large for the system: too_large.
 	smtpDsnStatusTooLarge = "5.3.4"
 	// Delivery time expired: given up at 5 days.

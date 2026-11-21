@@ -565,6 +565,7 @@ func (self configAclStatementRules) fold(next *configStateBuilder, statement *co
 		return err
 	}
 	next.setAclRows(rows)
+	next.state.rememberGrantAction(statement.body)
 	configApplyAclEffect(next, statement.n, effect)
 	return nil
 }

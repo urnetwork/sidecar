@@ -28,9 +28,17 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sync"
 
 	"github.com/urnetwork/sidecar/protocol"
 )
+
+// A registration on one dispatcher, tied to the engine that can still serve its cursors.
+type searchServeRegistration struct {
+	handler SubprotocolHandler
+	close   func()
+	current func() bool
+}
 
 // The component that serves remote search, beside a network's others.
 const searchServeComponentName = "search-serve"
@@ -40,6 +48,8 @@ type DaemonSearchServe struct {
 	// SEARCH's handler: SEARCH-M10-32's SearchRemoteServer.Handle, built on this network's handle on the daemon's
 	// SidecarRemoteBudget (SidecarRemoteBudget.For). Required.
 	Handler SubprotocolHandler
+	// Stock serving opens the current network engine at registration and releases its cursors on withdrawal.
+	open func() (*searchServeRegistration, error)
 	// Opens a designation's sealed services with the config generation's key, as ConfigState.SearchIndexersFor's
 	// argument does. Nil opens none, so no designation names search and nothing is served.
 	Services func(indexer ConfigIndexer) ([]protocol.IndexerService, bool)
@@ -51,7 +61,7 @@ type DaemonSearchServe struct {
 // Search.RemoteServe is on: the network's Sidecar gains the search-serve component. The answer removes it, ending
 // serving on every generation.
 func (self *Daemon) ServeRemoteSearch(networkId Id, serve *DaemonSearchServe) (func(), error) {
-	if serve == nil || serve.Handler == nil {
+	if serve == nil || (serve.Handler == nil && serve.open == nil) {
 		return nil, fmt.Errorf("%w: remote serving needs its handler", ErrDaemonRegistration)
 	}
 	sidecar, ok := self.SidecarForNetwork(networkId)
@@ -68,6 +78,9 @@ func (self *Daemon) ServeRemoteSearch(networkId Id, serve *DaemonSearchServe) (f
 type searchServeComponent struct {
 	sidecar *Sidecar
 	serve   *DaemonSearchServe
+	// Generations can briefly overlap while their dispatchers detach.
+	stateLock     sync.Mutex
+	registrations int
 }
 
 // The search-serve component of sidecar, serving with serve.
@@ -101,7 +114,7 @@ type searchServeDispatcher interface {
 // Registers or unregisters as the designation stands, at each entry the installed authority applies and every
 // Search.ServeRecheckInterval, until ctx ends, when it unregisters.
 func (self *searchServeComponent) follow(ctx context.Context, dispatcher searchServeDispatcher) {
-	var registered func()
+	var registered *searchServeRegistration
 	var authority SidecarAuthority
 	var removeCallback func()
 	entries := make(chan struct{}, 1)
@@ -114,6 +127,11 @@ func (self *searchServeComponent) follow(ctx context.Context, dispatcher searchS
 		}
 	}()
 	for {
+		// The verified follower can finish its initial read after this generation attached.
+		var followerChanged <-chan struct{}
+		if follower := self.sidecar.ConfigFollower(); follower != nil {
+			_, followerChanged = follower.state.Get()
+		}
 		if current := self.sidecar.authority(); current != authority {
 			if removeCallback != nil {
 				removeCallback()
@@ -134,6 +152,7 @@ func (self *searchServeComponent) follow(ctx context.Context, dispatcher searchS
 		case <-ctx.Done():
 			return
 		case <-entries:
+		case <-followerChanged:
 		case <-self.sidecar.clock.After(self.sidecar.settings.Search.ServeRecheckInterval):
 		}
 	}
@@ -141,35 +160,55 @@ func (self *searchServeComponent) follow(ctx context.Context, dispatcher searchS
 
 // Brings the registration to the designation: registered, nil when not, is what the last apply left, and the answer
 // is what this one leaves.
-func (self *searchServeComponent) apply(dispatcher searchServeDispatcher, registered func()) func() {
+func (self *searchServeComponent) apply(dispatcher searchServeDispatcher, registered *searchServeRegistration) *searchServeRegistration {
 	designated := self.designated()
-	switch {
-	case designated && registered == nil:
-		remove, err := dispatcher.Handle(protocol.MessageType_SEARCH, self.handle, nil)
-		if err != nil {
-			self.sidecar.log.Warningf("[search]remote serving could not register: %s", err)
-			return nil
-		}
-		if err := dispatcher.SetFeatures(SubprotocolFeatureServesSearch, nil); err != nil {
-			self.sidecar.log.Warningf("[search]remote serving could not set its bit: %s", err)
-			remove()
-			return nil
-		}
-		self.setCacheDesignated(true)
-		return remove
-	case !designated && registered != nil:
+	if registered != nil && (!designated || (registered.current != nil && !registered.current())) {
 		self.unregister(dispatcher, registered)
+		registered = nil
+	}
+	if !designated || registered != nil {
+		return registered
+	}
+	serving := &searchServeRegistration{handler: self.serve.Handler}
+	if self.serve.open != nil {
+		var err error
+		serving, err = self.serve.open()
+		if err != nil {
+			return nil
+		}
+	}
+	remove, err := dispatcher.Handle(protocol.MessageType_SEARCH, func(ctx context.Context, request *SubprotocolRequest) ([]byte, error) {
+		return self.handleWith(ctx, request, serving.handler)
+	}, nil)
+	if err != nil {
+		if serving.close != nil {
+			serving.close()
+		}
+		self.sidecar.log.Warningf("[search]remote serving could not register: %s", err)
 		return nil
 	}
-	return registered
+	release := serving.close
+	serving.close = func() {
+		remove()
+		if release != nil {
+			release()
+		}
+	}
+	if err := dispatcher.SetFeatures(SubprotocolFeatureServesSearch, nil); err != nil {
+		self.sidecar.log.Warningf("[search]remote serving could not set its bit: %s", err)
+		serving.close()
+		return nil
+	}
+	self.setCacheDesignated(true)
+	return serving
 }
 
 // Clears bit 0, then takes the handler away.
-func (self *searchServeComponent) unregister(dispatcher searchServeDispatcher, registered func()) {
+func (self *searchServeComponent) unregister(dispatcher searchServeDispatcher, registered *searchServeRegistration) {
 	if err := dispatcher.SetFeatures(0, nil); err != nil {
 		self.sidecar.log.Warningf("[search]remote serving could not clear its bit: %s", err)
 	}
-	registered()
+	registered.close()
 	self.setCacheDesignated(false)
 }
 
@@ -195,20 +234,35 @@ func (self *Sidecar) searchDesignated(services func(indexer ConfigIndexer) ([]pr
 	if err != nil {
 		return false
 	}
-	for _, indexer := range state.Indexers() {
-		if indexer.SidecarId != identity.SidecarId {
-			continue
-		}
-		if offered, opened := services(indexer); opened && slices.Contains(offered, protocol.IndexerService_INDEXER_SERVICE_SEARCH) {
-			return true
-		}
-	}
-	return false
+	return searchRemoteServesSearch(state, identity.SidecarId, services)
 }
 
 // Sets the network's cache to a designated daemon's bound, keeping the all of each repo this device reads among those it
 // holds, or back.
 func (self *searchServeComponent) setCacheDesignated(designated bool) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if designated {
+		self.registrations++
+	} else {
+		self.registrations--
+		if self.registrations != 0 {
+			return
+		}
+	}
+	// The Sidecar settings may be shared with other networks. Apply this network's
+	// signed designation to its live budget, leaving the base settings available on retirement.
+	settings := *self.sidecar.settings
+	searchSettings := *settings.Search
+	settings.Search = &searchSettings
+	if designated {
+		ApplySearchDesignatedSettings(&settings)
+	}
+	if leg, ok := self.sidecar.leg.(*sidecarConnectLeg); ok && leg.budget != nil {
+		leg.budget.stateLock.Lock()
+		leg.budget.memoryBudgetByteCount = settings.MemoryBudgetByteCount
+		leg.budget.stateLock.Unlock()
+	}
 	cache, err := self.sidecar.SearchCache()
 	if err != nil {
 		if self.sidecar.log.V(1).Enabled() {
@@ -238,12 +292,17 @@ func (self *searchServeComponent) setCacheDesignated(designated bool) {
 // SEARCH's handler beneath searchHandler's size rules: the designation checked before the engine's handler runs, and
 // the outcome counted.
 func (self *searchServeComponent) handle(ctx context.Context, request *SubprotocolRequest) ([]byte, error) {
+	return self.handleWith(ctx, request, self.serve.Handler)
+}
+
+// Rechecks designation before dispatch, counts served pages and records refusals by protocol code.
+func (self *searchServeComponent) handleWith(ctx context.Context, request *SubprotocolRequest, handler SubprotocolHandler) ([]byte, error) {
 	stats := &self.sidecar.stats
 	if !self.designated() {
 		stats.remoteRefused(protocol.ErrorCode_ERR_PERMISSION_DENIED.String())
 		return nil, &SubprotocolError{Code: protocol.ErrorCode_ERR_PERMISSION_DENIED}
 	}
-	body, err := self.serve.Handler(ctx, request)
+	body, err := handler(ctx, request)
 	if err != nil {
 		var refusal *SidecarRemoteRefusal
 		if errors.As(err, &refusal) {
@@ -263,8 +322,8 @@ func (self *searchServeComponent) handle(ctx context.Context, request *Subprotoc
 
 // Raises settings to a daemon designated for search's (owner decision 175, D-CORE-17): Search.CacheByteCount to at least
 // Search.DesignatedCacheByteCount and MemoryBudgetByteCount to at least Search.DesignatedMemoryBudgetByteCount. The
-// host applies it before NewSidecar where it runs as an indexer, as `ur indexer add`'s unit does; the cache also holds
-// the designated bound itself while designated (SearchCache.SetDesignated).
+// host applies the raised budget to the designated network at registration. The cache holds its designated bound
+// while registered (SearchCache.SetDesignated).
 func ApplySearchDesignatedSettings(settings *SidecarSettings) {
 	settings.Search.CacheByteCount = max(settings.Search.CacheByteCount, settings.Search.DesignatedCacheByteCount)
 	settings.MemoryBudgetByteCount = max(settings.MemoryBudgetByteCount, settings.Search.DesignatedMemoryBudgetByteCount)

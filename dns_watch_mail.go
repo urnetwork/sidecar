@@ -276,6 +276,8 @@ type dnsWatchChainSession struct {
 	settings   *DnsWatchStrictSettings
 	clock      Clock
 	queryCount int
+	// An address or PTR type validated locally at smtpedge and omitted from its DANE chain.
+	extraType uint16
 	// each zone's DNSKEY RRset and its DS RRset, or its parent's proof of none, as chain wire
 	zoneWire map[smtpDnsName][]byte
 	// the zone above each, by the signer of its DS answer; the root has none
@@ -287,8 +289,9 @@ type dnsWatchChainAnswer struct {
 	// NXDOMAIN
 	nameError bool
 	// the answer and authority sections' records of the chain's types, uncompressed and canonical
-	wire []byte
-	rrs  []*smtpDnsRr
+	wire        []byte
+	rrs         []*smtpDnsRr
+	answerCount int
 	// the zones whose RRSIGs are among them
 	signers []smtpDnsName
 }
@@ -328,7 +331,7 @@ func (self *dnsWatchChainSession) fetch(rrtype uint16, name smtpDnsName) (*dnsWa
 	if !usable {
 		return nil, false
 	}
-	return parseDnsWatchChainAnswer(response, rrtype, name, self.settings.Dane)
+	return parseDnsWatchChainAnswer(response, rrtype, name, self.settings.Dane, self.extraType)
 }
 
 // domain's MX hosts, as its MX answer lists them, and that answer. A domain with no MX RRset is its own host (RFC
@@ -446,21 +449,9 @@ func (self *dnsWatchChainSession) validate(mx *dnsWatchChainAnswer, tlsa []*dnsW
 		chain = append(chain, answer.wire...)
 		signers = append(signers, answer.signers...)
 	}
-	added := map[smtpDnsName]bool{}
-	for _, signer := range signers {
-		if !self.material(signer) {
-			return nil, false
-		}
-		zone := signer
-		for !added[zone] {
-			added[zone] = true
-			chain = append(chain, self.zoneWire[zone]...)
-			parent, ok := self.zoneParent[zone]
-			if !ok {
-				break
-			}
-			zone = parent
-		}
+	chain, ok := self.withZoneMaterial(chain, signers)
+	if !ok {
+		return nil, false
 	}
 	parsed, err := ParseSmtpDnssecChain(chain, self.settings.Dane)
 	if err != nil {
@@ -473,9 +464,33 @@ func (self *dnsWatchChainSession) validate(mx *dnsWatchChainAnswer, tlsa []*dnsW
 	return result, true
 }
 
+// Adds every signer's keys and parent DS to an answer, within the chain's byte budget.
+func (self *dnsWatchChainSession) withZoneMaterial(chain []byte, signers []smtpDnsName) ([]byte, bool) {
+	added := map[smtpDnsName]bool{}
+	for _, signer := range signers {
+		if !self.material(signer) {
+			return nil, false
+		}
+		zone := signer
+		for !added[zone] {
+			added[zone] = true
+			if self.settings.Dane.MaxChainByteCount-len(chain) < len(self.zoneWire[zone]) {
+				return nil, false
+			}
+			chain = append(chain, self.zoneWire[zone]...)
+			parent, ok := self.zoneParent[zone]
+			if !ok {
+				break
+			}
+			zone = parent
+		}
+	}
+	return chain, true
+}
+
 // response held to its question, NOERROR or NXDOMAIN, its answer and authority records of the chain's types in
 // dnssec_chain's form. Anything else, or a record of those types that does not encode, is no answer.
-func parseDnsWatchChainAnswer(response []byte, rrtype uint16, name smtpDnsName, dane *SmtpDaneSettings) (*dnsWatchChainAnswer, bool) {
+func parseDnsWatchChainAnswer(response []byte, rrtype uint16, name smtpDnsName, dane *SmtpDaneSettings, extraType uint16) (*dnsWatchChainAnswer, bool) {
 	var parser dnsmessage.Parser
 	header, err := parser.Start(response)
 	if err != nil || !header.Response || header.Truncated {
@@ -502,14 +517,17 @@ func parseDnsWatchChainAnswer(response []byte, rrtype uint16, name smtpDnsName, 
 		return nil, false
 	}
 	answer := &dnsWatchChainAnswer{nameError: header.RCode == dnsmessage.RCodeNameError}
-	for _, resource := range append(answers, authorities...) {
-		wire, ok := dnsWatchChainRr(resource)
+	for i, resource := range append(answers, authorities...) {
+		wire, ok := dnsWatchChainRr(resource, extraType)
 		if !ok {
 			return nil, false
 		}
 		answer.wire = append(answer.wire, wire...)
+		if i < len(answers) && len(wire) != 0 {
+			answer.answerCount++
+		}
 	}
-	answer.rrs, err = parseSmtpDnsRrs(answer.wire, dane.MaxRrCount)
+	answer.rrs, err = parseSmtpLookupRrs(answer.wire, dane.MaxRrCount, extraType)
 	if err != nil {
 		return nil, false
 	}
@@ -537,13 +555,23 @@ func dnsWatchChainType(rrtype uint16) bool {
 // resource as one uncompressed wire record, its owner and the names in an MX's or CNAME's RDATA lowercase (RFC 4034
 // §6.2): empty for a record dnssec_chain leaves out, an RRSIG over another type among them; false for one of its
 // types that does not encode.
-func dnsWatchChainRr(resource dnsmessage.Resource) ([]byte, bool) {
+func dnsWatchChainRr(resource dnsmessage.Resource, extraType uint16) ([]byte, bool) {
 	rrtype := uint16(resource.Header.Type)
-	if resource.Header.Class != dnsmessage.ClassINET || !dnsWatchChainType(rrtype) {
+	if resource.Header.Class != dnsmessage.ClassINET || (!dnsWatchChainType(rrtype) && (extraType == 0 || rrtype != extraType)) {
 		return nil, true
 	}
 	var rdata []byte
 	switch body := resource.Body.(type) {
+	case *dnsmessage.AResource:
+		rdata = body.A[:]
+	case *dnsmessage.AAAAResource:
+		rdata = body.AAAA[:]
+	case *dnsmessage.PTRResource:
+		target, ok := dnsWatchWireName(body.PTR)
+		if !ok {
+			return nil, false
+		}
+		rdata = []byte(target)
 	case *dnsmessage.MXResource:
 		exchange, ok := dnsWatchWireName(body.MX)
 		if !ok {
@@ -557,8 +585,14 @@ func dnsWatchChainRr(resource dnsmessage.Resource) ([]byte, bool) {
 		}
 		rdata = []byte(target)
 	case *dnsmessage.UnknownResource:
-		if rrtype == smtpDnsTypeRrsig && (len(body.Data) < 2 || !dnsWatchChainType(binary.BigEndian.Uint16(body.Data[:2]))) {
-			return nil, true
+		if rrtype == smtpDnsTypeRrsig {
+			if len(body.Data) < 2 {
+				return nil, false
+			}
+			covered := binary.BigEndian.Uint16(body.Data)
+			if !dnsWatchChainType(covered) && (extraType == 0 || covered != extraType) {
+				return nil, true
+			}
 		}
 		// TLSA, DNSKEY, DS, NSEC, NSEC3 and RRSIG carry no compressible name (RFC 3597 §4, RFC 4034)
 		rdata = body.Data

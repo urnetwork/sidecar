@@ -35,6 +35,26 @@ func testSearchTools(t *testing.T, world *testEngineWorld) *SearchTools {
 	return tools
 }
 
+func TestSearchToolsOpenNamedRefAfterCut(t *testing.T) {
+	world, cut := newTestNamedRefScan(t)
+	cut()
+	repoId, refId := world.sync.repoId, world.sync.refId
+	ref := world.scope.repos[0].Refs[1]
+	ref.IndexOff, ref.Unbuilt = false, true
+	tools := testSearchTools(t, world)
+	session := evsTestId("tool scan")
+	result, err := tools.Search(t.Context(), &SearchToolEnv{Session: session}, &SearchToolArgs{
+		Query: "harbor", Repos: []string{"id:" + repoId.String()}, Ref: "draft",
+	})
+	if err != nil || len(result.Hits) != 1 || result.Hits[0].Ref != refId.String() || result.Hits[0].Stub || result.Hits[0].Open.Arguments["hit"] != result.Hits[0].HitId {
+		t.Fatalf("named tool search: %+v, %v", result, err)
+	}
+	opened, err := tools.OpenHit(session, result.Hits[0].HitId)
+	if err != nil || opened.RefId != refId || opened.RefName != "draft" {
+		t.Fatalf("named hit: %+v, %v", opened, err)
+	}
+}
+
 func TestSearchToolsRefuseArgumentsOutsideTheirRanges(t *testing.T) {
 	world := newTestEngineWorld(t, nil, testEngineDocument(t, "doc", 1, 1, "notes/a.md", "rate limiter notes"))
 	tools := testSearchTools(t, world)
@@ -49,6 +69,8 @@ func TestSearchToolsRefuseArgumentsOutsideTheirRanges(t *testing.T) {
 		{Query: "limiter", GroupBy: "agent", Limit: 51},
 		{Query: "limiter", Scope: "galaxy"},
 		{Query: "limiter", Scope: "repo"},
+		{Query: "limiter", Ref: "main"},
+		{Query: "limiter", Repos: []string{"id:" + world.sync.repoId.String()}, Ref: string(EvsIndexRefName)},
 		{Query: "limiter", GroupBy: "colour"},
 		{Query: "limiter", Untrusted: "maybe"},
 		{Query: "limiter", Verify: "fetch"},
@@ -65,7 +87,7 @@ func TestSearchToolsRefuseArgumentsOutsideTheirRanges(t *testing.T) {
 			t.Errorf("%+v: %v", args, err)
 		}
 	}
-	for _, args := range []*SearchToolArgs{{Query: "limiter", Scope: "all"}, {Query: "limiter", Ref: "main"}} {
+	for _, args := range []*SearchToolArgs{{Query: "limiter", Scope: "all"}} {
 		if _, err := tools.Search(context.Background(), env, args); !errors.Is(err, ErrSearchToolUnbuilt) {
 			t.Errorf("%+v: %v", args, err)
 		}
@@ -472,5 +494,130 @@ func TestDaemonSearchMethods(t *testing.T) {
 		if response = dispatch(DaemonModeControl, pid, line); response.Error == nil || response.Result != nil {
 			t.Fatalf("a search answered unchecked: %+v %s", response.Error, response.Result)
 		}
+	}
+}
+
+func TestDaemonSearchAllResumesAcrossHostedNetworks(t *testing.T) {
+	daemon := newDispatchTestDaemon(t)
+	hosted := map[*Sidecar]*SearchTools{}
+	worlds := []*testEngineWorld{}
+	for _, label := range []string{"east", "west"} {
+		world := newTestEngineWorld(t, nil, testEngineDocument(t, label, 1, 1, label+".md", "harbor log"))
+		worlds = append(worlds, world)
+		networkId := evsTestId(label + " network")
+		shell := newSidecarBase(nil, cheapKeychainSettings())
+		if err := daemon.AddSidecar(networkId, shell); err != nil {
+			t.Fatal(err)
+		}
+		tools, err := NewSearchTools(world.engine, networkId, testTrustReader, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hosted[shell] = tools
+	}
+	for _, method := range DaemonSearchMethods(&DaemonSearchBackends{
+		Tools:  func(shell *Sidecar) (*SearchTools, error) { return hosted[shell], nil },
+		Secret: func(*Sidecar) (func([]byte) bool, error) { return func([]byte) bool { return false }, nil },
+	}) {
+		if err := daemon.RegisterMethod(method); err != nil {
+			t.Fatal(err)
+		}
+	}
+	session := func() *daemonSession {
+		done := make(chan struct{})
+		t.Cleanup(func() { close(done) })
+		return &daemonSession{hello: &DaemonHello{Mode: DaemonModeControl}, done: done}
+	}
+	call := func(s *daemonSession, args *SearchToolArgs) (*SearchToolResult, *DaemonRpcError) {
+		data, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": DaemonMethodSearch, "params": args})
+		if err != nil {
+			t.Fatal(err)
+		}
+		reply := daemon.dispatch(data, s, runUnbounded)
+		if reply.Error != nil {
+			return nil, reply.Error
+		}
+		out := &SearchToolResult{}
+		if err := json.Unmarshal(reply.Result, out); err != nil {
+			t.Fatal(err)
+		}
+		return out, nil
+	}
+	s := session()
+	request := &SearchToolArgs{Query: "harbor", Scope: "all", Limit: 1}
+	restricted := session()
+	restricted.hello.Mode = DaemonModeMcp
+	if result, failure := call(restricted, request); result != nil || failure == nil || failure.Code != DaemonRpcFailedPrecondition {
+		t.Fatalf("membership-scoped session initiated a host-wide query: %+v, %+v", result, failure)
+	}
+	first, failure := call(s, request)
+	if failure != nil || len(first.Hits) != 1 || first.Status.Complete || first.Status.NextCursor == "" || len(first.Coverage) != 2 {
+		t.Fatalf("first host-wide page: %+v, %+v", first, failure)
+	}
+	if _, foreign := call(session(), &SearchToolArgs{Cursor: first.Status.NextCursor}); foreign == nil {
+		t.Fatal("foreign session resumed all-network search")
+	}
+	seen := map[string]bool{first.Hits[0].Network: true}
+	page := first
+	for i := 0; i < 8 && !page.Status.Complete; i++ {
+		page, failure = call(s, &SearchToolArgs{Cursor: page.Status.NextCursor, Limit: 2})
+		if failure != nil {
+			t.Fatal(failure)
+		}
+		for _, hit := range page.Hits {
+			if seen[hit.Network] {
+				t.Fatalf("duplicate network hit: %+v", hit)
+			}
+			seen[hit.Network] = true
+		}
+	}
+	if !page.Status.Complete || len(seen) != 2 {
+		t.Fatalf("hit networks: %v, complete %t", seen, page.Status.Complete)
+	}
+	first, failure = call(s, request)
+	if failure != nil {
+		t.Fatal(failure)
+	}
+	world := worlds[1]
+	doc := testEngineDocument(t, "west", 1, 1, "west.md", "harbor log")
+	eraser := testNewEraser(t, world.sync.head.ref.store(evsTestId("all cut")), false, &testIndexWorldClock{world: world.sync.head}, nil)
+	testCut(t, eraser, "all cut", &IndexCutDocument{Key: doc.key, Version: 1})
+	world.sync.round(t)
+	if result, failure := call(s, &SearchToolArgs{Cursor: first.Status.NextCursor}); result != nil || failure == nil || !strings.Contains(failure.Message, ErrSearchCursorExpired.Error()) {
+		t.Fatalf("continued past remote-network cut: %+v, %+v", result, failure)
+	}
+}
+
+// An MCP session's grants constrain implicit scope, metadata and already-issued references without narrowing the host.
+func TestSearchSessionGrantLimitsCoverageAndRetainedHits(t *testing.T) {
+	world := newTestEngineWorld(t, nil, testEngineDocument(t, "doc", 1, 1, "notes/one", "rate limiter"), testEngineDocument(t, "doc", 2, 1, "notes/two", "rate limiter"))
+	host := testSearchTools(t, world)
+	allowed := false
+	session := host.WithRepoAccess(func(repo Id, now time.Time) bool { return allowed && repo == world.sync.repoId })
+	env := &SearchToolEnv{Session: NewId()}
+	query := &SearchToolArgs{Query: "limiter", Limit: 1}
+	denied, err := session.Search(context.Background(), env, query)
+	if err != nil || len(denied.Hits) != 0 || len(denied.Coverage) != 0 {
+		t.Fatalf("denied query: %+v, %v", denied, err)
+	}
+	status, err := session.Status(&SearchStatusToolArgs{})
+	if err != nil || len(status.Repos) != 1 || status.Repos[0].IndexOn {
+		t.Fatalf("denied status: %+v, %v", status, err)
+	}
+	allowed = true
+	page, err := session.Search(context.Background(), env, query)
+	if err != nil || len(page.Hits) != 1 || page.Status.NextCursor == "" {
+		t.Fatalf("allowed query: %+v, %v", page, err)
+	}
+	allowed = false
+	if _, err := session.OpenHit(env.Session, page.Hits[0].HitId); !errors.Is(err, ErrSearchHitUnknown) {
+		t.Fatalf("revoked hit: %v", err)
+	}
+	if _, err := session.Search(context.Background(), env, &SearchToolArgs{Cursor: page.Status.NextCursor}); !errors.Is(err, ErrSearchCursorExpired) {
+		t.Fatalf("revoked cursor: %v", err)
+	}
+	own, err := host.Search(context.Background(), &SearchToolEnv{Session: NewId()}, query)
+	if err != nil || len(own.Hits) != 1 {
+		t.Fatalf("host query: %+v, %v", own, err)
 	}
 }

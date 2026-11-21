@@ -53,6 +53,10 @@ var (
 // What the dispatcher keeps of streams. Its own lock, so a stream frame does not contend with calls.
 type subprotocolStreams struct {
 	stateLock sync.Mutex
+	// Only stream openers take rangeLock. Reserving a range may do I/O.
+	rangeLock  sync.Mutex
+	reserveIds func(context.Context) (uint64, error)
+	sendRange  uint64
 	// every peer a stream ever ran with, by client id
 	peers map[connect.Id]*streamPeer
 	// Listen's accept functions, by target
@@ -76,6 +80,10 @@ type streamPeer struct {
 	// an edge peer: a Service-mode source, or any peer of an edge (stream_edge.go)
 	edge bool
 	ids  *streamIds
+	// In the sender's range, behind the dispatcher's rangeLock.
+	sendRange uint64
+	// Serializes allocating and sending opens so the peer sees IDs in order.
+	opening chan struct{}
 	// what this side grants the peer's streams; an edge's grows with its streams
 	credit *streamCredit
 	// the streams running now, by id
@@ -210,6 +218,7 @@ func (self *Subprotocol) streamPeerWithLock(peerId connect.Id, edge bool) (*stre
 		peerId:          peerId,
 		edge:            edge,
 		ids:             ids,
+		opening:         make(chan struct{}, 1),
 		credit:          newStreamCredit(self.settings, self.budget, edge || self.role == SubprotocolRoleEdge, self.streamPressure),
 		streams:         map[uint64]*SubprotocolStream{},
 		lastInboundTime: self.clock.Now(),
@@ -562,4 +571,23 @@ func (self *Subprotocol) clockContext(parent context.Context, timeout time.Durat
 		}
 	}()
 	return ctx, cancel
+}
+
+// The verified Hello standing with peerId and the C15 key it verified under, and false while none stands.
+func (self *Subprotocol) peerVerifiedIdentity(peerId connect.Id) (*SubprotocolPeerIdentity, [32]byte, bool) {
+	now := self.clock.Now()
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	identity, ok := self.sourceIdIdentities[peerId]
+	if !ok || !now.Before(identity.expireTime) {
+		return nil, [32]byte{}, false
+	}
+	var peer *SubprotocolPeerIdentity
+	if identity.peer != nil {
+		peer = identity.peer.clone()
+	} else {
+		// a gate an internal test opened by hand: no Hello's fields behind it
+		peer = &SubprotocolPeerIdentity{}
+	}
+	return peer, identity.clientPublicKey, true
 }

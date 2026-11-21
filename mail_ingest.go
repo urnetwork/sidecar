@@ -11,10 +11,9 @@
 //	          write deposits §16.8's read receipts, which are the record's and are left alone; one with no right to
 //	          deposit there is consumed unrecorded; a pin this device does not hold yet leaves the deposit for a later
 //	          pass
-//	erased    a message a committed ERASE names is never written again (FS-13): its deposit is consumed with no
-//	          message, opened or not, since the ERASE took the deposit's slot too. The eraser removes no m/ path
-//	          (mail_erase.go), so an erasure that commits after this pass read the erasure ref still meets the path
-//	          standing, which is the 409 below
+//	erased    a signed ERASE consumes its deposit without a message. If a deposit-only ERASE races the mailbox push,
+//	          the post-commit check withholds callbacks. Readers mask the signed message id and a repo admin's next
+//	          pass destroys any new body and index slots under the original erasure id (mail_erase_late.go)
 //	trailer   the plaintext splits into the message and its MailDeposit (mail_ingest_reader.go); one that does not
 //	          split, or names no recipient, is consumed unrecorded, and one of an unknown version or past this
 //	          reader's bound stands for a reader that knows it
@@ -122,6 +121,8 @@ type MailIngestAclAuthority struct {
 	Root string
 	// Whether a zone is this network's own: its label, its alias or one of its scopes. Nil refuses every From.
 	OwnZone func(zone MailZone) bool
+	// A verified custom From maps to its own network's policy alias. An unavailable answer grants no identity.
+	CustomFrom func(address string) (MailRecipient, bool)
 	// Nil is real time.
 	Clock Clock
 }
@@ -171,7 +172,17 @@ func (self *MailIngestAclAuthority) MaySendAs(signerSidecarId Id, fromAddress st
 		return false
 	}
 	recipient, err := ParseMailRecipient(self.Root, fromAddress)
-	if err != nil || recipient.Kind == MailAddressKindBurner || recipient.Kind == MailAddressKindReverseAlias || !self.OwnZone(recipient.Zone) {
+	if err != nil {
+		if self.CustomFrom == nil {
+			return false
+		}
+		var ok bool
+		recipient, ok = self.CustomFrom(fromAddress)
+		if !ok {
+			return false
+		}
+	}
+	if recipient.Kind == MailAddressKindBurner || recipient.Kind == MailAddressKindReverseAlias || !self.OwnZone(recipient.Zone) {
 		return false
 	}
 	now := clockOrReal(self.Clock).Now()
@@ -341,6 +352,7 @@ type MailIngestor struct {
 	index     *MailIndexWriter
 	scorer    *MailSpamScorer
 	erased    *mailErasedView
+	eraser    *MailEraser
 	authority MailIngestAuthority
 	operators *MailOperatorList
 	args      *MailIngestArgs
@@ -350,6 +362,9 @@ type MailIngestor struct {
 
 	// Held over a pass, so one runs at a time.
 	passLock sync.Mutex
+	// A finished sweep covers only these two signed ref versions. A restart starts at zero.
+	reconciledMain    uint64
+	reconciledErasure uint64
 	// One pending wake.
 	wake chan struct{}
 }
@@ -368,7 +383,17 @@ func NewMailIngestor(args *MailIngestArgs) (*MailIngestor, error) {
 		storeSettings = DefaultMailStoreSettings()
 	}
 	store := newMailEvsStore(args.Repo, nil, storeSettings)
-	return newMailIngestor(args.Repo.RepoId(), &mailIngestEvsRepo{repo: args.Repo}, store, args), nil
+	ingestor := newMailIngestor(args.Repo.RepoId(), &mailIngestEvsRepo{repo: args.Repo}, store, args)
+	authority, ok := args.Authority.(MailEraseAuthority)
+	if !ok {
+		authority = &mailIngestEvsRepo{repo: args.Repo}
+	}
+	eraser, err := NewMailEraser(&MailEraserArgs{Repo: args.Repo, SidecarId: args.SidecarId, Authority: authority, Clock: args.Clock, Log: args.Log})
+	if err != nil {
+		return nil, err
+	}
+	ingestor.eraser = eraser
+	return ingestor, nil
 }
 
 // An ingestor of repoId over repo's deposit refs and store's files.
@@ -475,6 +500,9 @@ func (self *MailIngestor) Ingest(ctx context.Context) (*MailIngestPass, error) {
 		return pass, ErrMailNotIngester
 	}
 	if _, err := self.erased.refresh(ctx, self.repo.Erasures); err != nil {
+		return pass, err
+	}
+	if err := self.reconcileErased(ctx); err != nil {
 		return pass, err
 	}
 	depositorIds, err := self.repo.Depositors(ctx)
@@ -712,8 +740,8 @@ func (self *MailIngestor) ingestDeposit(ctx context.Context, depositorId Id, dep
 	content = append(content, message...)
 	messagePath := MailMessagePath(month, messageId)
 
-	// the erasure ref once more, just before the write: an ERASE that committed while this deposit was open
-	// (FS-13). One that commits after this read and took only a deposit, no m/ version standing, is not seen here
+	// Skip a deposit erased since it opened. The post-commit check below and the
+	// admin's durable reconciliation also cover an ERASE that races this push.
 	if _, err := self.erased.refresh(ctx, self.repo.Erasures); err != nil {
 		return false, err
 	}
@@ -725,13 +753,25 @@ func (self *MailIngestor) ingestDeposit(ctx context.Context, depositorId Id, dep
 	// the m/ write's mark: where the search index is on, its rows of the message carry the outside bit (search's)
 	_, err = self.index.Append(ctx, entry, &mailStoreWrite{Path: messagePath, Content: content, Outside: MailEntryUntrusted(entry)})
 	testHookBarrier("mail.ingest.push.after", "")
-	if mailStoreConflictOn(err, messagePath) {
-		// another reader won, or this one did before a crash: only the CONSUME is left
-		pass.Present += 1
+	present := mailStoreConflictOn(err, messagePath)
+	if !present && err != nil {
+		return false, err
+	}
+	// Do not announce, forward or consume an unverified candidate. Even if this
+	// process stops here, any admin's next pass finds the copy from the ERASE.
+	if _, err := self.erased.refresh(ctx, self.repo.Erasures); err != nil {
+		return false, err
+	}
+	if _, erased := self.erased.erased(messageId); erased {
+		if err := self.reconcileErased(ctx); err != nil {
+			return false, err
+		}
+		pass.Erased++
 		return true, nil
 	}
-	if err != nil {
-		return false, err
+	if present {
+		pass.Present++
+		return true, nil
 	}
 	pass.Ingested += 1
 

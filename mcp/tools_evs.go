@@ -5,9 +5,9 @@
 // files. ur://evs/{repo}/{+path} is resources_evs.go's.
 //
 //	guard      every call names what it reaches to McpGuard (§16.6's refused table, guard.go): never a secret repo,
-//	           the config's contents, the team directory, the search index's files, a mailbox's vault/ family or a
-//	           vault's harness/ config; a listing leaves such items out, and evs_list names the index's files only
-//	           when asked (include_index)
+//	           the config's contents, the team directory, the search index's files, approved-recipient records,
+//	           a mailbox's vault/ family or a vault's harness/ config. A listing omits refused items and names the
+//	           index's files only when asked (include_index)
 //	allow      §8's local allow of read, or write, on the repo for this sidecar
 //	reads      over EvsRepo, the read's purpose and run in its context, so an owner-bound repo's reader that is not
 //	           its writer deposits its receipt and awaits evs's 200 before anything decrypts (EVS1-M3-01's gate,
@@ -50,7 +50,8 @@ import (
 	"encoding/base64"
 	"errors"
 	"io"
-	"slices"
+	"net/url"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -81,46 +82,48 @@ type McpEvsNetwork interface {
 	EvsWriteEffect(repoId sidecar.Id, effect *sidecar.EvsWriteEffect) sidecar.SidecarEffect
 }
 
-// A hosted Sidecar, its engine and its evs client, as the evs tools read them.
-type mcpSidecarEvsNetwork struct {
-	*mcpSidecarNetwork
-	client *sidecar.EvsClient
-}
-
 // The evs view of hosted, its repos from engine's installed state and its calls through client.
 func McpEvsNetworkOf(hosted *sidecar.Sidecar, engine *sidecar.AclEngine, client *sidecar.EvsClient) McpEvsNetwork {
-	return &mcpSidecarEvsNetwork{mcpSidecarNetwork: &mcpSidecarNetwork{Sidecar: hosted, engine: engine}, client: client}
+	return &mcpSidecarNetwork{Sidecar: hosted, engine: engine, evs: client}
 }
 
 // The installed state's repos.
-func (self *mcpSidecarEvsNetwork) RepoIds() []sidecar.Id {
-	if self.engine == nil || self.engine.State() == nil {
+func (self *mcpSidecarNetwork) RepoIds() []sidecar.Id {
+	engine, _ := self.policy()
+	if engine == nil {
 		return nil
 	}
-	repoIds := []sidecar.Id{}
-	for _, repo := range self.engine.State().Rows().GetRepos() {
-		if repoId, err := sidecar.IdFromBytes(repo.GetRepoId()); err == nil {
-			repoIds = append(repoIds, repoId)
-		}
+	state := engine.State()
+	if state == nil {
+		return nil
 	}
-	slices.SortFunc(repoIds, sidecar.Id.Cmp)
-	return repoIds
+	return state.RepoIds()
+}
+
+// The daemon's currently attached EVS client, or the one supplied by the embedding host.
+func (self *mcpSidecarNetwork) evsClient() *sidecar.EvsClient {
+	if self.follow {
+		return self.Sidecar.EvsClient()
+	}
+	return self.evs
 }
 
 // The client's repo.
-func (self *mcpSidecarEvsNetwork) EvsRepo(repoId sidecar.Id) McpEvsRepo {
-	if self.client == nil {
+func (self *mcpSidecarNetwork) EvsRepo(repoId sidecar.Id) McpEvsRepo {
+	client := self.evsClient()
+	if client == nil {
 		return nil
 	}
-	return self.client.Repo(repoId)
+	return client.Repo(repoId)
 }
 
 // The evs effect over the client's repo.
-func (self *mcpSidecarEvsNetwork) EvsWriteEffect(repoId sidecar.Id, effect *sidecar.EvsWriteEffect) sidecar.SidecarEffect {
-	if self.client == nil {
+func (self *mcpSidecarNetwork) EvsWriteEffect(repoId sidecar.Id, effect *sidecar.EvsWriteEffect) sidecar.SidecarEffect {
+	client := self.evsClient()
+	if client == nil {
 		return nil
 	}
-	effect.Repo = self.client.Repo(repoId)
+	effect.Repo = client.Repo(repoId)
 	return effect
 }
 
@@ -135,6 +138,7 @@ var (
 	errMcpEvsUnavailable = NewMcpError(McpCodeUnavailable, "this daemon holds no evs client for the network yet: run ur status in your own terminal", true)
 	errMcpEvsRepo        = NewMcpError(McpCodeInvalidArguments, "repo is a repo's id", false)
 	errMcpEvsPath        = NewMcpError(McpCodeInvalidArguments, "path is names joined by /, with no empty name", false)
+	errMcpEvsErased      = NewMcpError(McpCodeFailedPrecondition, "this version was erased", false)
 	errMcpEvsAbsent      = NewMcpError(McpCodeFailedPrecondition, "nothing stands at that path", false)
 	errMcpEvsConflict    = NewMcpError(McpCodeFailedPrecondition, "the path moved past base_version: read it again and write on its version", false)
 	errMcpEvsGitRef      = NewMcpError(McpCodeFailedPrecondition, "EVS_GIT_REF: the repo's ref is git-mode, and this daemon has no local tier to commit through", false)
@@ -211,7 +215,11 @@ func mcpEvsTarget(call *McpCall, repoId sidecar.Id, operation McpRepoOperation, 
 	if network, ok := mcpToolNetworkOf(call); ok {
 		kind = network.RepoKind(repoId)
 	}
-	return McpTarget{Kind: McpTargetRepo, RepoKind: kind, Operation: operation, Ref: mcpEvsMainRef, Path: path}
+	target := McpTarget{Kind: McpTargetRepo, RepoKind: kind, Operation: operation, Ref: mcpEvsMainRef, Path: path}
+	if kind == protocol.RepoKind_REPO_KIND_GENERAL && mcpRecipientPath(path) && call.ordinaryFileRepo != nil {
+		target.OrdinaryFileRepo = call.ordinaryFileRepo(repoId)
+	}
+	return target
 }
 
 // §8's grant a call needs on repoId.
@@ -227,6 +235,8 @@ func mcpEvsError(err error) error {
 		return errMcpEvsConflict
 	case errors.Is(err, sidecar.ErrEvsGitRef):
 		return errMcpEvsGitRef
+	case errors.Is(err, sidecar.ErrEvsErased):
+		return errMcpEvsErased
 	case errors.Is(err, sidecar.ErrEvsPathAbsent):
 		return errMcpEvsAbsent
 	case errors.Is(err, sidecar.ErrEvsFormatUnsupported):
@@ -426,7 +436,8 @@ func mcpEvsTrust(info *sidecar.EvsFileInfo, ownSidecarId sidecar.Id) McpTrust {
 // A read of one path's version into the result: its bytes held to the settings' bound, its trust by its push's
 // provenance (mcpEvsTrust), and for an untrusted version the run tainted first and its content fenced then. The
 // resource of the path is named for an over-limit result.
-func mcpEvsRead(ctx context.Context, call *McpCall, repoId sidecar.Id, repo McpEvsRepo, path string, version uint64, result *McpResult) (*mcpEvsReadOut, error) {
+func mcpEvsRead(ctx context.Context, call *McpCall, repo McpEvsRepo, ref *sidecar.SearchHitRef, hit string, result *McpResult) (*mcpEvsReadOut, error) {
+	repoId, path := ref.RepoId, ref.Path
 	network, ok := mcpToolNetworkOf(call)
 	if !ok {
 		return nil, errMcpNoToolNetwork
@@ -436,18 +447,38 @@ func mcpEvsRead(ctx context.Context, call *McpCall, repoId sidecar.Id, repo McpE
 		return nil, errMcpUnenrolled
 	}
 	result.SetSource("evs:" + repoId.String())
-	result.SetResource(McpEvsUri(repoId, path))
 	runId := call.RunId
 	ctx = sidecar.WithEvsReadContext(ctx, &sidecar.EvsReadContext{Purpose: sidecar.RecordReadPurposeRead, RunId: &runId})
 	limit := call.Session.server.settings.Mcp.ResourceByteCount
 	content := &mcpLimitedBuffer{limit: limit}
-	info, err := repo.ReadHead(ctx, &sidecar.EvsReadArgs{Path: path, Version: version, Provenance: true}, content)
+	args := &sidecar.EvsReadArgs{Path: path, Version: ref.Version, Provenance: true}
+	if ref.RefName != "" {
+		args.RefName = []byte(ref.RefName)
+	}
+	info, err := repo.ReadHead(ctx, args, content)
 	if err != nil {
 		if content.over {
 			return nil, errMcpEvsTooLarge
 		}
 		return nil, mcpEvsError(err)
 	}
+	if hit != "" {
+		current, err := mcpHitOfKind(call, hit, sidecar.IndexDocFile)
+		if err != nil {
+			return nil, err
+		}
+		if *current != *ref {
+			return nil, errMcpHitUnknown
+		}
+	}
+	uri := McpEvsUri(repoId, path) + "?network=" + call.NetworkId.String() + "&version=" + strconv.FormatUint(info.Version, 10)
+	if ref.RefName != "" {
+		if info.RefId != ref.RefId || info.Version != ref.Version {
+			return nil, errMcpHitUnknown
+		}
+		uri += "&hit=" + url.QueryEscape(hit)
+	}
+	result.SetResource(uri)
 	McpMeter(ctx, int64(content.buffer.Len()))
 	out := &mcpEvsReadOut{
 		Path:          path,
@@ -512,9 +543,6 @@ func mcpEvsWrite(ctx context.Context, call *McpCall, repoId sidecar.Id, path str
 	// tainted run's words read back untrusted in every run (QD-042). An unbound session's placeholder reads tainted
 	tainted := call.Tainted()
 	shared := mcpEvsShared(network.RepoKind(repoId))
-	if shared && McpAgentConfigPath(call.Session.server.settings.Ingest, path) {
-		return mcpEvsWriteOutward(ctx, call, network, repoId, path, base, content, remove, message, agentLabel, agentId, tainted)
-	}
 	if shared && !remove {
 		scanner, err := sidecar.NewRedactor(rand.Reader)
 		if err != nil {
@@ -523,6 +551,9 @@ func mcpEvsWrite(ctx context.Context, call *McpCall, repoId sidecar.Id, path str
 		if 0 < len(scanner.Scan(content)) {
 			return nil, errMcpEvsSecret
 		}
+	}
+	if shared && McpAgentConfigPath(call.Session.server.settings.Ingest, path) {
+		return mcpEvsWriteOutward(ctx, call, network, repoId, path, base, content, remove, message, agentLabel, agentId, tainted)
 	}
 	write := &sidecar.EvsPathWrite{Path: path, Remove: remove, IfBaseVersion: &base}
 	if !remove {
@@ -756,30 +787,30 @@ func addEvsTools(catalog *McpCatalog) {
 		Tier:        McpTierRead,
 		Description: "Reads a file of a repo, its newest version or an older one, or the file a search hit names by its hit id; content a tainted run wrote, or an import brought in from outside, comes back marked untrusted, and reading it taints the run.",
 		Targets: func(call *McpCall, in *mcpEvsReadIn) ([]McpTarget, error) {
-			repoId, path, _, err := mcpEvsReadOf(call, in)
+			ref, err := mcpEvsReadOf(call, in)
 			if err != nil {
 				return nil, err
 			}
-			return []McpTarget{mcpEvsTarget(call, repoId, McpRepoRead, path)}, nil
+			return []McpTarget{mcpEvsReadTarget(call, ref)}, nil
 		},
 		Access: func(call *McpCall, in *mcpEvsReadIn) ([]McpAccess, error) {
-			repoId, _, _, err := mcpEvsReadOf(call, in)
+			ref, err := mcpEvsReadOf(call, in)
 			if err != nil {
 				return nil, err
 			}
-			return mcpEvsAccess(repoId, protocol.AclAction_ACL_ACTION_READ), nil
+			return mcpEvsAccess(ref.RepoId, protocol.AclAction_ACL_ACTION_READ), nil
 		},
 	}, func(ctx context.Context, call *McpCall, in *mcpEvsReadIn, result *McpResult) (*mcpEvsReadOut, error) {
 		// a hit resolves again here: one whose cursor ended since the guard ran opens nothing
-		repoId, path, version, err := mcpEvsReadOf(call, in)
+		ref, err := mcpEvsReadOf(call, in)
 		if err != nil {
 			return nil, err
 		}
-		_, repo, err := mcpEvsRepoOf(call, repoId)
+		_, repo, err := mcpEvsRepoOf(call, ref.RepoId)
 		if err != nil {
 			return nil, err
 		}
-		return mcpEvsRead(ctx, call, repoId, repo, path, version, result)
+		return mcpEvsRead(ctx, call, repo, ref, in.Hit, result)
 	})
 
 	writeTargets := func(call *McpCall, repoText string, pathText string, operation McpRepoOperation) ([]McpTarget, error) {

@@ -8,7 +8,11 @@
 // first; a file-mode ref's version becomes one commit (§11.7's export column): tree the state at that version, parent
 // the previous version's commit, author and committer the signer's client as <client_id>@ur.invalid with the push's
 // time_ms in UTC, message "ur push <push_id hex>\n". An erased or expired entry's content renders as a stub blob
-// naming its token path and entry hash, so the tree keeps the path (EVS1-M2-32's stub).
+// naming its token path and entry hash, so the tree keeps the path (EVS1-M2-32's stub): §11.12's retention row's
+// {token path, entry hash, erased}, the blob `ur-erased <token path hex> <entry hash hex>\n` under its entry version's
+// mode. A version is erased where its read answers ErrEvsErased, a key a committed ERASE destroyed, judged as every
+// read judges a key gone from its slot (evs_read_erased.go), and export goes on past it; a key gone that no ERASE
+// names alarms tamper and ends the export.
 //
 // On every leg; only a desktop host runs it. Not safe for concurrent use.
 
@@ -280,6 +284,11 @@ func evsExportErasedStub(tokenPath EvsTokenPath, entrySha256 []byte) []byte {
 	return []byte("ur-erased " + hex.EncodeToString(tokenPath.Bytes()) + " " + hex.EncodeToString(entrySha256) + "\n")
 }
 
+// Writes the stub of the version change wrote, one whose key a committed ERASE destroyed, and answers its oid.
+func (self *evsGitObjectWriter) writeErasedStub(change *EvsCheckedChange) (EvsGitOid, error) {
+	return self.write("blob", evsExportErasedStub(change.TokenPath, change.Change.GetEntrySha256()))
+}
+
 // A file-mode ref, version by version (§11.7's export column): each push's changes replayed, in their list's order,
 // onto the state the version before it left, so a directory's delta, its parent's included and the root's first,
 // comes before the paths it names; every path's raw names are opened from the row its parent's delta added, checked
@@ -358,9 +367,23 @@ func (self *EvsRepo) exportFileRef(ctx context.Context, writer *evsGitObjectWrit
 		}
 		ignoredCount := 0
 		noteLines := []string{}
+		// A removal can follow its parent's directory delta or removal in the same push. Keep the names
+		// of its explicit removals from the preceding version while applying changes in signed order.
+		removalNames := map[string][][]byte{}
+		for _, change := range payload.Changes {
+			if !change.WritesEntry() {
+				key := string(change.TokenPath.Bytes())
+				if pathNames, named := names[key]; named {
+					removalNames[key] = pathNames
+				}
+			}
+		}
 		for _, change := range payload.Changes {
 			key := string(change.TokenPath.Bytes())
 			pathNames, named := names[key]
+			if !named && !change.WritesEntry() {
+				pathNames, named = removalNames[key]
+			}
 			changeIgnored := false
 			if judge != nil {
 				held := func(token EvsToken) (protocol.EvsEntryKind, bool) {
@@ -444,20 +467,30 @@ func (self *EvsRepo) exportFileRef(ctx context.Context, writer *evsGitObjectWrit
 					continue
 				}
 			}
-			file, err := self.exportBlob(ctx, writer, head, keys, statement, change)
-			if err != nil {
+			file, err := self.exportBlob(ctx, writer, head, keys, statement, change, string(bytes.Join(pathNames, []byte("/"))))
+			erased := errors.Is(err, ErrEvsErased)
+			if err != nil && !erased {
 				return nil, nil, err
 			}
-			if file == nil {
+			if !erased && file == nil {
 				return nil, nil, fmt.Errorf("%w: a file-mode change of no file", ErrEvsExport)
 			}
-			oid := &file.oid
 			fields, err := EvsOpenFields(fieldsKey, entry.GetSealedFields())
 			if err != nil {
 				self.client.alarm(self.repoId, head.RefId, SidecarEvsAlarmTamper, "", nil)
 				return nil, nil, err
 			}
-			state[evsExportKey(pathNames)] = &evsExportPath{names: pathNames, mode: fields.GetMode(), oid: *oid}
+			var oid EvsGitOid
+			if erased {
+				// a version whose key a committed ERASE destroyed: its stub, under its entry version's mode (§11.12's
+				// retention row), and the replay goes on
+				if oid, err = writer.writeErasedStub(change); err != nil {
+					return nil, nil, err
+				}
+			} else {
+				oid = file.oid
+			}
+			state[evsExportKey(pathNames)] = &evsExportPath{names: pathNames, mode: fields.GetMode(), oid: oid}
 		}
 		if 0 < ignoredCount {
 			signerId, _ := IdFromBytes(push.GetSignerSidecarId())

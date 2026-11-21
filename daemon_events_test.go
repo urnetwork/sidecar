@@ -330,6 +330,34 @@ func TestDaemonSessionAnswersEveryLineInOrder(t *testing.T) {
 	}
 }
 
+// The wire carries the identity that raised a state even if another listener changes the enrollment before the
+// ring receives it. An unenrolled state can still have an identity.
+func TestDaemonEventKeepsTheOriginThatRaisedItsState(t *testing.T) {
+	running := newTestSidecar(t)
+	network, origin, nextNetwork, nextSidecar := NewId(), NewId(), NewId(), NewId()
+	running.networkId = &network
+	running.identity = &SidecarIdentity{NetworkId: network, SidecarId: origin}
+	detachListener := running.AddEventCallback(func(event SidecarEvent) {
+		running.stateLock.Lock()
+		defer running.stateLock.Unlock()
+		running.networkId = &nextNetwork
+		running.identity = &SidecarIdentity{NetworkId: nextNetwork, SidecarId: nextSidecar}
+	})
+	defer detachListener()
+	events := newDaemonEvents(DefaultSidecarSettings().LocalSettings, nil)
+	detachRing := events.Attach(struct{ *Sidecar }{Sidecar: running})
+	defer detachRing()
+	running.emitEvent(SidecarEvent{Kind: SidecarEventState, State: SidecarStateUnenrolled, Reason: SidecarReasonRefused})
+	reply, err := events.next(t.Context(), nil, events.cursorOf(0), 0)
+	if err != nil || len(reply.Events) != 1 {
+		t.Fatalf("state events: %v, %v", reply, err)
+	}
+	event := reply.Events[0]
+	if event.LoggedOut || event.NetworkId == nil || *event.NetworkId != network || event.OriginSidecarId == nil || *event.OriginSidecarId != origin {
+		t.Fatalf("ordinary unenrolled state with its original identity: %+v", event)
+	}
+}
+
 // Every SidecarEvent with each field set to something, so a field added to it shows up here unmapped.
 func fullTestSidecarEvent(t *testing.T) SidecarEvent {
 	t.Helper()

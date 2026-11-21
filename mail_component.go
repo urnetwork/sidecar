@@ -10,6 +10,7 @@
 //	          designations' sealed services over the key client's config keys (owner decision 634). A host that bound
 //	          its own (MailClient made without a Sidecar) keeps it
 //	follow    mailcfg, through MailConfig, which follows its repo itself once built
+//	send      on a locally enabled, consented prover host, prepare the release keys and drain the member's outbox
 //	ingest    the member's mailbox: one MailIngestor running while the generation lives (MAIL-M7-15)
 //	receive   once mail is on, the receive settings say receive, and policy grants this device the listen on
 //	          smtp/25/mx, one receiver (mail_receiver.go) with its sessions (mail_session.go) on the legs that build
@@ -32,9 +33,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
@@ -68,19 +71,32 @@ func (self *Sidecar) StartMail() (*MailClient, error) {
 // leg, which runs no receiver.
 var mailSidecarReceiverFactory func(sidecar *Sidecar) mailReceiverFactory
 
+// Desktop and native hosts install the SMTP composition. Other hosts keep using the member's outbox.
+var mailSidecarSenderFactory func(*MailClient, *mailComponentRun, Id, Id) (*mailComponentSmtp, error)
+
+// One member mailbox's sender and workers, owned by this component generation.
+type mailComponentSmtp struct {
+	mailboxId Id
+	memberId  Id
+	sender    *SmtpSender
+	dkim      *SmtpDkimKeys
+	close     func()
+}
+
 // Builds a receiver for the component, and what closes its parts once the receiver has ended.
 type mailReceiverFactory func(args *mailReceiverFactoryArgs) (*MailReceiver, func(), error)
 
 // What a receiver is built over.
 type mailReceiverFactoryArgs struct {
-	Evs      *EvsClient
-	Config   *MailConfig
-	Root     string
-	Api      MailApi
-	Store    SidecarStore
-	Settings *MailReceiveSettings
-	Clock    Clock
-	Log      Logger
+	// The signed network-scope mail designation of this daemon, checked before each direct bind.
+	DirectMxEligible func() bool
+	Evs              *EvsClient
+	Config           *MailConfig
+	Api              MailApi
+	Store            SidecarStore
+	Settings         *MailReceiveSettings
+	Clock            Clock
+	Log              Logger
 }
 
 // One generation's running parts, under the client's stateLock.
@@ -92,6 +108,9 @@ type mailComponentRun struct {
 	ingestRepoId Id
 	ingestCancel context.CancelFunc
 	ingestor     *MailIngestor
+	// Written only by this generation's pass. An r/ checkpoint belongs to a particular member mailbox.
+	groupMailboxId Id
+	groupRefs      map[Id]*MailGroupRefs
 	// the receiver running, what ends it, and what closes its parts after
 	receiver       *MailReceiver
 	receiverCancel context.CancelFunc
@@ -101,6 +120,7 @@ type mailComponentRun struct {
 	mtaStsRetryTime time.Time
 	// when the member's or/ is next swept for records past their days
 	outcomeSweepTime time.Time
+	smtp             *mailComponentSmtp
 }
 
 // What the component keeps on the client beside its run: a test's seams.
@@ -210,6 +230,7 @@ func (self *MailClient) runGeneration(run *mailComponentRun) {
 // Stops what run started: its MTA-STS publish, its ingestor and its receiver, whose parts close after.
 func (self *MailClient) stopRun(run *mailComponentRun) {
 	self.stopMtaSts(run)
+	self.replaceSmtp(run, nil)
 	ingestCancel, receiverCancel, receiverClose := func() (context.CancelFunc, context.CancelFunc, func()) {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
@@ -235,6 +256,7 @@ func (self *MailClient) pass(run *mailComponentRun) bool {
 	self.bindFromSidecar(ctx, run.env)
 	binding, _, err := self.bound()
 	if err != nil {
+		self.replaceSmtp(run, nil)
 		self.setReceiverStatus(MailClientReceiverStatus{Problem: "mail has nothing to work on yet"})
 		return false
 	}
@@ -243,10 +265,12 @@ func (self *MailClient) pass(run *mailComponentRun) bool {
 			self.setNetworkEnabled(network.Enabled)
 		}
 	}
+	self.passSmtp(run, binding)
 	self.passIngest(run, binding)
 	self.passReceive(run, binding)
 	self.passMtaSts(run, binding)
 	self.passOutcomes(run)
+	self.passGroupInboxes(run, binding)
 	if binding.BurnerSelectors != nil {
 		// a burn another device made retires this device's selectors for the label too (MAIL-M9-03)
 		if _, err := self.RetireBurnedSelectors(ctx); err != nil {
@@ -256,6 +280,70 @@ func (self *MailClient) pass(run *mailComponentRun) bool {
 	return true
 }
 
+// Whether this device explicitly enabled mail. Only such a device may fetch proof transcripts.
+func (self *MailClient) smtpEnabledLocally() bool {
+	self.loadEnabled()
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.enabledLocally
+}
+
+// Starts the sending workers only for a consented member device with a prover and its own mailbox.
+func (self *MailClient) passSmtp(run *mailComponentRun, binding *MailBinding) {
+	if self.sidecar == nil || self.sidecar.settings == nil || self.sidecar.settings.Connect == nil ||
+		self.sidecar.settings.Connect.SmtpProver == nil || mailSidecarSenderFactory == nil {
+		return
+	}
+	state := binding.Engine.State()
+	if state == nil || !self.smtpEnabledLocally() {
+		self.replaceSmtp(run, nil)
+		return
+	}
+	memberId, ok := mailMemberOf(state, self.sidecarId)
+	if !ok || !state.ConsentedFor(self.sidecarId, memberId) {
+		self.replaceSmtp(run, nil)
+		return
+	}
+	mailboxId, err := self.mailboxId()
+	if err != nil {
+		self.replaceSmtp(run, nil)
+		return
+	}
+	if run.smtp != nil && run.smtp.mailboxId == mailboxId && run.smtp.memberId == memberId {
+		return
+	}
+	self.replaceSmtp(run, nil)
+	smtp, err := mailSidecarSenderFactory(self, run, memberId, mailboxId)
+	if err != nil {
+		if run.ctx.Err() == nil && self.log.V(1).Enabled() {
+			self.log.Infof("[mail]SMTP sender is waiting for its dependencies: %v", err)
+		}
+		return
+	}
+	self.replaceSmtp(run, smtp)
+}
+
+// Replaces the generation-owned binding and joins the old workers without holding the client lock.
+func (self *MailClient) replaceSmtp(run *mailComponentRun, next *mailComponentSmtp) {
+	self.stateLock.Lock()
+	previous := run.smtp
+	run.smtp = next
+	if self.binding != nil && (previous != nil && self.binding.Sender == previous.sender || next != nil && self.componentRun == run) {
+		current := *self.binding
+		if previous != nil && current.Sender == previous.sender {
+			current.Sender, current.BurnerSelectors = nil, nil
+		}
+		if next != nil && self.componentRun == run {
+			current.Sender, current.BurnerSelectors = next.sender, next.dkim
+		}
+		self.binding = &current
+	}
+	self.stateLock.Unlock()
+	if previous != nil {
+		previous.close()
+	}
+}
+
 // Binds what the client's Sidecar holds as it stands, where the client was made over a Sidecar.
 func (self *MailClient) bindFromSidecar(ctx context.Context, env *SidecarEnv) {
 	sidecar := self.sidecar
@@ -263,7 +351,7 @@ func (self *MailClient) bindFromSidecar(ctx context.Context, env *SidecarEnv) {
 		return
 	}
 	binding := &MailBinding{Gate: sidecar}
-	if evs := sidecar.mailEvsClient(); evs != nil {
+	if evs := sidecar.EvsClient(); evs != nil {
 		binding.Evs = evs
 		binding.Gkm = evs.args.Gkm
 		binding.FileStatement = evs.args.FileStatement
@@ -329,21 +417,19 @@ func (self *MailClient) bindFromSidecar(ctx context.Context, env *SidecarEnv) {
 		}
 		return mailIndexerCovers(state, self.sidecarId, binding.IndexerServices)
 	}
-	self.Bind(binding)
-}
-
-// The network's EvsClient: the evs component's, nil while none is attached.
-func (self *Sidecar) mailEvsClient() *EvsClient {
-	leg, ok := self.leg.(*sidecarConnectLeg)
-	if !ok {
-		return nil
-	}
-	for _, component := range leg.componentList() {
-		if evsComponent, ok := component.(*EvsComponent); ok {
-			return evsComponent.Client()
+	self.bindWhen(binding, func(current *MailBinding) bool {
+		if env == nil {
+			return true
 		}
-	}
-	return nil
+		run, ok := self.componentRun.(*mailComponentRun)
+		if !ok || run.env != env || run.ctx.Err() != nil {
+			return false
+		}
+		if run.smtp != nil {
+			current.Sender, current.BurnerSelectors = run.smtp.sender, run.smtp.dkim
+		}
+		return true
+	})
 }
 
 // Starts the member's mailbox's ingestor, or moves it to a new mailbox, once the mailbox stands.
@@ -364,34 +450,7 @@ func (self *MailClient) passIngest(run *mailComponentRun, binding *MailBinding) 
 	if running {
 		return
 	}
-	root := self.networkRow().Root
-	ingestor, err := parts.ingestor(mailboxId, &MailIngestArgs{
-		SidecarId: self.sidecarId,
-		Root:      root,
-		Authority: &MailIngestAclAuthority{
-			Engine: binding.Engine,
-			Root:   root,
-			OwnZone: func(zone MailZone) bool {
-				return zone.OfNetwork(self.networkRow())
-			},
-			Clock: self.clock,
-		},
-		Message: func(message *MailMessage) {
-			self.invalidateMonth(message.RepoId, message.Month)
-			self.judgeReceiver(binding, message)
-			// an opted-in burner's mail forwarded, and a reply to a reverse alias relayed (MAIL-M9-04)
-			if _, err := self.considerForward(run.ctx, message); err != nil {
-				self.log.Warningf("[mail]a forward was not queued: %v", err)
-			}
-		},
-		Alarm: func(alarm *MailIngestAlarm) {
-			self.log.Warningf("[mail]ingest alarm %s on %s", alarm.Kind, alarm.RepoId)
-			self.raiseReceiverAlarm(SidecarMailReceiverAlarmDeposit, alarm.DepositorId, alarm.RepoId)
-		},
-		Clock:    self.clock,
-		Log:      self.log,
-		Settings: self.settings.Ingest,
-	})
+	ingestor, err := parts.ingestor(mailboxId, self.ingestArgs(run, binding))
 	if err != nil {
 		self.log.Warningf("[mail]no ingestor for the mailbox: %v", err)
 		return
@@ -410,6 +469,118 @@ func (self *MailClient) passIngest(run *mailComponentRun, binding *MailBinding) 
 		previous()
 	}
 	go ingestor.Run(ingestCtx)
+}
+
+// Both the personal inbox and group repositories judge deposits at their signed pins.
+func (self *MailClient) ingestArgs(run *mailComponentRun, binding *MailBinding) *MailIngestArgs {
+	root := self.networkRow().Root
+	return &MailIngestArgs{
+		SidecarId: self.sidecarId,
+		Root:      root,
+		Authority: &MailIngestAclAuthority{
+			Engine: binding.Engine,
+			Root:   root,
+			OwnZone: func(zone MailZone) bool {
+				return zone.OfNetwork(self.networkRow())
+			},
+			CustomFrom: func(address string) (MailRecipient, bool) {
+				from, _, err := mailVerifiedCustomFrom(run.ctx, binding.Api, self.networkRow(), address)
+				return from, err == nil
+			},
+			Clock: self.clock,
+		},
+		Message: func(message *MailMessage) {
+			self.invalidateMonth(message.RepoId, message.Month)
+			self.judgeReceiver(binding, message)
+			// an opted-in burner's mail forwarded, and a reply to a reverse alias relayed (MAIL-M9-04)
+			if _, err := self.considerForward(run.ctx, message); err != nil {
+				self.log.Warningf("[mail]a forward was not queued: %v", err)
+			}
+		},
+		Alarm: func(alarm *MailIngestAlarm) {
+			self.log.Warningf("[mail]ingest alarm %s on %s", alarm.Kind, alarm.RepoId)
+			self.raiseReceiverAlarm(SidecarMailReceiverAlarmDeposit, alarm.DepositorId, alarm.RepoId)
+		},
+		Clock:    self.clock,
+		Log:      self.log,
+		Settings: self.settings.Ingest,
+	}
+}
+
+// A writer ingests once into the group's own ref. A listed member with read access adds only a reference
+// to their own writable mailbox. Each pass rechecks the signed address and rights before touching either.
+func (self *MailClient) passGroupInboxes(run *mailComponentRun, binding *MailBinding) {
+	state := binding.Engine.State()
+	if state == nil || !slices.ContainsFunc(state.Rows().GetRepos(), AclRepoIsInbox) {
+		run.groupRefs = nil
+		return
+	}
+	config, err := self.syncedConfig(run.ctx)
+	if err != nil {
+		return
+	}
+	addresses, err := config.Addresses()
+	if err != nil {
+		return
+	}
+	active, parts, err := self.bound()
+	if err != nil || active.Engine != binding.Engine || active.Evs != binding.Evs {
+		return
+	}
+	memberId, member := mailMemberOf(state, self.sidecarId)
+	mailboxId, _ := self.mailboxId()
+	subject := AclSidecarSubject(self.sidecarId)
+	now := self.clock.Now()
+	mailboxWritable := member && mailboxId != (Id{}) && state.EvsAccess(subject, mailboxId, AclTokenAudienceEvs, now).Rights.Has(AclEvsWrite)
+	if mailboxId != run.groupMailboxId {
+		run.groupMailboxId, run.groupRefs = mailboxId, nil
+	}
+	next := map[Id]*MailGroupRefs{}
+	ingested := map[Id]bool{}
+	for _, address := range addresses {
+		if run.ctx.Err() != nil || binding.Engine.State() != state {
+			return
+		}
+		if !address.Known || (address.Kind != protocol.MailAddressKind_MAIL_ADDRESS_GROUP && address.Kind != protocol.MailAddressKind_MAIL_ADDRESS_ADMIN) {
+			continue
+		}
+		groupId := address.MailboxRepoId
+		row := state.Repo(groupId)
+		role := protocol.RepoInbox_REPO_INBOX_GROUP
+		if address.Kind == protocol.MailAddressKind_MAIL_ADDRESS_ADMIN {
+			role = protocol.RepoInbox_REPO_INBOX_ADMIN
+		}
+		if row.GetInbox() != role || !mailRepoStands(row) {
+			continue
+		}
+		rights := state.EvsAccess(subject, groupId, AclTokenAudienceEvs, now).Rights
+		if rights.Has(AclEvsWrite) && !ingested[groupId] {
+			ingested[groupId] = true
+			ingestor, err := parts.ingestor(groupId, self.ingestArgs(run, binding))
+			if err == nil {
+				_, err = ingestor.Ingest(run.ctx)
+			}
+			if err != nil {
+				self.log.Warningf("[mail]group ingest %s: %v", groupId, err)
+			}
+		}
+		if !mailboxWritable || !rights.Has(AclEvsRead) || !slices.Contains(address.MemberIds, memberId) || next[groupId] != nil {
+			continue
+		}
+		refs := run.groupRefs[groupId]
+		if refs == nil {
+			refs, err = parts.groupRefs(groupId, mailboxId)
+			if err != nil {
+				self.log.Warningf("[mail]group references %s: %v", groupId, err)
+				continue
+			}
+		}
+		next[groupId] = refs
+		if _, err := refs.Sync(run.ctx); err != nil {
+			self.log.Warningf("[mail]group references %s: %v", groupId, err)
+		}
+	}
+	run.groupRefs = next
 }
 
 // Drops the view's kept month where the mailbox's ingest wrote, so the next list reads it afresh, and raises IDLE's
@@ -519,16 +690,26 @@ func (self *MailClient) startReceiver(run *mailComponentRun, binding *MailBindin
 	if err != nil {
 		return nil, err
 	}
-	receiver, closeParts, err := factory(&mailReceiverFactoryArgs{
+	args := &mailReceiverFactoryArgs{
 		Evs:      binding.Evs,
 		Config:   config,
-		Root:     self.networkRow().Root,
 		Api:      binding.Api,
 		Store:    self.store,
 		Settings: self.settings.Receive,
 		Clock:    self.clock,
 		Log:      self.log,
-	})
+	}
+	if self.Profile().MayIndex() && binding.Config != nil {
+		args.DirectMxEligible = func() bool {
+			state, err := binding.Config()
+			if err != nil || state == nil {
+				return false
+			}
+			receivers, _ := MailDesignatedReceivers(state, binding.IndexerServices)
+			return slices.Contains(mailNetworkIndexers(state, receivers), self.sidecarId)
+		}
+	}
+	receiver, closeParts, err := factory(args)
 	if err != nil {
 		return nil, err
 	}
@@ -538,7 +719,12 @@ func (self *MailClient) startReceiver(run *mailComponentRun, binding *MailBindin
 		defer self.stateLock.Unlock()
 		run.receiver = receiver
 		run.receiverCancel = receiverCancel
-		run.receiverClose = closeParts
+		run.receiverClose = func() {
+			<-receiver.done
+			if closeParts != nil {
+				closeParts()
+			}
+		}
 	}()
 	var pending *ApprovalPendingError
 	if err := receiver.Start(receiverCtx); err != nil && !errors.As(err, &pending) && self.log.V(1).Enabled() {
@@ -573,6 +759,7 @@ func (self *MailClient) Resync() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		if run, ok := self.componentRun.(*mailComponentRun); ok {
+			self.notifyWithLock()
 			return run.ingestor
 		}
 		return nil

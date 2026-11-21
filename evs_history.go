@@ -68,7 +68,13 @@ func (self *EvsRepo) History(ctx context.Context, args *EvsReadArgs) (*EvsHistor
 	if err != nil {
 		return nil, err
 	}
+	return self.historyAt(ctx, refId, args, nil, ruled)
+}
+
+// Reads a named path or a deposit's random token. Deposit refs stay in epoch 1 and carry no prefix rules.
+func (self *EvsRepo) historyAt(ctx context.Context, refId Id, args *EvsReadArgs, token EvsTokenPath, ruled evsPrefixReader) (*EvsHistory, error) {
 	history := &EvsHistory{RefId: refId, Path: args.Path}
+	wholeLineage := true
 	version := args.Version
 	var expectPushId []byte
 	var expectCommit uint64
@@ -83,8 +89,9 @@ func (self *EvsRepo) History(ctx context.Context, args *EvsReadArgs) (*EvsHistor
 	statements := []*EvsVerifiedStatement{}
 	var head *EvsVerifiedHead
 	var keys *evsReadKeys
+	var err error
 	for len(history.Versions) < self.client.settings.HistoryVersionCount {
-		path := &evsReadPath{path: args.Path, version: version}
+		path := &evsReadPath{path: args.Path, token: token, version: version}
 		if version != 0 {
 			path.commitVersion, path.prevPushId = expectCommit, expectPushId
 		}
@@ -133,11 +140,22 @@ func (self *EvsRepo) History(ctx context.Context, args *EvsReadArgs) (*EvsHistor
 		// a read by number answers that version or one below it, and one by number alone a version committed below
 		// the one listed above it; anything else does not descend (see the file header)
 		descends := func(served uint64, commitVersion uint64) bool {
-			if version == 0 || (served <= version && (!below || commitVersion < belowCommit)) {
-				return true
+			if version != 0 && (version < served || (below && belowCommit <= commitVersion)) {
+				self.client.alarm(self.repoId, refId, SidecarEvsAlarmTamper, args.Path, nil)
+				return false
 			}
-			self.client.alarm(self.repoId, refId, SidecarEvsAlarmTamper, args.Path, nil)
-			return false
+			if len(history.Versions) != 0 {
+				newer := history.Versions[len(history.Versions)-1]
+				if newer.Created {
+					// An earlier life ended in a removal, at exactly the implied number when the creation names it.
+					wholeLineage = wholeLineage && verified.Removal != nil && (impliedRemoval == 0 || served == impliedRemoval)
+				} else {
+					// Both a removal and a replacement follow the file one version below. An older signed answer can
+					// still be displayed, but reaching a creation through it cannot account for the skipped keys.
+					wholeLineage = wholeLineage && verified.Removal == nil && served == version
+				}
+			}
+			return true
 		}
 		if verified.Removal != nil {
 			removal := verified.Removal
@@ -223,6 +241,8 @@ func (self *EvsRepo) History(ctx context.Context, args *EvsReadArgs) (*EvsHistor
 			DropId:          evsDropIdOf(verified.Drop),
 			DropNotBefore:   evsDropNotBeforeOf(verified.Drop),
 			SlotIds:         slotIds,
+			kind:            info.Kind,
+			paddedSize:      entry.GetPaddedSize(),
 			EntrySha256:     evsHistoryEntrySha256(verified),
 			Epoch:           verified.Statement.Push.GetPathEpoch(),
 		})
@@ -259,6 +279,7 @@ func (self *EvsRepo) History(ctx context.Context, args *EvsReadArgs) (*EvsHistor
 		version = entry.GetVersion() - 1
 		below, belowCommit, impliedRemoval = false, 0, 0
 	}
+	history.Whole = history.Whole && wholeLineage
 	self.markWrittenOver(ctx, history, statements, head, keys)
 	if args.Provenance && head != nil {
 		reads := newEvsProvenanceReads(self, refId, head, keys)

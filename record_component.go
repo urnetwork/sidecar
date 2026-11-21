@@ -6,8 +6,8 @@
 // The component's sealed directory is the record's own (§5.9's <component>/): Sidecar.Record opens it under the same
 // name.
 //
-// Nothing adds this component yet: the daemon's composition does, beside evs's and the others', as each lands. The
-// sidecar_http leg runs no component (§18.10), and the page Worker reads the record and writes nothing.
+// Native member and daemon hosts attach the component with the anchored config follower. The sidecar_http leg reads
+// the record through its bound streams and runs no background writer (§18.10).
 
 package sidecar
 

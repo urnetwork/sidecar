@@ -231,7 +231,7 @@ func (self *SearchSync) storeRemaining(ctx context.Context, ref *searchSyncRef, 
 func (self *SearchSync) swapLatest(ctx context.Context, ref *searchSyncRef, manifest *SearchManifest, plan *SearchSyncPlan, latest []*SearchManifestFile) (*SearchManifest, error) {
 	companion := ref.args.companion
 	next := &SearchManifest{
-		Root: plan.Root, Pin: plan.Target, IndexEpoch: plan.IndexEpoch, Listing: plan.Wanted,
+		Receipted: ref.args.nonWriter, Root: plan.Root, Pin: plan.Target, IndexEpoch: plan.IndexEpoch, Listing: plan.Wanted,
 	}
 	if manifest != nil {
 		next.All = manifest.All
@@ -475,6 +475,15 @@ func searchRolledThroughDay(allManifest *SearchManifestFile) uint32 {
 func (self *SearchSync) content(ctx context.Context, ref *searchSyncRef, manifest *SearchManifest) ([]*SearchManifestContent, error) {
 	byRef := map[Id]*SearchManifestContent{}
 	refIds := []Id{}
+	// In-ref writer heads may carry no explicit coverage row: they were written in the content push itself.
+	own, judgesOwn := ref.args.source.(interface {
+		inRefCoverage(*SearchManifest, []*SearchManifestCoverage) uint64
+	})
+	if judgesOwn && !ref.args.companion {
+		id := ref.args.refId
+		byRef[id] = &SearchManifestContent{RefId: id}
+		refIds = append(refIds, id)
+	}
 	for _, file := range manifest.Files {
 		if file.State != SearchManifestHeld || len(file.Coverage) == 0 {
 			continue
@@ -499,7 +508,9 @@ func (self *SearchSync) content(ctx context.Context, ref *searchSyncRef, manifes
 	contents := make([]*SearchManifestContent, 0, len(refIds))
 	for _, refId := range refIds {
 		content := byRef[refId]
-		if self.args.coverage != nil {
+		if judgesOwn && !ref.args.companion && refId == ref.args.refId {
+			content.IndexedThrough = own.inRefCoverage(manifest, content.Rows)
+		} else if self.args.coverage != nil {
 			indexedThrough, err := self.args.coverage(ctx, ref.args.repoId, refId, content.Rows)
 			if err != nil {
 				return nil, err
@@ -581,6 +592,9 @@ func (self *SearchSync) retire(ref *searchSyncRef) error {
 	}
 	for snapshot := range ref.open {
 		name(snapshot.manifest)
+		for key := range snapshot.landed {
+			keepFiles[key] = true
+		}
 	}
 	table := ref.table
 	self.stateLock.Unlock()

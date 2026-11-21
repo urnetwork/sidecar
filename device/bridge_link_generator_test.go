@@ -155,6 +155,9 @@ func (self *generatorTestInner) NewClientSettings() *connect.ClientSettings {
 }
 
 func (self *generatorTestInner) NewClient(ctx context.Context, args *connect.MultiClientGeneratorClientArgs, clientSettings *connect.ClientSettings) (*connect.Client, error) {
+	if !clientSettings.EncryptionSettings.GateReceiveOnSignedIdentity {
+		self.t.Fatal("window client started without signed-identity receive gating")
+	}
 	client := connect.NewClient(ctx, args.ClientId, self.control, clientSettings)
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()

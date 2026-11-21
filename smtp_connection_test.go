@@ -115,9 +115,11 @@ type testSenderOptions struct {
 	dialer       func(stub *sidecartest.StubSmtpEdgeDialer) sidecar.SmtpEdgeDialer
 	readyKeySets [][]byte
 	measure      *sidecar.SmtpProverMeasure
+	proverHost   *sidecar.SmtpProverHost
 	memberDevice func(sidecarId sidecar.Id) bool
 	// replaces the world's DKIM keys, given its device DoH, clock and settings
-	dkim func(zone *sidecartest.FakeMailZone, clock *sidecartest.FakeClock, settings *sidecar.SmtpSenderSettings) *sidecar.SmtpDkimKeys
+	dkim            func(zone *sidecartest.FakeMailZone, clock *sidecartest.FakeClock, settings *sidecar.SmtpSenderSettings) *sidecar.SmtpDkimKeys
+	configureSender func(*sidecar.SmtpSenderArgs)
 }
 
 // mail.example and its MX behind the stub edge, a sender on the fake prover, and what it reported.
@@ -201,9 +203,18 @@ func newTestSenderWorld(t *testing.T, options *testSenderOptions) *testSenderWor
 		readyKeySets := options.readyKeySets
 		args.ReadyKeySets = func() [][]byte { return readyKeySets }
 	}
+	if self.prover != nil {
+		args.Measure = self.prover.SendMeasure
+	}
 	if options.measure != nil {
 		measure := options.measure
 		args.Measure = func() *sidecar.SmtpProverMeasure { return measure }
+	}
+	if host := options.proverHost; host != nil {
+		args.Measure, args.ReadyKeySets, args.SendHold = host.Measure, host.ReadyKeySets, host.HoldForSend
+	}
+	if options.configureSender != nil {
+		options.configureSender(args)
 	}
 	sender, err := sidecar.NewSmtpSender(args)
 	if err != nil {
@@ -522,7 +533,7 @@ func TestSmtpConnectionTakesTheBackupTicketAfterAnEdgeReset(t *testing.T) {
 
 // A prover that blocks inside SendSmtp until its stream ends, as a 2 h DATA send would.
 type testBlockingProver struct {
-	*sidecartest.FakeSmtpProver
+	sidecar.SmtpProver
 	started chan struct{}
 }
 
@@ -535,35 +546,170 @@ func (self *testBlockingProver) SendSmtp(ctx context.Context, conn net.Conn, job
 
 // A send cancelled from outside ends, its stream reset under the prover, and Close joins every send.
 func TestSmtpConnectionCancelledSendJoins(t *testing.T) {
-	world := newTestSenderWorld(t, nil)
-	blocking := &testBlockingProver{FakeSmtpProver: world.prover, started: make(chan struct{})}
-	sender, err := sidecar.NewSmtpSender(&sidecar.SmtpSenderArgs{
-		Dialer:   world.stub,
-		Prover:   blocking,
-		Policy:   sidecar.NewSmtpTlsPolicy(sidecar.NewSmtpDane(world.tls.anchors, world.tls.clock, nil), sidecar.NewSmtpMtaSts(world.tls.zone, world.tls.world.MtaStsTransport(), world.tls.store.Root(), world.settings, world.tls.clock), world.pins, sidecar.NewSmtpTlsAllowanceStore(world.tls.store.Root(), world.settings, world.tls.clock), world.tls.gate, world.tls.zone, world.tls.pki.roots, world.settings, world.tls.clock),
-		Pins:     world.pins,
-		Dkim:     sidecar.NewSmtpDkimKeys(newTestMemorySecrets(), testEchoDkimPublisher{}, world.settings, world.tls.clock, nil),
-		Mailbox:  world.mailbox,
-		Settings: world.settings,
-		Clock:    world.tls.clock,
-	})
+	started := make(chan struct{})
+	world := newTestSenderWorld(t, &testSenderOptions{configureSender: func(args *sidecar.SmtpSenderArgs) {
+		args.Prover = &testBlockingProver{SmtpProver: args.Prover, started: started}
+	}})
+	message := world.message([]string{"bob@" + testTlsDomain}, nil, "body\r\n")
+	var result *sidecar.SmtpSendResult
+	var sendErr error
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		result, sendErr = world.sender.Send(t.Context(), message)
+	}()
+	<-started
+	world.sender.Close()
+	stored, err := world.mailbox.ReadOutcomes(t.Context(), message.EffectKey)
+	if err != nil || len(stored) != 1 {
+		t.Errorf("mailbox when Close returned: %d domains, %v", len(stored), err)
+	} else if got := stored[0]; got.Outcome != sidecar.SmtpOutcomeDeferred || got.RetryAfter <= 0 {
+		t.Errorf("mailbox when Close returned: %+v", got)
+	}
+	<-done
+	if sendErr != nil || result == nil || testDomainOutcome(t, result, testTlsDomain).Outcome != sidecar.SmtpOutcomeDeferred {
+		t.Errorf("cancelled send: %+v, %v", result, sendErr)
+	}
+	if len(world.mx.Transactions()) != 0 || len(world.reachNotes()) != 0 {
+		t.Error("an unacknowledged message was counted as delivered")
+	}
+	if _, err := world.sender.Send(t.Context(), message); !errors.Is(err, sidecar.ErrSmtpSenderClosed) {
+		t.Errorf("a closed sender sent: %v", err)
+	}
+}
+
+// The sender's stream closes on its first write after the private MX accepts the message.
+type testQuitFailureDialer struct {
+	sidecar.SmtpEdgeDialer
+	afterAcceptance func() bool
+}
+
+func (self *testQuitFailureDialer) DialSmtpEdge(ctx context.Context) (sidecar.SmtpEdgeStream, error) {
+	stream, err := self.SmtpEdgeDialer.DialSmtpEdge(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &testQuitFailureStream{SmtpEdgeStream: stream, afterAcceptance: self.afterAcceptance}, nil
+}
+
+type testQuitFailureStream struct {
+	sidecar.SmtpEdgeStream
+	afterAcceptance func() bool
+}
+
+func (self *testQuitFailureStream) Write(data []byte) (int, error) {
+	if self.afterAcceptance() {
+		self.SmtpEdgeStream.Abort()
+		return 0, net.ErrClosed
+	}
+	return self.SmtpEdgeStream.Write(data)
+}
+
+// A final DATA acknowledgement survives cancellation during QUIT and a new sender's replay.
+func TestSmtpConnectionCancelledAfterDataAcceptance(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var world *testSenderWorld
+	var restartArgs sidecar.SmtpSenderArgs
+	world = newTestSenderWorld(t, &testSenderOptions{script: testDataOnlyScript(), configureSender: func(args *sidecar.SmtpSenderArgs) {
+		restartArgs = *args
+		args.Dialer = &testQuitFailureDialer{SmtpEdgeDialer: args.Dialer, afterAcceptance: func() bool {
+			if len(world.mx.Transactions()) == 0 {
+				return false
+			}
+			cancel()
+			return true
+		}}
+	}})
+	nextMx := world.addDomain(testDataDomain, testDataHost, testDataAddress, nil)
+	message := world.message([]string{"bob@" + testTlsDomain, "carol@" + testDataDomain}, nil, "body\r\n")
+	if err := world.mailbox.WriteOutcomes(t.Context(), message.EffectKey, []*sidecar.SmtpDomainOutcome{{
+		Domain: testDataDomain, Outcome: sidecar.SmtpOutcomeQueued, UpdateTime: world.tls.clock.Now().Add(-world.settings.OutboxTakeoverTimeout),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := world.sender.Send(ctx, message)
+	if err != nil || result == nil {
+		t.Fatalf("send after acknowledgement: %+v, %v", result, err)
+	}
+	if got := testDomainOutcome(t, result, testTlsDomain); got.Outcome != sidecar.SmtpOutcomeSent || got.Mode != sidecar.SmtpModeData {
+		t.Fatalf("acknowledged domain: %+v", got)
+	}
+	if got := testDomainOutcome(t, result, testDataDomain); got.Outcome != sidecar.SmtpOutcomeQueued || len(nextMx.Transactions()) != 0 || len(result.ResentDomains) != 0 {
+		t.Fatalf("unstarted domain after cancellation: %+v, resent %v", got, result.ResentDomains)
+	}
+	sends := world.prover.Sends()
+	if len(sends) != 1 || !errors.Is(sends[0].Err, net.ErrClosed) || sends[0].Result == nil || !sends[0].Result.Accepted {
+		t.Fatalf("prover did not retain the acknowledgement and the QUIT error: %+v", sends)
+	}
+	world.sender.Close()
+	world.tls.clock.Advance(world.settings.OutboxTakeoverTimeout)
+	restarted, err := sidecar.NewSmtpSender(&restartArgs)
 	if err != nil {
 		t.Fatal(err)
 	}
-	message := world.message([]string{"bob@" + testTlsDomain}, nil, "body\r\n")
-	sent := make(chan *sidecar.SmtpSendResult, 1)
-	go func() {
-		result, _ := sender.Send(context.Background(), message)
-		sent <- result
-	}()
-	<-blocking.started
-	sender.Close()
-	result := <-sent
-	if result == nil || testDomainOutcome(t, result, testTlsDomain).Outcome != sidecar.SmtpOutcomeDeferred {
-		t.Errorf("a cancelled send reported %+v", result)
+	defer restarted.Close()
+	result, err = restarted.Send(t.Context(), message)
+	if err != nil || result == nil {
+		t.Fatalf("replay: %+v, %v", result, err)
 	}
-	if _, err := sender.Send(context.Background(), message); !errors.Is(err, sidecar.ErrSmtpSenderClosed) {
-		t.Errorf("a closed sender sent: %v", err)
+	if testDomainOutcome(t, result, testTlsDomain).Outcome != sidecar.SmtpOutcomeSent ||
+		testDomainOutcome(t, result, testDataDomain).Outcome != sidecar.SmtpOutcomeSent ||
+		len(world.mx.Transactions()) != 1 || len(nextMx.Transactions()) != 1 {
+		t.Fatalf("replay: %+v, transactions %d and %d", result, len(world.mx.Transactions()), len(nextMx.Transactions()))
+	}
+}
+
+// A mailbox that loses its final write to cancellation and stalls the recovery write.
+type testStalledOutcomeMailbox struct {
+	sidecar.SmtpMailbox
+	cancel  context.CancelFunc
+	stalled chan struct{}
+}
+
+func (self *testStalledOutcomeMailbox) WriteOutcomes(ctx context.Context, key []byte, outcomes []*sidecar.SmtpDomainOutcome) error {
+	if len(outcomes) == 1 && outcomes[0].Outcome == sidecar.SmtpOutcomeSent {
+		self.cancel()
+		if ctx.Err() != nil {
+			// The underlying store reports its closed transport on the interrupted write.
+			return net.ErrClosed
+		}
+		close(self.stalled)
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return self.SmtpMailbox.WriteOutcomes(ctx, key, outcomes)
+}
+
+// When the final mailbox write also stalls after cancellation, Send ends with its error and leaves the queued claim.
+func TestSmtpConnectionCancelledOutcomeWriteIsBounded(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	stalled := make(chan struct{})
+	world := newTestSenderWorld(t, &testSenderOptions{configureSender: func(args *sidecar.SmtpSenderArgs) {
+		args.Mailbox = &testStalledOutcomeMailbox{SmtpMailbox: args.Mailbox, cancel: cancel, stalled: stalled}
+	}})
+	message := world.message([]string{"bob@" + testTlsDomain}, nil, "body\r\n")
+	done := make(chan struct{})
+	var result *sidecar.SmtpSendResult
+	var err error
+	go func() {
+		defer close(done)
+		result, err = world.sender.Send(ctx, message)
+	}()
+	select {
+	case <-stalled:
+	case <-done:
+		t.Fatalf("cancelled final write ended without attempting to record the acknowledgement: %+v, %v", result, err)
+	}
+	world.tls.clock.Advance(world.settings.OutcomeSendTimeout)
+	<-done
+	if result != nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("stalled write: %+v, %v", result, err)
+	}
+	stored, err := world.mailbox.ReadOutcomes(t.Context(), message.EffectKey)
+	if err != nil || len(stored) != 1 || stored[0].Outcome != sidecar.SmtpOutcomeQueued {
+		t.Fatalf("mailbox after failed write: %+v, %v", stored, err)
 	}
 }
 

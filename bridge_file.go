@@ -115,8 +115,8 @@ const (
 
 // Tunables of a filer.
 type BridgeFilerSettings struct {
-	// How long a first map waits for its BridgeAddress's entry to apply before it reads the ledger again: 30 s, a
-	// follow's few round trips. Non-positive waits not at all, so a claim answers uncertain unless its entry applied.
+	// How long to wait for a filed address or forward grant to reach the verified log.
+	// Non-positive waits not at all, so a claim answers uncertain unless its entry applied.
 	AddressLandTimeout time.Duration
 	// How many addresses a first map proposes, drawing again after a claim another won in log order: 3, since two
 	// hosts racing for one free address of thousands is rare. Non-positive proposes one.
@@ -156,6 +156,7 @@ const (
 	bridgeFileDirectory     = "bridge"
 	bridgeFileClass         = "bridge"
 	bridgeFileEgressPrefix  = "egress/"
+	bridgeFileForwardPrefix = "forward/"
 	bridgeFileRoutePrefix   = "route/"
 	bridgeFileRecordVersion = 1
 )
@@ -249,7 +250,8 @@ type BridgeFiler struct {
 	random   io.Reader
 
 	// held across appending an owed route entry and dropping it, so two passes append it once
-	owedLock sync.Mutex
+	owedLock    sync.Mutex
+	forwardLock sync.Mutex
 }
 
 // A filer over args, whose Sidecar and Config are required.
@@ -1295,7 +1297,7 @@ func (self *BridgeFiler) Forward(ctx context.Context, origin *BridgeFileOrigin, 
 		expiresMs = now.Add(request.Lifetime).UnixMilli()
 	}
 	destination := "sidecar:" + hex.EncodeToString(request.Target.Bytes())
-	stored, err := grants.Action(ctx, &protocol.CanonicalAction{Kind: uint32(SidecarActionForward)}, &AclGrantRequest{
+	ask := &AclGrantRequest{
 		Subject:    identity.SidecarId,
 		GrantDst:   []string{destination},
 		GrantAllow: []string{"dial"},
@@ -1304,11 +1306,20 @@ func (self *BridgeFiler) Forward(ctx context.Context, origin *BridgeFileOrigin, 
 			TargetPort: request.Port,
 			GrantDst:   []string{destination + ":" + protocolName + ":" + strconv.FormatUint(uint64(request.Port), 10)},
 		},
-	}, now)
+	}
+	stored, err := grants.Action(ctx, &protocol.CanonicalAction{Kind: uint32(SidecarActionForward)}, ask, now)
 	if err != nil {
 		return nil, err
 	}
-	effect := &bridgeForwardEffect{filer: self, inner: grants.Effect(stored), origin: origin, request: request, action: stored}
+	// A person may answer after a restart. The gate and the log verify the originally sealed bytes and deadline.
+	if gate, err := self.args.Sidecar.ApprovalGate(); err == nil {
+		stored, err = self.forwardApprovalAction(gate, origin, request, stored, ask.Detail, now)
+		if err != nil {
+			return nil, err
+		}
+	}
+	grant := &aclGrantEffect{filer: grants, action: stored, confirm: self.confirmForwardGrant}
+	effect := &bridgeForwardEffect{filer: self, inner: grant, origin: origin, request: request, action: stored}
 	var detail *SidecarActionDetail
 	if 0 < request.LocalPort {
 		detail = &SidecarActionDetail{LocalPort: request.LocalPort}
@@ -1326,6 +1337,134 @@ func (self *BridgeFiler) Forward(ctx context.Context, origin *BridgeFileOrigin, 
 		filing.GrantId = grantId
 	}
 	return filing, nil
+}
+
+// A retry must present exactly the seal and absolute deadline the member reviewed. The local store is per network.
+type bridgeForwardApproval struct {
+	Version   int    `json:"version"`
+	Canonical []byte `json:"canonical"`
+	ExpiresMs int64  `json:"expires_ms"`
+}
+
+// The post's receipt lets the listener ask the follower to catch up immediately. Only a grant accepted on this
+// chain can enable the listener, even if posting the statement returned success.
+func (self *BridgeFiler) confirmForwardGrant(ctx context.Context, pin *bridge.AuthPin, signed, id []byte) error {
+	if pin == nil || pin.GetVersion() == 0 || len(pin.GetChain()) != sha256.Size {
+		return fmt.Errorf("%w: no receipt for the forward grant", ErrBridgeFileUncertain)
+	}
+	ctx, cancel := context.WithTimeout(ctx, self.settings.AddressLandTimeout)
+	defer cancel()
+	state, err := self.args.Config.WaitFor(ctx, pin.GetVersion())
+	if err != nil {
+		return fmt.Errorf("%w: waiting for the forward grant: %w", ErrBridgeFileUncertain, err)
+	}
+	if state == nil || !state.OnChain(pin) {
+		return fmt.Errorf("%w: the forward receipt is off the verified log", ErrBridgeFileUncertain)
+	}
+	at, err := state.StateAt(pin)
+	if err != nil {
+		return fmt.Errorf("%w: checking the forward receipt: %w", ErrBridgeFileUncertain, err)
+	}
+	statementId, err := bridgeSignedStatementId(signed)
+	if err != nil {
+		return err
+	}
+	if n, held := at.ringFind(pin.GetVersion()+1, statementId); !held || n != pin.GetVersion() {
+		return fmt.Errorf("%w: the receipt does not identify the accepted forward statement", ErrBridgeFileRefused)
+	}
+	acl, err := at.Acl()
+	if err != nil || acl.grantRule(id) == nil {
+		return fmt.Errorf("%w: the verified log does not hold the grant at the receipt", ErrBridgeFileRefused)
+	}
+	return nil
+}
+
+// Reuses a matching forward request's sealed action until its deadline passes or a matching grant is withdrawn.
+func (self *BridgeFiler) forwardApprovalAction(gate *ApprovalGate, origin *BridgeFileOrigin, request *BridgeForwardRequest, fresh *StoredCanonicalAction, detail *protocol.CanonicalActionDetail, now time.Time) (*StoredCanonicalAction, error) {
+	// Separate origins, users, run bindings, local listeners and requested durations, even when a remote port matches.
+	intent, err := json.Marshal(struct {
+		Subject        []byte
+		Act            SidecarActOrigin
+		RunId, AgentId *Id
+		Risk           SidecarRisk
+		Summary        string
+		Request        BridgeForwardRequest
+	}{
+		Subject: fresh.Action.GetSubject(),
+		Act:     origin.Act,
+		RunId:   origin.RunId,
+		AgentId: origin.AgentId,
+		Risk:    origin.AgentRisk,
+		Summary: origin.Summary,
+		Request: *request,
+	})
+	if err != nil {
+		return nil, err
+	}
+	digest := sha256.Sum256(intent)
+	name := bridgeFileForwardPrefix + hex.EncodeToString(digest[:])
+	self.forwardLock.Lock()
+	defer self.forwardLock.Unlock()
+	kept := &bridgeForwardApproval{}
+	found, err := self.loadRecord(name, kept)
+	if err != nil {
+		return nil, err
+	}
+	if found && now.UnixMilli() < kept.ExpiresMs && kept.ExpiresMs <= fresh.Action.GetExpiresMillis() {
+		original, err := ParseStoredCanonicalAction(kept.Canonical)
+		if err != nil {
+			return nil, err
+		}
+		clear := proto.Clone(fresh.Action).(*protocol.CanonicalAction)
+		clear.ExpiresMillis, clear.SealedDetail = kept.ExpiresMs, original.Action.GetSealedDetail()
+		opened, err := self.args.Sidecar.OpenActionDetail(original)
+		if err == nil && proto.Equal(original.Action, clear) && proto.Equal(opened, detail) {
+			ended, err := self.forwardGrantWithdrawn(gate, origin, request.LocalPort, original)
+			if err != nil {
+				return nil, err
+			}
+			if !ended {
+				return original, nil
+			}
+		}
+	}
+	// Bound the retained seals by the lifetime of the grants. Unreadable records never authorize a retry.
+	if names, err := self.recordNames(bridgeFileForwardPrefix); err == nil {
+		for _, expired := range names {
+			record := &bridgeForwardApproval{}
+			if exists, err := self.loadRecord(expired, record); err == nil && exists && record.ExpiresMs <= now.UnixMilli() {
+				_ = self.removeRecord(expired)
+			}
+		}
+	}
+	err = self.saveRecord(name, &bridgeForwardApproval{Version: bridgeFileRecordVersion, Canonical: fresh.Bytes, ExpiresMs: fresh.Action.GetExpiresMillis()})
+	return fresh, err
+}
+
+// Reports whether a matching approval's grant was spent and its rule is absent from the current policy.
+func (self *BridgeFiler) forwardGrantWithdrawn(gate *ApprovalGate, origin *BridgeFileOrigin, localPort uint32, action *StoredCanonicalAction) (bool, error) {
+	if err := gate.inbox.ensureLoaded(); err != nil {
+		return false, err
+	}
+	state := self.args.Config.State()
+	if state == nil {
+		return false, ErrBridgeFileNoState
+	}
+	acl, err := state.Acl()
+	if err != nil {
+		return false, err
+	}
+	var local *SidecarActionDetail
+	if localPort != 0 {
+		local = &SidecarActionDetail{LocalPort: localPort}
+	}
+	for _, candidate := range gate.inbox.candidates(action, local, origin.RunId, origin.AgentId) {
+		id := AclGrantId(candidate.request.ApprovalId(), action.PayloadSha256())
+		if acl.spentGrant(id[:]) != nil && acl.grantRule(id[:]) == nil {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // The grant component's effect for a forward, with the route entry beside it once a grant this run filed lands.

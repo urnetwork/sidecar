@@ -287,7 +287,9 @@ message EvsPush {                       // sidecar/protocol/evs.proto, inside §
                                         // 64 ERASE, 128 CLOSURE (an erasure's re-checkpoint, 11.12), 256 DROP
                                         // (a drop-history action or its cancel, 11.7; format 2), 512 CUT (an
                                         // erasure's index cut, 11.12; format 2), 1024 COMPLETION (with ERASE
-                                        // alone: a completion ERASE, 11.12; format 2; owner decision 658)
+                                        // alone: a completion ERASE, 11.12; format 2; owner decision 658),
+                                        // 2048 EXACT_HEAD (file mode, formats 1 and 2, same base version and
+                                        // chain at commit, 11.8)
   bytes path_map_sha256 = 17;           // PATH_EPOCH: SHA-256 over the epoch's EvsPathMap parts, in order
   uint32 part_count = 18;               // 0 for a one-part push, else 2 to 1,024
   bytes parts_sha256 = 19;              // SHA-256 over the parts' SHA-256s in part order (the list is in the payload)
@@ -562,6 +564,9 @@ file  evs_write on file-mode    path-level CAS: each changed file      evs lands
                                                                                                        <client_id>@ur.invalid of the
                                                                                                        signer, time time_ms, message
                                                                                                        "ur push <push_id hex>"
+exact     an authorized file-mode writer may also sign EXACT_HEAD to require the current version and chain at
+          commit (11.8 step 5f). A reader replaying the chain checks that such a statement names its immediate
+          predecessor's version and chain. The ordinary file-mode path rule above still admits disjoint pushes.
 set       the ref's first push sets ref_mode in its statement and the head; another mode is refused (409 REF_MODE);
           only git-mode refs take overlays (below), which are git mode
 replay    replaying readers of a git-mode ref check TIP; that the update's stated old tip is the ref's; that every
@@ -1226,7 +1231,11 @@ evs    4  the head first: its verified cache entry (11.9) when that version is a
              (owner decision 585)
           f  base: git mode b = v (TIP) and no live lease of another push; file mode b >= v - 63, so the push lands
              within (b, b+64], and C_b matches the history, else 409 BASE_STALE, carrying EvsDepositHead from the
-             cluster head on the caller's own deposit ref (11.12)
+             cluster head on the caller's own deposit ref (11.12). With EXACT_HEAD, additionally require the signed
+             (base_version, base_chain) to equal (v, C_v) for this ref, including (0, C_0) at creation. A mismatch
+             is final 409 BASE_STALE. The head If-Match in step 7 binds this check to commit. Repeat it on a lost
+             CAS, also at the seal of a multipart push. Step 5a still returns the original success for an already
+             committed identical push. Git-mode pushes carrying EXACT_HEAD are invalid.
           g  path-level CAS on each changed file path, from the caller's read when its write named a version
              (11.20's `Write`; owner decision 407): its newest committed version (11.7's rule: the entry, or a
              newer version after the folded_through of the head read before it) equals base_entry_version, 0 naming
@@ -1560,6 +1569,10 @@ request   POST /evs/v1/repos/<repo_id>/read (r): {ref_id, pin_version (0 if none
           checked, by ref version, at most 64 (held_drops)}; this, the refs and log routes and 11.10's subscription
           routes answer a deleted repo 409 REPO_DELETED and a shredding or shredded one 409 SHREDDING, from the 5 s
           repo/ cache the upload route uses (11.12's refused row; owner decision 379)
+exact     An authenticated fresh single-ref read of a file-mode or uncreated ref reports whether this host enforces
+          EXACT_HEAD in 11.8 (EvsHeadSummary.supports_exact_head, bool field 18). Listings, streams and cached
+          reads omit it. Missing or false leaves the native ACL client at its preview (§7.9). Older hosts reject
+          the signed flag. Older readers of either format need an upgrade to replay past a flagged version.
 streams   POST .../read {refs: up to 64 (ref_id, pin_version)} (r) reads a record-class repo's owned streams: per
           ref, the head summary and the Signed EvsPush of every version after its pin with the entries those
           versions create, their records and slots, in one framed stream of at most 4 MiB, a ref past it
@@ -3962,7 +3975,7 @@ never     a query, which documents match it, or which trigrams documents share: 
 
 **D-EVS-21 (proposed).** 11.13 budgets every metadata write in drive bytes, which bound its IOs too, with leases, the push sequence and gkm acks in Redis and a per-network fair share that sheds the heaviest network first. *Why:* every drive takes every write (owner decisions 21, 116, 140).
 
-**D-EVS-22 (decided; owner decision 141).** Refs have a mode fixed at creation: git-mode refs commit only on their tip and keep the original commits; file-mode refs use path-level CAS and export one deterministic commit per version; head mode writes file-mode refs only. *Why:* git commits bind tree and parents (owner decisions 2, 24, 81).
+**D-EVS-22 (decided; owner decision 141).** Refs have a mode fixed at creation: git-mode refs commit only on their tip and keep the original commits; file-mode refs use path-level CAS and export one deterministic commit per version. A file-mode writer may also sign EXACT_HEAD to require the version and chain it read. Head mode writes file-mode refs only. *Why:* git commits bind tree and parents (owner decisions 2, 24, 81).
 
 **D-EVS-23 (proposed).** A push id names one statement, whose retry returns its original version; an unknown outcome resolves from the head and at most two log pages, or stays unknown; a refusal the head does not settle for good is answered only once a head CAS records the push id, its code and its statement's time bound in the head, at most 8 records a ref and one a second, else 429, and every attempt of that push id that reads the record gets that refusal; no answer deletes anything, and evacuation deletes only a dead push's slots. *Why:* a store can apply a write and lose its response, and another attempt of the same push id, a client's retry or the lb's re-send, can reach evs at any time, even after another attempt's answer reached the client, so only state the commit point covers keeps a refusal true; a fence timed by attempts' arrival cannot.
 
@@ -4074,7 +4087,7 @@ never     a query, which documents match it, or which trigrams documents share: 
 
 **Q-EVS-7.** Cross-cutting (§11, §21). Does a preservation hold pause user-initiated shredding (`--now`, the 7-day timer, slot erasure)? **Decided by owner 2026-11-04 (owner decision 133):** (a) no: holds pause only the server's TTL sweeps and GC for in-scope records and, from M10, drops' deletions, silently (owner decision 184; §21.9), and user-initiated shredding always proceeds (11.12), if counsel confirms that deleting wrapped keys to ciphertext URnetwork cannot read is permitted (§21). A hold keeps only the ciphertext a shred leaves. *Residual:* none.
 
-**Q-EVS-8.** Cross-cutting (owner decisions 2, 24). On a shared git ref, disjoint landing (owner decision 2) leaves a tree no git commit has, so git compatibility and R-EVS-10's CAS cannot both hold. **Decided by owner 2026-11-04 (owner decision 141):** (a): git-mode refs commit only on their tip (D-EVS-22), and file-mode refs (vaults, mailboxes, records, the config) keep disjoint landing, so exact git oids and stock non-fast-forward errors hold; a loser pulls or merges, about 2% of merges in the twenty-agent test. *Residual:* none.
+**Q-EVS-8.** Cross-cutting (owner decisions 2, 24). On a shared git ref, disjoint landing (owner decision 2) leaves a tree no git commit has, so git compatibility and R-EVS-10's CAS cannot both hold. **Decided by owner 2026-11-04 (owner decision 141):** (a): git-mode refs commit only on their tip (D-EVS-22), and file-mode refs (vaults, mailboxes, records, the config) keep disjoint landing, so exact git oids and stock non-fast-forward errors hold; a loser pulls or merges, about 2% of merges in the twenty-agent test. **Amended by owner 2026-11-20 (owner decision 141):** a file-mode writer may sign an additional exact-head precondition. The stock ACL writer uses it for a confirmed policy preview (§7.9). *Residual:* none.
 
 **Q-EVS-9.** Cross-cutting (owner decisions 2, 140, 145; §19, §22). Must the design meet the ~10-15 KiB of drive writes a push in owner decision 140's record, when owner decision 2's commit point, the head's If-Match overwrite, alone writes ~14 KiB a drive (~10.5 on 1 KiB blocks), since MinIO also rewrites the old xl.meta (11.3)? **Decided by owner 2026-11-04 (owner decision 140, record corrected):** (a): the binding budget, gated at 43 KiB a push per drive (D-TEST-11). The ~10-15 KiB figure was the design team's first estimate, not the owner's requirement, which is the PM9A3 profile itself ("We have to make that iop profile work"): at most 0.8 DWPD and 50% of rated write IOPS at the design load. Not taken: (b) a head per version created If-None-Match, which departs from owner decision 2's If-Match commit point; (c) patching MinIO to skip the old xl.meta's copy on overwrite, which gives up its torn-write backup. *Residual:* none.
 

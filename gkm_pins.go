@@ -311,6 +311,9 @@ func (self *GkmGroupClient) GenHead(groupId Id) (*protocol.GenHead, bool) {
 
 // The epoch pins of the groups this device and the peer are both leaves of, in group id order. From memory.
 func (self *GkmGroupClient) GroupHeads(peerSidecarId Id) []*protocol.GroupHead {
+	if self.KeyDeliveryOnly() {
+		return nil
+	}
 	_, _, heads := self.heads()
 	groupHeads := []*protocol.GroupHead{}
 	for _, head := range heads {
@@ -325,6 +328,9 @@ func (self *GkmGroupClient) GroupHeads(peerSidecarId Id) []*protocol.GroupHead {
 
 // This device's epoch pin for a group it is a leaf of. From memory.
 func (self *GkmGroupClient) GroupHead(groupId Id) (*protocol.GroupHead, bool) {
+	if self.KeyDeliveryOnly() {
+		return nil, false
+	}
 	_, _, heads := self.heads()
 	for _, head := range heads {
 		if head.pins.groupId == groupId && slices.Contains(head.leafIds, self.args.SidecarId) {
@@ -338,6 +344,9 @@ func (self *GkmGroupClient) GroupHead(groupId Id) (*protocol.GroupHead, bool) {
 // The groups this device is a leaf of, with their newest adopted epochs: what upkeep acks daily (§10.6's ack row,
 // GkmUpkeepArgs.AckGroups). From memory.
 func (self *GkmGroupClient) AckGroups() []*GkmAckGroup {
+	if self.KeyDeliveryOnly() {
+		return nil
+	}
 	_, repoIds, heads := self.heads()
 	ackGroups := []*GkmAckGroup{}
 	for index, head := range heads {

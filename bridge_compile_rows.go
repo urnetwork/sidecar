@@ -12,8 +12,8 @@
 //	           listener, or one the device role would refuse, is void here and alarms map_refused
 //	served     S's routes in force, an exposed prefix read into the block, a withdrawn one until its drain's end
 //	subjects   each sidecar that reaches S, its member, tag, client ids and dial, route and exit rows, one a rule and
-//	           port range, ports and prefixes from AclLocalPolicy; a port-limited rule whose ports the device does not
-//	           hold, as an activated grant's (sealed_detail, QD-003), gives no row, the closed direction
+//	           port range, ports and prefixes from AclLocalPolicy or an activated dial grant's sealed detail; a
+//	           port-limited rule whose ports the device cannot open gives no row
 //	egress     S's mode from the rows' BridgeRows, and under exits the exits of S's own spec, else of the first atom S
 //	           holds that has one, each a link, and whether that spec requires default egress on (QD-1053)
 //	untagged   autogroup:untagged's rows at S, what an sdk provider gives a sealed subject no row binds (QD-733)
@@ -660,6 +660,9 @@ func (self *bridgeCompiler) reachRows(rules []AclReachRule, routeRows bool) []*b
 			continue
 		}
 		local := self.aclLocal.Rule(rule.RuleId)
+		if !routeRows && rule.PortsLimited && len(rule.GrantId) != 0 {
+			local = self.state.grantPortRule(self.grantActions[string(rule.GrantId)], self.self, self.view.RepoKeyAt)
+		}
 		ports, ok := bridgeCompilePortRows(rule, local)
 		if !ok {
 			continue

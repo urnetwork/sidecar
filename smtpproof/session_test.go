@@ -506,8 +506,19 @@ func testRunSendWith(t *testing.T, leg *testTlsLeg, mxSettings *testMxSettings, 
 	return testRunSendThrough(t, leg, mxSettings, proverSettings, job, partProver, partVerifier, nil)
 }
 
-// As testRunSendWith, with the relay set up by configure, when given, before anything flows.
-func testRunSendThrough(t *testing.T, leg *testTlsLeg, mxSettings *testMxSettings, proverSettings *ProverSettings, job *sidecar.SmtpProofJob, partProver partProver, partVerifier partVerifier, configure func(edge *testEdge)) *testSend {
+// The scripted prover has a known reference capacity. A fixture can lower it to exercise the size check.
+func testSendingProver(settings *ProverSettings, backend partProver, suites []uint16) *Prover {
+	cap := settings.DataProofBytes
+	if cap == 0 {
+		cap = 1024 * 1024
+	}
+	return &Prover{settings: settings, backend: backend, tlsSuites: suites, measured: &proverMeasured{
+		measure: sidecar.SmtpProverMeasure{DataProofBytes: uint64(cap)},
+	}}
+}
+
+// As testRunSendWith, with the relay configured before anything flows and, if supplied, a host's actual measurement.
+func testRunSendThrough(t *testing.T, leg *testTlsLeg, mxSettings *testMxSettings, proverSettings *ProverSettings, job *sidecar.SmtpProofJob, partProver partProver, partVerifier partVerifier, configure func(edge *testEdge), measurement ...*sidecar.SmtpProverMeasure) *testSend {
 	t.Helper()
 	sidecarConn, edgeSidecarConn := testPipe()
 	edgeMxConn, mxConn := testPipe()
@@ -534,7 +545,10 @@ func testRunSendThrough(t *testing.T, leg *testTlsLeg, mxSettings *testMxSetting
 	}
 	edge.run()
 
-	prover := &Prover{settings: proverSettings, backend: partProver, tlsSuites: leg.suites}
+	prover := testSendingProver(proverSettings, partProver, leg.suites)
+	if len(measurement) != 0 {
+		prover.measured.measure = *measurement[0]
+	}
 	result, err := prover.SendSmtp(context.Background(), sidecarConn, job, edge)
 	sidecarConn.Close()
 	<-mxDone
@@ -573,6 +587,32 @@ func TestSendBdatThroughTheGate(t *testing.T) {
 		}
 		if got := len(send.backend.statements); got != 3 {
 			t.Errorf("%s: %d parts, want pi1 to pi3", leg.name, got)
+		}
+	}
+}
+
+// Only an exact REQUIRETLS extension in the post-TLS EHLO permits the flagged envelope on either TLS version.
+func TestSendRequiresThePostTlsRequireTlsKeywordBeforeMail(t *testing.T) {
+	for _, leg := range testTlsLegs() {
+		job := testJob("A message requiring TLS.\r\n", "bob")
+		job.Preamble.Flags |= preambleFlagRequireTls
+		mxSettings := testMxDefaults()
+		mxSettings.keywords = append(mxSettings.keywords, "XREQUIRETLS", "REQUIRETLS-NO")
+		send := testRunSend(t, leg, mxSettings, DefaultProverSettings(), job)
+		if send.err != nil || send.result == nil || !send.result.RequireTlsMissing || send.result.Accepted {
+			t.Fatalf("%s missing extension: %+v, %v", leg.name, send.result, send.err)
+		}
+		if seen := send.mx.seen(); len(seen) != 1 || seen[0] != "EHLO "+testHeloName || len(send.edge.parts) != 1 {
+			t.Fatalf("%s missing extension: MX saw %v, parts %d", leg.name, seen, len(send.edge.parts))
+		}
+
+		mxSettings.keywords = append(mxSettings.keywords, "ReQuIrEtLs")
+		send = testRunSend(t, leg, mxSettings, DefaultProverSettings(), job)
+		if send.err != nil || send.result == nil || !send.result.Accepted || send.result.RequireTlsMissing {
+			t.Fatalf("%s advertised extension: %+v, %v", leg.name, send.result, send.err)
+		}
+		if seen := send.mx.seen(); len(seen) < 2 || !strings.HasSuffix(seen[1], "> REQUIRETLS") {
+			t.Fatalf("%s advertised extension: MX saw %v", leg.name, seen)
 		}
 	}
 }
@@ -991,6 +1031,27 @@ func TestSendStopsOnABadPreambleBeforeAnyEffect(t *testing.T) {
 	}
 	if 0 < len(send.mx.transactions()) || 0 < len(send.edge.parts) {
 		t.Errorf("%d transactions, %d parts", len(send.mx.transactions()), len(send.edge.parts))
+	}
+}
+
+// The reply is already read when the peer closes before QUIT. An incomplete reply gives no acceptance.
+func TestProverKeepsFinalMessageReplyAcrossDisconnect(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	client, peer := net.Pipe()
+	defer client.Close()
+	peer.Close()
+	for _, mode := range []uint32{partModeData, partModeBdat} {
+		run := &proverRun{client: &tlsClient{conn: client}, job: &sidecar.SmtpProofJob{}, stream: []byte("250 2.0.0 accepted\r\n")}
+		quit := &tlsSealedRecord{raw: []byte("quit record")}
+		result, err := run.finish(ctx, mode, quit)
+		if result == nil || !result.Accepted || result.Mode != mode || !errors.Is(err, io.ErrClosedPipe) {
+			t.Fatalf("mode %d, acknowledged message with a closed stream: %+v, %v", mode, result, err)
+		}
+		run.stream = []byte("250 2.0.0 accepted")
+		if result, err := run.finish(ctx, mode, quit); result != nil || !errors.Is(err, context.Canceled) {
+			t.Fatalf("mode %d, incomplete acknowledgement: %+v, %v", mode, result, err)
+		}
 	}
 }
 

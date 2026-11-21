@@ -48,16 +48,15 @@ func seamHeadFile(t *testing.T, world *mailworld.M10World, message *mailworld.M1
 	return held[0].Path, index.Files[held[0].Path], files[held[0].Path]
 }
 
-// The versions Retained names, every readable one read without error; it never answers complete on EvsRepo, since it
-// names no removed index path (SEARCH-M10-17's note).
+// The versions Retained proves on the mailbox, every readable one read through EVS.
 func seamRetained(t *testing.T, world *mailworld.M10World, label string) []*sidecar.SearchTestEvsRetained {
 	t.Helper()
 	retained, complete, err := sidecar.SearchTestEvsRetainedVersions(world.Context(), world.Owner.Repo, nil)
 	if err != nil {
 		t.Fatalf("%s: the retained versions: %v", label, err)
 	}
-	if complete {
-		t.Fatalf("%s: the retained versions answered complete", label)
+	if !complete {
+		t.Fatalf("%s: the retained history is incomplete", label)
 	}
 	for _, version := range retained {
 		if version.Readable && version.ReadErr != nil {
@@ -115,7 +114,7 @@ func TestEvsIndexRetainedLeavesOutAVersionAnEraseDestroyedEndToEnd(t *testing.T)
 	if err != nil {
 		t.Fatalf("the first erasure: %v", err)
 	}
-	if first.State != sidecar.MailErasureRewriting || !first.Unproven {
+	if first.State != sidecar.MailErasureDone || first.Unproven {
 		t.Fatalf("the first erasure: %+v", first)
 	}
 	// its CLOSURE rewrote the head file, and its ERASE took the key both earlier versions open under: evs lists them
@@ -153,7 +152,7 @@ func TestEvsIndexRetainedLeavesOutAVersionAnEraseDestroyedEndToEnd(t *testing.T)
 	if err != nil {
 		t.Fatalf("the resume after the second erasure: %v", err)
 	}
-	if len(resumed) == 0 || resumed[0].ErasureId != first.ErasureId || resumed[0].State != sidecar.MailErasureRewriting {
-		t.Fatalf("the resume took up %+v, not the first erasure", resumed)
+	if len(resumed) != 0 {
+		t.Fatalf("the resume took up completed erasures: %+v", resumed)
 	}
 }

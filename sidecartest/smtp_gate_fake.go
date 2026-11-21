@@ -115,10 +115,22 @@ func (self *FakeSmtpGate) OpCounts() map[string]int {
 	return maps.Clone(self.opCounts)
 }
 
-// See smtpedgeservice.SmtpGate.
+// Read both inputs under the same lock, as the edge reads the signed grant and scopes at one position.
+func (self *FakeSmtpGate) SendFacts(networkId sidecar.Id, sidecarId sidecar.Id, now time.Time) (*smtpedgeservice.SmtpGateFacts, sidecar.AclDecision) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	facts, _ := self.factsLocked(networkId)
+	return facts, self.mailSendLocked(networkId, sidecarId)
+}
+
+// A copy of the network's facts for a fixture to inspect.
 func (self *FakeSmtpGate) Facts(networkId sidecar.Id) (*smtpedgeservice.SmtpGateFacts, bool) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
+	return self.factsLocked(networkId)
+}
+
+func (self *FakeSmtpGate) factsLocked(networkId sidecar.Id) (*smtpedgeservice.SmtpGateFacts, bool) {
 	self.opCounts["Facts"] += 1
 	facts, ok := self.networkIdFacts[networkId]
 	if !ok {
@@ -129,10 +141,14 @@ func (self *FakeSmtpGate) Facts(networkId sidecar.Id) (*smtpedgeservice.SmtpGate
 	return &kept, true
 }
 
-// See smtpedgeservice.SmtpGate.
+// The fixture's current decision for this sender.
 func (self *FakeSmtpGate) MaySendMail(networkId sidecar.Id, sidecarId sidecar.Id, now time.Time) sidecar.AclDecision {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
+	return self.mailSendLocked(networkId, sidecarId)
+}
+
+func (self *FakeSmtpGate) mailSendLocked(networkId sidecar.Id, sidecarId sidecar.Id) sidecar.AclDecision {
 	self.opCounts["MaySendMail"] += 1
 	sends, ok := self.networkIdSidecarIdSends[networkId]
 	if !ok {

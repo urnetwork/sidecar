@@ -60,11 +60,31 @@ func (self *MailClient) registerOutboxLookup(gate MailConfigGate) {
 
 // Kind mail's Lookup: the member's outbox's (MailOutbox.Lookup), uncertain where the mailbox cannot be read.
 func (self *MailClient) outboxLookup(ctx context.Context, canonical []byte, effectKey []byte) (*SidecarOutcome, error) {
+	if len(effectKey) != mailEffectKeyByteCount {
+		return &SidecarOutcome{State: ApprovalOutcomeNotDone}, nil
+	}
+	name := mailSendCheckpointName(effectKey)
+	release, _ := self.trySendUse(name)
+	if release == nil {
+		return &SidecarOutcome{State: ApprovalOutcomeUncertain}, nil
+	}
+	defer release()
 	outbox, err := self.memberOutbox(nil)
+	outcome := &SidecarOutcome{State: ApprovalOutcomeUncertain}
+	if err == nil {
+		outcome, err = outbox.Lookup(ctx, canonical, effectKey)
+		if err != nil || outcome.State == ApprovalOutcomeDone {
+			return outcome, err
+		}
+	}
+	checkpoint, err := self.readSendCheckpoint(name)
 	if err != nil {
 		return &SidecarOutcome{State: ApprovalOutcomeUncertain}, nil
 	}
-	return outbox.Lookup(ctx, canonical, effectKey)
+	if checkpoint != nil {
+		return checkpoint.outcome(), nil
+	}
+	return outcome, nil
 }
 
 // The outbox of this device's member's mailbox over the bound parts, standing read through standing.
@@ -81,13 +101,37 @@ func (self *MailClient) memberOutbox(standing MailOutboxStanding) (*MailOutbox, 
 	if binding.Sign != nil {
 		sign = binding.Sign
 	}
-	return NewMailOutbox(&MailOutboxArgs{
+	outbox, err := NewMailOutbox(&MailOutboxArgs{
 		Store:    parts.store(mailboxId),
 		Sign:     sign,
 		Standing: standing,
 		Settings: self.outboxSettings(),
 		Clock:    self.clock,
 	})
+	if err != nil {
+		return nil, err
+	}
+	outbox.client = self
+	return outbox, nil
+}
+
+// The receipt of an earlier send under this effect key. A device with no writable member mailbox has no outbox.
+func (self *MailClient) queuedSend(ctx context.Context, plan *mailSendPlan, effectKey []byte) (*MailOutboxQueued, error) {
+	mailboxId, err := self.mailboxId()
+	if errors.Is(err, ErrMailNoMailbox) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !plan.authority.Writes(self.sidecarId, mailboxId) {
+		return nil, nil
+	}
+	outbox, err := self.memberOutbox(nil)
+	if err != nil {
+		return nil, err
+	}
+	return outbox.receipt(ctx, effectKey)
 }
 
 // The member's outbox, its standing read once, as one send's queue: nil and the outcome its internet recipients
@@ -132,22 +176,24 @@ type mailSendOutboxQueue struct {
 }
 
 // See mailSendQueue.
-func (self *mailSendOutboxQueue) queue(ctx context.Context, args *mailSendQueueArgs) MailSendOutcome {
-	_, err := self.outbox.Queue(ctx, &MailOutboxQueueArgs{
+func (self *mailSendOutboxQueue) queue(ctx context.Context, args *mailSendQueueArgs) (*MailOutboxQueued, MailSendOutcome, error) {
+	queued, err := self.outbox.queue(ctx, &MailOutboxQueueArgs{
 		EffectKey:        args.effectKey,
 		Sender:           self.sender,
 		Recipients:       args.recipients,
 		Message:          args.message,
 		Flags:            args.flags,
 		ApprovalNotAfter: args.notAfter,
-	})
+	}, true)
 	switch {
 	case err == nil:
-		return MailSendQueued
+		return queued, MailSendQueued, nil
+	case errors.Is(err, ErrMailSendUncertain):
+		return nil, "", err
 	case errors.Is(err, ErrMailOutboxStanding):
-		return MailSendInternetRefused
+		return nil, MailSendInternetRefused, nil
 	}
-	return MailSendFailed
+	return nil, MailSendFailed, nil
 }
 
 // The member's mailbox as §14's sender and outbox runner reach it (SmtpSenderArgs.Mailbox,
@@ -206,6 +252,9 @@ func (self *MailClient) passOutcomes(run *mailComponentRun) {
 	}()
 	if !due {
 		return
+	}
+	if err := self.sweepSendCheckpoints(run.ctx, now); err != nil {
+		self.log.Warningf("[mail]expired send checkpoints were not all removed")
 	}
 	if _, err := self.RemoveExpiredOutcomes(run.ctx); err != nil {
 		self.log.Warningf("[mail]expired send outcomes were not all removed: %v", err)

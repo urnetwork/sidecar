@@ -84,6 +84,8 @@ type McpCall struct {
 	RunId sidecar.Id
 	// RunId first, then each run of a harness above the session, which a taint reaches (hook_bind.go)
 	members []sidecar.Id
+	// Whether the verified mailcfg confirms a general repo is an ordinary file repo.
+	ordinaryFileRepo func(repoId sidecar.Id) bool
 }
 
 // The session a request came on, which the server's middleware puts in every request's context. Nil outside one.

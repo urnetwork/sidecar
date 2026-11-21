@@ -5,7 +5,7 @@
 // internet's, each recipient on its own path. A draft's message is built here; a submission's comes as its client
 // wrote it (MailClient.SubmitMessage, mail_submission.go), and both take the same steps.
 //
-//	from      one of this network's own addresses (its label's, its alias's or a scope's), held to
+//	from      one of this network's own addresses (its label's, its alias's, a scope's or a verified Team domain's), held to
 //	          mail:<alias>#send for this device (D-ACL-12) by the rule ingest holds a deposit's signer to, so a message
 //	          the sender may not send as its From is refused here and, if forged, shown as outside mail there. A
 //	          burner's From is a reply, which MailClient.Reply alone sends (mail_burner_reply.go), and a bounce or
@@ -54,6 +54,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/sidecar/protocol"
 )
@@ -122,25 +124,29 @@ type MailSendSettings struct {
 	// action's own bound, CanonicalActionSettings.PreviewMaxByteCount (§16.8's 2 KiB). A larger value builds an
 	// action NewCanonicalAction refuses, so the send is refused rather than its preview cut short.
 	PreviewMaxByteCount int
+	// The most bytes in one device-local send checkpoint, including one signed deposit push and its receipts.
+	CheckpointMaxByteCount int
 }
 
 // The one default.
 func DefaultMailSendSettings() *MailSendSettings {
 	return &MailSendSettings{
-		RecipientMaxCount:     DefaultMailIngestSettings().RecipientMaxCount,
-		AddressMaxByteCount:   254,
-		SubjectMaxByteCount:   512,
-		TextMaxByteCount:      8 * 1024 * 1024,
-		MessageMaxByteCount:   50 * 1024 * 1024,
-		MessageIdMaxByteCount: 256,
-		PreviewMaxByteCount:   DefaultCanonicalActionSettings().PreviewMaxByteCount,
+		RecipientMaxCount:      DefaultMailIngestSettings().RecipientMaxCount,
+		AddressMaxByteCount:    254,
+		SubjectMaxByteCount:    512,
+		TextMaxByteCount:       8 * 1024 * 1024,
+		MessageMaxByteCount:    50 * 1024 * 1024,
+		MessageIdMaxByteCount:  256,
+		PreviewMaxByteCount:    DefaultCanonicalActionSettings().PreviewMaxByteCount,
+		CheckpointMaxByteCount: 1024 * 1024,
 	}
 }
 
 // Whether every value is in range.
 func (self *MailSendSettings) valid() bool {
 	return self != nil && 0 < self.RecipientMaxCount && 0 < self.AddressMaxByteCount && 0 < self.SubjectMaxByteCount &&
-		0 < self.TextMaxByteCount && 0 < self.MessageMaxByteCount && 0 < self.MessageIdMaxByteCount && 0 < self.PreviewMaxByteCount
+		0 < self.TextMaxByteCount && 0 < self.MessageMaxByteCount && 0 < self.MessageIdMaxByteCount && 0 < self.PreviewMaxByteCount &&
+		0 < self.CheckpointMaxByteCount
 }
 
 // What Send sends.
@@ -160,18 +166,26 @@ type MailSendArgs struct {
 	// nil for a person's own command or a host's submission, which are no run and so untainted (§16.6's spend step
 	// 1), the agent's words and a decision in hand.
 	Action MailConfigActionArgs
+	// How many mails the agent asks one approval to cover (mail_send's uses; owner decision 613). 2 or more, on a send
+	// that waits on the gate, asks for a template of From and the recipients, To, Cc and Bcc the allowed set
+	// (NewMailTemplateAction), filed in this mail's place where no decision covers the mail, so Send answers
+	// *ApprovalPendingError with the template's id; once a person approves it, this mail sent again and each later
+	// one from From to a subset of them spend its uses. A send that goes at once, W, asks for nothing. 0 or 1 is this
+	// mail alone. A template binds its agent's run, so one asked with no run in Action is refused.
+	Uses uint32
 }
 
 // One recipient's outcome.
 type MailSendRecipient struct {
-	// As the caller named it, lowercase.
+	// Its delivery address, with a canonical domain and the original external local part.
 	Address string
 	Outcome MailSendOutcome
 }
 
 // What Send answers.
 type MailSendResult struct {
-	// The message's id: its sent copy's, and its Message-ID's left side.
+	// A draft's send id. Queued mail takes the id in its committed Message-ID. A raw SMTP submission can have
+	// a client-chosen Message-ID that names no send.
 	SendId Id
 	// Each distinct recipient, in the order named, To then Cc then Bcc.
 	Recipients []*MailSendRecipient
@@ -179,6 +193,8 @@ type MailSendResult struct {
 	SentCopy bool
 	// The o/ entry's key, which names its or/ outcomes too; empty where nothing was queued.
 	EffectKey []byte
+	// A previous presentation supplied a committed delivery receipt, including a member-only send's.
+	replayed bool
 }
 
 // The recipients Delivered, in order.
@@ -258,19 +274,15 @@ func mailSendDepositRepoOf(binding *MailBinding, parts mailClientParts, repoId I
 // Holds args to what a draft's send needs before it keeps or deposits anything (see the file header): its shape and
 // bounds, the zone, and a From of this network that policy lets this device send as. Send and SubmitSend both start
 // here, so a send the gate holds was refused for none of these. An error names no address.
-func (self *MailClient) planSend(args *MailSendArgs) (*mailSendPlan, error) {
-	return self.planSendDraft(args, "")
+func (self *MailClient) planSend(ctx context.Context, args *MailSendArgs) (*mailSendPlan, error) {
+	return self.planSendDraft(ctx, args, "")
 }
 
 // planSend for a draft from burnerLabel's burner, a reply's (MailClient.Reply), or "" for any other.
-func (self *MailClient) planSendDraft(args *MailSendArgs, burnerLabel string) (*mailSendPlan, error) {
+func (self *MailClient) planSendDraft(ctx context.Context, args *MailSendArgs, burnerLabel string) (*mailSendPlan, error) {
 	settings := self.sendSettings()
 	if args == nil {
 		return nil, fmt.Errorf("%w: no message", ErrMailSendInvalid)
-	}
-	recipients, err := mailSendRecipients(args, settings)
-	if err != nil {
-		return nil, err
 	}
 	if strings.ContainsAny(args.Subject, "\r\n") || settings.SubjectMaxByteCount < len(args.Subject) || !utf8.ValidString(args.Subject) ||
 		settings.TextMaxByteCount < len(args.Text) || !utf8.ValidString(args.Text) {
@@ -280,13 +292,13 @@ func (self *MailClient) planSendDraft(args *MailSendArgs, burnerLabel string) (*
 		!strings.Contains(args.InReplyTo, "@") || !utf8.ValidString(args.InReplyTo)) {
 		return nil, fmt.Errorf("%w: a reply's id out of shape", ErrMailSendInvalid)
 	}
-	return self.planSendFrom(args.From, recipients, burnerLabel)
+	return self.planSendFrom(ctx, args.From, burnerLabel, args.To, args.Cc, args.Bcc)
 }
 
-// What a send from fromText to recipients, distinct and lowercase, is held to: the zone, and a From of this network
+// What a send to the address lists is held to: the zone, its distinct recipients and a From of this network
 // that policy lets this device send as. burnerLabel, a reply's, holds a burner's From to its live label in this
 // member's mailbox instead (MailClient.Reply).
-func (self *MailClient) planSendFrom(fromText string, recipients []string, burnerLabel string) (*mailSendPlan, error) {
+func (self *MailClient) planSendFrom(ctx context.Context, fromText string, burnerLabel string, lists ...[]string) (*mailSendPlan, error) {
 	binding, parts, _, err := self.state()
 	if err != nil {
 		return nil, err
@@ -297,6 +309,10 @@ func (self *MailClient) planSendFrom(fromText string, recipients []string, burne
 	}
 	if row.Root == "" || row.Label == "" {
 		return nil, ErrMailConfigNoZone
+	}
+	recipients, err := mailSendAddressList(row, self.sendSettings(), lists...)
+	if err != nil {
+		return nil, err
 	}
 	authority := MailSendAuthority(&MailSendAclAuthority{
 		Engine: binding.Engine,
@@ -310,12 +326,19 @@ func (self *MailClient) planSendFrom(fromText string, recipients []string, burne
 		authority = sendParts.sendAuthority()
 	}
 
-	// from: one of the network's own addresses, which policy lets this device send as
+	// The policy alias stays the network's own. The sender preserves a verified customer domain on the wire.
 	from, err := ParseMailRecipient(row.Root, fromText)
-	if err != nil || !from.Zone.OfNetwork(row) {
+	fromDomain := from.Domain()
+	if err != nil {
+		from, fromDomain, err = mailVerifiedCustomFrom(ctx, binding.Api, row, fromText)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if !from.Zone.OfNetwork(row) {
 		return nil, ErrMailSendFromRefused
 	}
-	fromAddress := from.Address()
+	fromAddress := from.LocalPart + "@" + fromDomain
 	switch {
 	case burnerLabel != "":
 		// a reply's From is its burner's, held to the live label in this member's mailbox by the reply's caller
@@ -324,7 +347,7 @@ func (self *MailClient) planSendFrom(fromText string, recipients []string, burne
 		}
 	case from.Kind != MailAddressKindName && from.Kind != MailAddressKindAdmin:
 		return nil, ErrMailSendFromRefused
-	case !authority.MaySendAs(self.sidecarId, fromAddress):
+	case !authority.MaySendAs(self.sidecarId, from.Address()):
 		return nil, ErrMailSendFromRefused
 	}
 	return &mailSendPlan{
@@ -336,10 +359,27 @@ func (self *MailClient) planSendFrom(fromText string, recipients []string, burne
 			return mailSendDepositRepoOf(binding, parts, repoId)
 		},
 		fromAddress: fromAddress,
-		fromDomain:  from.Domain(),
+		fromDomain:  fromDomain,
 		recipients:  recipients,
 		burnerLabel: burnerLabel,
 	}, nil
+}
+
+// Resolve a custom From to the local alias the device needs permission to use. Status applies the edge's
+// Team/downgrade entitlement and verifies the exact domain. Every approval spend repeats the lookup.
+func mailVerifiedCustomFrom(ctx context.Context, api MailApi, row NetworkLabelRow, address string) (MailRecipient, string, error) {
+	from, domain, ok := mailCustomAddress(MailZone{Net: row.Label, Root: row.Root}, address)
+	if !ok || api == nil {
+		return MailRecipient{}, "", ErrMailSendFromRefused
+	}
+	status, err := api.MailStatus(ctx)
+	if err != nil {
+		return MailRecipient{}, "", err
+	}
+	if status == nil || !status.MaySendFromCustomDomains || !slices.Contains(status.VerifiedDomains, domain) {
+		return MailRecipient{}, "", ErrMailSendFromRefused
+	}
+	return from, domain, nil
 }
 
 // address parsed under row's root, and whether it is an address of row's network. One that does not parse there is
@@ -355,16 +395,20 @@ func mailSendOwnRecipient(row NetworkLabelRow, address string) (MailRecipient, b
 
 // Sends a message to any recipient (see the file header): mail to members alone goes at once; one naming an internet
 // recipient, or a tainted run's, waits on §5.4's gate, answered *ApprovalPendingError with nothing kept, deposited or
-// queued while a person's decision is awaited. An error is the whole send's: nothing was sent. Otherwise each
-// recipient's outcome is in the answer.
+// queued while a person's decision is awaited. ErrMailSendUncertain can follow partial delivery of a reserved use.
+// A retry can reconcile it. A completed send reports each recipient's outcome or returns the existing send receipt.
 func (self *MailClient) Send(ctx context.Context, args *MailSendArgs) (*MailSendResult, error) {
-	plan, err := self.planSend(args)
+	if args != nil && 1 < args.Uses && args.Action.RunId == nil {
+		// a decision binds its run: a template with none would serve every send of this device's that names none
+		return nil, fmt.Errorf("%w: uses asked by no run", ErrMailSendInvalid)
+	}
+	plan, err := self.planSend(ctx, args)
 	if err != nil {
 		return nil, err
 	}
 	draft := mailSendCopyArgs(args)
-	return self.sendPlanned(ctx, plan, &mailSendContent{draft: draft}, args.Action, func() (*mailSendPlan, error) {
-		return self.planSend(draft)
+	return self.sendPlanned(ctx, plan, &mailSendContent{draft: draft}, args.Action, func(ctx context.Context) (*mailSendPlan, error) {
+		return self.planSend(ctx, draft)
 	})
 }
 
@@ -375,15 +419,15 @@ func (self *MailClient) SubmitSend(ctx context.Context, args *MailSendArgs) (*Ma
 
 // The send once planned: at once where it is W, else through the gate (the file header's gate row), whose effect
 // plans it again with replan at the spend.
-func (self *MailClient) sendPlanned(ctx context.Context, plan *mailSendPlan, content *mailSendContent, action MailConfigActionArgs, replan func() (*mailSendPlan, error)) (*MailSendResult, error) {
+func (self *MailClient) sendPlanned(ctx context.Context, plan *mailSendPlan, content *mailSendContent, action MailConfigActionArgs, replan func(context.Context) (*mailSendPlan, error)) (*MailSendResult, error) {
 	outside := plan.outsideRecipients()
 	tainted := action.RunId != nil && plan.binding.RunTainted != nil && plan.binding.RunTainted(*action.RunId)
 	if len(outside) == 0 && !tainted {
-		return self.deliverSend(ctx, plan, content, nil)
+		return self.deliverSend(ctx, plan, content, nil, "")
 	}
 	if 0 < len(outside) && !tainted && self.ApprovedRecipients().ApprovedAll(ctx, plan.fromAddress, outside) {
 		// W by approval records alone: no use of the gate's, so a key of its own names the entry
-		return self.deliverSend(ctx, plan, content, mailSendStandingEffectKey())
+		return self.deliverSend(ctx, plan, content, mailSendStandingEffectKey(), "")
 	}
 	return self.gatedSend(ctx, plan, content, action, replan)
 }
@@ -396,11 +440,34 @@ func mailSendStandingEffectKey() []byte {
 
 // The delivery of content once plan holds: the split, the resolution, the burner rules, the sent copy, the deposits
 // and the queue. effectKey is the use's, nil for a send to members alone, which queues nothing.
-func (self *MailClient) deliverSend(ctx context.Context, plan *mailSendPlan, content *mailSendContent, effectKey []byte) (*MailSendResult, error) {
+func (self *MailClient) deliverSend(ctx context.Context, plan *mailSendPlan, content *mailSendContent, effectKey []byte, checkpointName string) (result *MailSendResult, err error) {
 	row, authority, fromAddress := plan.row, plan.authority, plan.fromAddress
+	// A retry may find its queue committed before the gate recorded the answer.
+	if replay, err := self.priorSend(ctx, plan, content, effectKey); err != nil || replay != nil {
+		return replay, err
+	}
+	var checkpoint *mailSendCheckpoint
+	if checkpointName != "" {
+		checkpoint, err = self.readSendCheckpoint(checkpointName)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrMailSendUncertain, err)
+		}
+		if checkpoint != nil && checkpoint.Complete {
+			if checkpoint.Queued {
+				return content.replayedSend(checkpoint.EffectRef, effectKey)
+			}
+			return content.replayedSend(checkpoint.EffectRef, nil)
+		}
+		// Once an intent stands, a later error cannot establish that the first presentation did nothing.
+		defer func() {
+			if err != nil && checkpoint != nil && !errors.Is(err, ErrMailSendUncertain) {
+				err = fmt.Errorf("%w: %w", ErrMailSendUncertain, err)
+			}
+		}()
+	}
 
 	// split and resolve
-	result := &MailSendResult{}
+	result = &MailSendResult{}
 	targets := []*mailSendTarget{}
 	targetIndexes := map[*MailSendRecipient]int{}
 	outside := []*MailSendRecipient{}
@@ -458,28 +525,42 @@ func (self *MailClient) deliverSend(ctx context.Context, plan *mailSendPlan, con
 		}
 	}
 	if len(targets) == 0 && len(outside) == 0 {
+		if checkpoint != nil {
+			return nil, fmt.Errorf("%w: the send no longer has its original destinations", ErrMailSendUncertain)
+		}
 		// nothing to deposit or queue: no copy is kept of a message that went nowhere
 		return result, nil
 	}
 
-	now := self.clock.Now()
+	now := self.clock.Now().UTC()
 	// mail that leaves the network, and every burner's, names a random id (MailOutboxMessageId); mail to members
 	// alone keeps an id's time
-	result.SendId = NewId()
+	opaqueId := queue != nil || plan.burnerLabel != ""
+	switch {
+	case checkpoint != nil:
+		now, result.SendId, opaqueId = checkpoint.Time, checkpoint.SendId, checkpoint.OpaqueId
+	case opaqueId:
+		result.SendId = newMailOutboxSendId()
+	default:
+		result.SendId = NewId()
+	}
 	messageDomain := plan.fromDomain
 	messageId := strings.ToLower(result.SendId.String()) + "@" + messageDomain
-	if queue != nil || plan.burnerLabel != "" {
-		result.SendId = newMailOutboxSendId()
+	if opaqueId {
 		messageId = MailOutboxMessageId(result.SendId, messageDomain)
 	}
-	message, err := content.message(fromAddress, messageId, now)
+	message, err := content.message(plan, messageId, now)
 	if err != nil {
 		return nil, err
 	}
 	flags := uint32(0)
 	if plan.burnerLabel != "" {
 		// step 3, before the copy, so the copy is what went
-		if message, err = self.burnerHeaders().Apply(message, &MailBurnerHeadersArgs{MessageId: messageId, Now: now}); err != nil {
+		headers := &MailBurnerHeadersArgs{MessageId: messageId, Now: now}
+		if checkpointName != "" {
+			headers.Boundary = func(index int) string { return mailSendBoundary(effectKey, index) }
+		}
+		if message, err = self.burnerHeaders().Apply(message, headers); err != nil {
 			return nil, fmt.Errorf("%w: %w", ErrMailSendInvalid, err)
 		}
 		flags |= SmtpFlagBurner
@@ -488,14 +569,43 @@ func (self *MailClient) deliverSend(ctx context.Context, plan *mailSendPlan, con
 	sendable := mailSendStripBcc(message)
 
 	// copy: before any deposit or queue, so one that cannot be kept sends nothing
+	resuming := checkpoint != nil
 	mailboxId, mailboxErr := self.mailboxId()
-	if mailboxErr == nil && authority.Writes(self.sidecarId, mailboxId) {
-		if err := self.keepSentCopy(ctx, plan.parts.store(mailboxId), result.SendId, message, fromAddress, now); err != nil {
-			return nil, fmt.Errorf("%w: %w", ErrMailSendCopyFailed, err)
+	if mailboxErr != nil || !authority.Writes(self.sidecarId, mailboxId) {
+		mailboxId = Id{}
+	}
+	if checkpointName != "" {
+		digest := mailSendPlanDigest(message, mailboxId, plan, targets, queue != nil)
+		if checkpoint == nil {
+			checkpoint = &mailSendCheckpoint{
+				SendId: result.SendId, Time: now, Expires: mailSendCheckpointExpiry(ctx, plan.binding.Gate, now),
+				OpaqueId: opaqueId, PlanDigest: digest,
+			}
+			if err := self.writeSendCheckpoint(checkpointName, checkpoint); err != nil {
+				return nil, err
+			}
+		} else if !bytes.Equal(digest, checkpoint.PlanDigest) || len(targets) < len(checkpoint.Deposits) {
+			return nil, fmt.Errorf("%w: the message or its authorized destinations changed", ErrMailSendUncertain)
+		}
+	}
+	if mailboxId != (Id{}) {
+		if checkpoint == nil || !checkpoint.CopyKept {
+			if err := self.keepSentCopy(ctx, plan.parts.store(mailboxId), result.SendId, message, fromAddress, now, resuming); err != nil {
+				return nil, fmt.Errorf("%w: %w", ErrMailSendCopyFailed, err)
+			}
+			if checkpoint != nil {
+				checkpoint.CopyKept = true
+				if err := self.writeSendCheckpoint(checkpointName, checkpoint); err != nil {
+					return nil, err
+				}
+			}
 		}
 		result.SentCopy = true
 	}
-	outcomes := mailSendDeposit(ctx, plan.depositRepo, sendable, fromAddress, targets)
+	outcomes, err := self.depositSend(ctx, plan.depositRepo, sendable, fromAddress, targets, checkpointName, checkpoint)
+	if err != nil {
+		return nil, err
+	}
 	for recipient, index := range targetIndexes {
 		recipient.Outcome = outcomes[index]
 	}
@@ -504,21 +614,71 @@ func (self *MailClient) deliverSend(ctx context.Context, plan *mailSendPlan, con
 		for _, recipient := range outside {
 			addresses = append(addresses, recipient.Address)
 		}
-		outcome := queue.queue(ctx, &mailSendQueueArgs{
+		queued, outcome, err := queue.queue(ctx, &mailSendQueueArgs{
 			effectKey:  effectKey,
 			recipients: addresses,
 			message:    sendable,
 			flags:      flags,
 			notAfter:   mailSendApprovalNotAfter(ctx),
 		})
+		if err != nil {
+			return nil, err
+		}
 		for _, recipient := range outside {
 			recipient.Outcome = outcome
 		}
-		if outcome == MailSendQueued {
-			result.EffectKey = append([]byte(nil), effectKey...)
+		if queued != nil {
+			if checkpoint != nil {
+				// The local receipt survives loss of mailbox access through the approval's retention window.
+				checkpoint.Complete, checkpoint.Queued, checkpoint.EffectRef = true, true, queued.SendId
+				checkpoint.Deposits = nil
+				if err := self.writeSendCheckpoint(checkpointName, checkpoint); err != nil {
+					return nil, err
+				}
+			}
+			if !queued.Created {
+				return content.replayedSend(queued.SendId, queued.EffectKey)
+			}
+			result.EffectKey = queued.EffectKey
+			result.SendId = queued.SendId
+			return result, nil
+		}
+	}
+	if checkpoint != nil {
+		checkpoint.Complete = true
+		checkpoint.Deposits = nil
+		if len(result.Delivered()) != 0 {
+			checkpoint.EffectRef = result.SendId
+		}
+		if err := self.writeSendCheckpoint(checkpointName, checkpoint); err != nil {
+			return nil, err
 		}
 	}
 	return result, nil
+}
+
+// The recorded queue result, read before repeating any effect and when a gate answers from its ledger.
+func (self *MailClient) priorSend(ctx context.Context, plan *mailSendPlan, content *mailSendContent, effectKey []byte) (*MailSendResult, error) {
+	if len(effectKey) != mailEffectKeyByteCount || len(plan.outsideRecipients()) == 0 {
+		return nil, nil
+	}
+	queued, err := self.queuedSend(ctx, plan, effectKey)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrMailSendUncertain, err)
+	}
+	if queued == nil {
+		return nil, nil
+	}
+	return content.replayedSend(queued.SendId, queued.EffectKey)
+}
+
+// The result known on replay. A raw submission may carry a client-chosen Message-ID, and an old outcome may
+// omit send_id. A draft needs its committed id for GetSendResult.
+func (self *mailSendContent) replayedSend(sendId Id, effectKey []byte) (*MailSendResult, error) {
+	if sendId == (Id{}) && self.draft != nil {
+		return nil, fmt.Errorf("%w: the recorded outcome names no send", ErrMailSendUncertain)
+	}
+	return &MailSendResult{SendId: sendId, EffectKey: effectKey, replayed: true}, nil
 }
 
 // The Message-ID an internet send names, <id>@<domain>: id the lowercase base32 of the send's 16 bytes, which a
@@ -542,24 +702,39 @@ type mailSendQueueArgs struct {
 	notAfter   time.Time
 }
 
+// What MailOutbox.Queue committed or found under the same key.
+type MailOutboxQueued struct {
+	EffectKey []byte
+	// The id in the committed message or outcome record, zero if it names none.
+	SendId Id
+	// This call wrote the entry.
+	Created bool
+}
+
 // Where a send's internet mail goes: the member's outbox on the legs that send mail (mail_send_queue.go).
 type mailSendQueue interface {
-	// Queues args' message for its internet recipients: MailSendQueued, or the outcome they answer instead.
-	queue(ctx context.Context, args *mailSendQueueArgs) MailSendOutcome
+	// Queues args' message for its internet recipients. An error means a committed receipt could not be read.
+	queue(ctx context.Context, args *mailSendQueueArgs) (*MailOutboxQueued, MailSendOutcome, error)
 }
 
-// The distinct recipients of args, lowercase, To then Cc then Bcc, each parsing as a bare RFC 5322 address, within
-// the settings' bounds.
-func mailSendRecipients(args *MailSendArgs, settings *MailSendSettings) ([]string, error) {
-	return mailSendAddressList(settings, args.To, args.Cc, args.Bcc)
+// Canonicalizes a bare recipient. An external SMTP local part is opaque, whereas a local mailcfg name folds case.
+func mailSendAddress(row NetworkLabelRow, address string) string {
+	address = strings.TrimSpace(address)
+	if recipient, own := mailSendOwnRecipient(row, address); own {
+		return recipient.Address()
+	}
+	if at := strings.LastIndexByte(address, '@'); at >= 0 {
+		return address[:at+1] + dnsAsciiLower(address[at+1:])
+	}
+	return address
 }
 
-// The distinct addresses of lists, lowercase and in order, each a bare RFC 5322 address within settings' bounds.
-func mailSendAddressList(settings *MailSendSettings, lists ...[]string) ([]string, error) {
+// The distinct delivery addresses in list order, each a bare RFC 5322 address within settings' bounds.
+func mailSendAddressList(row NetworkLabelRow, settings *MailSendSettings, lists ...[]string) ([]string, error) {
 	recipients := []string{}
 	for _, list := range lists {
 		for _, address := range list {
-			address = dnsAsciiLower(strings.TrimSpace(address))
+			address = mailSendAddress(row, address)
 			if address == "" || settings.AddressMaxByteCount < len(address) || strings.ContainsAny(address, "\r\n<>,") {
 				return nil, fmt.Errorf("%w: a recipient out of shape", ErrMailSendInvalid)
 			}
@@ -582,29 +757,23 @@ func mailSendAddressList(settings *MailSendSettings, lists ...[]string) ([]strin
 }
 
 // The message content sends: a draft's built under messageId, or a submission's as its client wrote it.
-func (self *mailSendContent) message(fromAddress string, messageId string, now time.Time) ([]byte, error) {
+func (self *mailSendContent) message(plan *mailSendPlan, messageId string, now time.Time) ([]byte, error) {
 	if self.draft == nil {
 		return bytes.Clone(self.raw), nil
 	}
-	return mailSendBuildMessageWithId(self.draft, fromAddress, messageId, now)
+	return mailSendBuildMessageWithId(self.draft, plan.row, plan.fromAddress, messageId, now)
 }
 
-// The message a send deposits and keeps: plain text, UTF-8, quoted-printable, CRLF lines (see the file header), its
-// Message-ID the send id under the From's domain.
-func mailSendBuildMessage(args *MailSendArgs, fromAddress string, fromDomain string, sendId Id, now time.Time) ([]byte, error) {
-	return mailSendBuildMessageWithId(args, fromAddress, strings.ToLower(sendId.String())+"@"+fromDomain, now)
-}
-
-// mailSendBuildMessage with its Message-ID's addr-spec.
-func mailSendBuildMessageWithId(args *MailSendArgs, fromAddress string, messageId string, now time.Time) ([]byte, error) {
-	lowerAll := func(addresses []string) []string {
-		lowered := []string{}
+// A draft's message with its send's Message-ID, and the same To and Cc addresses the planner used for delivery.
+func mailSendBuildMessageWithId(args *MailSendArgs, row NetworkLabelRow, fromAddress string, messageId string, now time.Time) ([]byte, error) {
+	headerAddresses := func(addresses []string) []string {
+		distinct := []string{}
 		for _, address := range addresses {
-			if address = dnsAsciiLower(strings.TrimSpace(address)); address != "" && !slices.Contains(lowered, address) {
-				lowered = append(lowered, address)
+			if address = mailSendAddress(row, address); address != "" && !slices.Contains(distinct, address) {
+				distinct = append(distinct, address)
 			}
 		}
-		return lowered
+		return distinct
 	}
 	message := &bytes.Buffer{}
 	header := func(name string, value string) {
@@ -614,10 +783,10 @@ func mailSendBuildMessageWithId(args *MailSendArgs, fromAddress string, messageI
 		message.WriteString("\r\n")
 	}
 	header("From", fromAddress)
-	if to := lowerAll(args.To); 0 < len(to) {
+	if to := headerAddresses(args.To); 0 < len(to) {
 		header("To", strings.Join(to, ", "))
 	}
-	if cc := lowerAll(args.Cc); 0 < len(cc) {
+	if cc := headerAddresses(args.Cc); 0 < len(cc) {
 		header("Cc", strings.Join(cc, ", "))
 	}
 	if args.Subject != "" {
@@ -681,9 +850,9 @@ func mailSendStripBcc(message []byte) []byte {
 	return append(stripped, message[headerEnd+len(lineEnd):]...)
 }
 
-// Keeps message as the send's copy in store, this device's member's mailbox: its m/ file and i/ row in one push, then
-// the label sent in f/ (plan-MAIL-small-readings#9). The row's address is the From, the address it belongs to here.
-func (self *MailClient) keepSentCopy(ctx context.Context, store mailStore, sendId Id, message []byte, fromAddress string, now time.Time) error {
+// Keeps the sent copy's body, index row and label in one create-once push. A retry can recognize the entire copy by
+// its exact body without duplicating a flag or resurrecting a removed message.
+func (self *MailClient) keepSentCopy(ctx context.Context, store mailStore, sendId Id, message []byte, fromAddress string, now time.Time, resuming bool) error {
 	parseSettings := self.settings.Ingest.Parse
 	if parseSettings == nil {
 		parseSettings = DefaultMailParseSettings()
@@ -705,14 +874,45 @@ func (self *MailClient) keepSentCopy(ctx context.Context, store mailStore, sendI
 	}
 	month := MailYearMonthOf(entry.GetTime())
 	messagePath := MailMessagePath(month, sendId)
-	testHookBarrier("mail.send.copy.before", "")
-	_, err = NewMailIndexWriter(store, self.settings.Store).Append(ctx, entry, &mailStoreWrite{Path: messagePath, Content: message})
-	testHookBarrier("mail.send.copy.after", "")
-	if err != nil {
-		return err
+	if resuming {
+		held, _, err := store.Read(ctx, messagePath, len(message))
+		switch {
+		case err == nil && bytes.Equal(held, message):
+			return nil
+		case err == nil:
+			return ErrMailSendUncertain
+		case !errors.Is(err, ErrEvsPathAbsent):
+			return err
+		}
 	}
-	_, err = NewMailFlagWriter(store, NewMailHlc(self.clock), self.sidecarId, self.settings.Store).Apply(ctx, []*MailFlagChange{{
-		Month: month, MessageId: sendId, Kind: protocol.MailFlagKind_MAIL_FLAG_LABEL, Set: true, Label: MailLabelSent,
-	}})
-	return err
+	body := &mailStoreWrite{Path: messagePath, Content: message, CreateOnce: true}
+	flags := NewMailFlagWriter(store, NewMailHlc(self.clock), self.sidecarId, self.settings.Store)
+	index := NewMailIndexWriter(store, self.settings.Store)
+	testHookBarrier("mail.send.copy.before", "")
+	defer testHookBarrier("mail.send.copy.after", "")
+	for attempt := 0; ; attempt += 1 {
+		tail, err := flags.readTail(ctx, month)
+		if err != nil {
+			return err
+		}
+		op, err := proto.MarshalOptions{Deterministic: true}.Marshal(&protocol.MailFlagOp{
+			MessageId: sendId.Bytes(), Op: protocol.MailFlagKind_MAIL_FLAG_LABEL, Set: true, Label: MailLabelSent,
+			Hlc: flags.hlc.Tick(), SidecarId: self.sidecarId.Bytes(),
+		})
+		if err != nil {
+			return err
+		}
+		tail.add(op)
+		_, writeErr := index.Append(ctx, entry, append(tail.writes, body)...)
+		if writeErr == nil {
+			return nil
+		}
+		held, _, readErr := store.Read(ctx, messagePath, len(message))
+		if readErr == nil && bytes.Equal(held, message) {
+			return nil
+		}
+		if !errors.Is(writeErr, ErrMailStoreConflict) || self.settings.Store.WriteRetryCount <= attempt {
+			return writeErr
+		}
+	}
 }

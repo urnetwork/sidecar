@@ -48,6 +48,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"slices"
 	"strings"
 )
@@ -140,8 +141,8 @@ func mailNewEraseIndex(ctx context.Context, repo *EvsRepo, args *MailEraserArgs,
 			}
 			complete := map[Id]bool{}
 			for _, erasure := range erasures {
-				if erasure.Complete {
-					complete[erasure.ErasureId] = true
+				if id, ended, applies := erasure.completionState(); applies {
+					complete[id] = ended
 				}
 			}
 			return complete, nil
@@ -194,8 +195,16 @@ func mailIndexChunkCount(path string, content []byte, format *IndexFormatSetting
 // bytes, one document a ChunkByteCount of it, and one for an empty text.
 func mailIndexChunkBound(byteCount uint64, growthFactor int, format *IndexFormatSettings) uint32 {
 	chunkByteCount := uint64(max(format.ChunkByteCount, 1))
-	textByteCount := byteCount * uint64(max(growthFactor, 1))
-	return uint32(max((textByteCount+chunkByteCount-1)/chunkByteCount, 1))
+	growth := uint64(max(growthFactor, 1))
+	// A deposit's padded size comes from its signer. An oversized claim must exceed the CUT budget.
+	if math.MaxUint64/growth < byteCount {
+		return math.MaxUint32
+	}
+	textByteCount := byteCount * growth
+	if textByteCount == 0 {
+		return 1
+	}
+	return uint32(min((textByteCount-1)/chunkByteCount+1, math.MaxUint32))
 }
 
 // The index's side of this repo's erasures, opened at its first use: nil in a format-1 mailbox, which has none.

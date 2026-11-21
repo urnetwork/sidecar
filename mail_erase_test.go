@@ -5,6 +5,7 @@
 package sidecar
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net/http"
@@ -12,6 +13,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/sidecar/protocol"
 )
@@ -44,14 +47,10 @@ func newMailEraseTestStore() *mailEraseTestStore {
 	}
 }
 
-func (self *mailEraseTestStore) Versions(ctx context.Context, path string) ([]*EvsHistoryVersion, error) {
-	versions, err := self.mailVaultTestStore.Versions(ctx, path)
-	if err == nil && 0 < len(versions) {
-		self.eraseLock.Lock()
-		defer self.eraseLock.Unlock()
-		versions[0].Time = self.pushTimes[path]
-	}
-	return versions, err
+func (self *mailEraseTestStore) NewestPushTime(ctx context.Context, path string) (time.Time, error) {
+	self.eraseLock.Lock()
+	defer self.eraseLock.Unlock()
+	return self.pushTimes[path], nil
 }
 
 func (self *mailEraseTestStore) Erase(ctx context.Context, args *EvsEraseArgs) error {
@@ -244,6 +243,64 @@ func (self *mailEraseTestWorld) slotIngestor() *MailIngestor {
 	return newMailIngestor(self.repoId, self.repo, self.eraseStore, args)
 }
 
+// The signed fields of standing deposits, independent of whether the body opens.
+func (self *mailIngestTestRepo) depositSlots(ctx context.Context, depositorId Id, messageIds []Id) ([]mailDepositSlot, error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	var slots []mailDepositSlot
+	for _, deposit := range self.standing[depositorId] {
+		if slices.Contains(messageIds, deposit.id) {
+			slots = append(slots, mailDepositSlot{messageId: deposit.id, slotId: deposit.slotId, paddedSize: EvsPadme(uint64(len(deposit.plaintext)))})
+		}
+	}
+	return slots, nil
+}
+
+// A deposit ref cannot disappear from inventory because its owner or the listing is incomplete.
+func TestMailDepositInventoryRequiresEveryRef(t *testing.T) {
+	repoId, depositorId := NewId(), NewId()
+	head := &protocol.EvsHeadSummary{
+		RefKind: protocol.EvsRefKind_EVS_REF_DEPOSIT, OwnerSidecarId: depositorId.Bytes(),
+		RefId: EvsDepositRefId(repoId, depositorId).Bytes(),
+	}
+	reply := &protocol.EvsRefsReply{Refs: []*protocol.EvsHeadSummary{head}}
+	if _, err := mailDepositRefOwners(repoId, reply); !errors.Is(err, ErrEvsReplyInvalid) {
+		t.Fatalf("partial inventory: %v", err)
+	}
+	reply.All = true
+	owners, err := mailDepositRefOwners(repoId, reply)
+	if err != nil || !slices.Equal(owners, []Id{depositorId}) {
+		t.Fatalf("deposit ref owners: %v, %v", owners, err)
+	}
+	head.OwnerSidecarId = NewId().Bytes()
+	if _, err := mailDepositRefOwners(repoId, reply); !errors.Is(err, ErrEvsReplyInvalid) {
+		t.Fatalf("inconsistent ref owner: %v", err)
+	}
+	reply.Refs[0] = nil
+	if _, err := mailDepositRefOwners(repoId, reply); !errors.Is(err, ErrEvsReplyInvalid) {
+		t.Fatalf("unidentified ref: %v", err)
+	}
+}
+
+// An interrupted CONSUME leaves an authenticated deposit slot even while its body cannot be read.
+func TestMailErasureUsesTheStandingDepositSlotWithoutOpeningItsBody(t *testing.T) {
+	world := newMailEraseTestWorld(t)
+	ctx := t.Context()
+	deposit := world.depositMessage(testMailIngestMessage("Deposit inventory", "body"))
+	world.repo.failConsumeBefore = errors.New("transient consume failure")
+	if _, err := world.slotIngestor().Ingest(ctx); err == nil {
+		t.Fatal("ingest did not stop before CONSUME")
+	}
+	deposit.openErr = errors.New("deposit content temporarily unavailable")
+	erasure, err := world.eraser().Erase(ctx, world.month, []Id{deposit.id})
+	if err != nil || erasure.State != MailErasureDone {
+		t.Fatalf("erasure from the verified entry: %+v, %v", erasure, err)
+	}
+	if world.eraseStore.slotHeld(deposit.slotId) {
+		t.Fatal("the completed erasure left its standing deposit slot open")
+	}
+}
+
 // An eraser as a device makes one: a restart, or another admin's device.
 func (self *mailEraseTestWorld) eraser() *MailEraser {
 	return newMailEraser(self.repoId, self.eraseStore, self.repo, &MailEraserArgs{
@@ -263,6 +320,196 @@ func (self *mailEraseTestWorld) ingestMessages(subjects ...string) []Id {
 		self.t.Fatalf("ingest: %+v, %v", pass, err)
 	}
 	return ids
+}
+
+// Mail's production EVS history adapter paired with the in-memory erasure ref and slot rewrite.
+type mailHistoryTestStore struct {
+	*mailEraseTestStore
+	history *mailVaultEvsStore
+}
+
+func (self *mailHistoryTestStore) Versions(ctx context.Context, path string) ([]*EvsHistoryVersion, error) {
+	return self.history.Versions(ctx, path)
+}
+
+// A removed and recreated body has a different key in each life. Display can show partial history, while erasure
+// waits for both authenticated slots and a restarted eraser can destroy them together.
+func TestMailEraseRequiresWholeBodyHistoryAcrossLives(t *testing.T) {
+	ctx := t.Context()
+	writer := newEvsTestWriter(t)
+	writer.world.config.repo.Kind = protocol.RepoKind_REPO_KIND_MAILBOX
+	month, messageId := MailYearMonthOf(testMailIngestReceiveMillis), NewId()
+	path := MailMessagePath(month, messageId)
+	write := func(path string, content []byte) {
+		t.Helper()
+		if _, err := writer.write(t, path, content); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("other", []byte("other"))
+	write(path, []byte("first life"))
+	first, err := IdFromBytes(writer.entry(t, path).GetSlotIds()[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(path, nil)
+	write("other", []byte("later"))
+	write(path, []byte("second life"))
+	second, err := IdFromBytes(writer.entry(t, path).GetSlotIds()[0])
+	if err != nil || first == second {
+		t.Fatalf("distinct slots across a removal: %v", err)
+	}
+	store := &mailHistoryTestStore{
+		mailEraseTestStore: newMailEraseTestStore(),
+		history:            &mailVaultEvsStore{mailEvsStore: newMailEvsStore(writer.repo, nil, nil)},
+	}
+	store.holdSlot(first)
+	store.holdSlot(second)
+	start := func() *MailEraser {
+		return newMailEraser(writer.repo.RepoId(), store, nil, &MailEraserArgs{SidecarId: NewId(), Authority: &mailEraseTestAuthority{admin: true}})
+	}
+	refuse := func() {
+		t.Helper()
+		history, err := writer.repo.History(ctx, &EvsReadArgs{Path: path, Fresh: true})
+		if err != nil || history.Whole || len(history.Versions) == 0 {
+			t.Fatalf("ordinary history %+v: %v", history, err)
+		}
+		if erased, err := start().Erase(ctx, month, []Id{messageId}); erased != nil || !errors.Is(err, ErrEvsSlotKeysIncomplete) {
+			t.Fatalf("short history returned %+v: %v", erased, err)
+		}
+		if !store.slotHeld(first) || !store.slotHeld(second) || len(store.committedErasures()) != 0 {
+			t.Fatal("partial history changed the durable erasure state")
+		}
+	}
+	writer.world.belowRefused = true
+	refuse()
+	writer.world.belowRefused = false
+	limit := writer.test.client.settings.HistoryVersionCount
+	writer.test.client.settings.HistoryVersionCount = 1
+	refuse()
+	writer.test.client.settings.HistoryVersionCount = limit
+	// A missing predecessor below a removal ends History with the readable newest life.
+	writer.world.mutatePath = func(reply *protocol.EvsReadPathReply) {
+		entry := &protocol.EvsEntryVersion{}
+		if raw := reply.GetVersion().GetEntryVersion(); len(raw) != 0 && proto.Unmarshal(raw, entry) == nil && len(entry.GetSlotIds()) == 1 && bytes.Equal(entry.GetSlotIds()[0], first.Bytes()) {
+			reply.Version, reply.Statement, reply.Proof, reply.Absences = nil, nil, nil, nil
+		}
+	}
+	refuse()
+	writer.world.mutatePath = nil
+	erased, err := start().Erase(ctx, month, []Id{messageId})
+	if err != nil || erased == nil || erased.State != MailErasureDone || store.slotHeld(first) || store.slotHeld(second) {
+		t.Fatalf("restart with both lives visible %+v: %v", erased, err)
+	}
+	if committed := store.committedErasures(); len(committed) != 1 || !committed[0].Complete || len(committed[0].Keys) != 2 {
+		t.Fatalf("durable erasure %+v", committed)
+	}
+}
+
+// A malformed suffix can follow a readable target row. Its index segment must be repaired before a complete
+// slot inventory can be committed, and its old versions must then lose their keys.
+func TestMailEraseRefusesAPartiallyReadableSegment(t *testing.T) {
+	ctx := t.Context()
+	world := newMailEraseTestWorld(t)
+	ids := world.ingestMessages("Erase", "Keep")
+	path := MailIndexPath(world.month, 0)
+	content, version, err := world.eraseStore.Read(ctx, path, mailIndexSegmentReadMaxByteCount)
+	if err != nil {
+		t.Fatal(err)
+	}
+	broken := append(slices.Clone(content), 0x80)
+	versions, err := world.eraseStore.Write(ctx, []*mailStoreWrite{{Path: path, Content: broken, IfVersion: version}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := false
+	err = mailSegmentRecords(broken, func(index int, record []byte) error {
+		id, _, ok := mailIndexRecordKey(record)
+		seen = seen || (ok && id == ids[0])
+		return nil
+	})
+	if !seen || !errors.Is(err, ErrMailSegmentInvalid) {
+		t.Fatalf("readable row before the damaged suffix %t: %v", seen, err)
+	}
+	if erased, err := world.eraser().Erase(ctx, world.month, ids[:1]); erased != nil || !errors.Is(err, ErrMailSegmentInvalid) {
+		t.Fatalf("partially readable segment returned %+v: %v", erased, err)
+	}
+	if len(world.eraseStore.committedErasures()) != 0 || len(world.eraseStore.openableVersions(MailMessagePath(world.month, ids[0]))) == 0 {
+		t.Fatal("incomplete inventory changed the durable erasure state")
+	}
+	if _, err := world.eraseStore.Write(ctx, []*mailStoreWrite{{Path: path, Content: content, IfVersion: versions[0]}}); err != nil {
+		t.Fatal(err)
+	}
+	erased, err := world.eraser().Erase(ctx, world.month, ids[:1])
+	if err != nil || erased == nil || erased.State != MailErasureDone || !slices.Equal(world.rowIds(), ids[1:]) || len(world.eraseStore.openableVersions(path)) != 1 {
+		t.Fatalf("restarted erasure after segment repair %+v: %v", erased, err)
+	}
+}
+
+// A second runner wins the conditional CLOSURE and stops before its ERASE.
+type mailRacingClosureTestStore struct{ mailEraseStore }
+
+func (self *mailRacingClosureTestStore) Closure(ctx context.Context, erasureId Id, path string, content []byte, ifVersion uint64, keys []*EvsErasedKey) error {
+	if err := self.mailEraseStore.Closure(ctx, erasureId, path, content, ifVersion, keys); err != nil {
+		return err
+	}
+	return &MailStoreConflictError{Paths: []string{path}}
+}
+
+// Even a second segment must wait while a concurrent runner's first CLOSURE has no paired ERASE.
+func TestMailEraseRecoversACompetingRunnersClosureBeforeCompletion(t *testing.T) {
+	ctx := t.Context()
+	for _, segmentCount := range []int{1, 2} {
+		world := newMailEraseTestWorld(t)
+		ids := world.ingestMessages("One", "Kept")
+		path := MailIndexPath(world.month, 0)
+		if segmentCount == 2 {
+			content, _, err := world.eraseStore.Read(ctx, path, mailIndexSegmentReadMaxByteCount)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := world.eraseStore.Write(ctx, []*mailStoreWrite{{Path: MailIndexPath(world.month, 1), Content: content}}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		runner := world.eraser()
+		runner.store = &mailRacingClosureTestStore{mailEraseStore: world.eraseStore}
+		erasure, err := runner.Erase(ctx, world.month, ids[:1])
+		if err != nil || erasure == nil || erasure.State != MailErasureRewriting || mailErasureComplete(world.eraseStore.committedErasures(), erasure.ErasureId) {
+			t.Fatalf("%d segments, unpaired CLOSURE %+v: %v", segmentCount, erasure, err)
+		}
+		if len(world.eraseStore.openableVersions(path)) < 2 {
+			t.Fatal("the paused runner did not leave its old segment key pending")
+		}
+		// A completion naming the orphan's still-live key supplies no physical erasure evidence.
+		closures, err := world.eraseStore.Closures(ctx)
+		if err != nil || len(closures) != 1 {
+			t.Fatalf("pending closure %v: %v", closures, err)
+		}
+		func() {
+			world.eraseStore.vaultLock.Lock()
+			defer world.eraseStore.vaultLock.Unlock()
+			version := uint64(len(world.eraseStore.erasures) + 1)
+			world.eraseStore.completionVersions[version] = true
+			world.eraseStore.erasures = append(world.eraseStore.erasures, &EvsErasure{
+				Version: version, ErasureId: erasure.ErasureId, Complete: true, Keys: closures[0].Keys,
+				Note: mailErasureNote([]mailErasedMessage{{Month: world.month, MessageId: NewId()}}, nil),
+			})
+		}()
+		resumed, err := world.eraser().Resume(ctx)
+		if err != nil || len(resumed) != 1 || resumed[0].State != MailErasureDone || !slices.Equal(resumed[0].MessageIds, ids[:1]) {
+			t.Fatalf("%d segments after restart %+v: %v", segmentCount, resumed, err)
+		}
+		committed, err := world.eraseStore.Erasures(ctx, 0)
+		if err != nil || !mailErasureComplete(committed, erasure.ErasureId) {
+			t.Fatalf("restarted eraser left no durable completion: %v", err)
+		}
+		for n := range segmentCount {
+			if open := world.eraseStore.openableVersions(MailIndexPath(world.month, uint64(n))); len(open) != 1 {
+				t.Fatalf("segment %d open versions %v", n, open)
+			}
+		}
+	}
 }
 
 // The ids of the month's i/ rows, as stored, whether or not a key opens them.
@@ -631,7 +878,10 @@ func testMailEraseTakeRow(t *testing.T, world *mailEraseTestWorld, eraser *MailE
 	if err != nil {
 		t.Fatal(err)
 	}
-	without, removedCount := mailSegmentWithout(content, world.month, []mailErasedMessage{{Month: world.month, MessageId: messageId}})
+	without, removedCount, err := mailSegmentWithout(content, world.month, []mailErasedMessage{{Month: world.month, MessageId: messageId}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	keys, err := eraser.pathKeys(ctx, segmentPath)
 	if err != nil || removedCount != 1 {
 		t.Fatalf("the segment's keys: %d rows, %v", removedCount, err)

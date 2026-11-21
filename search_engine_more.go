@@ -62,9 +62,7 @@ const (
 type searchMoreLanded struct {
 	ref  *searchOpenedRef
 	file SearchManifestFile
-	// The window's call that landed it: one call's landed shards judge the keys its snapshot's table lacks together
-	// (matchLanded).
-	call int
+	key  SearchCacheKey
 }
 
 // A search's download state as a page or a test reads it.
@@ -95,8 +93,7 @@ type searchEngineMore struct {
 	running bool
 	ended   searchMoreEnd
 	// Closed once the running or last window's goroutine returns.
-	done      chan struct{}
-	callCount int
+	done chan struct{}
 	// Landed shards no page has taken yet, in landing order.
 	landed []*searchMoreLanded
 	// A page waits on the download and has taken everything it gave.
@@ -179,19 +176,17 @@ func (self *searchEngineMore) takeRelay() bool {
 	return relay
 }
 
-// The ref whose call goes next, the first in the search's order with shards to search, its cursor and the call's
-// number; nil once every ref is finished.
-func (self *searchEngineMore) nextCall(refs []*searchOpenedRef) (*searchOpenedRef, *SearchMoreCursor, int) {
+// The first ref in the search's order with shards left to search, and its cursor.
+func (self *searchEngineMore) nextCall(refs []*searchOpenedRef) (*searchOpenedRef, *SearchMoreCursor) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	for _, ref := range refs {
 		key := [2]Id{ref.repoId, ref.refId}
 		if !self.finished[key] {
-			self.callCount += 1
-			return ref, self.cursors[key], self.callCount
+			return ref, self.cursors[key]
 		}
 	}
-	return nil, nil, 0
+	return nil, nil
 }
 
 // A call ended: its cursor goes on, and its last progress stands.
@@ -387,19 +382,16 @@ func (self *searchEngineStream) awaitMore(ctx context.Context, holding bool) (bo
 // searched.
 func (self *searchEngineStream) searchLanded(landed *searchMoreLanded) error {
 	ref := landed.ref
-	if landed.call != self.landedCall {
-		self.landedCall, self.landedShards = landed.call, nil
-	}
 	source, err := ref.landedSource(self.lifetime, &landed.file)
 	if err != nil || source == nil {
 		return err
 	}
-	self.landedShards = append(self.landedShards, source.shards...)
-	input, err := ref.matchLanded(self.query, source, self.landedShards, self.step)
+	input, err := ref.matchLanded(self.query, source, self.step)
 	if err != nil {
 		return err
 	}
 	self.step += 1
+	input.release = func() { ref.snap.releaseLanded(landed.key) }
 	self.pending = append(self.pending, input)
 	return nil
 }
@@ -439,15 +431,19 @@ func (self *searchEngineStream) runWindow(ctx context.Context, timeUp *atomic.Bo
 			}
 			return searchMoreEndClosed
 		}
-		ref, cursor, call := more.nextCall(self.refs)
+		ref, cursor := more.nextCall(self.refs)
 		if ref == nil {
 			return searchMoreEndFinished
 		}
 		search, err := NewSearchMore(&SearchMoreArgs{
-			Sync: engine.args.Sync, Policy: engine.args.Policy, Settings: engine.args.Settings, RepoId: ref.repoId, RefId: ref.refId,
+			Sync: engine.args.Sync, Policy: engine.args.Policy, Settings: engine.args.Settings, RepoId: ref.repoId, RefId: ref.snap.ref.args.refId,
 			AllowMetered: self.request.AllowMetered, Cursor: cursor, Clock: engine.clock,
 			OnShard: func(ctx context.Context, file *SearchManifestFile) error {
-				more.queue(&searchMoreLanded{ref: ref, file: *file, call: call})
+				key := SearchCacheKey{RepoId: ref.repoId, RefId: ref.snap.ref.args.refId, Path: file.Path, Version: file.Version}
+				if err := ref.snap.holdLanded(key); err != nil {
+					return err
+				}
+				more.queue(&searchMoreLanded{ref: ref, file: *file, key: key})
 				return nil
 			},
 			OnProgress: more.reported,

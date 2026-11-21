@@ -5,7 +5,8 @@
 //
 // What Append does with a draft:
 //
-//	routed, unlocked   seal (record_seal.go), journal (record_chain.go), queue for the log's next push or deposit
+//	direct startup     spool until the writer reconciles existing journals and its verified stream head
+//	routed, ready      seal (record_seal.go), journal (record_chain.go), queue for the log's next push or deposit
 //	locked             spool the draft unsealed, to the spool's public key; it is sealed at unlock, in capture order
 //	unrouted           spool it: no author, no vault yet, or no right there (section 4.2's no author row); the run's
 //	                   coverage names no_vault, and it is sealed once a log takes it
@@ -18,16 +19,15 @@
 // and the run's taint at capture, which sealing ORs with the run's bit then: taint never clears, so a later seal can
 // only read more tainted (D-MCP-16). While the spool holds drafts, Append spools too, after trying to drain it, so
 // entries are sealed in capture order: seq order never runs against capture order on one writer. A draft of several
-// entries carries its capture id on its last, so a kill between them seals the whole draft again at the next drain:
-// the earlier entries then stand twice, never missing.
+// entries first journals the whole set of signed destinations in one capture file (record_capture.go). Recovery
+// finishes each destination with those bytes before signing another capture.
 //
 // The spool's drain (MCP-M3-18) hands over taint records first and delivers at least once. This writer owns the drain:
 // a taint record goes to the handler SetSpoolHandlers installs (MCP-M3-15's ingest, which applies it to the run file
 // before any capture is sealed), and so does a capture record that is no record draft. With no handler installed
 // either stops the drain, failing closed: nothing after a taint record is sealed until it applies. A record draft
-// drained again after a kill is told by its capture id, which the entry's journal record keeps (RecordSealArgs.
-// CaptureId), and by the mark file, written after each seal and before the entry can be pushed: a capture is sealed
-// once.
+// drained again after a kill is recognized by the cursor in its committed capture file or the installed spool mark.
+// Older complete journals can still supply their capture ids when rebuilding the mark.
 //
 // Safe for concurrent use. Locks are taken in this order: runLock, pumpLock, drainLock, sealLock, stateLock; the chain
 // store's own locks sit inside sealLock. stateLock is never held across I/O, a barrier or a call out.
@@ -69,6 +69,9 @@ var (
 	// every later one spooled, in order.
 	errRecordSpoolUnhandled = errors.New("record spool record unhandled")
 )
+
+// The log's direct writer has yet to reconcile its stream in this binding.
+var errRecordHeadPending = errors.New("record writer awaits verified stream head")
 
 // Seals and appends entries to one network's logs, section 5.3's order. Safe for concurrent use. Append routes by
 // section 4.2 and returns once each entry is durable in the journal or spool, never waiting on evs. A kind bound for V
@@ -222,39 +225,6 @@ type SidecarRecord struct {
 	reach any
 }
 
-// A record over args. Nothing is read until the first Append or Run.
-func NewSidecarRecord(args *SidecarRecordArgs) (*SidecarRecord, error) {
-	if args == nil || args.Store == nil || args.Sign == nil || args.Settings == nil {
-		return nil, fmt.Errorf("%w: a record needs a store, a signer and settings", ErrRecordDraftInvalid)
-	}
-	writer := newRecordWriter(args)
-	reader := NewRecordReader(&RecordReaderArgs{
-		SidecarId:    args.SidecarId,
-		Store:        args.Store,
-		Streams:      writer.boundStreams,
-		Auth:         writer.auth,
-		Alarm:        args.Alarm,
-		Clock:        args.Clock,
-		Settings:     args.Settings,
-		Log:          args.Log,
-		AgentSubkeys: args.AgentSubkeys,
-	})
-	self := &SidecarRecord{
-		writer:     writer,
-		reader:     reader,
-		ingester:   newRecordIngester(writer, reader),
-		receipts:   newRecordReceipts(writer),
-		approvals:  &RecordApprovals{writer: writer, reader: reader},
-		accounting: &RecordAccounting{writer: writer, reader: reader},
-		ingestDue:  true,
-	}
-	writer.addCommitHook(func(logId Id) { self.markIngestDue() })
-	self.log = newRecordLog(self, args.Witness)
-	reader.addSyncHook(self.log.monitor)
-	self.export = newRecordExport(self)
-	return self, nil
-}
-
 // The verifiable log (RECORD-M6-05): its monitor runs at each of the reader's syncs.
 func (self *SidecarRecord) Log() *RecordLog {
 	return self.log
@@ -326,6 +296,9 @@ func (self *SidecarRecord) ingestedLogs() []Id {
 // One pass of the loop's own work before the writer pumps: queued events mirrored, and each log this device ingests
 // ingested when a deposit may wait.
 func (self *SidecarRecord) tend(ctx context.Context) {
+	if err := self.PrepareDirectWrites(ctx); err != nil && self.writer.log.V(1).Enabled() {
+		self.writer.log.Infof("[record]a direct writer awaits its stream: %s", err)
+	}
 	self.accounting.mirrorQueued(ctx)
 	self.log.Tick(ctx)
 	self.export.Tick(ctx)
@@ -367,6 +340,11 @@ func (self *SidecarRecord) Run(ctx context.Context) {
 // Pushes and deposits everything queued now, retrying nothing that fails, and answers the first failure: what sleep
 // and exit call, and what a test steps the loop with.
 func (self *SidecarRecord) Flush(ctx context.Context) error {
+	if self.writer.backlogged() {
+		if err := self.DrainSpool(ctx); err != nil {
+			return errors.Join(err, self.writer.Flush(ctx))
+		}
+	}
 	return self.writer.Flush(ctx)
 }
 
@@ -395,6 +373,11 @@ func (self *SidecarRecord) Land(ctx context.Context, refs []*RecordEntryRef) err
 
 // Whether this writer's entry at seq of logId committed: sealed here, and neither waiting nor in a plan.
 func (self *recordWriter) landed(logId Id, seq uint64) bool {
+	self.sealLock.RLock()
+	defer self.sealLock.RUnlock()
+	if self.capturePending {
+		return false
+	}
 	head, err := self.chain.Head(logId)
 	if err != nil || head.Seq < seq {
 		return false
@@ -426,7 +409,13 @@ func (self *SidecarRecord) SetSpoolHandlers(taint func(id SpoolRecordId, record 
 
 // Seals what the spool holds now, in capture order, as far as it can: what an unlock calls.
 func (self *SidecarRecord) DrainSpool(ctx context.Context) error {
-	return self.writer.drainSpool(ctx)
+	// One unavailable log must not hold up a capture whose destinations are ready.
+	warmErr := self.PrepareDirectWrites(ctx)
+	err := self.writer.drainSpool(ctx)
+	if errors.Is(err, errRecordHeadPending) {
+		return errors.Join(err, warmErr)
+	}
+	return err
 }
 
 // The writer: routing, sealing, spooling, and the queues the push loop empties.
@@ -450,18 +439,22 @@ type recordWriter struct {
 	runLock   sync.Mutex
 	pumpLock  sync.Mutex
 	drainLock sync.Mutex
-	// held shared from a seal through its entry's enqueue, and alone while a plan takes entries, so a plan never takes
-	// seq n+1 while n is between its journal and its queue
+	// Serializes capture installation, fresh signatures and plan construction, so a plan never takes sequence n+1
+	// while n is between its journal and its queue. A landed check takes it shared.
 	sealLock sync.RWMutex
-	loadLock sync.Mutex
+	// A committed capture may still need installation, including on first open. Guarded by sealLock.
+	capturePending bool
+	loadLock       sync.Mutex
 
 	stateLock sync.Mutex
 	streams   RecordStreams
 	authFunc  func() RecordAuthView
 	loaded    bool
 	logQueues map[Id]*recordLogQueue
-	// whether the spool may hold drafts: true until a drain finds none
+	// whether the spool may hold drafts: true until a drain finds none without a concurrent capture
 	spoolBacklog bool
+	// incremented after each durable spool append, so an overlapping drain cannot clear its wakeup
+	spoolGeneration uint64
 	// no drain is tried before this, Unix milliseconds: a drain that failed waits PushCoalesce, so a run of Appends
 	// does not read the whole spool once each
 	drainRetryMillis int64
@@ -511,6 +504,7 @@ func newRecordWriter(args *SidecarRecordArgs) *recordWriter {
 		authFunc:          args.Auth,
 		logQueues:         map[Id]*recordLogQueue{},
 		spoolBacklog:      true,
+		capturePending:    true,
 		adoptedLogs:       map[Id]bool{},
 	}
 }
@@ -539,6 +533,10 @@ func (self *recordWriter) boundStreams() RecordStreams {
 
 // SidecarRecord.Bind's: a new binding lets every log adopt again, and wakes the loop.
 func (self *recordWriter) bind(streams RecordStreams, auth func() RecordAuthView) {
+	self.pumpLock.Lock()
+	defer self.pumpLock.Unlock()
+	self.sealLock.Lock()
+	defer self.sealLock.Unlock()
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
@@ -869,8 +867,7 @@ func (self *recordWriter) Append(draft *RecordDraft) ([]*RecordEntryRef, error) 
 		return nil, err
 	}
 	if err != nil {
-		// locked, or a journal that did not take it: the spool keeps the draft, and a draft cut after its first entry
-		// seals whole again at the drain
+		// No destination committed: the spool keeps the draft.
 		return self.spoolDraft(spoolDraft, "")
 	}
 	return refs, nil
@@ -897,10 +894,8 @@ type recordSealedOpening struct {
 
 // Seals one entry of draft into route's log, kind and body its own, and queues it for the log's next push or
 // deposit. captureId names a spooled capture.
-func (self *recordWriter) sealOne(draft *recordSpoolDraft, route *recordRoute, kind RecordKind, body []byte, content []*protocol.ContentRef, captureId []byte) (*recordSealedOpening, error) {
-	self.sealLock.RLock()
-	defer self.sealLock.RUnlock()
-	sealed, err := RecordSeal(&RecordSealEnv{Chain: self.chain, Sign: self.sign, Random: self.random}, self.sealArgs(draft, route.logId, kind, body, content, captureId))
+func (self *recordWriter) sealOne(env *RecordSealEnv, draft *recordSpoolDraft, route *recordRoute, kind RecordKind, body []byte, content []*protocol.ContentRef, captureId []byte) (*recordSealedOpening, error) {
+	sealed, err := RecordSeal(env, self.sealArgs(draft, route.logId, kind, body, content, captureId))
 	if err != nil {
 		return nil, err
 	}
@@ -922,114 +917,12 @@ func (self *recordWriter) sealOne(draft *recordSpoolDraft, route *recordRoute, k
 		version:   max(sealed.Version, recordEntryVersion),
 	}
 	sealed.agentBody = nil
-	self.enqueue(route, sealed, kind)
+	if env.stage == nil {
+		self.enqueue(route, sealed, kind)
+	} else {
+		sealed.Clear()
+	}
 	return opening, nil
-}
-
-// Seals a draft's entries by its routes (record_team.go), in order: the vault's, T's, T's copy in the vault, the
-// directory's. Only the last carries captureId, so a kill between them leaves the capture to seal again whole.
-func (self *recordWriter) sealRoutes(draft *recordSpoolDraft, routes *recordRoutes, captureId []byte) ([]*RecordEntryRef, error) {
-	kind := RecordKind(draft.Kind)
-	remaining := 0
-	if routes.vault != nil && routes.vaultEntry {
-		remaining += 1
-	}
-	if routes.team != nil {
-		remaining += 1 + len(routes.ledgers)
-		if routes.copy && routes.vault != nil {
-			remaining += 1
-		}
-	}
-	if routes.directory != nil {
-		remaining += 1
-	}
-	if remaining == 0 {
-		return nil, fmt.Errorf("%w: %s routes nowhere", ErrRecordRouteTeamOnly, kind)
-	}
-	capture := func() []byte {
-		remaining -= 1
-		if remaining == 0 {
-			return captureId
-		}
-		return nil
-	}
-	// T's body first, so a draft that cannot project seals nothing at all
-	var teamBody []byte
-	if routes.team != nil {
-		projected, err := recordTeamBodyBytes(kind, routes.teamBody, draft.Body, draft.Projection)
-		if err != nil {
-			return nil, err
-		}
-		teamBody = projected
-	}
-	refs := []*RecordEntryRef{}
-	var vaultRef *RecordEntryRef
-	if routes.vault != nil && routes.vaultEntry {
-		sealed, err := self.sealOne(draft, routes.vault, kind, draft.Body, draft.contentRefs(), capture())
-		if err != nil {
-			return refs, err
-		}
-		vaultRef = sealed.ref
-		refs = append(refs, sealed.ref)
-	}
-	if routes.team != nil {
-		var content []*protocol.ContentRef
-		if routes.teamBody == recordTeamBodyProjection && vaultRef != nil {
-			// one ContentRef to the vault entry, whose salt stays in its slot row (RECORD.md section 5.1)
-			content = []*protocol.ContentRef{{RepoId: vaultRef.LogId.Bytes(), ObjectId: vaultRef.EntryId.Bytes(), Commitment: bytes.Clone(vaultRef.Commitment[:])}}
-		}
-		sealed, err := self.sealOne(draft, routes.team, kind, teamBody, append(content, draft.contentRefs()...), capture())
-		if err != nil {
-			return refs, err
-		}
-		refs = append(refs, sealed.ref)
-		if routes.copy && routes.vault != nil {
-			// what the header's commitment opens with: T's body, or the AgentSignedBody holding it (version 2)
-			copiedBody := teamBody
-			if sealed.committed != nil {
-				copiedBody = sealed.committed
-			}
-			copyBody, err := NewRecordCopyBody([]*RecordOpened{{SignedBytes: sealed.signed, Salt: sealed.salt, Body: copiedBody, Version: sealed.version}})
-			clear(sealed.salt)
-			if err != nil {
-				return refs, err
-			}
-			copyBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(copyBody)
-			if err != nil {
-				return refs, err
-			}
-			// an accounting entry of the run that filed T's, about no action of its own
-			copyDraft := *draft
-			copyDraft.Kind = uint32(RecordKindCopy)
-			copyDraft.Source = uint32(RecordSourceObserved)
-			copyDraft.ActionId = nil
-			copyDraft.GrantId = nil
-			copied, err := self.sealOne(&copyDraft, routes.vault, RecordKindCopy, copyBytes, nil, capture())
-			clear(copyBytes)
-			if err != nil {
-				return refs, err
-			}
-			refs = append(refs, copied.ref)
-		}
-		clear(sealed.salt)
-		// T's body again as each in-scope ledger's own entry: its own id, chain position, key and commitment
-		for _, ledger := range routes.ledgers {
-			copied, err := self.sealOne(draft, ledger, kind, teamBody, nil, capture())
-			if err != nil {
-				return refs, err
-			}
-			clear(copied.salt)
-			refs = append(refs, copied.ref)
-		}
-	}
-	if routes.directory != nil {
-		sealed, err := self.sealOne(draft, routes.directory, kind, draft.Body, nil, capture())
-		if err != nil {
-			return refs, err
-		}
-		refs = append(refs, sealed.ref)
-	}
-	return refs, nil
 }
 
 // Whether a drain may be tried now: none failed within PushCoalesce.
@@ -1070,7 +963,9 @@ func (self *recordWriter) spoolDraft(draft *recordSpoolDraft, gapCode string) ([
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		self.spoolBacklog = true
+		self.spoolGeneration++
 	}()
+	self.signal()
 	if gapCode != "" {
 		self.countGap(draft.RunId, gapCode)
 	}
@@ -1095,10 +990,10 @@ func (self *recordWriter) drainSpool(ctx context.Context) error {
 	}
 	self.drainLock.Lock()
 	defer self.drainLock.Unlock()
-	taint, other, mark := func() (func(SpoolRecordId, *SpoolRecord) error, func(SpoolRecordId, *SpoolRecord) error, *SpoolRecordId) {
+	taint, other, mark, generation := func() (func(SpoolRecordId, *SpoolRecord) error, func(SpoolRecordId, *SpoolRecord) error, *SpoolRecordId, uint64) {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
-		return self.spoolTaint, self.spoolOther, self.captureMark
+		return self.spoolTaint, self.spoolOther, self.captureMark, self.spoolGeneration
 	}()
 	err := self.spool.Drain(ctx, func(id SpoolRecordId, record *SpoolRecord) error {
 		if record.Kind == SpoolRecordTaint {
@@ -1150,7 +1045,7 @@ func (self *recordWriter) drainSpool(ctx context.Context) error {
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
-		self.spoolBacklog = false
+		self.spoolBacklog = self.spoolGeneration != generation
 		self.drainRetryMillis = 0
 	}()
 	self.signal()
@@ -1206,6 +1101,13 @@ func (self *recordWriter) writeMark(id SpoolRecordId) error {
 func (self *recordWriter) load() error {
 	self.loadLock.Lock()
 	defer self.loadLock.Unlock()
+	if err := func() error {
+		self.sealLock.Lock()
+		defer self.sealLock.Unlock()
+		return self.finishCaptureWithLock()
+	}(); err != nil {
+		return err
+	}
 	if func() bool {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
@@ -1291,84 +1193,4 @@ func (self *recordWriter) load() error {
 		}
 	}
 	return nil
-}
-
-// The network's record, one per Sidecar, built once its network and identity are known. Its streams stay unavailable
-// until RECORD-M3-12 binds evs, and its authorization state until TEAM's and ACL's states bind (SidecarRecord.Bind), so
-// until then every draft spools, as an unrouted one does. ErrSidecarStoreLocked before enrollment, and
-// ErrSidecarNoIdentity before an identity. The record component (record_component.go) runs its push loop.
-func (self *Sidecar) Record() (*SidecarRecord, error) {
-	networkId := self.knownNetworkId()
-	if self.instance == nil || networkId == nil {
-		return nil, ErrSidecarStoreLocked
-	}
-	identity := self.Identity()
-	if identity == nil {
-		return nil, ErrSidecarNoIdentity
-	}
-	store, err := self.LocalStore().Directory(recordComponentName, recordComponentName)
-	if err != nil {
-		return nil, err
-	}
-	// each takes the records' lock itself, so before it is taken here
-	var spool RecordSpool
-	var kept *Spool
-	if built, err := self.Spool(); err == nil {
-		spool = built
-		kept = built
-	}
-	runs, runsErr := self.Runs()
-	self.records.stateLock.Lock()
-	defer self.records.stateLock.Unlock()
-	self.records.forNetworkWithLock(*networkId)
-	if self.records.record != nil {
-		return self.records.record, nil
-	}
-	args := &SidecarRecordArgs{
-		SidecarId:         identity.SidecarId,
-		IdentityPublicKey: identity.IdentityPublicKey,
-		Store:             store,
-		Sign:              self.Sign,
-		Spool:             spool,
-		// taint read at sealing, true whenever the run store cannot answer (D-MCP-16)
-		Runs: self,
-		Alarm: func(alarm *RecordAlarm) {
-			logId := alarm.LogId
-			self.emitEvent(SidecarEvent{Kind: SidecarEventRecordAlarm, RepoId: &logId, SidecarId: alarm.SidecarId, RecordAlarm: alarm.Reason})
-		},
-		Clock:    self.settings.ClockOrReal(),
-		Settings: self.settings.Record,
-		Log:      self.log,
-	}
-	args.AgentSubkeys = self.settings.AgentSubkeys
-	if recordSidecarAgentSigner != nil && self.settings.AgentSubkeys != nil && self.settings.AgentSubkeys.SignRecordEntries {
-		args.SignProvenance = recordSidecarAgentSigner(self)
-	}
-	if runsErr == nil {
-		args.Gap = func(runId Id, code string) {
-			if err := runs.AddGap(context.Background(), runId, code); err != nil {
-				self.log.Warningf("[record]a coverage gap was not counted: %s", err)
-			}
-		}
-	}
-	record, err := NewSidecarRecord(args)
-	if err != nil {
-		return nil, err
-	}
-	// where a follow job's lines go: a file on this device, on a leg that has files
-	record.SetExportSink(recordExportFileSink())
-	if kept != nil {
-		record.kept = kept
-	}
-	// §5's membership and key events, mirrored into the member's vault (RECORD-M3-08); Queue never blocks. A Sidecar
-	// NewSidecar did not build raises no events to mirror.
-	if self.eventCallbacks != nil {
-		self.AddEventCallback(func(event SidecarEvent) {
-			if mirrored, ok := RecordAccountingEventOf(event); ok {
-				record.Accounting().Queue(mirrored)
-			}
-		})
-	}
-	self.records.record = record
-	return record, nil
 }

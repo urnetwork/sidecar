@@ -63,15 +63,13 @@ func NewAclGateViews(cache *sidecar.AclGateCache) EvsGateViews {
 	return &aclGateViews{cache: cache}
 }
 
-// See EvsGateViews. A network the cache does not track yet is told to it, which starts its load, and is unknown
-// meanwhile.
+// See EvsGateViews. A network with no loaded snapshot is requested and stays unknown until it verifies.
 func (self *aclGateViews) View(networkId sidecar.Id) (sidecar.GkmAuthView, EvsAuthAnswer) {
-	snapshot, status := self.cache.State(networkId)
-	switch {
-	case status == sidecar.AclGateUnknown:
-		self.cache.Changed(networkId)
+	if self.cache == nil {
 		return nil, EvsAuthUnknown
-	case status != sidecar.AclGateLoaded || snapshot == nil || snapshot.Config == nil:
+	}
+	snapshot := sidecar.RequestAclGateSnapshot(self.cache, networkId)
+	if snapshot == nil || snapshot.Config == nil {
 		return nil, EvsAuthUnknown
 	}
 	return snapshot.Config, EvsAuthAllowed
@@ -513,8 +511,8 @@ func (self *pushAttempt) afterCommitted(outcome *pushOutcome) *pushOutcome {
 		if unfinished := self.finishErase(); unfinished != nil {
 			return unfinished
 		}
-	case flags&uint32(protocol.EvsPushFlag_EVS_PUSH_CONSUME) != 0 && outcome.ownCommit != nil:
-		if unfinished := self.finishConsume(); unfinished != nil {
+	case flags&uint32(protocol.EvsPushFlag_EVS_PUSH_CONSUME) != 0:
+		if unfinished := self.finishConsume(outcome); unfinished != nil {
 			return unfinished
 		}
 	}

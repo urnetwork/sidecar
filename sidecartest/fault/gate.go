@@ -42,6 +42,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Prefix of a T3 test's verbose log line when a real store operation used the schedule clock. The test
+// name follows it so evidence belongs only to the test that observed the translation.
+const GateStoreClockWitness = "sidecar-t3 store clock translated for"
+
 // One go test on one package, as gates.yml writes it: repo and dir name the module's directory under the
 // monoroot, package the package in it, names the tests, each of which must report PASS. Stores runs it
 // through the private-store wrapper; args go after the package.
@@ -83,8 +87,7 @@ type GateRow struct {
 	Tests    []*GateTest    `yaml:"tests,omitempty"`
 	Commands []*GateCommand `yaml:"commands,omitempty"`
 	External string         `yaml:"external,omitempty"`
-	// The case's T3 run reads LastModified and ttls that T3's store clock translates onto the schedule's clock
-	// (catalog.yml's store_clock, QD-264), which the tool's report says beside its outcome.
+	// The case's T3 tests require evidence that the store clock translated stored ages (QD-264).
 	StoreClock bool `yaml:"store_clock,omitempty"`
 }
 
@@ -349,8 +352,8 @@ const gateFileHeader = `# §23.8's gate sweeps (TEST-M1-11; OPS-M1-07's tool): g
 # run in a repo's directory and pass on exit 0, or read the outcome a last "sidecar-gate outcome: <outcome>" line
 # names, a nonzero exit still failing. A row with nothing to run is missing. external says what outside the build
 # (hardware, production, people) the row also waits on, or the later gate a later-of case passes at, and reads open.
-# store_clock: true says the case's T3 run reads stored ages through T3's store clock (QD-264), which the report
-# names beside its outcome. A case's T2 test is TestFs<n><Case> in sidecar's sidecartest/fault and its T3 test
+# store_clock: true requires a runtime translation witness from each named T3 test (QD-264). The report records
+# observed translations beside their tests. A case's T2 test is TestFs<n><Case> in sidecar's sidecartest/fault and its T3 test
 # TestFs<n><Case>OnT3 in server's sidecart3 under sidecar_localstack too, by convention, so this file does not
 # change as rows land. Each clause registered for a case (fault.RegisterClause; QD-1084) adds its tests to the
 # case's row by the same convention, TestFs<n><Case><Clause> in sidecar's sidecartest/fault and, where it runs on

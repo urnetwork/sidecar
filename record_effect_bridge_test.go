@@ -22,6 +22,7 @@ import (
 	"net"
 	"net/netip"
 	"testing"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -126,6 +127,7 @@ func (self *testBridgeEffectWorld) open() {
 	}
 	self.filer = self.newFiler()
 	unregister := self.filer.Register()
+	removeForward := self.sidecar.RegisterEffectLookup(SidecarActionForward, self.filer.args.Grants.Lookup)
 	counter, err := NewApprovalPresenceCounts(self.localStore)
 	if err != nil {
 		self.t.Fatal(err)
@@ -177,6 +179,7 @@ func (self *testBridgeEffectWorld) open() {
 	self.closeOpen = func() {
 		bridges.Close()
 		uninstall()
+		removeForward()
 		unregister()
 	}
 }
@@ -241,6 +244,65 @@ func (self *testBridgeEffectWorld) approve(request *StoredApprovalRequest) {
 	self.approvals.putDecision(request.ApprovalId(), stored)
 	if err := self.inbox.Poll(self.t.Context()); err != nil {
 		self.t.Fatal(err)
+	}
+}
+
+// A person's decision arrives after the first call and survives a daemon restart. The retry spends the stored
+// request, including its original deadline, run, agent, listener and sealed target.
+func TestBridgeToolPathForwardUsesTheReviewedRequestOnRetry(t *testing.T) {
+	world := newTestBridgeEffectWorld(t)
+	world.net.log.settings.AclSpendCheck = NewSpendCheck(nil)
+	ctx := t.Context()
+	origin := world.mcp()
+	request := &BridgeForwardRequest{Target: world.laptop.sidecarId, Protocol: bridgeProtocolUdp, Port: 5353, LocalPort: 10053, Lifetime: 15 * time.Minute}
+	pending := func(origin *BridgeFileOrigin, request *BridgeForwardRequest) Id {
+		t.Helper()
+		_, err := world.filer.Forward(ctx, origin, request)
+		var waiting *ApprovalPendingError
+		if !errors.As(err, &waiting) {
+			t.Fatalf("waiting for a forward approval: %v", err)
+		}
+		return waiting.ApprovalId
+	}
+	approvalId := pending(origin, request)
+	entry, err := world.ledgerRows.State(approvalId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approved, err := ParseStoredApprovalRequest(entry.Request)
+	if err != nil || !bytes.Equal(approved.Request.GetRunId(), world.runId[:]) || !bytes.Equal(approved.Request.GetAgentId(), world.agentId[:]) ||
+		approved.Request.GetLocalPort() != request.LocalPort || !bytes.Equal(approved.Request.GetRequesterSidecarId(), world.hostId[:]) {
+		t.Fatalf("the requester's forward approval: %+v, %v", approved, err)
+	}
+	world.approve(approved)
+	world.clock.advance(30 * time.Second)
+	world.net.tickAt(world.clock.Now().UnixMilli())
+	world.install()
+	world.open()
+	other := *request
+	other.Port++
+	if pending(origin, &other) == approvalId || pending(world.confirmed(), request) == approvalId {
+		t.Fatal("another port or origin found the existing approval")
+	}
+	if posted := world.api.postCount(); posted != 0 {
+		t.Fatalf("the pending requests posted %d statements", posted)
+	}
+	before := world.net.log.State().Pin()
+	filed, err := world.filer.Forward(ctx, origin, request)
+	wantGrant := AclGrantId(approvalId, approved.Action.PayloadSha256())
+	if err != nil || filed.ApprovalId != approvalId || !bytes.Equal(filed.GrantId, wantGrant[:]) {
+		t.Fatalf("the approved forward after restart: %+v, %v (log refusal: %v)", filed, err, world.net.verdicts[world.net.n].Refusal)
+	}
+	if err := world.filer.confirmForwardGrant(ctx, before, world.api.posts[0], filed.GrantId); !errors.Is(err, ErrBridgeFileRefused) {
+		t.Fatalf("a receipt from before the approval: %v", err)
+	}
+	world.install()
+	if _, err := world.filer.Close(ctx, world.confirmed(), filed.GrantId, false); err != nil {
+		t.Fatal(err)
+	}
+	world.install()
+	if pending(origin, request) == approvalId {
+		t.Fatal("a withdrawn forward reused its spent approval")
 	}
 }
 

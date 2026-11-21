@@ -53,14 +53,18 @@ const (
 )
 
 // Whether a kind's GenRotates carry a drop key (D-KEYS-17): §8.5's deposit column, the vault, the mailbox, the
-// secret store and the team record. A group inbox's marker (plan-MAIL-group-inbox) is not in §8.8's rows yet, so
-// a general repo's inbox gets none until ACL-M2-06 carries it.
+// secret store and the team record.
 func GkmRepoKindTakesDeposits(kind protocol.RepoKind) bool {
 	switch kind {
 	case protocol.RepoKind_REPO_KIND_VAULT, protocol.RepoKind_REPO_KIND_MAILBOX, protocol.RepoKind_REPO_KIND_SECRET, protocol.RepoKind_REPO_KIND_TEAM_RECORD:
 		return true
 	}
 	return false
+}
+
+// The signed RepoCreate also enables deposits in a general repo marked as an inbox (QD-102).
+func gkmRepoTakesDeposits(repo *protocol.AclRepo) bool {
+	return repo != nil && (GkmRepoKindTakesDeposits(repo.GetKind()) || AclRepoIsInbox(repo))
 }
 
 // A rotation's draft as the keychain holds it: RK' and the Signed GenRotate it will claim with.
@@ -261,7 +265,10 @@ func (self *gkmGroupManager) rotateDraft(ctx context.Context, state GkmAuthView,
 			// at, since a clock set back leaves a draft dated ahead of it
 			fresh := 0 < client.settings.RotateDraftMaxAge && at.Sub(draftAt).Abs() <= client.settings.RotateDraftMaxAge &&
 				bytes.Equal(rotate.GetGroupId(), pins.groupId.Bytes())
-			if draftState, stateErr := state.At(rotate.GetAuth()); chains && fresh && stateErr == nil {
+			// In v0 a claim must cover the current recovery bindings. If another log entry overtook an
+			// unclaimed draft, rebuild it at the new pin before staging another generation.
+			current := !client.KeyDeliveryOnly() || rotate.GetAuth().GetVersion() == state.Pin().GetVersion()
+			if draftState, stateErr := state.At(rotate.GetAuth()); chains && fresh && current && stateErr == nil {
 				holders, err := KeyHolders(draftState, self.repoId, draftAt)
 				if err != nil {
 					return nil, nil, err
@@ -304,7 +311,7 @@ func (self *gkmGroupManager) rotateDraft(ctx context.Context, state GkmAuthView,
 		cause = GkmCauseRequest
 	}
 	args := &GkmGenerationArgs{Cause: cause, Auth: state.Pin(), Time: at, HoldersSha256: holders.Sha256()}
-	if repo := state.Repo(self.repoId); repo != nil && GkmRepoKindTakesDeposits(repo.GetKind()) {
+	if gkmRepoTakesDeposits(state.Repo(self.repoId)) {
 		args.DropNotAfter = at.Add(client.settings.DropKeyLifetime)
 	}
 	// R5: a leaf_wrap only if this device is a leaf of its epoch and that tree holds holders alone
@@ -376,7 +383,7 @@ func (self *gkmGroupManager) claim(ctx context.Context, groupId Id, draft *gkmRo
 				return nil, nil, fmt.Errorf("%w: a claim's winner", ErrGkmReplyInvalid)
 			}
 			return nil, winner, nil
-		case refused && gkmError.Status == http.StatusForbidden:
+		case refused && (gkmError.Status == http.StatusForbidden || gkmError.Status == http.StatusConflict):
 			// its signer, auth or time check: gkm's state is ahead of this one, or this clock is off
 			return nil, nil, fmt.Errorf("%w: gkm refused the claim of generation %d", ErrGkmWait, generation)
 		case refused:

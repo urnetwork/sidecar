@@ -108,7 +108,7 @@ func (self *evsErasedKeys) readAfter(ctx context.Context, repo *EvsRepo) error {
 		self.slots = map[Id]bool{}
 	}
 	for _, erasure := range erasures {
-		for _, key := range erasure.Keys {
+		for _, key := range erasure.destroyedKeys() {
 			self.keys[*key] = true
 			self.slots[key.SlotId] = true
 		}

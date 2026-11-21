@@ -118,12 +118,10 @@ type SmtpGateFacts struct {
 // The send gate's memory, which SMTP-M9-20's production gate fills from api's internal gate routes and
 // sidecartest.FakeSmtpGate in tests. No method does I/O or blocks. Safe for concurrent use.
 type SmtpGate interface {
-	// The network's facts. ok false while they are not loaded: the call has asked for their load, off the
-	// path, and the preamble answers TRY_LATER.
-	Facts(networkId sidecar.Id) (facts *SmtpGateFacts, ok bool)
-	// §8's mail_send for the sidecar (AclGateView.MaySendMail). AclReasonNoState while the network's
-	// state is not loaded, which asks for its load.
-	MaySendMail(networkId sidecar.Id, sidecarId sidecar.Id, now time.Time) sidecar.AclDecision
+	// The network's facts and the ticket subject's mail_send decision. The decision and ScopeLabels
+	// come from the same verified projection. Missing database facts return nil and a cold projection
+	// returns AclReasonNoState. Each miss asks for a load off the preamble path.
+	SendFacts(networkId sidecar.Id, sidecarId sidecar.Id, now time.Time) (*SmtpGateFacts, sidecar.AclDecision)
 	// §21.5's breaker state. ok false until first loaded.
 	Breaker() (state *SmtpBreakerState, ok bool)
 	// The Community tier's limits, which a restricted network sends at (§14.7). ok false until loaded.
@@ -230,12 +228,11 @@ func checkSmtpGate(gate SmtpGate, abuse sidecar.AbuseGate, request *SmtpGateRequ
 		return unloaded
 	}
 	// every fact is asked for before any refuses, so one preamble starts every load it lacks
-	facts, factsOk := gate.Facts(request.NetworkId)
+	facts, mailSend := gate.SendFacts(request.NetworkId, request.SidecarId, now)
 	standing, standingOk := abuse.Standing(connect.Id(request.NetworkId))
 	verified, verifiedOk := abuse.Verified(connect.Id(request.NetworkId))
 	breaker, breakerOk := gate.Breaker()
-	mailSend := gate.MaySendMail(request.NetworkId, request.SidecarId, now)
-	if !factsOk || facts == nil || !standingOk || !verifiedOk || !breakerOk || breaker == nil {
+	if facts == nil || !standingOk || !verifiedOk || !breakerOk || breaker == nil {
 		return unloaded
 	}
 	if !mailSend.Allowed && mailSend.Reason == sidecar.AclReasonNoState {

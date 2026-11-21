@@ -159,7 +159,7 @@ func searchRegistryOf(kind protocol.RepoKind) *IndexFieldRegistry {
 
 // Opens one kept file for reading: RK_g of its generation asked of gkm.
 func (self *searchOpenedRef) openRead(ctx context.Context, file *SearchManifestFile) (*SearchCacheRecordRead, error) {
-	key := SearchCacheKey{RepoId: self.repoId, RefId: self.refId, Path: file.Path, Version: file.Version}
+	key := SearchCacheKey{RepoId: self.repoId, RefId: self.snap.ref.args.refId, Path: file.Path, Version: file.Version}
 	keys := self.keys
 	if keys == nil {
 		keys = self.engine.args.Gkm
@@ -536,14 +536,14 @@ func searchVerifyCandidate(ctx context.Context, candidate *searchOrderedCandidat
 // Matches a partition "search more" landed, which the search's snapshot holds no run of: a key the snapshot's table
 // does not hold is judged by the landed shards themselves, whose row of it is all's one row of the key and older than
 // every bucket entry the table holds (§11.14's newest row), the erasure set's masks still the table's.
-func (self *searchOpenedRef) matchLanded(query *SearchQuery, source *searchPartitionSource, landed []*searchShardSource, step int) (*searchRankInput, error) {
+func (self *searchOpenedRef) matchLanded(query *SearchQuery, source *searchPartitionSource, step int) (*searchRankInput, error) {
 	base := self.probe
 	probe := func(key [indexIdByteCount]byte) (searchVersionRecord, error) {
 		record, err := base(key)
 		if err != nil || record.found {
 			return record, err
 		}
-		for _, shard := range landed {
+		for _, shard := range source.shards {
 			version, ok, err := searchShardVersionOf(shard.reader, key)
 			if err != nil {
 				return record, err

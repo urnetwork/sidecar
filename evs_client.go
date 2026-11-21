@@ -33,6 +33,7 @@ import (
 	"net/http"
 	"reflect"
 	"sync"
+	"sync/atomic"
 
 	"google.golang.org/protobuf/proto"
 
@@ -140,13 +141,14 @@ type EvsRepoCreated struct {
 
 // One network's client of evs.
 type EvsClient struct {
-	args     *EvsClientArgs
-	settings *EvsSettings
-	clock    Clock
-	log      Logger
-	http     *evsHttp
-	pins     *EvsPinStore
-	verifier *EvsVerifier
+	searchNames atomic.Bool
+	args        *EvsClientArgs
+	settings    *EvsSettings
+	clock       Clock
+	log         Logger
+	http        *evsHttp
+	pins        *EvsPinStore
+	verifier    *EvsVerifier
 
 	stateLock sync.Mutex
 	// the newest ref version a hint named, per repo and ref, which sends the next read past evs's head cache
@@ -171,7 +173,7 @@ type EvsClient struct {
 	writeHook EvsWritePlanHook
 	// whether the network is in §19.11's format2 gate, from the composition's core state (evs_format_client.go); nil
 	// answers false
-	format2Source func() bool
+	format2Source func() (admitted bool, known bool)
 	// a new path's versioning rules, from the composition's config state (evs_write_versionless.go); nil reads as
 	// no rule
 	versioningRules func(repoId Id, filePath string, size uint64) (uint32, error)
@@ -326,16 +328,28 @@ type EvsCreateRepoArgs struct {
 	// A create already filed and cut short: its repo id, to resume at the route without filing a second
 	// RepoCreate. Nil draws a new random id and files.
 	ResumeRepoId *Id
+	// A random ID already reserved by the caller's durable operation, before it filed RepoCreate.
+	proposedRepoId *Id
 	// The repo's display name, which a team network's directory announces a general or record repo under (prose).
 	DisplayName string
 	// --private on every repo-creating command (§16.11's private row): the directory gets a private marker in place of
 	// the announcement, so no device announces the repo on its own. Asked of EvsClientArgs.PrivateCreate before the
 	// RepoCreate is filed, which refuses while the network's directory does not stand (QD-748).
 	Private bool
-	// A group inbox (§15.8): announced with requests closed and no roles offered.
+	// The role filed in RepoCreate. A group inbox is announced with requests closed and no roles offered.
+	Inbox protocol.RepoInbox
+	// GroupInbox selects the group role for callers predating the signed marker.
 	GroupInbox bool
 	// A person confirmed the creating command on /dev/tty or in an app's UI (§5.8).
 	Confirmed bool
+}
+
+// Uses the explicit inbox role when set, falling back to the legacy group-inbox flag.
+func (self *EvsCreateRepoArgs) inboxRole() protocol.RepoInbox {
+	if self.Inbox == protocol.RepoInbox_REPO_INBOX_NONE && self.GroupInbox {
+		return protocol.RepoInbox_REPO_INBOX_GROUP
+	}
+	return self.Inbox
 }
 
 // A new random repo id: 16 random bytes, so the id says nothing of when or where it was made (§11.12's naming row).
@@ -356,6 +370,9 @@ func NewEvsRepoId() Id {
 func (self *EvsClient) CreateRepo(ctx context.Context, args *EvsCreateRepoArgs) (*EvsRepo, error) {
 	if args == nil || args.Kind == protocol.RepoKind_REPO_KIND_UNSPECIFIED {
 		return nil, fmt.Errorf("%w: a repo of no kind", errInvalidSettings)
+	}
+	if !aclRepoInboxFits(args.Kind, args.inboxRole()) {
+		return nil, fmt.Errorf("%w: invalid inbox role for repo kind", errInvalidSettings)
 	}
 	if !AclRepoKindOwnerFits(args.Kind, args.OwnerMemberId != nil) {
 		return nil, fmt.Errorf("%w: an owner member for an owner-bound kind and a Team scope's mailcfg alone", errInvalidSettings)
@@ -384,7 +401,7 @@ func (self *EvsClient) CreateRepo(ctx context.Context, args *EvsCreateRepoArgs) 
 			return repo, err
 		}
 	} else {
-		groupArgs := &GkmCreateGroupArgs{NetworkId: self.args.NetworkId, RepoId: repoId, Kind: args.Kind, OwnerMemberId: args.OwnerMemberId}
+		groupArgs := &GkmCreateGroupArgs{NetworkId: self.args.NetworkId, RepoId: repoId, Kind: args.Kind, Inbox: args.inboxRole(), OwnerMemberId: args.OwnerMemberId}
 		if _, err := self.args.Gkm.CreateGroup(ctx, groupArgs); err != nil {
 			return nil, fmt.Errorf("evs: the repo's group: %w", err)
 		}
@@ -399,7 +416,7 @@ func (self *EvsClient) CreateRepo(ctx context.Context, args *EvsCreateRepoArgs) 
 			OwnerMemberId: args.OwnerMemberId,
 			DisplayName:   args.DisplayName,
 			Private:       args.Private,
-			GroupInbox:    args.GroupInbox,
+			GroupInbox:    args.inboxRole() != protocol.RepoInbox_REPO_INBOX_NONE,
 			Confirmed:     args.Confirmed,
 		}
 		if err := self.args.RepoCreated(ctx, created); err != nil {
@@ -422,12 +439,15 @@ func (self *EvsClient) placeRepo(ctx context.Context, args *EvsCreateRepoArgs) (
 	}
 	for retryCount := 0; ; retryCount += 1 {
 		repoId := NewEvsRepoId()
-		create := &protocol.RepoCreate{RepoId: repoId.Bytes(), Kind: args.Kind}
+		if args.proposedRepoId != nil {
+			repoId = *args.proposedRepoId
+		}
+		create := &protocol.RepoCreate{RepoId: repoId.Bytes(), Kind: args.Kind, Inbox: args.inboxRole()}
 		if err := self.args.FileStatement(ctx, bridge.SignedType_SIGNED_REPO_CREATE, create); err != nil {
 			return Id{}, fmt.Errorf("evs: RepoCreate: %w", err)
 		}
 		err := self.Repo(repoId).callLifecycle(ctx, evsPlaceCall(repoId))
-		if !IsEvsRepoPlaced(err) || self.settings.RepoPlacedRetryCount <= retryCount {
+		if args.proposedRepoId != nil || !IsEvsRepoPlaced(err) || self.settings.RepoPlacedRetryCount <= retryCount {
 			return repoId, err
 		}
 		self.log.Warningf("[evs]repo %s is placed by another creator: creating under another id", repoId)
@@ -460,6 +480,9 @@ func evsActivateCall(repoId Id) *evsCall {
 // Whether this sidecar holds no leaf at its verified state, a tagged or an ephemeral one, so a member device forms
 // the groups of the repos it creates (QD-638). False with no state, whose CreateGroup refuses for such a sidecar.
 func (self *EvsClient) holdsNoLeaf() bool {
+	if client, ok := self.args.Gkm.(interface{ KeyDeliveryOnly() bool }); ok && client.KeyDeliveryOnly() {
+		return false
+	}
 	if self.args.Config == nil || self.args.Identity == nil {
 		return false
 	}

@@ -149,27 +149,46 @@ type mailSendTarget struct {
 }
 
 // Deposits message to each target's repo, one deposit a repo naming its own recipients only, in order: each target's
-// outcome, delivered or failed. A failure stops nothing: the rest are still tried, and the caller sends the failed
-// ones again.
-func mailSendDeposit(ctx context.Context, repo func(repoId Id) mailSendDepositRepo, message []byte, mailFrom string, targets []*mailSendTarget) []MailSendOutcome {
+// outcome, delivered or failed. A definitive failure permits the next target. An ambiguous reserved deposit must
+// be reconciled first, using its saved push.
+func (self *MailClient) depositSend(ctx context.Context, repo func(repoId Id) mailSendDepositRepo, message []byte, mailFrom string, targets []*mailSendTarget, checkpointName string, checkpoint *mailSendCheckpoint) ([]MailSendOutcome, error) {
 	outcomes := make([]MailSendOutcome, len(targets))
 	for index, target := range targets {
+		if checkpoint != nil && index < len(checkpoint.Deposits) {
+			outcomes[index] = checkpoint.Deposits[index]
+			continue
+		}
 		outcomes[index] = MailSendFailed
 		depositRepo := repo(target.repoId)
-		if depositRepo == nil {
-			continue
-		}
 		plaintext, err := MailSameNetworkDeposit(message, mailFrom, target.recipients)
-		if err != nil {
-			continue
+		if depositRepo != nil && err == nil {
+			args := &EvsDepositArgs{Body: bytes.NewReader(plaintext), Size: int64(len(plaintext))}
+			if checkpoint != nil {
+				args.pending = checkpoint.Pending
+				args.prepare = func(request *evsDepositRequest) error {
+					checkpoint.Pending = request
+					return self.writeSendCheckpoint(checkpointName, checkpoint)
+				}
+			}
+			key := target.repoId.String()
+			testHookBarrier("mail.send.deposit.before", key)
+			_, err = depositRepo.Deposit(ctx, args)
+			if err == nil {
+				outcomes[index] = MailSendDelivered
+			}
+			testHookBarrier("mail.send.deposit.after", key)
 		}
-		key := target.repoId.String()
-		testHookBarrier("mail.send.deposit.before", key)
-		_, err = depositRepo.Deposit(ctx, &EvsDepositArgs{Body: bytes.NewReader(plaintext), Size: int64(len(plaintext))})
-		testHookBarrier("mail.send.deposit.after", key)
-		if err == nil {
-			outcomes[index] = MailSendDelivered
+		if checkpoint != nil {
+			if checkpoint.Pending != nil && outcomes[index] != MailSendDelivered {
+				// Its original push may have committed. Receipt recovery must use those same bytes.
+				return nil, ErrMailSendUncertain
+			}
+			checkpoint.Pending = nil
+			checkpoint.Deposits = append(checkpoint.Deposits, outcomes[index])
+			if err := self.writeSendCheckpoint(checkpointName, checkpoint); err != nil {
+				return nil, err
+			}
 		}
 	}
-	return outcomes
+	return outcomes, nil
 }

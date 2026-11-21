@@ -124,8 +124,7 @@ type GkmGroupClientArgs struct {
 	Sign GkmSignFunction
 	// The network's keychain.ur under gkm's namespace (§5.9).
 	Secrets SidecarSecrets
-	// This sidecar's MLS engine. Nil for a sidecar that holds no leaf, an agent: it commits nothing and rotates by
-	// wraps.
+	// The draft MLS engine. Nil for v0 clients, which give every holder a KeyDelivery.
 	Mls MlsEngine
 	// The private key of a ReaderKey this sidecar signed, by its key's digest: GkmUpkeep.ReaderPrivateKey. Nil opens
 	// no delivery.
@@ -136,6 +135,10 @@ type GkmGroupClientArgs struct {
 	// opens (§7.9). Nil, or an answer of none for a member that holds a recovery identity, refuses the rotation
 	// rather than leave that member without its RecoveryWrap (D-KEYS-18).
 	RecoveryKey func(memberId Id) (*GkmRecoveryKey, error)
+	// Reads the effective binding in the exact state used to compute the generation's holders.
+	RecoveryKeyAt          func(state GkmAuthView, memberId Id) (*GkmRecoveryKey, error)
+	OwnRecoveryKey         func(*GkmRecoveryKey) error
+	AwaitingRecoveryAnchor func() bool
 	// The repos this sidecar reads at its newest state, the list its token scopes come from: where a Welcome's
 	// group is looked for. Nil joins only groups of repos this device already holds.
 	ReaderRepoIds func() []Id
@@ -162,11 +165,13 @@ type GkmGroupClientArgs struct {
 
 // One sidecar's group flows. See the file header.
 type GkmGroupClient struct {
-	args     *GkmGroupClientArgs
-	settings *GkmSettings
-	clock    Clock
-	log      Logger
-	lateAsks *GkmLateAsks
+	args       *GkmGroupClientArgs
+	settings   *GkmSettings
+	clock      Clock
+	log        Logger
+	lateAsks   *GkmLateAsks
+	rebindLock sync.Mutex
+	rebindWake chan struct{}
 
 	// who waits for a repo's next held generation; its own lock
 	generationWaits gkmGenerationWaits
@@ -238,6 +243,7 @@ func NewGkmGroupClient(args *GkmGroupClientArgs) (*GkmGroupClient, error) {
 		lateAsks:          NewGkmLateAsks(settings),
 		repoIdManagers:    map[Id]*gkmGroupManager{},
 		hintWorkKeys:      map[string]bool{},
+		rebindWake:        make(chan struct{}, 1),
 		repoIdHeads:       map[Id]*gkmRepoHead{},
 		repoIdWantAskedAt: map[Id]time.Time{},
 	}, nil
@@ -251,13 +257,38 @@ func (self *GkmGroupClient) AuthAdvanced(state GkmAuthView) {
 		return
 	}
 	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	if self.state != nil && state.Pin().GetVersion() <= self.state.Pin().GetVersion() {
+	before := self.state
+	if before != nil && state.Pin().GetVersion() <= before.Pin().GetVersion() {
+		self.stateLock.Unlock()
 		return
 	}
 	self.state = state
-	// a verified state supersedes every unconfirmed one
+	// A verified state supersedes every unconfirmed one.
 	self.unconfirmedState, self.unconfirmedConfigRepoId = nil, Id{}
+	ctx := self.hintsCtx
+	self.stateLock.Unlock()
+	select {
+	case self.rebindWake <- struct{}{}:
+	default:
+	}
+	if ctx != nil && self.KeyDeliveryOnly() && self.args.ReaderRepoIds != nil {
+		go self.syncNewReaderRepos(ctx, before)
+	}
+}
+
+// A new grant can refer to a generation the repo has held for some time. Ask for its wrap at the grant,
+// including for a vault or mailbox that became readable after the config follower first stood.
+func (self *GkmGroupClient) syncNewReaderRepos(ctx context.Context, before GkmAuthView) {
+	now := self.clock.Now()
+	for _, repoId := range self.args.ReaderRepoIds() {
+		if ctx.Err() != nil {
+			return
+		}
+		if before != nil && slices.Contains(before.RepoReadersAt(repoId, now), self.args.SidecarId) {
+			continue
+		}
+		self.hintWork(ctx, "sync", repoId, func() { self.logFlowError("reader grant", self.SyncRepo(ctx, repoId)) })
+	}
 }
 
 // The config follower's state before it stands (GkmConfigJoiner; QD-817), kept for the config group's join alone:
@@ -267,14 +298,16 @@ func (self *GkmGroupClient) AuthUnconfirmed(state GkmAuthView, configRepoId Id) 
 		return
 	}
 	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	if self.state != nil {
-		return
-	}
-	if self.unconfirmedState != nil && state.Pin().GetVersion() <= self.unconfirmedState.Pin().GetVersion() {
+	if self.state != nil || self.unconfirmedState != nil && state.Pin().GetVersion() <= self.unconfirmedState.Pin().GetVersion() {
+		self.stateLock.Unlock()
 		return
 	}
 	self.unconfirmedState, self.unconfirmedConfigRepoId = state, configRepoId
+	ctx := self.hintsCtx
+	self.stateLock.Unlock()
+	if ctx != nil && self.KeyDeliveryOnly() {
+		self.hintWork(ctx, "sync", configRepoId, func() { self.logFlowError("config join", self.SyncRepo(ctx, configRepoId)) })
+	}
 }
 
 // Whether the keychain holds RK_g of some generation of the repo, and a channel closed once it next takes a generation
@@ -318,6 +351,11 @@ func gkmKeychainHoldsRepoKey(secrets SidecarSecrets, repoId Id) (bool, error) {
 	return false, nil
 }
 
+// Reports whether this client forms and follows groups using only signed generations and their deliveries.
+func (self *GkmGroupClient) KeyDeliveryOnly() bool {
+	return self.args.Mls == nil
+}
+
 // The newest verified state, or ErrGkmUnavailable before the first, and in a process that does not hold the
 // network's state, where no flow runs. An unconfirmed state never answers here (joiningState).
 func (self *GkmGroupClient) currentState() (GkmAuthView, error) {
@@ -357,6 +395,9 @@ func (self *GkmGroupClient) keyState(repoId Id) (GkmAuthView, error) {
 	state, configRepoId, confirmed, err := self.joiningState()
 	if err != nil {
 		return nil, err
+	}
+	if self.args.AwaitingRecoveryAnchor != nil && self.args.AwaitingRecoveryAnchor() {
+		return nil, ErrGkmRecoveryNotAnchored
 	}
 	if !confirmed && repoId != configRepoId {
 		return nil, fmt.Errorf("%w: no verified state yet, and an unconfirmed one opens the config repo's keys alone", ErrGkmUnavailable)
@@ -1302,6 +1343,46 @@ func (self *GkmGroupClient) AttachHints(ctx context.Context, hints *GkmHints) {
 			self.logFlowError("drop key renewal", self.RenewDropKey(ctx, repoId))
 		})
 	}
+	if self.args.Mls == nil {
+		if self.args.RecoveryKeyAt != nil {
+			go self.followRecoveryBinding(ctx)
+		}
+		syncReadable := func(ctx context.Context) {
+			select {
+			case self.rebindWake <- struct{}{}:
+			default:
+			}
+			if self.args.ReaderRepoIds == nil {
+				return
+			}
+			for _, repoId := range self.args.ReaderRepoIds() {
+				self.hintWork(ctx, "sync", repoId, func() {
+					self.logFlowError("sync", self.SyncRepo(ctx, repoId))
+					self.logFlowError("pending", self.RunPending(ctx, repoId))
+					self.logFlowError("drop key renewal", self.RenewDropKey(ctx, repoId))
+				})
+			}
+		}
+		hints.AddResync(syncReadable)
+		hints.SetHandler(protocol.GkmHintKind_GKM_HINT_PENDING, func(ctx context.Context, wake *GkmHintWake) { syncReadable(ctx) })
+		hints.SetHandler(protocol.GkmHintKind_GKM_HINT_COMMIT, func(ctx context.Context, wake *GkmHintWake) {
+			if wake.GroupId != nil {
+				if repoId, ok := self.heldRepoOfGroup(*wake.GroupId); ok {
+					self.hintWork(ctx, "sync", repoId, func() { self.logFlowError("sync", self.SyncRepo(ctx, repoId)) })
+				}
+			}
+		})
+		hints.SetHandler(protocol.GkmHintKind_GKM_HINT_WRAP_PENDING, func(ctx context.Context, wake *GkmHintWake) {
+			if wake.GroupId != nil && wake.Recipient != "" {
+				if repoId, ok := self.heldRepoOfGroup(*wake.GroupId); ok {
+					self.hintWork(ctx, "deliver:"+wake.Recipient, repoId, func() {
+						self.logFlowError("deliver", self.DeliverLate(ctx, repoId, wake.Recipient))
+					})
+				}
+			}
+		})
+		return
+	}
 	hints.SetHandler(protocol.GkmHintKind_GKM_HINT_PENDING, func(ctx context.Context, wake *GkmHintWake) {
 		if wake.GroupId == nil {
 			// a repo with no group yet, which a sidecar with no leaf created (QD-638)
@@ -1449,27 +1530,33 @@ func (self *GkmGroupClient) noteAgentRepoRefused(repoId Id, version uint64) bool
 	return true
 }
 
-// Runs work on its own goroutine unless the same kind of work for the repo is already running.
+// Coalesce work by repo. A native sync arriving during a pass may carry the first
+// delivery for a device that was still waiting at that pass, so run it once more.
 func (self *GkmGroupClient) hintWork(ctx context.Context, kind string, repoId Id, work func()) {
 	key := kind + ":" + gkmPathId(repoId)
-	running := false
-	func() {
-		self.stateLock.Lock()
-		defer self.stateLock.Unlock()
-		running = self.hintWorkKeys[key]
-		self.hintWorkKeys[key] = true
-	}()
-	if running {
+	self.stateLock.Lock()
+	if _, running := self.hintWorkKeys[key]; running {
+		if kind == "sync" && self.KeyDeliveryOnly() {
+			self.hintWorkKeys[key] = true
+		}
+		self.stateLock.Unlock()
 		return
 	}
+	self.hintWorkKeys[key] = false
+	self.stateLock.Unlock()
 	go func() {
-		defer func() {
+		for {
+			if ctx.Err() == nil {
+				work()
+			}
 			self.stateLock.Lock()
-			defer self.stateLock.Unlock()
-			delete(self.hintWorkKeys, key)
-		}()
-		if ctx.Err() == nil {
-			work()
+			if ctx.Err() != nil || !self.hintWorkKeys[key] {
+				delete(self.hintWorkKeys, key)
+				self.stateLock.Unlock()
+				return
+			}
+			self.hintWorkKeys[key] = false
+			self.stateLock.Unlock()
 		}
 	}()
 }

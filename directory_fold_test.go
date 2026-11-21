@@ -41,9 +41,9 @@ func (self *testDirectoryWorld) advance(count int, step time.Duration) {
 	}
 }
 
-// Seals item as the writer's announce entry and pushes it in stream's own stream, the writer's when stream is nil, at
-// pin, the world's tip when pin is nil. Answers the pin.
-func (self *testDirectoryWriter) announceIn(item *protocol.Announcement, stream *testDirectoryWriter, pin *bridge.AuthPin) *bridge.AuthPin {
+// Seals an announcement for the next position in stream, defaulting to the writer's stream and the current pin.
+// The signed entry and its slot can be held across a later change to the directory.
+func (self *testDirectoryWriter) prepareAnnouncement(item *protocol.Announcement, stream *testDirectoryWriter, pin *bridge.AuthPin) *sidecar.RecordStreamPush {
 	t := self.world.t
 	t.Helper()
 	if stream == nil {
@@ -76,10 +76,24 @@ func (self *testDirectoryWriter) announceIn(item *protocol.Announcement, stream 
 		SlotRows:        []*sidecar.RecordSlotRow{sealed.SlotRow(0)},
 	}
 	push.Entries = []*sidecar.RecordStreamEntry{{Path: path, Entry: sealed.EntryBytes(&push.SlotId, 0)}}
-	if _, err := self.world.streams.For(stream.sidecarId).Append(t.Context(), self.world.directoryId, push); err != nil {
+	return push
+}
+
+// Delivers an already signed entry using its stream writer.
+func (self *testDirectoryWriter) appendAnnouncement(push *sidecar.RecordStreamPush) {
+	t := self.world.t
+	t.Helper()
+	if _, err := self.world.streams.For(push.WriterSidecarId).Append(t.Context(), self.world.directoryId, push); err != nil {
 		t.Fatal(err)
 	}
-	return pin
+}
+
+// Seals and delivers an announcement, returning the pin used for the push.
+func (self *testDirectoryWriter) announceIn(item *protocol.Announcement, stream *testDirectoryWriter, pin *bridge.AuthPin) *bridge.AuthPin {
+	self.world.t.Helper()
+	push := self.prepareAnnouncement(item, stream, pin)
+	self.appendAnnouncement(push)
+	return push.AuthPin
 }
 
 // Seals item as the writer's announce entry in its own stream at the world's tip.

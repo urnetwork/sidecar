@@ -10,17 +10,22 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"errors"
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/device"
+	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
 	"github.com/urnetwork/sidecar/sidecartest"
+	"google.golang.org/protobuf/proto"
 )
 
 // Networks of admission worlds on one Net, one instance hosting a Sidecar in each that the daemon's composition
@@ -38,6 +43,11 @@ type testUrFollowWorld struct {
 // A world of networkCount networks, nothing hosted yet: the daemon's head reader hook reads each Sidecar's own
 // network's config repo.
 func newTestUrFollowWorld(t *testing.T, networkCount int) *testUrFollowWorld {
+	return newTestUrFollowWorldWithSettings(t, networkCount, nil)
+}
+
+// Like a stock instance, with a new settings object for each device or restart.
+func newTestUrFollowWorldWithSettings(t *testing.T, networkCount int, settings func() *sidecar.SidecarSettings) *testUrFollowWorld {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 5*urTestTimeout)
 	t.Cleanup(cancel)
@@ -48,7 +58,16 @@ func newTestUrFollowWorld(t *testing.T, networkCount int) *testUrFollowWorld {
 	if err != nil {
 		t.Fatal(err)
 	}
+	api, err := net.Api()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The enrolled host and the other devices post to the same network sequencer.
+	tier.NewApi = func(sidecar.Clock, sidecar.BlobCluster) sidecartest.AdmissionApi {
+		return sidecartest.FakeApiAdmission(api)
+	}
 	tier.AclCompile = sidecartest.AclAdmissionCompile
+	tier.AclSpendCheck = sidecar.NewSpendCheck(nil)
 	for range networkCount {
 		network := sidecartest.NewAdmissionNet(t, tier)
 		t.Cleanup(network.Close)
@@ -64,6 +83,7 @@ func newTestUrFollowWorld(t *testing.T, networkCount int) *testUrFollowWorld {
 	urTunPlatform = func(settings *urTunSettings, log sidecar.Logger) urTunSystem { return world.system }
 
 	world.instance, err = net.StartInstance("daemon", &sidecartest.TestInstanceArgs{
+		Settings: settings,
 		Start: func(running *sidecar.Sidecar) error {
 			if startUrConfigFollower(running, sidecar.NewNoopLogger()) == nil {
 				return errors.New("no follower started")
@@ -111,6 +131,131 @@ func (self *testUrFollowWorld) standing(running *sidecar.Sidecar, network *sidec
 	}
 	if _, err := client.WaitFor(ctx, network.Tip().GetVersion()); err != nil {
 		self.t.Fatalf("network %s at %d: %v", network.NetworkId(), network.Tip().GetVersion(), err)
+	}
+}
+
+type testUrForwardKeys struct{ key *sidecar.EvsRepoKey }
+
+func (self testUrForwardKeys) CurrentConfigKey(context.Context) (*sidecar.EvsRepoKey, error) {
+	return self.key, nil
+}
+
+func (self testUrForwardKeys) ConfigKeyAt(generation uint64) *sidecar.EvsRepoKey {
+	if self.key.Generation() == generation {
+		return self.key
+	}
+	return nil
+}
+
+// The native bridge files the regular member's request and checks its signed activation on the local log before
+// returning the route. The first call binds no listener until the member's other device approves.
+func TestUrDaemonFollowsVerifiedForwardApproval(t *testing.T) {
+	world := newTestUrFollowWorld(t, 1)
+	network := world.networks[0]
+	member, target := network.ConsentedMember("forward member")
+	running, err := world.instance.AddSidecarIn(network.NetworkId(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	network.AdmitSidecar(target, running.Identity(), member, 0)
+	requester := running.Identity().SidecarId
+	world.saveBlock(network, 80)
+	network.SaveAclPolicy([]byte(`{"requests":[{"src":["autogroup:member"],"dst":["autogroup:self"],"allow":["dial"]}]}`), nil)
+	world.standing(running, network)
+	now := network.Clock().Now()
+	key, _, err := sidecar.NewGkmFirstGeneration(network.ConfigRepoId(), network.Id("forward config group"), &sidecar.GkmGenerationArgs{
+		Cause: sidecar.GkmCauseRequest, Auth: network.Tip(), Time: now, HoldersSha256: make([]byte, sha256.Size),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(running.InstallConfigKeys(testUrForwardKeys{key}))
+	header := network.Header()
+	addressKind := bridge.SignedType_SIGNED_BRIDGE_ADDRESS
+	sealed, err := sidecar.SealConfigBody(key, sidecar.NewConfigSealContext(addressKind, header), &bridge.BridgeAddressBody{Ipv4: 0x6450010e}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	network.MustLand(network.Sign(target, addressKind, &bridge.BridgeAddress{Header: header, SidecarId: target.SidecarId.Bytes(), SealedBody: sealed}))
+	world.standing(running, network)
+	control, err := newUrDaemonBridges(world.bridges, func(*sidecar.DaemonLocalListenArgs) (*sidecar.DaemonLocalListener, error) {
+		t.Fatal("a pending forward attempted to bind a listener")
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer control.Close()
+	origin := &sidecar.BridgeFileOrigin{Act: sidecar.SidecarActConfirmed}
+	pending, err := control.Forward(world.ctx, network.NetworkId(), running, origin, &sidecar.DaemonBridgeForwardParams{
+		Target: target.SidecarId.String(), Protocol: "tcp", Port: 5353, LocalPort: 10053, LifetimeSeconds: 900,
+	})
+	if err != nil || pending.ApprovalPendingId == nil {
+		t.Fatalf("native forward request: %+v, %v", pending, err)
+	}
+	approvalId := *pending.ApprovalPendingId
+	ledger, err := running.ApprovalLedger()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, err := ledger.State(approvalId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := sidecar.ParseStoredApprovalRequest(entry.Request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := stored.Action.PayloadSha256()
+	deadline := stored.Action.Action.GetExpiresMillis()
+	requestDigest := stored.Sha256()
+	body, err := proto.Marshal(&protocol.ApprovalDecision{
+		ApprovalId: approvalId.Bytes(), RequestSha256: requestDigest[:], PayloadSha256: payload[:],
+		Decision: uint32(protocol.ApprovalVerdict_APPROVAL_VERDICT_APPROVE), Uses: 1, NotAfterMillis: stored.Request.GetNotAfterMillis(),
+		ApproverMemberId: member.Bytes(), Channel: uint32(protocol.ApprovalChannel_APPROVAL_CHANNEL_DEVICE),
+		RequesterSidecarId: requester.Bytes(), AuthPin: network.Tip(), Version: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	kind := bridge.SignedType_SIGNED_APPROVAL_DECISION
+	origin.Decision = &bridge.Signed{Body: body, SignerId: target.SidecarId.Bytes(), Type: uint32(kind),
+		Signature: ed25519.Sign(target.Key, bridge.SignedBytes(sidecar.ApprovalPurpose, kind, body))}
+	backends := &urBridgeBackends{bridges: world.bridges, networkIdBackends: map[sidecar.Id]*urBridgeBackend{}}
+	defer backends.close()
+	backend, err := backends.backend(world.ctx, network.NetworkId(), running)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := &sidecar.BridgeForwardRequest{Target: target.SidecarId, Protocol: 6, Port: 5353, LocalPort: 10053, Lifetime: 15 * time.Minute}
+	filed, err := backend.Forward(world.ctx, origin, request)
+	grantId := sidecar.AclGrantId(approvalId, payload)
+	if err != nil || !bytes.Equal(filed.GrantId, grantId[:]) || filed.ApprovalId != approvalId {
+		t.Fatalf("native approval receipt: %+v, %v", filed, err)
+	}
+	route, err := backend.ForwardRoute(world.ctx, request, filed.GrantId)
+	if err != nil || !route.Live || route.Address != netip.MustParseAddr("100.80.1.14") || route.ExpiresAt.UnixMilli() != deadline {
+		t.Fatalf("native approved route: %+v, %v", route, err)
+	}
+	acl, err := running.ConfigFollower().Client().State().Acl()
+	if err != nil {
+		t.Fatal(err)
+	}
+	from := sidecar.AclSidecarSubject(requester)
+	rules := acl.DialRules(from, sidecar.AclSidecarSubject(target.SidecarId), now)
+	if len(rules) != 1 || !bytes.Equal(rules[0].GrantId, grantId[:]) || !rules[0].PortsLimited || rules[0].ExpiresMs != deadline {
+		t.Fatalf("daemon's verified forward grant: %+v", rules)
+	}
+	if other := acl.DialRules(from, sidecar.AclSidecarSubject(network.Owner().SidecarId), now); len(other) != 0 {
+		t.Fatalf("daemon's grants for a different member's device: %+v", other)
+	}
+	if _, err := backend.Close(world.ctx, &sidecar.BridgeFileOrigin{Act: sidecar.SidecarActConfirmed}, filed.GrantId, false); err != nil {
+		t.Fatal(err)
+	}
+	network.Sync()
+	world.standing(running, network)
+	if withdrawn, err := backend.ForwardRoute(world.ctx, request, filed.GrantId); err != nil || withdrawn.Live {
+		t.Fatalf("native withdrawn route: %+v, %v", withdrawn, err)
 	}
 }
 
@@ -195,6 +340,29 @@ func (self *testUrConfigHeads) ReadConfigHead(ctx context.Context, version uint6
 		}
 	}
 	return nil, sidecar.ErrConfigHeadUnavailable
+}
+
+// The normal CLI bridge builder serves the authenticated config-backed methods after the follower is standing.
+func TestBridgeStatusReadsItsStandingFollower(t *testing.T) {
+	world := newTestUrFollowWorld(t, 1)
+	network := world.networks[0]
+	running := world.host(network, nil)
+	world.saveBlock(network, 80)
+	world.standing(running, network)
+	control, err := newUrDaemonBridges(world.bridges, sidecar.DaemonLocalListen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer control.Close()
+	networkId := network.NetworkId()
+	if _, err := control.Status(world.ctx, networkId, running); err != nil {
+		t.Fatal(err)
+	}
+	world.awaitEnforcing(world.heldBridges()[networkId])
+	status, err := control.Status(world.ctx, networkId, running)
+	if err != nil || status.List == nil || status.List.NetworkId != networkId {
+		t.Fatalf("standing network's bridge status: %+v, %v", status, err)
+	}
 }
 
 // ur tun brings the tun up over a network's bridge, built over that network's own follower, where it answered "no
@@ -322,5 +490,46 @@ func TestDaemonRunsOneFollowerASidecar(t *testing.T) {
 	}
 	if len(world.heldBridges()) != 0 {
 		t.Fatal("a bridge was built with no follower")
+	}
+}
+
+// The stock TLS installer attaches to an enrolled daemon's verified follower. The real publish handler then
+// evaluates the reserved system name, and removing the component makes that same handler unavailable again.
+func TestUrDesktopTlsInstallsTheDaemonPublisher(t *testing.T) {
+	world := newTestUrFollowWorld(t, 1)
+	network := world.networks[0]
+	running := world.host(network, nil)
+	world.saveBlock(network, 80)
+	world.standing(running, network)
+	service := &urDesktopTls{
+		running: running, follower: running.ConfigFollower(), stateDirectory: t.TempDir(), network: &urDaemonNetwork{},
+	}
+	if _, err := service.clientNames(world.ctx); err != nil {
+		t.Fatalf("client names from the verified config head: %v", err)
+	}
+	var publish *sidecar.DaemonMethod
+	for _, method := range sidecar.DaemonTlsMethods() {
+		if method.Name == sidecar.DaemonMethodTlsPublish {
+			publish = method
+		}
+	}
+	if publish == nil {
+		t.Fatal("the daemon has no TLS publish handler")
+	}
+	call := &sidecar.DaemonCall{Sidecar: running, Params: []byte(`{"host":"mta-sts","target":"8080"}`)}
+	if _, err := publish.Handler(world.ctx, call); !errors.Is(err, sidecar.ErrTlsComponentAbsent) {
+		t.Fatalf("publish before TLS installation: %v", err)
+	}
+	remove, err := service.install(world.ctx, sidecar.NewNoopLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer remove()
+	if _, err := publish.Handler(world.ctx, call); !errors.Is(err, sidecar.ErrTlsPublishHostTaken) {
+		t.Fatalf("reserved publish through installed TLS: %v", err)
+	}
+	remove()
+	if _, err := publish.Handler(world.ctx, call); !errors.Is(err, sidecar.ErrTlsComponentAbsent) {
+		t.Fatalf("publish after removing TLS: %v", err)
 	}
 }

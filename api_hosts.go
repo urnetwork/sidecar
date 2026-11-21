@@ -308,6 +308,15 @@ func (self *SidecarHostList) ApplyServiceUrls(settings *SidecarSettings) error {
 	settings.GkmUrl = urls[SidecarHostServiceGkm]
 	settings.SocketsUrl = urls[SidecarHostServiceSockets]
 	settings.DnsUrl = urls[SidecarHostServiceDns]
+	if settings.Tls != nil {
+		api, _ := self.ServiceEntry(SidecarHostServiceApi)
+		_, domain, _ := strings.Cut(api.Host, ".")
+		authority := "certs." + domain
+		if api.Tcp != 443 {
+			authority = net.JoinHostPort(authority, strconv.Itoa(api.Tcp))
+		}
+		settings.Tls.CertsResource = "https://" + authority
+	}
 	return nil
 }
 

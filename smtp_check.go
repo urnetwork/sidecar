@@ -134,16 +134,11 @@ func (self *SmtpSender) Check(ctx context.Context, message *SmtpOutboundMessage)
 	}
 
 	// the proving host's measure and cap: this one's, or for a host that only queues the member's prover hosts'
-	var measure *SmtpProverMeasure
+	measure := self.localMeasure()
 	capByteCount := uint64(0)
-	proves := self.args.Prover != nil && len(self.args.Prover.KeySet()) != 0
-	if proves && self.args.Measure != nil {
-		measure = self.args.Measure()
-		if measure != nil {
-			capByteCount = measure.DataProofBytes
-		}
-	}
-	if !proves {
+	if measure != nil {
+		capByteCount = measure.DataProofBytes
+	} else {
 		records, err := self.memberProverRecords(ctx)
 		if err != nil {
 			return nil, err
@@ -198,7 +193,7 @@ func (self *SmtpSender) Check(ctx context.Context, message *SmtpOutboundMessage)
 		switch {
 		case mode == SmtpModeData && capByteCount < byteCount:
 			domainCheck.Prediction = SmtpCheckTooLarge
-			if capByteCount == 0 {
+			if measure == nil {
 				domainCheck.Prediction = SmtpCheckUnknown
 			}
 		case mode == SmtpModeUnknown && capByteCount < byteCount:

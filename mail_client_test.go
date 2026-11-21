@@ -115,6 +115,9 @@ type mailClientTestParts struct {
 }
 
 func (self *mailClientTestParts) store(repoId Id) mailStore {
+	if group := self.world.groups[repoId]; group != nil {
+		return group.store
+	}
 	return self.world.ingest.store
 }
 
@@ -130,8 +133,21 @@ func (self *mailClientTestParts) repos(args *MailReposArgs) *MailRepos {
 }
 
 func (self *mailClientTestParts) ingestor(repoId Id, args *MailIngestArgs) (*MailIngestor, error) {
-	args.Authority = self.world.ingest.authority
-	return newMailIngestor(repoId, self.world.ingest.repo, self.world.ingest.store, args), nil
+	source := self.world.ingest
+	if group := self.world.groups[repoId]; group != nil {
+		source = group
+	}
+	args.Authority = source.authority
+	return newMailIngestor(repoId, source.repo, source.store, args), nil
+}
+
+// Explicit group and member stores for exercising reference reconciliation through the normal component.
+func (self *mailClientTestParts) groupRefs(groupId, mailboxId Id) (*MailGroupRefs, error) {
+	group := self.world.groups[groupId]
+	if group == nil || mailboxId != self.world.ingest.repoId {
+		return nil, ErrMailReposAbsent
+	}
+	return newMailGroupRefs(groupId, group.store, &mailTestRemoveStore{mailTestStore: self.world.ingest.store}, group.repo.Erasures, nil), nil
 }
 
 // A member's device with mail on its in-memory stand-ins.
@@ -139,6 +155,7 @@ type mailClientTestWorld struct {
 	t               *testing.T
 	repos           *mailReposTestWorld
 	ingest          *mailIngestTestWorld
+	groups          map[Id]*mailIngestTestWorld
 	configRepo      *mailConfigTestRepo
 	configAuthority *mailConfigTestAuthority
 	gate            *mailConfigTestGate
@@ -232,6 +249,57 @@ func (self *mailClientTestWorld) ingestAll(mailboxId Id) {
 		self.t.Fatal(err)
 	}
 	self.client.invalidateMonth(mailboxId, MailYearMonthOf(testMailIngestReceiveMillis))
+}
+
+// The ordinary component pass ingests a group's deposit once. Membership adds a reference only,
+// and the member's next pass removes it after a group administrator erases the message.
+func TestMailComponentIngestsSharedMailAndReconcilesMemberReferences(t *testing.T) {
+	ctx := t.Context()
+	world := newMailClientTestWorld(t)
+	world.enable()
+	repo, err := world.client.CreateGroup(ctx, &MailCreateGroupArgs{LocalPart: "team", Confirmed: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	groupId := repo.RepoId()
+	group := newMailIngestTestWorld(t)
+	world.groups = map[Id]*mailIngestTestWorld{groupId: group}
+	world.configAuthority.own(groupId, world.device)
+	group.depositMessage(testMailIngestMessage("Team", "Shared message"))
+	reconcile := func() {
+		t.Helper()
+		// Start from the current signed group and membership rows on each restart.
+		client := world.newClient()
+		client.setNetworkRow(testMailIngestNetwork())
+		binding, _, err := client.bound()
+		if err != nil {
+			t.Fatal(err)
+		}
+		client.passGroupInboxes(&mailComponentRun{ctx: ctx}, binding)
+	}
+	reconcile()
+	month := MailYearMonthOf(testMailIngestReceiveMillis)
+	entries := group.entries(month)
+	if len(entries) != 1 || group.repo.standingCount(group.receiverId) != 0 {
+		t.Fatalf("ingested group entries %d, standing deposits %d, log %v", len(entries), group.repo.standingCount(group.receiverId), world.log.snapshot())
+	}
+	id := mailEntryId(entries[0])
+	ref := MailGroupRefPath(month, id)
+	if world.ingest.store.file(ref) != nil {
+		t.Fatal("a group admin with no group membership received a reference")
+	}
+	if err := world.client.AddGroupMember(ctx, "team", world.member); err != nil {
+		t.Fatal(err)
+	}
+	reconcile()
+	if group.store.file(MailMessagePath(month, id)) == nil || world.ingest.store.file(ref) == nil || world.ingest.store.file(MailMessagePath(month, id)) != nil {
+		t.Fatalf("the member did not receive just a reference, log %v", world.log.snapshot())
+	}
+	group.repo.erase(NewId(), mailErasureNote([]mailErasedMessage{{Month: month, MessageId: id}}, nil))
+	reconcile()
+	if world.ingest.store.file(ref) != nil || len(group.entries(month)) != 1 {
+		t.Fatal("restart kept the erased reference or ingested the message twice")
+	}
 }
 
 // Enable, an alias, a deposit for it, then the list and the read: the message as received, its label and stated
@@ -435,6 +503,7 @@ func TestMailComponentStartsTheReceiverOnlyWhereGranted(t *testing.T) {
 	var granted sync.Mutex
 	grant := false
 	started := 0
+	directStarted, directStopped := make(chan struct{}), make(chan struct{})
 	world.client.componentSeams = &mailComponentSeams{
 		mayReceive: func() bool {
 			granted.Lock()
@@ -443,7 +512,13 @@ func TestMailComponentStartsTheReceiverOnlyWhereGranted(t *testing.T) {
 		},
 		factory: func(args *mailReceiverFactoryArgs) (*MailReceiver, func(), error) {
 			started += 1
-			return receivers.newReceiver(nil), func() {}, nil
+			receiver := receivers.newReceiver(nil)
+			receiver.runDirect = func(ctx context.Context) {
+				close(directStarted)
+				<-ctx.Done()
+				close(directStopped)
+			}
+			return receiver, func() {}, nil
 		},
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -467,6 +542,7 @@ func TestMailComponentStartsTheReceiverOnlyWhereGranted(t *testing.T) {
 	granted.Unlock()
 	world.client.passReceive(run, binding)
 	receivers.publisher.awaitCount(1)
+	<-directStarted
 	if status := world.client.receiverStatus; !status.Running || started != 1 {
 		t.Fatalf("granted %+v, %d started", status, started)
 	}
@@ -478,6 +554,11 @@ func TestMailComponentStartsTheReceiverOnlyWhereGranted(t *testing.T) {
 	grant = false
 	granted.Unlock()
 	world.client.passReceive(run, binding)
+	select {
+	case <-directStopped:
+	default:
+		t.Fatal("the direct listener outlived its grant")
+	}
 	if run.receiver != nil || world.client.receiverStatus.Running {
 		t.Fatal("the receiver outlived its grant")
 	}

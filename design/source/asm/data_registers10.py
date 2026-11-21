@@ -154,3 +154,9 @@ Q['Q-PROTO-4'] = (Q['Q-PROTO-4'][0], "(b), then owner decision 609: the pair is 
 # The dr4-late-sweep fold (2026-11-18): sidecar's server-hosted packages (owner decisions 593, 594).
 assert D['D-REPO-3'].startswith("Engines live in sidecar over operator-core's Env"), 'D-REPO-3 row moved'
 D['D-REPO-3'] = "Engines live in sidecar over operator-core's Env; sidecar owns its SQL and server-hosted packages (owner decisions 19, 251, 594)."
+
+# Owner decision 141's file-mode amendment, approved 2026-11-20.
+D['D-EVS-22'] = ("Git-mode refs require their tip. File-mode refs admit disjoint writes and optionally require "
+                 "the signed base version and chain.")
+Q['Q-EVS-8'] = (Q['Q-EVS-8'][0], "Git requires its tip. File mode admits disjoint writes by default and supports "
+                "an exact-head precondition.")

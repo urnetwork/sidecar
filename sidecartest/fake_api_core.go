@@ -112,6 +112,11 @@ type fakeApiClientBinding struct {
 
 // The core routes' state on FakeApi, under its stateLock.
 type fakeApiCoreState struct {
+	// The owner's user and, only in a Team, that user's separate membership id.
+	ownerUserIds  map[sidecar.Id]sidecar.Id
+	teamMemberIds map[sidecar.Id]sidecar.Id
+	// A page account handoff's selected native signer, indexed by the minted browser client.
+	pageSigners map[sidecar.Id]sidecar.Id
 	// signs the tokens this api mints
 	tokenKey   []byte
 	authKeys   map[string]*fakeApiAuthKey
@@ -166,6 +171,9 @@ func newFakeApiCoreState() fakeApiCoreState {
 		refusedRefreshClientIds: map[sidecar.Id]bool{},
 		routeCounts:             map[string]int{},
 		newestTokens:            map[sidecar.Id]fakeApiTokenTimes{},
+		ownerUserIds:            map[sidecar.Id]sidecar.Id{},
+		teamMemberIds:           map[sidecar.Id]sidecar.Id{},
+		pageSigners:             map[sidecar.Id]sidecar.Id{},
 		clientTokens:            map[sidecar.Id][]string{},
 	}
 }
@@ -200,6 +208,22 @@ func (self *FakeApi) RouteCount(route string) int {
 	return self.core.routeCounts[route]
 }
 
+// Issues each personal-network client in this fixture the owner's real user_id claim.
+func (self *FakeApi) SetPersonalOwner(networkId sidecar.Id, userId sidecar.Id) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.core.ownerUserIds[networkId] = userId
+	delete(self.core.teamMemberIds, networkId)
+}
+
+// Issues the first Team owner's credential with both its account and membership claims.
+func (self *FakeApi) SetTeamOwner(networkId sidecar.Id, userId sidecar.Id, memberId sidecar.Id) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.core.ownerUserIds[networkId] = userId
+	self.core.teamMemberIds[networkId] = memberId
+}
+
 // Mints client's token, as server signs a by_jwt: client_id, device_id, session_id, network_id, create_time,
 // strict_exp and admin_refused when client carries the mark (owner decision 291), iat, exp and a random jti. exp is
 // ClientTokenTimeout from now, §7.4's 7 days. The token maps to a copy of client.
@@ -218,11 +242,24 @@ func (self *FakeApi) mintClientToken(client *fakeApiClient) string {
 		"exp":         expireTime.Unix(),
 		"jti":         sidecar.NewId().String(),
 	}
+	self.stateLock.Lock()
+	ownerId := self.core.ownerUserIds[minted.networkId]
+	memberId := self.core.teamMemberIds[minted.networkId]
+	self.stateLock.Unlock()
+	if ownerId != (sidecar.Id{}) {
+		claims["user_id"] = ownerId.String()
+	}
+	if memberId != (sidecar.Id{}) {
+		claims["member_id"] = memberId.String()
+	}
 	if minted.strictExp {
 		claims["strict_exp"] = true
 	}
 	if minted.adminRefused {
 		claims["admin_refused"] = true
+	}
+	if minted.pageReader {
+		claims["declares_no_egress"] = true
 	}
 	header, err := json.Marshal(map[string]string{"alg": "HS256", "typ": "JWT"})
 	if err != nil {
@@ -824,6 +861,7 @@ func (self *FakeApi) handleBind(writer http.ResponseWriter, request *http.Reques
 
 // GET /sidecar/identity's answer, never a user_id (§5.15).
 type fakeApiIdentityResult struct {
+	BrowserAdmission  string     `json:"browser_admission,omitempty"`
 	SidecarId         sidecar.Id `json:"sidecar_id"`
 	IdentityPublicKey []byte     `json:"identity_public_key"`
 	IdentityAlg       string     `json:"identity_alg"`
@@ -884,6 +922,13 @@ func (self *FakeApi) handleIdentity(writer http.ResponseWriter, request *http.Re
 		}
 	}
 	result := self.identityResult(client.networkId, sidecarId, nil, beforeGeneration)
+	if mode := request.URL.Query().Get("browser_admission"); mode != "" {
+		if mode != "page" || result == nil || !self.ownPageCandidate(client, result) {
+			result = nil
+		} else {
+			result.BrowserAdmission = mode
+		}
+	}
 	if result == nil {
 		fakeApiRefuse(writer, http.StatusNotFound, "not_found", "No such sidecar identity.", nil)
 		return

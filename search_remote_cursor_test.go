@@ -10,6 +10,7 @@ package sidecar
 import (
 	"bytes"
 	"testing"
+	"time"
 
 	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
@@ -176,6 +177,26 @@ func TestARevokedReadEndsTheCursor(t *testing.T) {
 	}
 	if fixture.corpus.openViews != 0 {
 		t.Errorf("the ended cursor kept its view")
+	}
+}
+
+// Replaying page zero must recheck a share at the time of the request, even with no new log entry.
+func TestRemoteRepeatedPageChecksShareExpiryWithoutANewEntry(t *testing.T) {
+	team := newTestConfigSearchTeam(t)
+	net := team.net
+	expires := net.timeMs + time.Minute.Milliseconds()
+	net.mustPost(team.danaLaptop, bridge.SignedType_SIGNED_EVS_SHARE, &protocol.EvsShare{
+		Header: net.header(), RepoId: team.danaMailbox.Bytes(), Subject: team.benPhone.sidecarId.Bytes(), Expires: expires,
+	})
+	fixture := newTestSearchRemoteServer(t, team, team.danaNas)
+	fixture.corpus.serveText(team.danaMailbox, 5, testSearchRemoteDocs("mail", 300)...)
+	body := testSearchRemoteRequest(t, fixture.wire, 152, 0, "plan", team.danaMailbox)
+	if page := fixture.page(t, team.benPhone, body, 152, 0); len(page.Hits) == 0 {
+		t.Fatal("the valid share returned no hits")
+	}
+	fixture.clock.advance(time.UnixMilli(expires).Sub(fixture.clock.Now()))
+	if page := fixture.page(t, team.benPhone, body, 152, 0); len(page.Hits) != 0 || page.GetStatus() != uint32(protocol.SearchStatus_SEARCH_CURSOR_EXPIRED) {
+		t.Fatalf("expired share replay: %v", page)
 	}
 }
 

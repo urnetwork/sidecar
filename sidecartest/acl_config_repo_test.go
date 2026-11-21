@@ -32,6 +32,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -59,9 +60,6 @@ func (self aclConfigRepoRevocations) Check(ctx context.Context, principal *sidec
 
 // The purpose a GroupForm is signed under (QD-527).
 const aclConfigRepoGroupFormPurpose = "group-form"
-
-// The cipher suite a group takes (owner decision 44).
-const aclConfigRepoCipherSuite uint32 = 0x0010
 
 // The world: the Net, its admission network, the real gate cache, and evs and gkm over it.
 type aclConfigRepoWorld struct {
@@ -246,16 +244,20 @@ func (self *aclConfigRepoWorld) groupForm(signer *AdmissionDevice, groupId sidec
 	return signed
 }
 
-// KF1's request for the config repo's first group by signer: its form and gen/1 at the tip and the Net's clock. The
-// holders hash, GenWrap and GroupInfo are stand-ins gkm stores and never opens.
+// Wraps-only KF1 signs the config group's first generation over its holders at the current pin and time.
 func (self *aclConfigRepoWorld) groupCreate(signer *AdmissionDevice, groupId sidecar.Id) *protocol.GkmGroupCreateRequest {
 	self.t.Helper()
-	holdersSha256 := sha256.Sum256([]byte("config repo holders"))
+	state := self.admission.State()
+	now := self.net.Clock().Now()
+	holders, err := sidecar.KeyHolders(state, self.configId, now)
+	if err != nil {
+		self.t.Fatal(err)
+	}
 	_, rotate, err := sidecar.NewGkmFirstGeneration(self.configId, groupId, &sidecar.GkmGenerationArgs{
 		Cause:         sidecar.GkmCauseRequest,
-		Auth:          self.admission.Tip(),
-		Time:          self.net.Clock().Now(),
-		HoldersSha256: holdersSha256[:],
+		Auth:          state.Pin(),
+		Time:          now,
+		HoldersSha256: holders.Sha256(),
 	})
 	if err != nil {
 		self.t.Fatal(err)
@@ -265,11 +267,8 @@ func (self *aclConfigRepoWorld) groupCreate(signer *AdmissionDevice, groupId sid
 		self.t.Fatal(err)
 	}
 	return &protocol.GkmGroupCreateRequest{
-		Form:            self.groupForm(signer, groupId, nil, 1),
-		GenRotate:       signedRotate,
-		GenWrap:         bytes.Repeat([]byte{7}, 24+32+16),
-		SealedGroupInfo: []byte("sealed group info of the config group's epoch 0"),
-		CipherSuite:     aclConfigRepoCipherSuite,
+		Form:      self.groupForm(signer, groupId, nil, 1),
+		GenRotate: signedRotate,
 	}
 }
 
@@ -277,10 +276,7 @@ func (self *aclConfigRepoWorld) groupCreate(signer *AdmissionDevice, groupId sid
 func (self *aclConfigRepoWorld) groupReform(signer *AdmissionDevice, groupId sidecar.Id, previousGroupId sidecar.Id) *protocol.GkmGroupReformRequest {
 	self.t.Helper()
 	return &protocol.GkmGroupReformRequest{
-		Form:            self.groupForm(signer, groupId, &previousGroupId, 1),
-		GenWrap:         bytes.Repeat([]byte{5}, 24+32+16),
-		SealedGroupInfo: []byte("sealed group info of the re-formed config group's epoch 0"),
-		CipherSuite:     aclConfigRepoCipherSuite,
+		Form: self.groupForm(signer, groupId, &previousGroupId, 1),
 	}
 }
 
@@ -300,8 +296,11 @@ func (self *aclConfigRepoWorld) configClusterObject(key string) []byte {
 		self.t.Fatal(err)
 	}
 	object, err := cluster.Get(self.t.Context(), key)
-	if err != nil {
+	if errors.Is(err, sidecar.ErrBlobNotFound) {
 		return nil
+	}
+	if err != nil {
+		self.t.Fatalf("read %s: %v", key, err)
 	}
 	defer object.Body.Close()
 	objectBytes := new(bytes.Buffer)
@@ -443,6 +442,9 @@ func TestAclConfigRepoRowAtTheRealGates(t *testing.T) {
 	}
 	if status := world.serveGkm("/gkm/groups", create, owner, configAdmin); status != http.StatusOK {
 		t.Fatalf("the bootstrap sidecar's creation of the config group: %d", status)
+	}
+	if world.configClusterObject(gkmservice.GkmEpochKey(groupId, 0)) != nil {
+		t.Error("creating the config group wrote an MLS epoch")
 	}
 	rotate1 := world.configClusterObject(gkmservice.GkmGenerationKey(groupId, 1))
 	if len(rotate1) == 0 {
@@ -646,6 +648,9 @@ func TestAclConfigRepoRowAtTheRealGates(t *testing.T) {
 	}
 	if status := world.serveGkm(formsPath, world.groupReform(ownerPhone, reformedGroupId, groupId), ownerPhone, configAdmin); status != http.StatusOK {
 		t.Fatalf("the config writer's re-form of the config group: %d", status)
+	}
+	if world.configClusterObject(gkmservice.GkmEpochKey(reformedGroupId, 0)) != nil {
+		t.Error("re-forming the config group wrote an MLS epoch")
 	}
 	for name, device := range map[string]*AdmissionDevice{"the revoked bootstrap sidecar": owner, "a member's device": laptop, "a read_only device": readOnly} {
 		if status := world.serveGkm(ladderPath, ladder, device, configAdmin); status != http.StatusForbidden {

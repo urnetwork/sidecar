@@ -204,8 +204,23 @@ type RecordStreamErasure struct {
 	EraserSidecarId Id
 	ErasureId       Id
 	Complete        bool
-	Keys            []*RecordSlotKey
-	SealedNote      []byte
+	// A completion names previously destroyed keys as evidence. It destroys no keys or entries itself.
+	Completion bool
+	Keys       []*RecordSlotKey
+	SealedNote []byte
+}
+
+// Returns the keys this erasure destroyed. A completion only records evidence of an earlier destruction.
+func (self *RecordStreamErasure) destroyedKeys() []*RecordSlotKey {
+	if self.Completion {
+		return nil
+	}
+	return self.Keys
+}
+
+// A matching completion ends its erasure. An unrelated completion changes no state.
+func (self *RecordStreamErasure) completionState() (id Id, complete bool, applies bool) {
+	return self.ErasureId, self.Complete, !self.Completion || self.Complete
 }
 
 // One sidecar's reach into its network's record-class repos (§11.8, §11.12), evs's part of the record. Calls carry

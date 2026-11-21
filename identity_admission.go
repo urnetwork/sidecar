@@ -57,7 +57,11 @@ var (
 // Everything §5.6 lists asks this one place: no peer (§6's Hello check), MLS group or wrap (§10's upkeep, KEYS-M2-18),
 // or grant (§8) before it is true.
 func (self *Sidecar) Admitted() bool {
-	authority := self.authority()
+	return self.admittedBy(self.authority())
+}
+
+// Checks the current identity's admission, revocation and expiry against the supplied authority.
+func (self *Sidecar) admittedBy(authority SidecarAuthority) bool {
 	identity := self.currentIdentity()
 	if authority == nil || identity == nil {
 		return false

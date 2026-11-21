@@ -22,8 +22,7 @@
 // gets no new wrap, and opens only what was wrapped to it before; a backup sealed before the rebind still opens under
 // the old code, which §5.9 discloses and the result repeats.
 //
-// Gated: SidecarSettings.RecoveryBindings is off until §5.9 states QD-010's derivation, and while it is off nothing
-// is drawn or signed.
+// A host can disable recovery binding changes through SidecarSettings.RecoveryBindings.
 //
 // On every leg: root Id, no connect type.
 
@@ -43,8 +42,8 @@ import (
 )
 
 var (
-	// SidecarSettings.RecoveryBindings is off: no binding is signed until §5.9 states the derivation (QD-010).
-	ErrRecoveryBindingGated = errors.New("recovery bindings are not signed yet: the design does not state the code's key derivation")
+	// The host has disabled signing recovery bindings.
+	ErrRecoveryBindingGated = errors.New("recovery binding changes are disabled")
 	// This device is not its member's consented, approval-capable device, which alone signs its member's binding.
 	ErrRecoveryBindingNotEligible = errors.New("only the member's consented device signs its recovery binding")
 	// No anchored genesis or no config key, so no genesis_sig can be made or no body sealed.
@@ -83,6 +82,8 @@ type RecoveryRotation struct {
 	// The statement is signed and kept, and its post goes again with the same bytes: the code is the member's new
 	// code once it lands.
 	Pending bool
+	// The signed binding still awaits complete replacement wraps and rotations.
+	RewrapPending bool
 	// The member's devices at the rotation, this one first: with compromise, the ones a person reviews and revokes
 	// (g0-recheck-2-compromise-rebind-backups #1), the rebind's signer, this device, last of all.
 	Devices []MemberDevice
@@ -265,6 +266,16 @@ func (self *Sidecar) BindRecovery(ctx context.Context, binding *RecoveryBinding,
 	}
 	if devices, err := self.Devices(); err == nil {
 		rotation.Devices = devices
+	}
+	rotation.RewrapPending = true
+	if !rotation.Pending && !proposal {
+		if recovery := self.recoveryArgs(); recovery != nil {
+			if completion, ok := recovery.Groups.(interface {
+				CompleteRecoveryBinding(context.Context, []byte) error
+			}); ok {
+				rotation.RewrapPending = completion.CompleteRecoveryBinding(ctx, rotation.KeySha256) != nil
+			}
+		}
 	}
 	return rotation, runErr
 }

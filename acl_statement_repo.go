@@ -168,7 +168,24 @@ func AclStatementNeedsTeamTier(signed []byte) bool {
 	return body.(*protocol.RepoCreate).GetKind() == protocol.RepoKind_REPO_KIND_DIRECTORY
 }
 
-// RepoCreate{repo_id, kind}: who the kind lets create it, which becomes its admin.
+// Whether a signed inbox role is defined for a repo's kind.
+func aclRepoInboxFits(kind protocol.RepoKind, inbox protocol.RepoInbox) bool {
+	switch inbox {
+	case protocol.RepoInbox_REPO_INBOX_NONE:
+		return true
+	case protocol.RepoInbox_REPO_INBOX_GROUP, protocol.RepoInbox_REPO_INBOX_ADMIN:
+		return kind == protocol.RepoKind_REPO_KIND_GENERAL
+	default:
+		return false
+	}
+}
+
+// Whether the verified creation marks this general repo as a mail inbox.
+func AclRepoIsInbox(repo *protocol.AclRepo) bool {
+	return repo != nil && repo.GetInbox() != protocol.RepoInbox_REPO_INBOX_NONE && aclRepoInboxFits(repo.GetKind(), repo.GetInbox())
+}
+
+// RepoCreate: who may create this kind and inbox role, becoming its admin.
 func (self *AclState) checkRepoCreate(statement *AclStatement, create *protocol.RepoCreate) (*AclStatementVerdict, error) {
 	signer, err := self.statementSigner(statement)
 	if err != nil {
@@ -182,6 +199,19 @@ func (self *AclState) checkRepoCreate(statement *AclStatement, create *protocol.
 		return nil, fmt.Errorf("%w: a second RepoCreate of one repo", ErrConfigRule)
 	}
 	verdict := &AclStatementVerdict{Signer: signer.id}
+	if !aclRepoInboxFits(create.GetKind(), create.GetInbox()) {
+		return nil, fmt.Errorf("%w: invalid inbox role for the repo kind", ErrConfigRule)
+	}
+	if create.GetInbox() == protocol.RepoInbox_REPO_INBOX_ADMIN {
+		if !signer.configWriter {
+			return nil, fmt.Errorf("%w: only a config writer creates the admin inbox", ErrConfigAuthority)
+		}
+		for _, repo := range self.repos {
+			if repo.row.GetInbox() == protocol.RepoInbox_REPO_INBOX_ADMIN {
+				return nil, fmt.Errorf("%w: a second admin inbox in one network", ErrConfigRule)
+			}
+		}
+	}
 	switch kind := create.GetKind(); kind {
 	case protocol.RepoKind_REPO_KIND_GENERAL, protocol.RepoKind_REPO_KIND_RECORD:
 		if signer.class != AclSubjectClassMemberDevice && !self.ruleGrantsRepoAdmin(signer, repoId, statement.TimeMs) {

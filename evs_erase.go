@@ -22,9 +22,9 @@
 //	          the erased list and its sealed metadata, whose erasure note it opens; an ERASE that changes a path, or
 //	          whose note is not one, refuses the read, as does a completion ERASE (format 2's flag COMPLETION beside
 //	          ERASE alone; QD-1137) whose note says nothing complete. A completion destroys nothing, and completes its
-//	          erasure only where an earlier ERASE of the erasure named each key it names; one that does not reads as
+//	          erasure only where an earlier ordinary ERASE of the erasure named each key it names; one that does not reads as
 //	          completing nothing
-//	reconcile Erasures gives each erasure the committed ERASEs' notes name, done once one of them completes it, else
+//	reconcile Erasures reports done while the newest applicable ERASE completes its erasure, else
 //	          rewriting, and stalled 25 h after its last ERASE with none since; which device resumes it, its eraser's
 //	          at its start or another of its member's after 25 h, is the caller's, from these states and from each
 //	          content ref's CLOSUREs, whose notes name their erasure (EvsRepo.ReadClosures)
@@ -96,6 +96,19 @@ type EvsErasure struct {
 	Completion bool
 	Keys       []*EvsErasedKey
 	Note       []byte
+}
+
+// A completion signs a claim about an earlier ERASE. Its keys remain visible in the audit log.
+func (self *EvsErasure) destroyedKeys() []*EvsErasedKey {
+	if self.Completion {
+		return nil
+	}
+	return self.Keys
+}
+
+// A matching completion ends its erasure. An unrelated completion changes no state.
+func (self *EvsErasure) completionState() (id Id, complete bool, applies bool) {
+	return self.ErasureId, self.Complete, !self.Completion || self.Complete
 }
 
 // An erasure note's layout (EVS-FORMAT.md's erasure notes; QD-682): the erasure's id, 16 B, which is all of a
@@ -241,10 +254,10 @@ func (self *EvsRepo) postErase(ctx context.Context, attempt *evsPushAttempt) (*p
 func (self *EvsRepo) ReadErasures(ctx context.Context, afterVersion uint64) ([]*EvsErasure, error) {
 	refId := EvsErasureRefId(self.repoId)
 	head, err := self.readHeadAlone(ctx, refId, true)
-	if err != nil || head.Version == 0 {
+	if err != nil || head.Version <= afterVersion {
 		return nil, err
 	}
-	walked, err := self.client.verifier.Walk(ctx, self.repoId, refId, 0, EvsChainStart(self.repoId, refId), head.Version)
+	walked, err := self.client.verifier.walkToHead(ctx, head)
 	if err != nil {
 		return nil, err
 	}
@@ -291,7 +304,7 @@ func (self *EvsRepo) ReadErasures(ctx context.Context, afterVersion uint64) ([]*
 				if named.ErasureId != erasure.ErasureId {
 					continue
 				}
-				for _, key := range named.Keys {
+				for _, key := range named.destroyedKeys() {
 					delete(unnamed, *key)
 				}
 			}
@@ -351,7 +364,7 @@ func (self *EvsRepo) erasureNoteOf(ctx context.Context, head *EvsVerifiedHead, s
 }
 
 // The repo's erasures as this device sees them from evs's state (§18.5, §11.12's reconcile row): one per erasure the
-// committed ERASEs name, done once one completes it, stalled 25 h after its last ERASE with none since, else
+// committed ERASEs name, done while its newest applicable ERASE completes it, stalled 25 h after the newest ERASE, else
 // rewriting. Erasures with no committed ERASE yet, a crash before the first, are their devices' journals'.
 func (self *EvsRepo) Erasures(ctx context.Context) ([]*SidecarErasure, error) {
 	erasures, err := self.ReadErasures(ctx, 0)
@@ -363,16 +376,23 @@ func (self *EvsRepo) Erasures(ctx context.Context) ([]*SidecarErasure, error) {
 	last := map[Id]time.Time{}
 	order := []Id{}
 	for _, erasure := range erasures {
-		state := byId[erasure.ErasureId]
+		id, complete, applies := erasure.completionState()
+		if !applies {
+			continue
+		}
+		state := byId[id]
 		if state == nil {
-			state = &SidecarErasure{ErasureId: erasure.ErasureId, State: "rewriting"}
-			byId[erasure.ErasureId] = state
-			order = append(order, erasure.ErasureId)
+			state = &SidecarErasure{ErasureId: id}
+			byId[id] = state
+			order = append(order, id)
 		}
-		if erasure.Complete {
+		if complete {
 			state.State = "done"
+		} else {
+			// A late copy's destructive ERASE reopens an earlier completion.
+			state.State = "rewriting"
 		}
-		last[erasure.ErasureId] = erasure.Time
+		last[id] = erasure.Time
 	}
 	states := []*SidecarErasure{}
 	for _, erasureId := range order {
@@ -392,6 +412,22 @@ const evsChainSlotKeyIndex = 0
 // slot the list lacks: an erasure never counts such a list whole.
 var ErrEvsSlotKeysIncomplete = errors.New("evs: a path's history not walked to its first version")
 
+// The authenticated versions an eraser may use for slot discovery. A displayable prefix does not prove that
+// all older keys were found. Keep the proof and the versions from the same fresh walk.
+func (self *EvsRepo) erasureVersions(ctx context.Context, refName []byte, path string) ([]*EvsHistoryVersion, error) {
+	history, err := self.History(ctx, &EvsReadArgs{RefName: refName, Path: path, Fresh: true})
+	if err != nil {
+		return nil, err
+	}
+	if history.Whole && !history.BelowUnknown && len(history.Versions) != 0 {
+		last := history.Versions[len(history.Versions)-1]
+		if !last.Removed && (last.Version == 1 || last.Created) {
+			return history.Versions, nil
+		}
+	}
+	return nil, fmt.Errorf("%w: %d versions walked", ErrEvsSlotKeysIncomplete, len(history.Versions))
+}
+
 // The key of every slot a version of each path names, by the paths' verified histories, each once, in the paths'
 // order and newest version first: what an ERASE of the paths lists, and a CLOSURE's list for the files it rewrites
 // (§11.12's closure and versionless rows). A version the history shows names its slots whether or not its content
@@ -409,26 +445,14 @@ var ErrEvsSlotKeysIncomplete = errors.New("evs: a path's history not walked to i
 // such as one ending at a removal or at a version that names the one it replaced, is short: ErrEvsSlotKeysIncomplete,
 // with no list.
 func (self *EvsRepo) SlotKeysOf(ctx context.Context, refName []byte, paths []string) ([]*EvsErasedKey, error) {
-	// the walk's last version is the path's first: version 1, or a creation evs answered nothing below, the walk
-	// neither cut at its bound nor stopped where evs could not read
-	whole := func(history *EvsHistory) bool {
-		if len(history.Versions) == 0 || !history.Whole || history.BelowUnknown {
-			return false
-		}
-		last := history.Versions[len(history.Versions)-1]
-		return !last.Removed && (last.Version == 1 || last.Created)
-	}
 	keys := []*EvsErasedKey{}
 	named := map[Id]bool{}
 	for _, path := range paths {
-		history, err := self.History(ctx, &EvsReadArgs{RefName: refName, Path: path, Fresh: true})
+		versions, err := self.erasureVersions(ctx, refName, path)
 		if err != nil {
 			return nil, err
 		}
-		if !whole(history) {
-			return nil, fmt.Errorf("%w: %d versions walked", ErrEvsSlotKeysIncomplete, len(history.Versions))
-		}
-		for _, version := range history.Versions {
+		for _, version := range versions {
 			for _, slotId := range version.SlotIds {
 				if !named[slotId] {
 					named[slotId] = true

@@ -438,7 +438,7 @@ func Fs99ErasureAuthorityOf(state *authorState, mutant bool) *Schedule {
 				return err
 			}
 			world.publish()
-			if err := world.open(second); err != nil {
+			if err := world.open(ctx, second); err != nil {
 				return err
 			}
 			if secondRunner, err = sidecar.NewDirectoryErasureRunner(&sidecar.DirectoryErasureRunnerArgs{

@@ -55,6 +55,7 @@ type epochWorld struct {
 	clientId  sidecar.Id
 	memberId  sidecar.Id
 	kind      protocol.RepoKind
+	inbox     protocol.RepoInbox
 	log       *FakeGkmAuthLog
 	gkm       *FakeGkm
 	engine    *evsservice.EvsEngine
@@ -65,6 +66,7 @@ type epochWorld struct {
 
 	stateLock sync.Mutex
 	view      *FakeGkmAuthView
+	config    func() sidecar.GkmAuthView
 	devices   []*epochDevice
 	// called before a device's request is served, nil for none; an error fails the request as a transport would
 	intercept func(device *epochDevice, request *http.Request) error
@@ -129,6 +131,11 @@ func newEpochWorld(t *testing.T) *epochWorld {
 // newEpochWorld's repo of kind.
 func newEpochWorldOf(t *testing.T, kind protocol.RepoKind) *epochWorld {
 	t.Helper()
+	return newEpochWorldWithInbox(t, kind, protocol.RepoInbox_REPO_INBOX_NONE)
+}
+
+func newEpochWorldWithInbox(t *testing.T, kind protocol.RepoKind, inbox protocol.RepoInbox) *epochWorld {
+	t.Helper()
 	ctx := t.Context()
 	clock := NewFakeClock(DefaultClockStart())
 	hostSettings := DefaultFakeHostSettings()
@@ -139,7 +146,7 @@ func newEpochWorldOf(t *testing.T, kind protocol.RepoKind) *epochWorld {
 	world := &epochWorld{
 		t: t, ctx: ctx, clock: clock, host: host,
 		networkId: sidecar.NewId(), repoId: sidecar.NewId(), clientId: sidecar.NewId(), memberId: sidecar.NewId(),
-		kind: kind, log: NewFakeGkmAuthLog(), signers: map[string]*FakeGkmSigner{},
+		kind: kind, inbox: inbox, log: NewFakeGkmAuthLog(), signers: map[string]*FakeGkmSigner{},
 		purge: &epochPurgeSink{},
 	}
 	for _, label := range epochWorldLabels {
@@ -160,7 +167,7 @@ func newEpochWorldOf(t *testing.T, kind protocol.RepoKind) *epochWorld {
 	world.gkm = NewFakeGkm(clock, host.Blobs, nil)
 	creator := world.gkm.Client(world.signers["w"].SidecarId, world.signers["w"].Sign)
 	creator.AuthAdvanced(world.currentView())
-	if _, err := creator.CreateGroup(ctx, &sidecar.GkmCreateGroupArgs{RepoId: world.repoId, Kind: kind}); err != nil {
+	if _, err := creator.CreateGroup(ctx, &sidecar.GkmCreateGroupArgs{RepoId: world.repoId, Kind: kind, Inbox: inbox}); err != nil {
 		t.Fatal(err)
 	}
 	usage, err := evsservice.NewUsageBatcher(ctx, host.ServiceHost(), nil)
@@ -218,7 +225,7 @@ func newEpochWorldOf(t *testing.T, kind protocol.RepoKind) *epochWorld {
 func (self *epochWorld) advance(readers []string, shrunkAt uint64, expiries map[string]time.Time) *FakeGkmAuthView {
 	fixture := &FakeGkmAuthFixture{
 		Rows: FakeGkmAuthRows(&protocol.AclRepo{
-			RepoId: self.repoId.Bytes(), Kind: self.kind, HoldersShrunkAt: shrunkAt,
+			RepoId: self.repoId.Bytes(), Kind: self.kind, Inbox: self.inbox, HoldersShrunkAt: shrunkAt,
 			Admins: []*protocol.AclRepoAdminRow{{SidecarId: self.signers["w"].SidecarId.Bytes()}},
 		}),
 		IdentityKeys:       map[sidecar.Id][]byte{},
@@ -284,6 +291,10 @@ func (self *epochWorld) deviceOn(label string, store sidecar.SidecarStore, mutat
 	if mutate != nil {
 		mutate(settings)
 	}
+	config := self.config
+	if config == nil {
+		config = func() sidecar.GkmAuthView { return self.currentView() }
+	}
 	client, err := sidecar.NewEvsClient(&sidecar.EvsClientArgs{
 		NetworkId: self.networkId,
 		EvsUrl:    "https://evs.example",
@@ -299,7 +310,7 @@ func (self *epochWorld) deviceOn(label string, store sidecar.SidecarStore, mutat
 		Identity: func() *sidecar.SidecarIdentity { return identity },
 		Gkm:      device.gkm,
 		Store:    store,
-		Config:   func() sidecar.GkmAuthView { return self.currentView() },
+		Config:   config,
 		Clock:    &epochDeviceClock{clock: self.clock},
 		Log:      sidecar.NewNoopLogger(),
 		Settings: settings,
@@ -647,6 +658,55 @@ func TestEvsPathEpochCutOverEndToEnd(t *testing.T) {
 	}
 	if names, err := fresh.list("docs"); err != nil || !slices.Equal(names, []string{"new.md", "newer.md", "old.md"}) {
 		t.Fatalf("the docs listing at the end: %v %v", names, err)
+	}
+}
+
+// A fresh read of a new name needs the parent listing at the head it returns, after another writer
+// created the file while the ref still lists a source epoch.
+func TestEvsFreshReadAfterAParentListingMovesEndToEnd(t *testing.T) {
+	world := newEpochWorld(t)
+	reader := world.device("w", nil)
+	if _, err := reader.write("docs/keep", []byte("kept")); err != nil {
+		t.Fatal(err)
+	}
+	world.advance([]string{"w", "v", "m", "r"}, 2, nil)
+	if _, err := reader.write("docs/keep", []byte("updated")); err != nil {
+		t.Fatal(err)
+	}
+	refId := world.mainRefId(reader)
+	if err := reader.repo.TickMapper(world.ctx, refId); err != nil {
+		t.Fatal(err)
+	}
+	if epoch := world.head(refId).GetPathEpoch(); epoch.GetCurrent() != 2 || len(epoch.GetSources()) != 1 {
+		t.Fatalf("path epochs before the listing: %v", epoch)
+	}
+	if names, err := reader.list("docs"); err != nil || !slices.Equal(names, []string{"keep"}) {
+		t.Fatalf("parent before creation: %v, %v", names, err)
+	}
+
+	writer := world.device("v", nil)
+	const path = "docs/new"
+	content := []byte("created by the other writer")
+	committed, err := writer.write(path, content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requests := world.record()
+	var out bytes.Buffer
+	info, err := reader.repo.ReadHead(world.ctx, &sidecar.EvsReadArgs{Path: path, Fresh: true}, &out)
+	if err != nil || info.HeadVersion != committed.Version || !bytes.Equal(out.Bytes(), content) {
+		t.Fatalf("fresh read at version %d: %q, %+v, %v", committed.Version, out.Bytes(), info, err)
+	}
+	if requests.named(reader.tokenPath(path, 1)) {
+		t.Fatal("the new name was sent in the source epoch")
+	}
+	if _, err := reader.repo.ReadHead(world.ctx, &sidecar.EvsReadArgs{Path: "docs/missing", Fresh: true}, io.Discard); !errors.Is(err, sidecar.ErrEvsPathAbsent) {
+		t.Fatalf("a name the current listing lacks: %v", err)
+	}
+	for _, epoch := range []uint64{1, 2} {
+		if requests.named(reader.tokenPath("docs/missing", epoch)) {
+			t.Fatalf("the absent name was sent in epoch %d", epoch)
+		}
 	}
 }
 
@@ -1009,6 +1069,38 @@ func TestEvsRecordClassWritesSlotKeyedEndToEnd(t *testing.T) {
 		if _, err := fresh.repo.ReadHead(world.ctx, &sidecar.EvsReadArgs{Path: "ledger/a", Version: version.Version}, out); err == nil {
 			t.Fatalf("version %d of ledger/a opened after its key was erased", version.Version)
 		}
+	}
+}
+
+// A marked general repo stores even the smallest messages under independently destroyable slots.
+func TestEvsGroupInboxErasesOnlyTheSelectedMessageSlot(t *testing.T) {
+	world := newEpochWorldWithInbox(t, protocol.RepoKind_REPO_KIND_GENERAL, protocol.RepoInbox_REPO_INBOX_GROUP)
+	writer := world.device("w", nil)
+	if _, err := writer.write("m/one", []byte("first message")); err != nil {
+		t.Fatal(err)
+	}
+	first := world.slotKeys()
+	if len(first) != 1 {
+		t.Fatalf("slots after one message: %d", len(first))
+	}
+	if _, err := writer.write("m/two", []byte("second message")); err != nil {
+		t.Fatal(err)
+	}
+	if second := world.slotKeys(); len(second) != 2 || len(epochNewSlots(first, second)) != 1 {
+		t.Fatalf("second message did not receive a separate slot: %v", second)
+	}
+	slot := epochNewSlots(nil, first)[0]
+	_, err := writer.repo.Erase(world.ctx, &sidecar.EvsEraseArgs{ErasureId: sidecar.NewId(),
+		Keys: []*sidecar.EvsErasedKey{{SlotId: slot, KeyIndex: 0}}, Complete: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := world.device("r", nil)
+	if _, _, err := reader.read("m/one"); err == nil {
+		t.Fatal("a new reader opened the erased group message")
+	}
+	if body, _, err := reader.read("m/two"); err != nil || string(body) != "second message" {
+		t.Fatalf("the other group message: %q, %v", body, err)
 	}
 }
 

@@ -1023,6 +1023,26 @@ func TestMailRegistrableDomain(t *testing.T) {
 	}
 }
 
+// A completion can end an erasure, but its audit note cannot erase another vault entry.
+func TestMailVaultCompletionKeepsTheNamedEntry(t *testing.T) {
+	store := newMailVaultTestStore()
+	device := newMailVaultTestDevice(t, store, testMailVaultDeviceId, nil)
+	entry, err := device.vault.PutVaultEntry(t.Context(), testMailVaultEntry("owner@shop.example", "fixture"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := Id(entry.GetEntryId())
+	for _, valid := range []bool{false, true} {
+		store.erasures = append(store.erasures, &EvsErasure{
+			Version: uint64(len(store.erasures) + 1), ErasureId: NewId(), Completion: true, Complete: valid, Note: []byte(MailVaultPath(id)),
+		})
+		read, err := device.vault.VaultEntry(t.Context(), id)
+		if err != nil || !proto.Equal(read, entry) {
+			t.Fatalf("completion (valid %t) affected the entry: %v", valid, err)
+		}
+	}
+}
+
 // An erasure's note is its vault paths, one a line; any other note names none.
 func TestMailVaultErasedPathsReadOnlyVaultNotes(t *testing.T) {
 	first, second := MailVaultPath(evsTestId("first")), MailVaultPath(evsTestId("second"))

@@ -156,6 +156,11 @@ type socketRegistrarEntry struct {
 	sentRowCount int
 	// the service has given its first verdict
 	answered bool
+	// ACME names in the last acknowledged page for the current registration. A waiter arms this channel
+	// under the registrar lock before checking for its exact name and claim.
+	acknowledgedAcme []*SocketAcmeName
+	acmeAttachment   uint64
+	acmeChanged      chan struct{}
 }
 
 // One registration of an entry: its key and what proves it.
@@ -366,6 +371,8 @@ func signSocketRegistrationClaim(networkId Id, sign socketSignFunction, entry *s
 // (step 1), the service's clock against this device's (step 4), the urnetwork-edge network (steps 3 and 6) and §20's
 // stop (step 5). A copy, which a listener reads without the registrar's lock.
 type socketAdmissionState struct {
+	// Identifies the authenticated response these keys and the edge id came from.
+	revision uint64
 	// an answer has come; until one, a listener admits nothing
 	known      bool
 	ticketKeys []*SocketTicketKey
@@ -384,6 +391,17 @@ func (self *socketAdmissionState) serverNowMillis(now time.Time) uint64 {
 		return 0
 	}
 	return uint64(millis)
+}
+
+// Whether a platform dial can verify a ticket with the advertised metadata now.
+func (self *socketAdmissionState) platformKeysCurrent(now time.Time) bool {
+	if self.urnetworkEdge == nil {
+		return false
+	}
+	serverNow := self.serverNowMillis(now)
+	return slices.ContainsFunc(self.ticketKeys, func(key *SocketTicketKey) bool {
+		return key != nil && key.KeyId != "" && serverNow < key.ExpireTimeMillis
+	})
 }
 
 // A copy sharing nothing.
@@ -484,6 +502,9 @@ type socketRegistrarState struct {
 	lastEagerAt time.Time
 
 	admission socketAdmissionState
+	// A platform dial needs the verify keys and edge id from an authenticated response.
+	metadataPending bool
+	admissionAt     time.Time
 	// what a hint has for owners: forced drains
 	effects []*socketRegistrarEffect
 }
@@ -517,6 +538,7 @@ func (self *socketRegistrarState) addEntry(entry *socketRegistrarEntry) error {
 
 // Takes entry out of the set without asking for a round: the service holds no lease for it.
 func (self *socketRegistrarState) dropEntry(entry *socketRegistrarEntry) {
+	entry.wakeAcme()
 	delete(self.entries, entry.listenId)
 	delete(self.listenIdsByName, entry.name)
 }
@@ -653,7 +675,8 @@ func (self *socketRegistrarState) attach() uint64 {
 	self.retryAt = time.Time{}
 	self.failureCount = 0
 	self.staleCount = 0
-	self.roundPending = 0 < len(self.entries) || self.serverMayHold
+	self.admissionAt = time.Time{}
+	self.roundPending = 0 < len(self.entries) || self.serverMayHold || self.metadataPending
 	return self.attachmentSeq
 }
 
@@ -777,7 +800,7 @@ func (self *socketRegistrarState) next(now time.Time) (*socketRegistrarCall, tim
 	nowMs := now.UnixMilli()
 	if self.round == nil && self.roundDue(now, nowMs) {
 		self.roundPending = false
-		if len(self.entries) == 0 && !self.serverMayHold {
+		if len(self.entries) == 0 && !self.serverMayHold && !self.metadataPending {
 			// nothing is registered and nothing is left to unlisten, so heartbeats stop
 			self.heartbeatAt = time.Time{}
 		} else {
@@ -981,6 +1004,11 @@ func (self *socketRegistrarState) finish(call *socketRegistrarCall, result *Sock
 		switch {
 		case status == SocketRegistrationStatusOk && previous:
 		case status == SocketRegistrationStatusOk:
+			if entry.namespace == SocketNamespaceTls {
+				entry.acknowledgedAcme = call.args.Registrations[index].AcmeNames
+				entry.acmeAttachment = call.attachmentSeq
+				entry.wakeAcme()
+			}
 			entry.reportedInflight = call.inflights[index]
 			if !self.eagerMoved(entry) {
 				entry.eagerSince = time.Time{}
@@ -1045,6 +1073,8 @@ func (self *socketRegistrarState) stale(now time.Time, storedSetVersion uint64) 
 // 0, or past an int64, is none given, and the offset before stands.
 func (self *socketRegistrarState) updateAdmission(result *SocketRegistrationsResult, sentAt time.Time, receivedAt time.Time) {
 	self.admission.known = true
+	self.admissionAt = receivedAt
+	self.admission.revision++
 	ticketKeys := []*SocketTicketKey{}
 	for _, ticketKey := range result.TicketKeys {
 		if ticketKey != nil {
@@ -1181,7 +1211,8 @@ type socketRegistrar struct {
 	stateLock sync.Mutex
 	state     *socketRegistrarState
 	// nil while no generation is attached
-	attachment *socketRegistrarAttachment
+	attachment   *socketRegistrarAttachment
+	metadataRead *socketMetadataRead
 	// the identity key claims are signed by, nil before the first attachment
 	identityPublicKey []byte
 	closed            bool
@@ -1312,6 +1343,7 @@ func (self *socketRegistrar) attach(ctx context.Context, registrations socketReg
 			self.state.newIdentity()
 		}
 		self.identityPublicKey = bytes.Clone(identityPublicKey)
+		self.endMetadataRead()
 		attachmentSeq := self.state.attach()
 		self.attachment = &socketRegistrarAttachment{ctx: ctx, registrations: registrations, seq: attachmentSeq}
 		return attachmentSeq
@@ -1326,6 +1358,7 @@ func (self *socketRegistrar) detach(attachmentSeq uint64) {
 	defer self.stateLock.Unlock()
 	if self.state.detach(attachmentSeq) {
 		self.attachment = nil
+		self.endMetadataRead()
 	}
 }
 
@@ -1349,6 +1382,65 @@ func (self *socketRegistrar) hint(notice PushNotice) {
 	})
 }
 
+// One shared request for the service metadata a platform dial needs. The registrar
+// writes the answer before closing done. A nil answer means the call failed.
+type socketMetadataRead struct {
+	done      chan struct{}
+	admission *socketAdmissionState
+}
+
+// Completes a shared metadata request under stateLock. Its callers wake with a
+// refusal if their generation ended before a registration supplied the answer.
+func (self *socketRegistrar) endMetadataRead() {
+	if self.metadataRead != nil {
+		close(self.metadataRead.done)
+		self.metadataRead = nil
+		self.state.metadataPending = false
+	}
+}
+
+// Gets the service metadata through the registrar's normal, serialized registration
+// path. The request always sends the current listener set, including when it is empty.
+// Idle dialers refresh on use, and concurrent dials share a single round. A ticket
+// signed by a new key needs an answer newer than the revision that could not verify it.
+func (self *socketRegistrar) platformAdmission(ctx context.Context, stale *socketAdmissionState) (*socketAdmissionState, error) {
+	now := self.clock.Now()
+	self.stateLock.Lock()
+	attachment := self.attachment
+	if self.closed || attachment == nil {
+		self.stateLock.Unlock()
+		return nil, &SocketCodeError{Err: ErrSocketUnavailable}
+	}
+	newEnough := stale == nil || stale.revision != self.state.admission.revision
+	if newEnough && !self.state.admissionAt.IsZero() && now.Before(self.state.admissionAt.Add(self.settings.HeartbeatInterval)) && self.state.admission.platformKeysCurrent(now) {
+		admission := self.state.admission.clone()
+		self.stateLock.Unlock()
+		return admission, nil
+	}
+	read := self.metadataRead
+	if read == nil {
+		read = &socketMetadataRead{done: make(chan struct{})}
+		self.metadataRead = read
+		self.state.metadataPending = true
+		if self.state.round == nil {
+			self.state.roundPending = true
+		}
+	}
+	self.stateLock.Unlock()
+	self.wake()
+	select {
+	case <-read.done:
+		if read.admission != nil {
+			return read.admission, nil
+		}
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-attachment.ctx.Done():
+	case <-self.ctx.Done():
+	}
+	return nil, &SocketCodeError{Err: ErrSocketUnavailable}
+}
+
 // A copy of what the newest answer gave admission (§9.6).
 func (self *socketRegistrar) admission() *socketAdmissionState {
 	self.stateLock.Lock()
@@ -1362,6 +1454,7 @@ func (self *socketRegistrar) close() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		self.closed = true
+		self.endMetadataRead()
 		self.state.detach(self.state.attachmentSeq)
 		self.attachment = nil
 		owners := []*socketRegistration{}
@@ -1408,7 +1501,16 @@ func (self *socketRegistrar) run() {
 			effects := func() []*socketRegistrarEffect {
 				self.stateLock.Lock()
 				defer self.stateLock.Unlock()
-				return self.state.finish(call, result, err, sentAt, receivedAt)
+				revision := self.state.admission.revision
+				effects := self.state.finish(call, result, err, sentAt, receivedAt)
+				rebase := err == nil && result != nil && result.Error != nil && result.Error.Code == SocketErrorCodeStale && self.state.staleCount == 1
+				if read := self.metadataRead; read != nil && self.attachment == attachment && !rebase {
+					if revision != self.state.admission.revision && self.state.admission.platformKeysCurrent(receivedAt) {
+						read.admission = self.state.admission.clone()
+					}
+					self.endMetadataRead()
+				}
+				return effects
 			}()
 			self.logAnswer(call, result, err)
 			self.deliver(effects)
@@ -1481,6 +1583,10 @@ func (self *socketRegistrar) remake(now time.Time) {
 	}
 	failed := false
 	for _, job := range jobs {
+		if ring == nil && job.entry.blinded() {
+			// The verified head no longer supplies K_sock. Withdraw both paths.
+			continue
+		}
 		// an entry's name, namespace and claim fields are fixed at add, so they are read here without the lock
 		job.rows, job.err = makeSocketRegistrarRows(self.networkId, self.sign, job.entry, ring, now.UnixMilli(), job.reuse, identityEpoch)
 		if job.err != nil {

@@ -121,6 +121,8 @@ type MailSearchJoin struct {
 	stale bool
 	// messages the last sync left out past MessageMaxCount
 	leftOut int
+	// Changes with the local flag table so cursors cannot retain an earlier view.
+	revision uint64
 }
 
 // A join over args' stores, holding nothing until it syncs.
@@ -147,6 +149,7 @@ func (self *MailSearchJoin) Invalidate() {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	self.stale = true
+	self.revision++
 }
 
 // Whether the table still answers for now.
@@ -162,13 +165,14 @@ func (self *MailSearchJoin) Sync(ctx context.Context) error {
 	self.syncLock.Lock()
 	defer self.syncLock.Unlock()
 	if self.fresh() {
-		return nil
+		return self.readErased(ctx, self.Repos())
 	}
 	// a write that lands while this reads is the next sync's
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		self.stale = false
+		self.synced = false
 	}()
 	self.reader.Invalidate()
 	defer self.reader.Invalidate()
@@ -224,10 +228,26 @@ func (self *MailSearchJoin) Sync(ctx context.Context) error {
 		}
 	}
 	slices.SortFunc(groupIds, mailIdCompare)
+	if err := self.readErased(ctx, append([]Id{self.source.MailboxId}, groupIds...)); err != nil {
+		self.Invalidate()
+		return err
+	}
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	self.months, self.groupIds, self.leftOut = months, groupIds, leftOut
 	self.synced, self.syncedAt = true, self.clock.Now()
+	self.revision++
+	return nil
+}
+
+// Refreshes the signed tombstones for every source during bulk sync, independently
+// of the query and even while the cached flags and scores remain current.
+func (self *MailSearchJoin) readErased(ctx context.Context, repoIds []Id) error {
+	for _, repoId := range repoIds {
+		if _, err := self.reader.readErased(ctx, repoId); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -249,6 +269,9 @@ func (self *MailSearchJoin) LeftOut() int {
 // See SearchJoinSource: the table's answer, from memory alone. A message of another repo than the one the table
 // holds it in is not this one.
 func (self *MailSearchJoin) MailFlags(ctx context.Context, repoId Id, month MailYearMonth, messageId Id) (*SearchMailFlags, bool, error) {
+	if self.reader.knownErased(repoId, messageId) {
+		return &SearchMailFlags{Erased: true}, true, nil
+	}
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	joinMonth := self.months[month]

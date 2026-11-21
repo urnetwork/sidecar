@@ -103,6 +103,9 @@ const (
 
 // One route of §10.14.
 type GkmRoute struct {
+	// This route belongs to the deferred MLS protocol.
+	DraftMls bool
+
 	// net/http's pattern, method and path, which is also the route's template for metrics and the service log: it
 	// holds no id (I-13).
 	Pattern string
@@ -119,26 +122,26 @@ type GkmRoute struct {
 // Every route gkm serves, each under its §10.6 row. A later task fills its routes' Serve here.
 var gkmRoutes = []*GkmRoute{
 	// KEYS-M2-13: per-sidecar objects on the first cluster
-	{Pattern: "POST /gkm/key-packages", Scope: gkmScopeOwn, Target: gkmTargetNone, Write: true, Serve: (*GkmEngine).serveKeyPackagesUpload},
-	{Pattern: "POST /gkm/key-packages/claim", Scope: gkmScopeWrite, Target: gkmTargetBody, Write: true, RepoState: gkmRepoStateActive, Serve: (*GkmEngine).serveKeyPackageClaim},
+	{DraftMls: true, Pattern: "POST /gkm/key-packages", Scope: gkmScopeOwn, Target: gkmTargetNone, Write: true, Serve: (*GkmEngine).serveKeyPackagesUpload},
+	{DraftMls: true, Pattern: "POST /gkm/key-packages/claim", Scope: gkmScopeWrite, Target: gkmTargetBody, Write: true, RepoState: gkmRepoStateActive, Serve: (*GkmEngine).serveKeyPackageClaim},
 	{Pattern: "POST /gkm/reader-key", Scope: gkmScopeOwn, Target: gkmTargetNone, Write: true, Serve: (*GkmEngine).serveReaderKeyUpload},
 	{Pattern: "GET /gkm/reader-key/{sidecar_id}", Scope: gkmScopePublic, Target: gkmTargetNone, Serve: (*GkmEngine).serveReaderKeyRead},
 	{Pattern: "POST /gkm/reader-keys", Scope: gkmScopePublic, Target: gkmTargetNone, Serve: (*GkmEngine).serveReaderKeysRead},
-	{Pattern: "GET /gkm/welcomes", Scope: gkmScopeRead, Target: gkmTargetNone, Serve: (*GkmEngine).serveWelcomes},
+	{DraftMls: true, Pattern: "GET /gkm/welcomes", Scope: gkmScopeRead, Target: gkmTargetNone, Serve: (*GkmEngine).serveWelcomes},
 
 	// KEYS-M2-14: groups, epochs, Welcomes, GroupInfo and acks
 	{Pattern: "POST /gkm/groups", Scope: gkmScopeAdmin, Target: gkmTargetBody, Write: true, RepoState: gkmRepoStateKeying, Serve: (*GkmEngine).serveGroupCreate},
 	{Pattern: "GET /gkm/groups/{group_id}", Scope: gkmScopeRead, Target: gkmTargetPathGroup, Serve: (*GkmEngine).serveGroupRead},
 	{Pattern: "GET /gkm/repos/{repo_id}/forms", Scope: gkmScopeRead, Target: gkmTargetPathRepo, Serve: (*GkmEngine).serveFormsRead},
 	{Pattern: "POST /gkm/repos/{repo_id}/forms", Scope: gkmScopeAdmin, Target: gkmTargetPathRepo, Write: true, RepoState: gkmRepoStateReseed, Serve: (*GkmEngine).serveReform},
-	{Pattern: "GET /gkm/groups/{group_id}/epochs", Scope: gkmScopeRead, Target: gkmTargetPathGroup, Serve: (*GkmEngine).serveEpochsRead},
-	{Pattern: "POST /gkm/groups/{group_id}/epochs/{n}", Scope: gkmScopeLeaf, Target: gkmTargetPathGroup, Write: true, RepoState: gkmRepoStateActive, Serve: (*GkmEngine).serveEpochCommit},
-	{Pattern: "POST /gkm/groups/{group_id}/welcome/{n}", Scope: gkmScopeWrite, Target: gkmTargetPathGroup, Write: true, RepoState: gkmRepoStateActive, Serve: (*GkmEngine).serveWelcomeWrite},
+	{DraftMls: true, Pattern: "GET /gkm/groups/{group_id}/epochs", Scope: gkmScopeRead, Target: gkmTargetPathGroup, Serve: (*GkmEngine).serveEpochsRead},
+	{DraftMls: true, Pattern: "POST /gkm/groups/{group_id}/epochs/{n}", Scope: gkmScopeLeaf, Target: gkmTargetPathGroup, Write: true, RepoState: gkmRepoStateActive, Serve: (*GkmEngine).serveEpochCommit},
+	{DraftMls: true, Pattern: "POST /gkm/groups/{group_id}/welcome/{n}", Scope: gkmScopeWrite, Target: gkmTargetPathGroup, Write: true, RepoState: gkmRepoStateActive, Serve: (*GkmEngine).serveWelcomeWrite},
 	// QD-747: whether epoch n's Welcome stands, for the WelcomeTimeout re-add
-	{Pattern: "HEAD /gkm/groups/{group_id}/welcome/{n}", Scope: gkmScopeWrite, Target: gkmTargetPathGroup, Serve: (*GkmEngine).serveWelcomeStands},
-	{Pattern: "GET /gkm/groups/{group_id}/group-info", Scope: gkmScopeRead, Target: gkmTargetPathGroup, Serve: (*GkmEngine).serveGroupInfoRead},
-	{Pattern: "POST /gkm/groups/{group_id}/group-info", Scope: gkmScopeInfo, Target: gkmTargetPathGroup, Write: true, RepoState: gkmRepoStateActive, Serve: (*GkmEngine).serveGroupInfoWrite},
-	{Pattern: "POST /gkm/groups/{group_id}/ack", Scope: gkmScopeRead, Target: gkmTargetPathGroup, Write: true, Serve: (*GkmEngine).serveAck},
+	{DraftMls: true, Pattern: "HEAD /gkm/groups/{group_id}/welcome/{n}", Scope: gkmScopeWrite, Target: gkmTargetPathGroup, Serve: (*GkmEngine).serveWelcomeStands},
+	{DraftMls: true, Pattern: "GET /gkm/groups/{group_id}/group-info", Scope: gkmScopeRead, Target: gkmTargetPathGroup, Serve: (*GkmEngine).serveGroupInfoRead},
+	{DraftMls: true, Pattern: "POST /gkm/groups/{group_id}/group-info", Scope: gkmScopeInfo, Target: gkmTargetPathGroup, Write: true, RepoState: gkmRepoStateActive, Serve: (*GkmEngine).serveGroupInfoWrite},
+	{DraftMls: true, Pattern: "POST /gkm/groups/{group_id}/ack", Scope: gkmScopeRead, Target: gkmTargetPathGroup, Write: true, Serve: (*GkmEngine).serveAck},
 
 	// KEYS-M2-15: generations, wraps, drop keys and recovery wraps; KEYS-M2-25: the ladder
 	{Pattern: "GET /gkm/groups/{group_id}/gen", Scope: gkmScopeRead, Target: gkmTargetPathGroup, Serve: (*GkmEngine).serveGenerationsRead},

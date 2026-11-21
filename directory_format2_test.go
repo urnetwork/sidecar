@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
 )
@@ -140,6 +142,45 @@ func TestDirectoryFormat2OneStateFromEitherCarrier(t *testing.T) {
 	}
 	if shown != 1 {
 		t.Fatalf("%d items of one repo from its entry and its file", shown)
+	}
+}
+
+// The first format 2 write can be a withdrawal. It snapshots the other active
+// runs, and a cold reader cannot resurrect the withdrawn one from retained M6 records.
+func TestDirectoryFormat2FirstCardWithdrawsOneRetainedRun(t *testing.T) {
+	world := newTestDirectoryWorld(t, nil)
+	writer := world.memberWriter(sidecar.NewId())
+	world.publish()
+	device := world.device(writer)
+	kept := world.startRun(device.client, "keep this run")
+	drop := world.startRun(device.client, "withdraw this run")
+	device.flush(t)
+	if entries := device.entriesAtEvs(t, sidecar.RecordKindAnnounce); len(entries) != 2 {
+		t.Fatalf("before migration: %d retained announcements", len(entries))
+	}
+	world.cards.RaiseFormat(world.directoryId)
+	device.mustSync(t)
+	if err := device.client.Runs().Withdraw(drop); err != nil {
+		t.Fatal(err)
+	}
+	reader := world.reader(nil)
+	reader.mustSync(t)
+	files := reader.client.Cards()
+	if len(files) != 1 || files[0].Path != sidecar.DirectoryCardPath(writer.sidecarId) {
+		t.Fatalf("expected the writer's first card, got %d files", len(files))
+	}
+	card, err := sidecar.DirectoryDecodeCard(files[0].Content, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cardItems := card.Card.GetItems()
+	if len(cardItems) != 1 || !slices.Equal(cardItems[0].GetWhat().GetRunId(), kept[:]) {
+		t.Fatalf("first card after withdrawing %s: %v", drop, cardItems)
+	}
+	// The surviving run has identical content, version and renewal on both carriers.
+	items := testFormat2ItemsOf(t, reader, writer.sidecarId)
+	if len(items) != 1 || !proto.Equal(items[0].Announcement, cardItems[0]) {
+		t.Fatalf("cold view after withdrawing %s: %d items, expected the surviving run", drop, len(items))
 	}
 }
 

@@ -101,6 +101,19 @@ type MailZone struct {
 	Scope string
 }
 
+// A customer address maps its local part to the network's own address. Its exact domain still
+// needs an ownership check against the authenticated status of that network.
+func mailCustomAddress(zone MailZone, address string) (MailRecipient, string, bool) {
+	local, domain, ok := strings.Cut(dnsAsciiLower(address), "@")
+	if !ok || zone.Net == "" || zone.Root == "" || zone.Scope != "" || len(address) > MailAddressMaxByteCount ||
+		len(domain) > dnsDomainMaxByteCount || !ValidMailLocalPart(local) || !isNetworkLabelRoot(domain) ||
+		domain == zone.Root || strings.HasSuffix(domain, "."+zone.Root) {
+		return MailRecipient{}, "", false
+	}
+	recipient, err := ParseMailRecipient(zone.Root, local+"@"+zone.Domain())
+	return recipient, domain, err == nil
+}
+
 // <net>.<root>, or <scope>.<net>.<root>.
 func (self MailZone) Domain() string {
 	if self.Scope == "" {

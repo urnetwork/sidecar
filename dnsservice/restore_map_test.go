@@ -1,6 +1,7 @@
 package dnsservice_test
 
 import (
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -144,13 +145,12 @@ func TestRestoreStepListsTheMapAfterItsWait(t *testing.T) {
 		progress, err := test.step.Run(t.Context(), edgeTestRoot, incidentId)
 		done <- outcome{progress: progress, err: err}
 	}()
-	// time stands still until the step reaches the map's wait, its first read of the map's state, so no SOA read
-	// or diff it waits on before that can time out; then it moves only while the step waits on it, a poll at a time,
-	// until it lists
+	// Keep the clock still through the SOA and diff reads. Once the step reads its
+	// incident's map reports, advance a poll at a time until it lists them.
 	var result outcome
 	finished := false
 	for !finished {
-		reads, changed := test.maps.StateReads()
+		reads, changed := test.maps.RestoreReportReads()
 		if 1 <= reads {
 			break
 		}
@@ -211,5 +211,49 @@ func TestRestoreStepWithNoMapStoreSaysItSkipped(t *testing.T) {
 	progress := test.run(t, sidecar.NewId())
 	if !progress.MapSkipped || progress.MapVersion != 0 || !progress.Done {
 		t.Fatalf("progress %+v", progress)
+	}
+}
+
+// Every regained host and its network are listed, even after the next ordinary map has loaded.
+func TestRestoreListsEveryHostBeyondProbeSample(t *testing.T) {
+	test := newRestoreMapTest(t)
+	added := []string{}
+	networks := map[sidecar.Id]bool{}
+	for index := range test.settings.Probe.RouteHostCount + 3 {
+		host := fmt.Sprintf("site-%02d.example", index)
+		networkId := sidecar.NewId()
+		added = append(added, host)
+		test.maps.SetHostNetwork(host, networkId)
+		networks[networkId] = true
+	}
+	test.maps.SetRestoreRaiseHook(func(version uint64) {
+		for _, name := range []string{"lb-1", "lb-2"} {
+			test.report(t, name, version, added, nil)
+			test.report(t, name, version+1, []string{"later.example"}, nil)
+		}
+		if err := test.maps.SyncMapInterfaces(t.Context(), edgeTestRoot, []string{"lb-2", "replacement"}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	incident := sidecar.NewId()
+	for range 2 {
+		progress := test.run(t, incident)
+		if !progress.Done || progress.MapReportedCount != 2 || len(progress.Listing.Entries) != len(added) {
+			t.Fatalf("restored hosts: %+v", progress)
+		}
+		for _, entry := range progress.Listing.Entries {
+			if !slices.Contains(added, entry.CustomHost) || entry.CustomHostChange != dnsservice.DnsRestoreCustomHostAdded {
+				t.Fatalf("unexpected incident entry: %+v", entry)
+			}
+		}
+		events := test.maps.IncidentEventNetworks(incident)
+		if len(events) != len(networks) {
+			t.Fatalf("listed %d of %d networks", len(events), len(networks))
+		}
+		for _, networkId := range events {
+			if !networks[networkId] {
+				t.Fatal("event for an unaffected network")
+			}
+		}
 	}
 }

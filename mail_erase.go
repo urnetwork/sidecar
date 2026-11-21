@@ -22,7 +22,8 @@
 //	wait     a part evs refuses 429, past the eraser's closure rate, its turn or its day's allowance, stops the
 //	         erasure there with the time to try again (retry_after_ms) and §11.13's estimate of its end: the rows
 //	         still listed stay openable to key holders until their part commits, and the bodies are gone already
-//	resume   Resume finishes every erasure of the repo that no ERASE completed, whoever began it, from evs alone:
+//	resume   Resume checks even completed erasures for bodies that raced their deposit-only ERASE (mail_erase_late.go),
+//	         then finishes the parts of each open erasure, whoever began it, from evs alone:
 //	         the erasure ref's ERASEs say which messages each names, the main ref's CLOSUREs say which re-checkpoint
 //	         no ERASE followed, whose keys the next ERASE destroys, and each segment still listing a message takes
 //	         its part. Nothing is kept on the device, so a restart, a wiped phone or another admin's device resumes
@@ -35,19 +36,19 @@
 //	who      only a sidecar the authority says administers the repo erases: a consented, not read-only device of a
 //	         mailbox's owner, or a group repo's admin. With no authority every call refuses
 //
-// A general repo's versions name no slot, since its keys ride its segments, so a group repo's mail is not shreddable
-// by slot keys and its erasure refuses (ErrMailNotShreddable) until §15.7's group inbox gives group mail slots
-// (QD-102): nothing here claims a group message erased.
+// A general repo whose signed RepoCreate marks it as a group or admin inbox uses a deletable slot per message
+// (§15.7, QD-102). A retained version whose key is in a segment header has no slot to destroy and returns
+// ErrMailNotShreddable.
 //
 // On every leg but the extension's. A MailEraser is safe for concurrent use: one erasure step runs at a time.
 
 package sidecar
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"slices"
 	"sync"
@@ -158,6 +159,8 @@ type mailEraseStore interface {
 	// Every retained version of path, newest first, each with the slots its records name and its push's time;
 	// ErrEvsPathAbsent where the path never stood.
 	Versions(ctx context.Context, path string) ([]*EvsHistoryVersion, error)
+	// The newest flag push, used to date trash even when older flag history is unavailable.
+	NewestPushTime(ctx context.Context, path string) (time.Time, error)
 	// One ERASE (evs_erase.go); one naming only keys gone already counts done.
 	Erase(ctx context.Context, args *EvsEraseArgs) error
 	// The committed ERASEs after afterVersion of the repo's erasure ref, oldest first, each with its note.
@@ -232,7 +235,7 @@ type MailEraser struct {
 	sidecarId Id
 	store     mailEraseStore
 	// The repo's deposit refs, for a deposit's slot; nil where the repo takes none.
-	deposits  mailIngestRepo
+	deposits  mailEraseDeposits
 	erased    *mailErasedView
 	authority MailEraseAuthority
 	purge     MailLocalPurge
@@ -273,7 +276,7 @@ func NewMailEraser(args *MailEraserArgs) (*MailEraser, error) {
 }
 
 // An eraser of repoId over store's files and deposits' refs.
-func newMailEraser(repoId Id, store mailEraseStore, deposits mailIngestRepo, args *MailEraserArgs) *MailEraser {
+func newMailEraser(repoId Id, store mailEraseStore, deposits mailEraseDeposits, args *MailEraserArgs) *MailEraser {
 	settings := args.Settings
 	if settings == nil {
 		settings = DefaultMailEraseSettings()
@@ -309,7 +312,7 @@ func (self *MailEraser) Refresh(ctx context.Context) ([]Id, error) {
 	messageIds := []Id{}
 	for _, erasure := range fresh {
 		messages, _, ok := parseMailErasureNote(erasure.Note)
-		if !ok {
+		if !ok || erasure.Completion {
 			continue
 		}
 		for _, message := range messages {
@@ -369,9 +372,8 @@ func (self *MailEraser) pathKeysAt(ctx context.Context, path string) ([]*EvsEras
 	return keys, newest, nil
 }
 
-// The slot of each standing deposit whose id is one of messageIds, by message: a deposit not yet consumed, which the
-// first ERASE takes, and the largest such deposit's size by message. A deposit that does not open has no key left to
-// take and is passed over.
+// The slots of all standing deposits of the requested messages and an upper bound on each deposit's size.
+// Every ref must answer before the first CUT or ERASE can commit.
 func (self *MailEraser) depositKeys(ctx context.Context, messageIds []Id) (map[Id][]*EvsErasedKey, map[Id]uint64, error) {
 	keys := map[Id][]*EvsErasedKey{}
 	byteCounts := map[Id]uint64{}
@@ -383,26 +385,13 @@ func (self *MailEraser) depositKeys(ctx context.Context, messageIds []Id) (map[I
 		return nil, nil, err
 	}
 	for _, depositorId := range depositorIds {
-		afterVersion := uint64(0)
-		for {
-			err := self.deposits.ReadDeposits(ctx, depositorId, afterVersion, func(deposit *EvsDeposit, body io.Reader) error {
-				afterVersion = max(afterVersion, deposit.Version)
-				messageId := Id(deposit.EntryId)
-				if slices.Contains(messageIds, messageId) && deposit.SlotId != (Id{}) {
-					keys[messageId] = append(keys[messageId], &EvsErasedKey{SlotId: deposit.SlotId, KeyIndex: mailVaultSlotKeyIndex})
-					byteCounts[messageId] = max(byteCounts[messageId], deposit.Size)
-				}
-				return nil
-			})
-			var openError *EvsDepositOpenError
-			if errors.As(err, &openError) && openError.Deposit != nil && afterVersion < openError.Deposit.Version && ctx.Err() == nil {
-				afterVersion = openError.Deposit.Version
-				continue
-			}
-			if err != nil {
-				return nil, nil, err
-			}
-			break
+		slots, err := self.deposits.depositSlots(ctx, depositorId, messageIds)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, slot := range slots {
+			keys[slot.messageId] = append(keys[slot.messageId], &EvsErasedKey{SlotId: slot.slotId, KeyIndex: mailVaultSlotKeyIndex})
+			byteCounts[slot.messageId] = max(byteCounts[slot.messageId], slot.paddedSize)
 		}
 	}
 	return keys, byteCounts, nil
@@ -448,6 +437,21 @@ func (self *MailEraser) Erase(ctx context.Context, month MailYearMonth, messageI
 // Begins the erasure of fresh, none of which an ERASE named, under erasureId: its CUT in a format-2 mailbox, its
 // first ERASE, then its parts. Nil with an error where nothing was destroyed.
 func (self *MailEraser) begin(ctx context.Context, erasureId Id, month MailYearMonth, fresh []Id, index *mailEraseIndex) (*MailErasure, error) {
+	// CONSUME can destroy the inventoried deposit slot after ingest published the body.
+	// A no-op ERASE made no durable promise. Re-inventory under the same erasure id.
+	for attempt := 0; ; attempt++ {
+		erasure, err := self.beginAttempt(ctx, erasureId, month, fresh, index)
+		if !errors.Is(err, errMailEraseUncommitted) || attempt >= self.settings.SegmentRetryCount {
+			return erasure, err
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+	}
+}
+
+// One inventory and first ERASE under the original erasure id.
+func (self *MailEraser) beginAttempt(ctx context.Context, erasureId Id, month MailYearMonth, fresh []Id, index *mailEraseIndex) (*MailErasure, error) {
 	erasure := &MailErasure{MessageIds: fresh, State: MailErasureDone}
 	depositKeys, depositByteCounts, err := self.depositKeys(ctx, fresh)
 	if err != nil {
@@ -457,7 +461,7 @@ func (self *MailEraser) begin(ctx context.Context, erasureId Id, month MailYearM
 	messages := []mailErasedMessage{}
 	// whether any message's m/ file stands: only such a message can be in the search index
 	standing := false
-	documentCount := 0
+	documentCount := uint64(0)
 	for _, messageId := range fresh {
 		path := MailMessagePath(month, messageId)
 		messageKeys, version, err := self.pathKeysAt(ctx, path)
@@ -475,12 +479,12 @@ func (self *MailEraser) begin(ctx context.Context, erasureId Id, month MailYearM
 			if err != nil {
 				return nil, err
 			}
-			documentCount += int(message.ChunkCount)
+			documentCount += uint64(message.ChunkCount)
 		}
 		keys = append(keys, messageKeys...)
 		messages = append(messages, message)
 	}
-	if index != nil && self.settings.CutDocumentMaxCount < documentCount {
+	if index != nil && uint64(max(self.settings.CutDocumentMaxCount, 0)) < documentCount {
 		return nil, ErrMailEraseBatchTooLarge
 	}
 	segments, err := self.segmentsListing(ctx, messages)
@@ -507,12 +511,22 @@ func (self *MailEraser) begin(ctx context.Context, erasureId Id, month MailYearM
 	// for, which the index never held; any other format-2 erasure ends with its index files' rewrite
 	complete := len(segments) == 0 && (index == nil || !standing)
 	testHookBarrier("mail.erase.message.before", "")
+	note := mailErasureNote(messages, nil)
 	err = self.store.Erase(ctx, &EvsEraseArgs{
-		ErasureId: erasure.ErasureId, Keys: keys, Complete: complete, Note: mailErasureNote(messages, nil),
+		ErasureId: erasure.ErasureId, Keys: keys, Complete: complete, Note: note,
 	})
 	testHookBarrier("mail.erase.message.after", "")
 	if err != nil {
 		return nil, err
+	}
+	erasures, err := self.store.Erasures(ctx, 0)
+	if err != nil {
+		return nil, err
+	}
+	if !slices.ContainsFunc(erasures, func(row *EvsErasure) bool {
+		return !row.Completion && row.ErasureId == erasureId && bytes.Equal(row.Note, note)
+	}) {
+		return nil, errMailEraseUncommitted
 	}
 	if index != nil {
 		if err := self.journal.done(erasureId); err != nil {
@@ -526,6 +540,11 @@ func (self *MailEraser) begin(ctx context.Context, erasureId Id, month MailYearM
 	if err := self.purgeLocal(ctx, fresh); err != nil {
 		// the bodies are gone from evs; this device's copies go at its next Refresh or restart
 		self.log.Warningf("[mail]erase %s: the local purge failed: %v", self.repoId, err)
+	}
+	messages, complete, _, err = self.eraseLateBodies(ctx, erasureId, messages, mailErasedKeys(erasures), index, complete)
+	if err != nil {
+		erasure.State = MailErasureRewriting
+		return erasure, err
 	}
 	if complete {
 		self.report(erasure)
@@ -542,11 +561,24 @@ func (self *MailEraser) begin(ctx context.Context, erasureId Id, month MailYearM
 // to carry complete, the index's rewrite ends the erasure, by its last ERASE or a completion ERASE, or the last
 // orphan's ERASE does; one evs's state still shows incomplete then takes a completion ERASE here (QD-1132), so no
 // erasure reads done on this device alone. Fills erasure with where it stands.
-func (self *MailEraser) parts(ctx context.Context, erasure *MailErasure, messages []mailErasedMessage, index *mailEraseIndex, role IndexResumeRole, orphans []*EvsClosure) error {
+func (self *MailEraser) parts(ctx context.Context, erasure *MailErasure, messages []mailErasedMessage, index *mailEraseIndex, role IndexResumeRole, erasedKeys map[EvsErasedKey]bool) error {
 	segments, err := self.segmentsListing(ctx, messages)
 	if err != nil {
 		erasure.State = MailErasureRewriting
 		return err
+	}
+	// A competing CLOSURE can make a row disappear. Read the main ref after the segments so that a CLOSURE
+	// responsible for an already absent row is visible before deciding which ERASE can complete the operation.
+	closures, err := self.store.Closures(ctx)
+	if err != nil {
+		erasure.State = MailErasureRewriting
+		return err
+	}
+	var orphans []*EvsClosure
+	for _, closure := range closures {
+		if closure.ErasureId == erasure.ErasureId && slices.ContainsFunc(closure.Keys, func(key *EvsErasedKey) bool { return !erasedKeys[*key] }) {
+			orphans = append(orphans, closure)
+		}
 	}
 	mayComplete := true
 	// whether the index's rewrite was asked to end the erasure, a completion ERASE included
@@ -571,11 +603,10 @@ func (self *MailEraser) parts(ctx context.Context, erasure *MailErasure, message
 			return err
 		}
 	}
-	if err := self.rewrite(ctx, erasure, segments, messages, mayComplete); err != nil || erasure.State != MailErasureDone || 0 < len(segments) {
+	if err := self.rewrite(ctx, erasure, segments, messages, mayComplete); err != nil || erasure.State != MailErasureDone {
 		return err
 	}
-	// no i/ segment held a message, so no part's ERASE carried complete; an index asked to end the erasure sent its own
-	// completion, which is not sent twice, and a format-1 mailbox has none to send (COMPLETION is format 2's)
+	// Even the last segment's ERASE may have found its keys already gone and committed nothing.
 	return self.complete(ctx, erasure, index != nil && !indexEnds)
 }
 
@@ -591,6 +622,7 @@ func (self *MailEraser) complete(ctx context.Context, erasure *MailErasure, send
 		return err
 	}
 	if mailErasureComplete(erasures, erasure.ErasureId) {
+		erasure.State = MailErasureDone
 		return nil
 	}
 	erasure.State = MailErasureRewriting
@@ -627,9 +659,12 @@ func (self *MailEraser) complete(ctx context.Context, erasure *MailErasure, send
 
 // Whether an ERASE of erasureId among erasures says complete, as Resume reads an erasure done.
 func mailErasureComplete(erasures []*EvsErasure, erasureId Id) bool {
-	return slices.ContainsFunc(erasures, func(erasure *EvsErasure) bool {
-		return erasure.ErasureId == erasureId && erasure.Complete
-	})
+	for _, erasure := range slices.Backward(erasures) {
+		if id, complete, applies := erasure.completionState(); id == erasureId && applies {
+			return complete
+		}
+	}
+	return false
 }
 
 // Finishes every erasure of the repo no ERASE completed: see the file header's resume row. Each erasure it took up is
@@ -664,42 +699,55 @@ func (self *MailEraser) Resume(ctx context.Context) ([]*MailErasure, error) {
 	}
 	type standing struct {
 		complete bool
+		late     bool
 		messages []mailErasedMessage
 		// the keys its ERASEs destroyed
-		erasedSlotIds map[Id]bool
+		erasedKeys map[EvsErasedKey]bool
 		// the device whose ERASE began it
 		eraserId Id
 	}
 	byId := map[Id]*standing{}
 	order := []Id{}
 	for _, erasure := range erasures {
+		_, complete, applies := erasure.completionState()
+		if !applies {
+			continue
+		}
 		state := byId[erasure.ErasureId]
 		if state == nil {
-			state = &standing{erasedSlotIds: map[Id]bool{}, eraserId: erasure.EraserSidecarId}
+			state = &standing{erasedKeys: map[EvsErasedKey]bool{}, eraserId: erasure.EraserSidecarId}
 			byId[erasure.ErasureId] = state
 			order = append(order, erasure.ErasureId)
 		}
-		state.complete = state.complete || erasure.Complete
-		for _, key := range erasure.Keys {
-			state.erasedSlotIds[key.SlotId] = true
-		}
-		if messages, _, ok := parseMailErasureNote(erasure.Note); ok {
-			state.messages = append(state.messages, messages...)
-		}
-	}
-	closures, err := self.store.Closures(ctx)
-	if err != nil {
-		return resumed, err
-	}
-	began := slices.Clone(resumed)
-	for _, erasureId := range order {
-		state := byId[erasureId]
-		if state.complete || len(state.messages) == 0 {
-			// done, or another writer's erasure, a vault entry's among them
+		state.complete = complete
+		if erasure.Completion {
 			continue
 		}
-		if slices.ContainsFunc(began, func(erasure *MailErasure) bool { return erasure.ErasureId == erasureId }) {
-			// a journaled erasure this call just ran
+		for _, key := range erasure.Keys {
+			state.erasedKeys[*key] = true
+		}
+		if messages, _, ok := parseMailErasureNote(erasure.Note); ok {
+			state.messages = mailMergeErasedMessages(state.messages, messages)
+		}
+	}
+	erasedKeys := mailErasedKeys(erasures)
+	began := slices.Clone(resumed)
+	// A waiting index or segment rewrite does not hold back the destruction of
+	// another erasure's late body. Check the bodies before spending closure quota.
+	for _, erasureId := range order {
+		state := byId[erasureId]
+		if len(state.messages) == 0 || slices.ContainsFunc(began, func(erasure *MailErasure) bool { return erasure.ErasureId == erasureId }) {
+			continue
+		}
+		state.messages, state.complete, state.late, err = self.eraseLateBodies(ctx, erasureId, state.messages, erasedKeys, index, state.complete)
+		if err != nil {
+			return resumed, err
+		}
+	}
+	for _, erasureId := range order {
+		state := byId[erasureId]
+		if len(state.messages) == 0 || (state.complete && !state.late) ||
+			slices.ContainsFunc(began, func(erasure *MailErasure) bool { return erasure.ErasureId == erasureId }) {
 			continue
 		}
 		erasure := &MailErasure{ErasureId: erasureId, State: MailErasureRewriting}
@@ -707,14 +755,12 @@ func (self *MailEraser) Resume(ctx context.Context) ([]*MailErasure, error) {
 			erasure.MessageIds = append(erasure.MessageIds, message.MessageId)
 		}
 		resumed = append(resumed, erasure)
-		// a CLOSURE no ERASE followed: its replaced chain's keys still stand
-		orphans := []*EvsClosure{}
-		for _, closure := range closures {
-			if closure.ErasureId == erasureId && slices.ContainsFunc(closure.Keys, func(key *EvsErasedKey) bool { return !state.erasedSlotIds[key.SlotId] }) {
-				orphans = append(orphans, closure)
-			}
+		if state.complete {
+			erasure.State = MailErasureDone
+			self.report(erasure)
+			continue
 		}
-		err = self.parts(ctx, erasure, state.messages, index, self.resumeRole(state.eraserId), orphans)
+		err = self.parts(ctx, erasure, state.messages, index, self.resumeRole(state.eraserId), state.erasedKeys)
 		self.report(erasure)
 		if err != nil || erasure.State != MailErasureDone {
 			return resumed, err

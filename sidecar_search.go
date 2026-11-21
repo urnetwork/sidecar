@@ -96,10 +96,14 @@ type SearchFieldFilter struct {
 
 // §5.4's request.
 type SearchRequest struct {
+	// A tool session may read a narrower set than its host. Rechecked while the cursor lives.
+	allowRepo func(Id) bool
 	// §16.10's query.
 	Text string
 	// Empty: every readable repo with its index on (never secret, config or mailcfg).
 	Repos []Id
+	// A content ref's name or id:<ref_id> in repo breadth. Empty selects the default ref.
+	Ref   string
 	Scope SearchScope
 	// Zero: unbounded.
 	Since time.Time
@@ -124,6 +128,8 @@ type SearchRequest struct {
 type SearchHit struct {
 	Repo Id
 	Ref  Id
+	// A non-main content ref. The local open tool resolves it through the querying session's hit ID.
+	refName string
 	// Or a derived document's registered name (§11.14).
 	Path    string
 	Version uint64
@@ -307,6 +313,8 @@ type sidecarSearch struct {
 	state     *SidecarSearchState
 	cache     *SearchCache
 	engine    SidecarSearchEngine
+	member    *memberSearchHost
+	requester SidecarSearchEngine
 }
 
 // The Sidecar's search, made on first use.
@@ -343,6 +351,7 @@ func (self *Sidecar) searchOfNetwork() (*sidecarSearch, Id, error) {
 		}
 		stale := search.cache
 		search.networkId = networkId
+		search.requester = nil
 		search.state = nil
 		search.cache = nil
 		search.engine = nil
@@ -463,16 +472,28 @@ func (self *Sidecar) InstallSearchEngine(engine SidecarSearchEngine) (func(), er
 
 // The installed engine of the enrolled network, or ErrSidecarSearchUnavailable.
 func (self *Sidecar) searchEngine() (SidecarSearchEngine, error) {
+	return self.hostSearchEngine(false)
+}
+
+// Native member app searches can ask designated indexers. Sync, daemon and tool sessions use the local engine.
+func (self *Sidecar) hostSearchEngine(ask bool) (SidecarSearchEngine, error) {
 	search, _, err := self.searchOfNetwork()
 	if err != nil {
 		return nil, err
 	}
 	search.stateLock.Lock()
-	defer search.stateLock.Unlock()
-	if search.engine == nil {
+	engine, member := search.engine, search.member
+	if engine == nil && ask && self.settings.Search.RemoteAsk {
+		engine = search.requester
+	}
+	search.stateLock.Unlock()
+	if engine != nil {
+		return engine, nil
+	}
+	if member == nil {
 		return nil, ErrSidecarSearchUnavailable
 	}
-	return search.engine, nil
+	return member.open()
 }
 
 // The remote mode a search of this network runs under: off where this host asks no indexer, or where search.state
@@ -501,7 +522,7 @@ func (self *Sidecar) Search(ctx context.Context, request *SearchRequest) (*Searc
 	if request.Scope != SearchCached && request.Scope != SearchLatest && request.Scope != SearchAll {
 		return nil, fmt.Errorf("%w: scope %d", ErrSearchRequest, request.Scope)
 	}
-	engine, err := self.searchEngine()
+	engine, err := self.hostSearchEngine(true)
 	if err != nil {
 		return nil, err
 	}
@@ -622,7 +643,7 @@ func (self *Sidecar) SetSearchPolicy(repoId *Id, mode string) error {
 // Drops the cache of repoId, or with nil of every repo (§5.4): its files and derived data, never search.state. An
 // engine that must end its searches first drops them itself.
 func (self *Sidecar) DropSearchCache(repoId *Id) error {
-	if engine, err := self.searchEngine(); err == nil {
+	if engine, err := self.hostSearchEngine(true); err == nil {
 		if dropper, ok := engine.(SidecarSearchCacheDropper); ok {
 			return dropper.DropCache(repoId)
 		}
@@ -643,7 +664,7 @@ func (self *Sidecar) GetSearchIndexers() []SearchIndexer {
 	if !self.settings.Search.RemoteAsk {
 		return nil
 	}
-	engine, err := self.searchEngine()
+	engine, err := self.hostSearchEngine(true)
 	if err != nil {
 		return nil
 	}

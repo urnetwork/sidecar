@@ -9,6 +9,7 @@ package sidecar
 
 import (
 	"bytes"
+	"slices"
 	"testing"
 
 	"github.com/urnetwork/connect"
@@ -95,6 +96,37 @@ func TestAclMailSendGate(t *testing.T) {
 	for _, subject := range []Id{world.receiver, world.other} {
 		if decision := world.view.MaySendMail(world.networkId, AclSidecarSubject(subject), aclTestNow); decision.Allowed {
 			t.Errorf("%s sends with no mail_send", subject)
+		}
+	}
+}
+
+// Scope reservations and the send grant must describe the same verified position.
+func TestAclMailSendScopesReadOneSnapshot(t *testing.T) {
+	world := newAclMailWorld(t)
+	states := world.view.states.(*aclContractTestStates)
+	subject := AclSidecarSubject(world.sender)
+	for _, sample := range []struct {
+		config  *ConfigState
+		allowed bool
+		labels  []string
+	}{
+		{config: nil, allowed: false, labels: nil},
+		{config: &ConfigState{}, allowed: true, labels: []string{}},
+		{
+			config: &ConfigState{teamScopes: []*bridge.TeamScopeRow{
+				{Label: "sales", MemberId: world.scopeMember.Bytes()},
+			}},
+			allowed: true,
+			labels:  []string{"sales"},
+		},
+	} {
+		states.snapshots[world.networkId].Config = sample.config
+		before, _ := states.asked()
+		decision, labels := world.view.MaySendMailWithScopes(world.networkId, subject, aclTestNow)
+		after, _ := states.asked()
+		if after != before+1 || decision.Allowed != sample.allowed || !slices.Equal(labels, sample.labels) ||
+			(!sample.allowed && decision.Reason != AclReasonNoState) {
+			t.Fatalf("snapshot reads %d, decision %+v, labels %v", after-before, decision, labels)
 		}
 	}
 }

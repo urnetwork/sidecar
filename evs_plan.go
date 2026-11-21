@@ -267,8 +267,10 @@ type EvsWritePlan struct {
 	// the push ids the repair form writes over, which the sender seals as EvsSealedMetadata.written_over (QD-833;
 	// evsPrefixWrittenOver); none for a plan that repairs nothing
 	writtenOver [][]byte
-	// the repo keeps its object keys in slots, a record-class repo's (see the file header)
+	// Record-class repos and signed general inboxes keep each file's object key in a deletable slot.
 	slotKeyed bool
+	// The signed inbox role also selects the mail index's extraction and exclusion rules.
+	groupInbox bool
 	// the ref's name bytes and the repo's kind, which a write's versioning is decided from (evs_write_versionless.go)
 	refName  []byte
 	repoKind protocol.RepoKind
@@ -474,7 +476,7 @@ func (self *EvsRepo) PlanWrite(ctx context.Context, args *EvsPlanArgs) (*EvsWrit
 			return nil, fmt.Errorf("%w: the git-lfs store's write off ur/lfs", ErrEvsReservedPath)
 		}
 	}
-	repoKind, err := self.repoKind()
+	repo, err := self.repoRow()
 	if err != nil {
 		return nil, err
 	}
@@ -560,8 +562,8 @@ func (self *EvsRepo) PlanWrite(ctx context.Context, args *EvsPlanArgs) (*EvsWrit
 					RepoId:    self.repoId, RefId: args.RefId, BaseVersion: result.head.Version, BaseChain: result.head.Chain,
 					Head: head, PathEpoch: evsCurrentEpoch(head.GetPathEpoch()), Sources: evsSourceEpochs(head.GetPathEpoch()),
 					Generation: args.Generation, keys: result.keys, floors: map[string]uint64{},
-					slotKeyed: EvsRepoKindRecordClass(repoKind), Tainted: args.Tainted, AgentId: args.AgentId,
-					refName: args.RefName, repoKind: repoKind,
+					slotKeyed: evsRepoSlotKeyed(repo), Tainted: args.Tainted, AgentId: args.AgentId,
+					refName: args.RefName, repoKind: repo.GetKind(), groupInbox: AclRepoIsInbox(repo),
 				}
 				if err := plan.setRef(head, args.RefName, self.client.args.Identity().SidecarId, rekeyOnly); err != nil {
 					return err
@@ -728,17 +730,28 @@ func evsCheckIndexPlace(names [][]byte, write *EvsPathWrite, onIndexRef bool) er
 	return nil
 }
 
-// The repo's kind, from the newest verified config state.
-func (self *EvsRepo) repoKind() (protocol.RepoKind, error) {
+// The repo at the newest verified config state; its creation binds both kind and inbox role.
+func (self *EvsRepo) repoRow() (*protocol.AclRepo, error) {
 	state, err := self.client.verifier.config()
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	repo := state.Repo(self.repoId)
 	if repo == nil {
-		return 0, fmt.Errorf("%w: a repo the state does not hold", ErrEvsNoConfig)
+		return nil, fmt.Errorf("%w: a repo the state does not hold", ErrEvsNoConfig)
 	}
-	return repo.GetKind(), nil
+	return repo, nil
+}
+
+// Reads the kind recorded at repo creation from the verified config.
+func (self *EvsRepo) repoKind() (protocol.RepoKind, error) {
+	repo, err := self.repoRow()
+	return repo.GetKind(), err
+}
+
+// Inbox files use deletable slots even though their shared file ref belongs to a general repo.
+func evsRepoSlotKeyed(repo *protocol.AclRepo) bool {
+	return EvsRepoKindRecordClass(repo.GetKind()) || AclRepoIsInbox(repo)
 }
 
 // A test's hook that sends a write over a version this device ignores as a diff on it, in place of the repair form's
@@ -937,10 +950,16 @@ func (self *EvsRepo) planPath(ctx context.Context, plan *EvsWritePlan, result *e
 		verified = &EvsVerifiedPath{TokenPath: verified.TokenPath}
 	} else if stands {
 		content, state, keys, fields, err := self.readBaseKeys(ctx, result, verified)
+		if errors.Is(err, ErrEvsErased) && plan.RefMode != protocol.EvsRefMode_EVS_REF_GIT {
+			// a version a committed ERASE emptied: nothing to diff against, so a checkpoint (evs_plan_erased.go)
+			fields, err = self.erasedBaseFields(ctx, result, verified)
+		}
 		if err != nil {
 			return nil, err
 		}
-		defer content.close()
+		if content != nil {
+			defer content.close()
+		}
 		previous, previousContent, previousKeys, previousFields = state, content, keys, fields
 		planned.Fields.FileId = fields.GetFileId()
 		planned.Fields.Mode = fields.GetMode()
@@ -1330,7 +1349,7 @@ func (self *EvsRepo) planEpochs(ctx context.Context, plan *EvsWritePlan) error {
 			if !planned.Remove {
 				continue
 			}
-			row, err := self.lookup(ctx, plan.RefId, planned.Path)
+			row, _, err := self.lookup(ctx, plan.RefId, planned.Path)
 			if err != nil {
 				return err
 			}
@@ -1544,11 +1563,11 @@ func (self *EvsRepo) PlanGitUpdate(ctx context.Context, args *EvsGitPlanArgs) (*
 	if err := evsGitCheckLimits(args.Changes); err != nil {
 		return nil, err
 	}
-	repoKind, err := self.repoKind()
+	repo, err := self.repoRow()
 	if err != nil {
 		return nil, err
 	}
-	if EvsRepoKindRecordClass(repoKind) {
+	if evsRepoSlotKeyed(repo) {
 		return nil, fmt.Errorf("%w: a git-mode ref in a slot-keyed repo", ErrEvsWriteNotBuilt)
 	}
 	// the net change, and with taints beside it once the head is read (planGitTaints); each path once

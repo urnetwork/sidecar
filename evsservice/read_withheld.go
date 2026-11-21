@@ -4,8 +4,7 @@
 // such a slot answer missing, as a deleted object's would, whether or not the object is still stored, so a held drop
 // reads as a finished one (owner decision 184) and nothing on the wire shows a hold. The set is the del and held files
 // of the repo's running job and of every held job, which gave up the slot to it (QD-1127; DropIndex.Withheld), loaded
-// through the table and refreshed with it; a repo with no table, or a table naming no job, pays nothing past the
-// table's cached GET. A set that cannot be read fails the read 503.
+// from the current table and file inventory before opening the object. A set that cannot be read fails the read 503.
 
 package evsservice
 
@@ -13,32 +12,30 @@ import (
 	"github.com/urnetwork/sidecar"
 )
 
-// Whether the read withholds id: see the file header.
-func (self *readAttempt) withheld(id DropScanId) (bool, error) {
+// The current set for the object about to be served, including every segment in a record's staged tail.
+func (self *readAttempt) withheldIds() (map[DropScanId]bool, error) {
 	if !self.engine.format2Instance() {
-		return false, nil
+		return nil, nil
 	}
-	table, err := self.dropTable()
-	if err != nil || table == nil || (table.Job == nil && len(table.HeldJobs) == 0) {
-		return false, err
+	table, err := self.engine.drops.Read(self.ctx, self.cluster, self.repoId)
+	if err != nil || table.Etag == "" {
+		return nil, err
 	}
 	segmentCluster, err := self.engine.blobs.SegmentCluster()
 	if err != nil {
-		return false, err
+		return nil, err
 	}
-	set, err := self.engine.dropIndex.Withheld(self.ctx, segmentCluster, self.cluster.ClusterId(), self.repoId, table, self.engine.clock.Now())
-	if err != nil {
-		return false, err
-	}
-	return set[id], nil
+	return self.engine.dropIndex.Withheld(self.ctx, segmentCluster, self.cluster.ClusterId(), self.repoId, table.State, self.engine.clock.Now())
 }
 
 // Whether the read withholds the segment.
 func (self *readAttempt) withheldSegment(segmentId [32]byte) (bool, error) {
-	return self.withheld(DropSegmentId(segmentId))
+	ids, err := self.withheldIds()
+	return ids[DropSegmentId(segmentId)], err
 }
 
 // Whether the read withholds the slot.
 func (self *readAttempt) withheldSlot(slotId sidecar.Id) (bool, error) {
-	return self.withheld(DropSlotId(slotId))
+	ids, err := self.withheldIds()
+	return ids[DropSlotId(slotId)], err
 }

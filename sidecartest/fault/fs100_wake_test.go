@@ -180,12 +180,12 @@ func (self *wakeWorld) device(name string, memberId sidecar.Id) (*wakeDevice, er
 }
 
 // Opens device's record and directory client, its requests bound, and on a phone its phone part over the surrogate.
-func (self *wakeWorld) open(device *wakeDevice, phone bool) error {
+func (self *wakeWorld) open(ctx context.Context, device *wakeDevice, phone bool) error {
 	recordStore, err := sidecartest.NewFakeStore().Root().Directory("record", "record")
 	if err != nil {
 		return err
 	}
-	record, err := sidecar.NewSidecarRecord(&sidecar.SidecarRecordArgs{
+	record, err := sidecar.OpenSidecarRecord(ctx, &sidecar.SidecarRecordArgs{
 		SidecarId:         device.sidecarId,
 		IdentityPublicKey: device.key.Public().(ed25519.PublicKey),
 		Store:             recordStore,
@@ -298,13 +298,13 @@ func newWakeWorld(ctx context.Context) (*wakeWorld, error) {
 	world.directoryFixture.TimeMillis = world.recordFixture.TimeMillis
 	world.recordAuth.Append(world.recordFixture)
 	world.directoryAuth.Append(world.directoryFixture)
-	if err := world.open(world.requester, true); err != nil {
+	if err := world.open(ctx, world.requester, true); err != nil {
 		return nil, err
 	}
-	if err := world.open(world.approver, false); err != nil {
+	if err := world.open(ctx, world.approver, false); err != nil {
 		return nil, err
 	}
-	if err := world.open(world.approverPhone, true); err != nil {
+	if err := world.open(ctx, world.approverPhone, true); err != nil {
 		return nil, err
 	}
 	return world, nil

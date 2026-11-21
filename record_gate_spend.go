@@ -75,6 +75,7 @@ func (self *ApprovalGate) spend(ctx context.Context, action *SidecarAction, stor
 	if err != nil {
 		return err
 	}
+	outcome.effectKey = effectKey[:]
 	action.Outcome = outcome
 	return nil
 }
@@ -92,8 +93,14 @@ func (self *ApprovalGate) spendOnce(ctx context.Context, action *SidecarAction, 
 		return nil, err
 	}
 	if plan.stale {
-		// TS1: a decision on an untainted request spends nothing in a tainted run, so the run asks afresh, tainted
-		request, err := self.router.findOrFile(ctx, action, stored, true)
+		// TS1: a decision on an untainted request spends nothing in a tainted run, so the run asks afresh, tainted, for
+		// the template the action asks in its place where it asks one (owner decision 613)
+		template, err := approvalActionTemplate(action, stored)
+		if err != nil {
+			return nil, err
+		}
+		filed, filedStored := approvalFiledAction(action, stored, template)
+		request, err := self.router.findOrFile(ctx, filed, filedStored, true)
 		if err != nil {
 			return nil, err
 		}

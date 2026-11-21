@@ -28,20 +28,29 @@ import (
 // The cards ref file at path as the fake holds it now: its version, 0 for none or a removal.
 func (self *testDirectoryWorld) cardFileVersion(path string) uint64 {
 	self.t.Helper()
-	changes, err := self.cards.For(self.readerId).ReadCards(self.t.Context(), self.directoryId, 0)
-	if err != nil {
-		self.t.Fatal(err)
-	}
-	version := uint64(0)
-	for _, file := range changes.Files {
-		if file.Path == path {
-			version = file.Version
-			if file.Removed {
-				version = 0
+	cards := self.cards.For(self.readerId)
+	var version, through uint64
+	for {
+		changes, err := cards.ReadCards(self.t.Context(), self.directoryId, through)
+		if err != nil {
+			self.t.Fatal(err)
+		}
+		for _, file := range changes.Files {
+			if file.Path == path {
+				version = file.Version
+				if file.Removed {
+					version = 0
+				}
 			}
 		}
+		if !changes.More {
+			return version
+		}
+		if changes.ThroughVersion <= through {
+			self.t.Fatalf("cards page stopped at version %d", through)
+		}
+		through = changes.ThroughVersion
 	}
-	return version
 }
 
 // Puts content at path as pusherId's push declaring pin, from the version the fake holds.

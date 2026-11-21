@@ -138,20 +138,15 @@ type socketListenerStream struct {
 	request  *socketAdmissionRequest
 	// the generation it was admitted on, whose sidecar its live check reads
 	generation *socketGeneration
+	// Set and removed under the listener's stateLock.
 	stopExpiry func() bool
-	endOnce    sync.Once
 }
 
 var _ socketStream = (*socketListenerStream)(nil)
 
 // Takes the stream out of its listener's count, once.
 func (self *socketListenerStream) end() {
-	self.endOnce.Do(func() {
-		if self.stopExpiry != nil {
-			self.stopExpiry()
-		}
-		self.listener.untrack(self)
-	})
+	self.listener.untrack(self)
 }
 
 // Ends the count when err says the stream is gone.
@@ -385,12 +380,30 @@ func (self *SocketListener) acceptStream(ctx context.Context, generation *socket
 	if code != protocol.StreamRejectCode_SR_UNSPECIFIED {
 		return &StreamRejectError{Code: code}
 	}
+	if self.namespace == SocketNamespaceTls || self.namespace == SocketNamespaceSmtp {
+		// A policy update can finish its live-stream scan between the ticket check and
+		// tracking this stream. Check again once the stream is visible to every later scan.
+		_, current, _ := self.component.current()
+		if !self.admission.allows(current, request, generation.identity.SidecarId, verdict.ticket) {
+			tracked.end()
+			return &StreamRejectError{Code: protocol.StreamRejectCode_SR_DENIED}
+		}
+	}
 	self.reportInflight()
 	if grantExpireMillis := verdict.ticket.GetGrantExpireTimeMillis(); grantExpireMillis != 0 {
 		admission := self.component.registrar.admission()
-		tracked.stopExpiry = self.clock.AfterFunc(socketGrantEndTime(admission, grantExpireMillis).Sub(self.clock.Now()), func() {
+		stop := self.clock.AfterFunc(socketGrantEndTime(admission, grantExpireMillis).Sub(self.clock.Now()), func() {
 			tracked.Reset(protocol.StreamResetCode_RST_REVOKED)
 		})
+		self.stateLock.Lock()
+		trackedNow := self.streams[tracked]
+		if trackedNow {
+			tracked.stopExpiry = stop
+		}
+		self.stateLock.Unlock()
+		if !trackedNow {
+			stop()
+		}
 	}
 
 	localAddr := &SocketAddr{NetworkId: connect.Id(self.networkId), ClientId: connect.Id(generation.identity.ClientId)}
@@ -418,16 +431,19 @@ func (self *SocketListener) notifyStreamsWithLock() {
 
 // Takes a stream out of the count and reports the load.
 func (self *SocketListener) untrack(stream *socketListenerStream) {
-	removed := func() bool {
+	stopExpiry, removed := func() (func() bool, bool) {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		if !self.streams[stream] {
-			return false
+			return nil, false
 		}
 		delete(self.streams, stream)
 		self.notifyStreamsWithLock()
-		return true
+		return stream.stopExpiry, true
 	}()
+	if stopExpiry != nil {
+		stopExpiry()
+	}
 	if removed {
 		self.reportInflight()
 	}
@@ -811,6 +827,9 @@ func (self *SocketComponent) listenAs(ctx context.Context, address *SocketAddres
 	if (name == SocketSystemPublishName) != systemPublish {
 		// the system publish is a mail receiver's own component's, which no other caller reaches
 		return nil, &SocketCodeError{Err: ErrSocketDenied}
+	}
+	if err := self.prepareSocketNetwork(ctx, address.NetworkLabel); err != nil {
+		return nil, err
 	}
 	generation, policy, labels := self.current()
 	if labels == nil {

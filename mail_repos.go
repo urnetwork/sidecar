@@ -79,6 +79,8 @@ type MailReposArgs struct {
 	State func() *AclState
 	// Files RepoAdmin and RepoGrant statements: the core's poster, as EvsClientArgs.FileStatement is.
 	FileStatement EvsFileStatementFunction
+	// Resolves the sealed tag:mail name against this exact verified state for a Team inbox's deposit grant.
+	MailIndexerTag func(state *AclState) (Id, bool)
 	// Says whether this device holds a repo's key. Nil holds none.
 	Gkm GkmClient
 	// This sidecar.
@@ -89,12 +91,13 @@ type MailReposArgs struct {
 
 // The repos mail lives in. See the file header. Safe for concurrent use.
 type MailRepos struct {
-	evs           mailReposEvs
-	state         func() *AclState
-	fileStatement EvsFileStatementFunction
-	gkm           GkmClient
-	sidecarId     Id
-	log           Logger
+	evs            mailReposEvs
+	state          func() *AclState
+	fileStatement  EvsFileStatementFunction
+	mailIndexerTag func(*AclState) (Id, bool)
+	gkm            GkmClient
+	sidecarId      Id
+	log            Logger
 
 	// held for one creation at a time, across its calls; never taken with stateLock held
 	createToken chan struct{}
@@ -127,6 +130,7 @@ func newMailRepos(evs mailReposEvs, args *MailReposArgs) *MailRepos {
 		evs:                   evs,
 		state:                 args.State,
 		fileStatement:         args.FileStatement,
+		mailIndexerTag:        args.MailIndexerTag,
 		gkm:                   args.Gkm,
 		sidecarId:             args.SidecarId,
 		log:                   log,
@@ -565,6 +569,18 @@ func (self *MailRepos) NetworkMailKeyRepo(ctx context.Context, config *MailConfi
 	}
 	if !lookup.Known {
 		return Id{}, ErrMailReposAbsent
+	}
+	state, err := self.verifiedState()
+	if err != nil {
+		return Id{}, err
+	}
+	// A Team's network-wide key belongs to the one admin-marked repo in the signed log.
+	// A member scope still uses its own mailbox, as does a personal network.
+	if zone.Scope == "" && state.teamNetwork() {
+		row := state.Repo(lookup.MailboxRepoId)
+		if row.GetInbox() != protocol.RepoInbox_REPO_INBOX_ADMIN || !mailRepoStands(row) {
+			return Id{}, ErrMailReposAbsent
+		}
 	}
 	return lookup.MailboxRepoId, nil
 }

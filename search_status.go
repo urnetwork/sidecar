@@ -15,11 +15,16 @@ import (
 
 // A repo's status, or with a nil repoId every repo's together (SidecarSearchEngine).
 func (self *SearchEngine) Status(repoId *Id) (*SearchStatus, error) {
+	return self.status(repoId, nil)
+}
+
+// Computes status using the same repo grants as the caller's search.
+func (self *SearchEngine) status(repoId *Id, allowRepo func(Id) bool) (*SearchStatus, error) {
 	repos, err := self.args.Scope.Repos(context.Background())
 	if err != nil {
 		return nil, err
 	}
-	request := &SearchRequest{}
+	request := &SearchRequest{allowRepo: allowRepo}
 	if repoId != nil {
 		request.Repos = []Id{*repoId}
 	}
@@ -52,7 +57,7 @@ func (self *SearchEngine) refStatus(entry *searchScopedRef) (*SearchStatus, erro
 		return status, nil
 	}
 	repoId, refId := entry.repo.RepoId, entry.ref.RefId
-	snapshot, err := self.args.Sync.Snapshot(repoId, refId)
+	snapshot, err := self.args.Sync.Snapshot(repoId, entry.ref.indexId())
 	if err != nil {
 		// not synced yet: on, nothing cached
 		return status, nil
@@ -78,7 +83,7 @@ func (self *SearchEngine) refStatus(entry *searchScopedRef) (*SearchStatus, erro
 	if 0 < lastDay {
 		status.AllCachedThrough = time.UnixMilli(int64(lastDay) * indexDayMs).UTC()
 	}
-	missing, _, err := self.args.Sync.moreMissing(repoId, refId)
+	missing, _, err := self.args.Sync.moreMissing(repoId, entry.ref.indexId())
 	if err != nil {
 		return nil, err
 	}

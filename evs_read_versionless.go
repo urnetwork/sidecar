@@ -69,7 +69,7 @@ func (self *EvsRepo) ReadVersion(ctx context.Context, args *EvsReadArgs, out io.
 	if err != nil {
 		return nil, err
 	}
-	return self.readFile(ctx, refId, args, args.Fresh, out)
+	return self.readFile(ctx, refId, args, args.Fresh, out, false)
 }
 
 // Each listed file's versioning, read from its newest version, ReadMaxPathCount paths a round. A child with no

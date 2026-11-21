@@ -172,7 +172,7 @@ type DirectoryFold struct {
 	// (DirectoryClient's directoryFoldFiles, directory_card.go); nil for none
 	files func(fold *DirectoryFold) []*directoryVersion
 	// what that judging keeps between updates, which goes with this fold at a lost read
-	fileState any
+	fileState interface{ supersedesEntry(*directoryVersion) bool }
 }
 
 // A fold of directoryId's entries, raising its alarms through alarm, nil for none.
@@ -249,21 +249,19 @@ func (self *DirectoryFold) Update(entries []*RecordReadEntry) {
 	if self.files != nil {
 		fileVersions = self.files(self)
 	}
-	held := func() map[[sha256.Size]byte]*directoryVersion {
-		self.stateLock.Lock()
-		defer self.stateLock.Unlock()
-		return self.leafVersions
-	}()
+	self.stateLock.Lock()
+	held, files := self.leafVersions, self.fileState
+	self.stateLock.Unlock()
 	leafVersions := map[[sha256.Size]byte]*directoryVersion{}
 	for _, entry := range entries {
 		if entry == nil || entry.Header == nil || entry.Kind() != RecordKindAnnounce || entry.State != RecordEntryLive || entry.Body == nil {
 			continue
 		}
-		if version, ok := held[entry.Leaf]; ok {
-			leafVersions[entry.Leaf] = version
-			continue
+		version, ok := held[entry.Leaf]
+		if !ok {
+			version, ok = directoryVersionOf(entry)
 		}
-		if version, ok := directoryVersionOf(entry); ok {
+		if ok && (files == nil || !files.supersedesEntry(version)) {
 			leafVersions[entry.Leaf] = version
 		}
 	}

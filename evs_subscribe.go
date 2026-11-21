@@ -243,9 +243,14 @@ func (self *EvsClient) StartSubscriptions() error {
 	return self.subscriber.start()
 }
 
-// Ends the subscriber's rounds and returns once the round in progress, if any, has. Subscriptions stay in the store
-// for the next start.
+// Ends and joins the mount workers and subscription rounds. Their durable records stay for the next start.
 func (self *EvsClient) Close() {
+	self.stateLock.Lock()
+	mounts, _ := self.localTier.(interface{ closeMounts() })
+	self.stateLock.Unlock()
+	if mounts != nil {
+		mounts.closeMounts()
+	}
 	self.subscriber.stateLock.Lock()
 	cancel, done := self.subscriber.runCancel, self.subscriber.runDone
 	self.subscriber.runCancel, self.subscriber.runDone = nil, nil

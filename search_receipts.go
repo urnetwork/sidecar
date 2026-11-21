@@ -19,6 +19,9 @@ package sidecar
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
 )
 
@@ -38,6 +41,9 @@ func searchReceiptDepositor(deposit SearchReceiptDeposit, repoId Id) func(ctx co
 		}
 		objectIds := make([][]byte, 0, len(wanted))
 		for _, file := range wanted {
+			if file == nil || file.ContentSha256 == ([sha256.Size]byte{}) {
+				return fmt.Errorf("%w: missing signed index digest", ErrRecordReceiptRefused)
+			}
 			sum := file.ContentSha256
 			objectIds = append(objectIds, sum[:])
 		}
@@ -52,4 +58,91 @@ func searchReceiptFollowArgs(repo *SearchScopeRepo, deposit SearchReceiptDeposit
 		return false, nil
 	}
 	return true, searchReceiptDepositor(deposit, repo.RepoId)
+}
+
+// The sealed admission window and whether queries must skip the ref while its receipt is outstanding.
+type searchReceiptRoundWire struct {
+	NextMs  int64 `json:"next_ms"`
+	Skipped bool  `json:"skipped,omitempty"`
+}
+
+// A manual sync, a background trigger and a restarted member all use the same reservation.
+var errSearchReceiptInterval = errors.New("search sync: the non-writer sync interval has not elapsed")
+
+// The local receipt schedule is keyed by the encrypted index's ref, shared by its content streams.
+func searchReceiptRoundKey(repo, ref Id) string {
+	return hex.EncodeToString(repo[:]) + "/" + hex.EncodeToString(ref[:])
+}
+
+// Reserves the interval before the first remote read. An interrupted round leaves the ref skipped.
+func (self *SidecarSearchState) beginReceiptRound(key string) (int64, error) {
+	now := self.clock.Now()
+	next := now.Add(self.settings.NonWriterSyncInterval).UnixMilli()
+	var refused error
+	err := self.change(func(wire *searchStateWire) {
+		if wire.ReceiptRounds[key].NextMs > now.UnixMilli() {
+			refused = errSearchReceiptInterval
+			return
+		}
+		if wire.ReceiptRounds == nil {
+			wire.ReceiptRounds = make(map[string]searchReceiptRoundWire)
+		}
+		wire.ReceiptRounds[key] = searchReceiptRoundWire{NextMs: next, Skipped: true}
+	}, func(*searchStateWire) error { return refused })
+	return next, err
+}
+
+// Makes a completed, receipted snapshot available. Until this write succeeds a restart still skips it.
+func (self *SidecarSearchState) finishReceiptRound(key string, next int64) error {
+	return self.change(func(wire *searchStateWire) {
+		row, ok := wire.ReceiptRounds[key]
+		if !ok || row.NextMs != next {
+			return
+		}
+		row.Skipped = false
+		wire.ReceiptRounds[key] = row
+	}, nil)
+}
+
+// Reads the most recent durable outcome, including an interrupted round.
+func (self *SidecarSearchState) receiptRoundSkipped(key string) bool {
+	wire, err := self.current()
+	return err != nil || wire.ReceiptRounds[key].Skipped
+}
+
+// Covers held files from an older writer manifest, and any surviving partial plan, before it can be reused.
+func (self *SearchSync) receiptHeld(ctx context.Context, ref *searchSyncRef) error {
+	manifest, plan := self.state(ref)
+	var files []*SearchSyncWanted
+	add := func(held []*SearchManifestFile) {
+		for _, f := range held {
+			if f.State == SearchManifestHeld {
+				files = append(files, &SearchSyncWanted{ContentSha256: f.ContentSha256})
+			}
+		}
+	}
+	if manifest != nil && !manifest.Receipted {
+		add(manifest.Files)
+	}
+	if plan != nil {
+		add(plan.Staged)
+	}
+	if len(files) != 0 {
+		if ref.args.depositReceipt == nil {
+			return errSearchSyncReceipt
+		}
+		if err := ref.args.depositReceipt(ctx, files); err != nil {
+			return fmt.Errorf("%w: %w", errSearchSyncReceipt, err)
+		}
+	}
+	return nil
+}
+
+// Both an unacknowledged round and a writer-only cached snapshot keep the protected ref out of a page.
+func (self *SearchSync) receiptSkipped(repo, index Id) bool {
+	self.stateLock.Lock()
+	ref := self.refs[[2]Id{repo, index}]
+	skipped := ref == nil || (ref.manifest != nil && !ref.manifest.Receipted) || errors.Is(ref.lastErr, errSearchSyncReceipt)
+	self.stateLock.Unlock()
+	return skipped || self.args.receiptState != nil && self.args.receiptState.receiptRoundSkipped(searchReceiptRoundKey(repo, index))
 }

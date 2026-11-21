@@ -64,6 +64,9 @@ type SearchEngineArgs struct {
 	// i/ (search_text_source.go).
 	Text    func(repoId Id, refId Id) SearchTextSource
 	Display func(repoId Id, refId Id) SearchDisplaySource
+	// A stable view of locally held versions on a named ref, and its locally held K_ref.
+	// Nil means this host has no scan source. Opening and paging a view must never fetch.
+	Scan func(ctx context.Context, repoId Id, refId Id) (*SearchScanView, error)
 	// This host's local layer of a ref (search_local_layer.go), nil where it keeps none.
 	Local func(repoId Id, refId Id) *SearchLocalLayer
 	// Mail's joins (search_join.go): a mail hit's flags from what the device holds of f/ and i/, which leave out spam
@@ -169,6 +172,9 @@ func (self *SearchEngine) open(ctx context.Context, session Id, request *SearchR
 	if request == nil || request.PageSize < 0 {
 		return nil, "", ErrSearchRequest
 	}
+	if request.Ref == string(EvsIndexRefName) || request.Ref != "" && len(request.Repos) == 0 {
+		return nil, "", ErrSearchRequest
+	}
 	if request.Scope != SearchCached && request.Scope != SearchLatest && request.Scope != SearchAll {
 		return nil, "", fmt.Errorf("%w: scope %d", ErrSearchRequest, request.Scope)
 	}
@@ -208,6 +214,25 @@ func (self *SearchEngine) open(ctx context.Context, session Id, request *SearchR
 		engine: self, session: session, request: &kept, query: query, filters: filters, normalizer: normalizer,
 		excluded: excluded, joinAsk: searchJoinAskOf(&kept), more: newSearchEngineMore(), lifetime: lifetime,
 		endLifetime: endLifetime,
+	}
+	visible := make(map[Id]bool, len(scoped)+len(excluded))
+	for _, ref := range scoped {
+		visible[ref.repo.RepoId] = true
+	}
+	for _, row := range excluded {
+		visible[row.RepoId] = true
+	}
+	for _, repo := range repos {
+		if repo == nil || !visible[repo.RepoId] {
+			continue
+		}
+		id := repo.RepoId
+		if repo.valid != nil {
+			stream.validScope = append(stream.validScope, repo.valid)
+		}
+		if allow := kept.allowRepo; allow != nil {
+			stream.validScope = append(stream.validScope, func() bool { return allow(id) })
+		}
 	}
 	if err := stream.open(ctx, scoped); err != nil {
 		stream.Close()
@@ -255,6 +280,9 @@ func (self *SearchEngine) EndSession(session Id) {
 func (self *SearchEngine) RunBackgroundSync(ctx context.Context) error {
 	if self.background == nil {
 		return ErrSidecarSearchUnavailable
+	}
+	if err := self.refreshScope(ctx, nil); err != nil {
+		return err
 	}
 	return self.background.RunBackgroundSync(ctx)
 }
@@ -375,6 +403,9 @@ type searchEngineStream struct {
 	filters    *searchRowFilters
 	normalizer *indexNormalizer
 	excluded   []SearchExclusion
+	repoEnds   []<-chan struct{}
+	validScope []func() bool
+	refNames   map[[2]Id]string
 	// What the request asks of mail's joins.
 	joinAsk SearchJoinAsk
 	// "search more"'s download and what it landed, shared with its window's goroutine.
@@ -384,17 +415,18 @@ type searchEngineStream struct {
 	endLifetime context.CancelFunc
 
 	// One page at a time.
-	pageLock sync.Mutex
-	refs     []*searchOpenedRef
-	ranker   *searchRanker
+	pageLock  sync.Mutex
+	refs      []*searchOpenedRef
+	scans     []*searchEngineScan
+	scanIndex int
+	ranker    *searchRanker
 	// 0 before phase 1; 1; 2 and on, phase 2's partitions.
 	phase int
 	step  int
 	// Phase-2 partitions waiting to be ranked, in the order they were matched.
 	pending []*searchRankInput
-	// The window call whose landed shards matchLanded reads together, and the shards it landed so far.
-	landedCall   int
-	landedShards []*searchShardSource
+	// Releases the current cold shard after its last candidate has been ranked.
+	releasePhase func()
 	// Hits ranked and held back past PageByteCount, or given back past a caller's limit (holdBack), first on the next
 	// page.
 	held []SearchHit
@@ -432,31 +464,88 @@ func (self *searchEngineStream) open(ctx context.Context, scoped []*searchScoped
 	planScope := map[SearchScope]searchPlanScope{SearchCached: searchPlanCached, SearchLatest: searchPlanLatest, SearchAll: searchPlanAll}[self.request.Scope]
 	for _, entry := range scoped {
 		repoId, refId := entry.repo.RepoId, entry.ref.RefId
+		indexId := entry.ref.indexId()
+		if entry.ref.valid != nil {
+			self.validScope = append(self.validScope, entry.ref.valid)
+		}
+		name := entry.ref.Name
+		if name == "" && !entry.ref.Default && len(entry.repo.Refs) != 0 && entry.repo.Refs[0] != entry.ref {
+			name = "id:" + refId.String()
+		}
+		if name != "" && name != string(EvsMainRefName) {
+			if self.refNames == nil {
+				self.refNames = map[[2]Id]string{}
+			}
+			self.refNames[[2]Id{repoId, refId}] = name
+		}
+		end := engine.args.Sync.repoEnd(repoId)
+		if !slices.Contains(self.repoEnds, end) {
+			self.repoEnds = append(self.repoEnds, end)
+		}
 		exclude := func(reason string) {
 			self.excluded = append(self.excluded, SearchExclusion{RepoId: repoId, RefId: &refId, Reason: reason})
 		}
+		fallback := func(reason string) error {
+			if entry.repo.ReceiptRequired && errors.Is(engine.args.Sync.lastError(repoId, indexId), errSearchSyncReceipt) {
+				exclude(SearchExcludedReceipt)
+				return nil
+			}
+			if searchBreadthOf(self.request) == SearchBreadthRepo && engine.args.Scan != nil {
+				view, err := engine.args.Scan(ctx, repoId, refId)
+				if errors.Is(err, errSearchSyncReceipt) {
+					exclude(SearchExcludedReceipt)
+					return nil
+				}
+				if err != nil {
+					return err
+				}
+				if view != nil && view.Source != nil && view.RefKey != nil {
+					if view.RefKey.RepoId() != repoId || view.RefKey.checkHeld() != nil {
+						return ErrSearchCacheKey
+					}
+					indexRef, err := EvsRefId(view.RefKey, EvsIndexRefName)
+					if err != nil {
+						return err
+					}
+					if refId == indexRef {
+						exclude(SearchExcludedNoIndex)
+						return nil
+					}
+					if view.valid != nil {
+						self.validScope = append(self.validScope, view.valid)
+					}
+					self.scans = append(self.scans, &searchEngineScan{view: view, scope: entry, reason: reason,
+						since: searchSearchableSinceSeconds(nowMs, entry.repo.SearchableAge)})
+					return nil
+				}
+			}
+			exclude(reason)
+			return nil
+		}
 		if entry.scan {
-			// §11.14's off row in repo breadth: no scan source is wired yet, so coverage says the index is off
+			reason := SearchExcludedUnbuilt
 			if entry.ref.IndexOff {
-				exclude(SearchExcludedIndexOff)
-			} else {
-				exclude(SearchExcludedUnbuilt)
+				reason = SearchExcludedIndexOff
+			}
+			if err := fallback(reason); err != nil {
+				return err
 			}
 			continue
 		}
-		snapshot, err := engine.args.Sync.Snapshot(repoId, refId)
+		snapshot, err := engine.args.Sync.Snapshot(repoId, indexId)
 		switch {
+		case errors.Is(err, errSearchSyncReceipt):
+			exclude(SearchExcludedReceipt)
+			continue
 		case errors.Is(err, ErrSidecarStoreAbsent), errors.Is(err, ErrSearchSyncUnfollowed):
-			if entry.repo.ReceiptRequired && errors.Is(engine.args.Sync.lastError(repoId, refId), errSearchSyncReceipt) {
-				exclude(SearchExcludedReceipt)
-			} else {
-				exclude(SearchExcludedUnbuilt)
+			if err := fallback(SearchExcludedUnbuilt); err != nil {
+				return err
 			}
 			continue
 		case err != nil:
 			return err
 		}
-		held, err := engine.args.Cache.Ref(repoId, refId)
+		held, err := engine.args.Cache.Ref(repoId, indexId)
 		if err != nil {
 			snapshot.Release()
 			return err
@@ -474,7 +563,9 @@ func (self *searchEngineStream) open(ctx context.Context, scoped []*searchScoped
 			continue
 		case searchRefOff:
 			snapshot.Release()
-			exclude(SearchExcludedIndexOff)
+			if err := fallback(SearchExcludedIndexOff); err != nil {
+				return err
+			}
 			continue
 		}
 		companion := searchRootCompanion(snapshot.manifest.Root)
@@ -505,7 +596,7 @@ func (self *searchEngineStream) open(ctx context.Context, scoped []*searchScoped
 		}
 		confirmer := &searchConfirmer{
 			query: self.query, filters: self.filters, normalizer: self.normalizer, registry: searchRegistryOf(entry.repo.Kind),
-			settings: engine.results, repoId: repoId,
+			settings: engine.results, repoId: repoId, acceptRow: entry.repo.acceptRow,
 		}
 		if engine.args.Text != nil {
 			confirmer.text = engine.args.Text(repoId, refId)
@@ -515,13 +606,18 @@ func (self *searchEngineStream) open(ctx context.Context, scoped []*searchScoped
 		}
 		opened.source = &searchRankSource{repoId: repoId, refId: refId, companion: companion, mask: mask, confirmer: confirmer}
 		self.refs = append(self.refs, opened)
-		engine.args.Cache.MarkSearched(repoId, refId, SearchCachePartition{})
+		engine.args.Cache.MarkSearched(repoId, indexId, SearchCachePartition{})
 	}
 	return nil
 }
 
 // Whether the search reads repoId.
 func (self *searchEngineStream) reads(repoId Id) bool {
+	for _, scan := range self.scans {
+		if scan.scope.repo.RepoId == repoId {
+			return true
+		}
+	}
 	for _, ref := range self.refs {
 		if ref.repoId == repoId {
 			return true
@@ -530,8 +626,28 @@ func (self *searchEngineStream) reads(repoId Id) bool {
 	return false
 }
 
+// Whether an erasure or a lost read has invalidated the query's scope, even after a finished stream released its snapshots.
+func (self *searchEngineStream) scopeEnded() bool {
+	return searchReposEnded(self.repoEnds) || slices.ContainsFunc(self.validScope, func(valid func() bool) bool { return !valid() })
+}
+
+// Reports whether any repo in the query has invalidated its readers, without waiting for a change.
+func searchReposEnded(ends []<-chan struct{}) bool {
+	for _, end := range ends {
+		select {
+		case <-end:
+			return true
+		default:
+		}
+	}
+	return false
+}
+
 // Whether an erasure, a CUT, a drop or a lost read ended a snapshot the search reads (§16.10's pages row).
 func (self *searchEngineStream) ended() bool {
+	if self.scopeEnded() {
+		return true
+	}
 	for _, ref := range self.refs {
 		select {
 		case <-ref.snap.Ended():
@@ -604,7 +720,34 @@ func (self *searchEngineStream) nextReporting(ctx context.Context, report func(p
 			self.held = append(self.held, hit)
 		}
 	}
-	if self.phase == 0 {
+	if len(page) < self.request.PageSize && len(self.held) == 0 && self.scanIndex < len(self.scans) {
+		scan := self.scans[self.scanIndex]
+		result, err := scan.page(pageCtx, self, self.request.PageSize-len(page))
+		if err != nil {
+			return nil, self.progressNow(), false, err
+		}
+		for _, hit := range result.hits {
+			kept, _, err := searchJoinMailHit(pageCtx, self.engine.args.Join, self.joinAsk, hit.repoId, hit.row)
+			if err != nil {
+				return nil, self.progressNow(), false, err
+			}
+			if kept {
+				self.finished.Confirmed += 1
+				view := searchHitOf(hit)
+				if len(page) < self.request.PageSize && len(self.held) == 0 {
+					give(view)
+				} else {
+					self.held = append(self.held, view)
+				}
+			}
+		}
+		scan.position = result.position
+		if result.done {
+			self.scanIndex += 1
+			self.searched += 1
+		}
+	}
+	if self.scanIndex == len(self.scans) && self.phase == 0 {
 		inputs := []*searchRankInput{}
 		near := []*searchNearInput{}
 		for _, ref := range self.refs {
@@ -619,7 +762,7 @@ func (self *searchEngineStream) nextReporting(ctx context.Context, report func(p
 			return nil, self.progressNow(), false, err
 		}
 	}
-	for len(page) < self.request.PageSize && len(self.held) == 0 && pageCtx.Err() == nil && !self.done {
+	for self.scanIndex == len(self.scans) && len(page) < self.request.PageSize && len(self.held) == 0 && pageCtx.Err() == nil && !self.done {
 		ranked, err := self.ranker.page(pageCtx, self.request.PageSize-len(page))
 		if err != nil {
 			return nil, self.progressNow(), false, err
@@ -657,6 +800,13 @@ func (self *searchEngineStream) nextReporting(ctx context.Context, report func(p
 	if 0 < len(page) && self.answerHook != nil {
 		self.answerHook()
 	}
+	if self.ended() {
+		self.Close()
+		return nil, self.progressNow(), true, ErrSearchCursorExpired
+	}
+	for i := range page {
+		page[i].refName = self.refNames[[2]Id{page[i].Repo, page[i].Ref}]
+	}
 	return page, self.progressNow(), self.done && len(self.held) == 0, nil
 }
 
@@ -668,6 +818,9 @@ func (self *searchEngineStream) begin(inputs []*searchRankInput) error {
 	}
 	self.phase += 1
 	self.phaseCounted = false
+	if len(inputs) == 1 {
+		self.releasePhase = inputs[0].release
+	}
 	self.searched += len(inputs)
 	return self.ranker.settleNear(nil, "", 0)
 }
@@ -760,6 +913,10 @@ func (self *searchEngineStream) beginNext(ctx context.Context, holding bool) (bo
 
 // Adds the phase just given to the search's running counts, once.
 func (self *searchEngineStream) finishPhase() {
+	if self.releasePhase != nil {
+		self.releasePhase()
+		self.releasePhase = nil
+	}
 	self.finished.Confirmed += self.current.matches
 	self.finished.Possible += self.current.possible
 	self.finished.Near += self.current.near
@@ -788,7 +945,12 @@ func (self *searchEngineStream) progressNow() SearchProgress {
 		FetchedBytes: more.progress.MeteredByteCount, Waiting: more.waiting, TooBroad: self.tooBroad,
 		Excluded: slices.Clone(self.excluded),
 	}
-	total := 0
+	total := len(self.scans)
+	for _, scan := range self.scans {
+		progress.Coverage = append(progress.Coverage, SearchRepoCoverage{
+			RepoId: scan.scope.repo.RepoId, RefId: scan.scope.ref.RefId, State: scan.reason,
+		})
+	}
 	for _, ref := range self.refs {
 		total += len(ref.plan.steps)
 		coverage := ref.coverage()
@@ -802,7 +964,7 @@ func (self *searchEngineStream) progressNow() SearchProgress {
 	}
 	progress.Total = max(total, self.searched)
 	progress.Counts = self.countsNow()
-	progress.Counts.Repos = len(self.refs)
+	progress.Counts.Repos = len(self.refs) + len(self.scans)
 	progress.Counts.Excluded = len(self.excluded)
 	return progress
 }

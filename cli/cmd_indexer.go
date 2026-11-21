@@ -1,9 +1,9 @@
 // ur indexer (TEAM-M2-18, TEAM-M10-01; §7.9's IndexerSet, owner decisions 150, 175, 178; D-TEAM-27):
 //
-//	ur indexer add [--scope=<scope>] [--services=<services>]   designate this device, network or member scope, for
+//	ur indexer add [--scope=<scope>] [--services=<services>] [--network=<network>]   designate this device, network or member scope, for
 //	                                                            mail, mirror and search (the default all three)
-//	ur indexer rm [--scope=<scope>]                             retire this device's designation at a scope
-//	ur indexer ls                                               the network's indexers
+//	ur indexer rm [--scope=<scope>] [--network=<network>]                             retire this device's designation at a scope
+//	ur indexer ls [--network=<network>]                                               the network's indexers
 //
 // add and rm sign an IndexerSet only for a command confirmed on /dev/tty, never through MCP (D-CORE-13); add refuses
 // search on an app host, which an indexer never is (owner decision 197), and installs the daemon's unit if absent
@@ -35,9 +35,9 @@ func init() {
 	registerUrCommand(&urCommand{
 		name: "indexer",
 		usage: strings.Join([]string{
-			"  ur indexer add [--scope=<scope>] [--services=<services>]",
-			"  ur indexer rm [--scope=<scope>]",
-			"  ur indexer ls",
+			"  ur indexer add [--scope=<scope>] [--services=<services>] [--network=<network>]",
+			"  ur indexer rm [--scope=<scope>] [--network=<network>]",
+			"  ur indexer ls [--network=<network>]",
 		}, "\n"),
 		summary: "designate this device as the network's or its member's indexer, retire it, or list indexers",
 		run:     runUrIndexer,
@@ -45,41 +45,9 @@ func init() {
 	urDaemonMethodExtensions = append(urDaemonMethodExtensions, urIndexerDesignationMethods)
 }
 
-// What the designation methods act on.
-type urIndexerDesignationTarget interface {
-	listIndexers() ([]sidecar.ConfigIndexer, error)
-	designateIndexer(ctx context.Context, scope protocol.IndexerScope, services []protocol.IndexerService) error
-	retireIndexerScope(ctx context.Context, scope protocol.IndexerScope) error
-}
-
-func (self *urDaemonNetwork) listIndexers() ([]sidecar.ConfigIndexer, error) {
-	running, err := self.onlySidecar()
-	if err != nil {
-		return nil, err
-	}
-	return running.Indexers()
-}
-
-// A confirmed control call. ur's daemon is never an app host.
-func (self *urDaemonNetwork) designateIndexer(ctx context.Context, scope protocol.IndexerScope, services []protocol.IndexerService) error {
-	running, err := self.onlySidecar()
-	if err != nil {
-		return err
-	}
-	return running.DesignateIndexer(ctx, scope, services, false, nil, sidecar.SidecarActConfirmed, nil)
-}
-
-// A confirmed control call.
-func (self *urDaemonNetwork) retireIndexerScope(ctx context.Context, scope protocol.IndexerScope) error {
-	running, err := self.onlySidecar()
-	if err != nil {
-		return err
-	}
-	return running.RetireIndexerScope(ctx, scope, sidecar.SidecarActConfirmed, nil)
-}
-
 // indexer.designate's and indexer.retire_scope's params.
 type urIndexerParams struct {
+	Network  string  `json:"network,omitempty"`
 	Scope    int32   `json:"scope"`
 	Services []int32 `json:"services,omitempty"`
 }
@@ -95,17 +63,14 @@ type urIndexersReply struct {
 	Items []*urIndexerItem `json:"items"`
 }
 
-// The designation methods over target, when it hosts a Sidecar.
-func urIndexerDesignationMethods(target urDaemonTarget) []*sidecar.DaemonMethod {
-	indexers, ok := target.(urIndexerDesignationTarget)
-	if !ok {
-		return nil
-	}
+// Designations belong to the network selected by the control request or its project.
+func urIndexerDesignationMethods(_ urDaemonTarget) []*sidecar.DaemonMethod {
 	return []*sidecar.DaemonMethod{
 		{
-			Name: urMethodIndexerList,
+			Name:    urMethodIndexerList,
+			Network: true,
 			Handler: func(ctx context.Context, call *sidecar.DaemonCall) (any, error) {
-				list, err := indexers.listIndexers()
+				list, err := call.Sidecar.Indexers()
 				if err != nil {
 					return nil, err
 				}
@@ -118,6 +83,7 @@ func urIndexerDesignationMethods(target urDaemonTarget) []*sidecar.DaemonMethod 
 		},
 		{
 			Name:    urMethodIndexerDesignate,
+			Network: true,
 			Confirm: true,
 			Handler: func(ctx context.Context, call *sidecar.DaemonCall) (any, error) {
 				params := &urIndexerParams{}
@@ -128,18 +94,24 @@ func urIndexerDesignationMethods(target urDaemonTarget) []*sidecar.DaemonMethod 
 				for _, service := range params.Services {
 					services = append(services, protocol.IndexerService(service))
 				}
-				return nil, indexers.designateIndexer(ctx, protocol.IndexerScope(params.Scope), services)
+				follower := call.Sidecar.ConfigFollower()
+				if follower == nil {
+					return nil, sidecar.ErrGkmUnavailable
+				}
+				return nil, call.Sidecar.DesignateIndexer(ctx, protocol.IndexerScope(params.Scope), services, false,
+					follower.CurrentConfigKey, sidecar.SidecarActConfirmed, nil)
 			},
 		},
 		{
 			Name:    urMethodIndexerRetireOne,
+			Network: true,
 			Confirm: true,
 			Handler: func(ctx context.Context, call *sidecar.DaemonCall) (any, error) {
 				params := &urIndexerParams{}
 				if err := decodeUrParams(call, params); err != nil {
 					return nil, err
 				}
-				return nil, indexers.retireIndexerScope(ctx, protocol.IndexerScope(params.Scope))
+				return nil, call.Sidecar.RetireIndexerScope(ctx, protocol.IndexerScope(params.Scope), sidecar.SidecarActConfirmed, nil)
 			},
 		},
 	}
@@ -192,9 +164,10 @@ func urIndexerServices(options docopt.Opts) ([]protocol.IndexerService, error) {
 
 // ur indexer: the list, or a designation or retirement confirmed on the terminal.
 func runUrIndexer(ctx context.Context, cli *urCli, options docopt.Opts) error {
+	network := urOptionString(options, "--network")
 	if urOptionBool(options, "ls") {
 		reply := &urIndexersReply{}
-		if err := cli.callDaemon(ctx, urMethodIndexerList, nil, false, reply); err != nil {
+		if err := cli.callDaemon(ctx, urMethodIndexerList, &urNetworkParams{Network: network}, false, reply); err != nil {
 			return err
 		}
 		if len(reply.Items) == 0 {
@@ -218,14 +191,14 @@ func runUrIndexer(ctx context.Context, cli *urCli, options docopt.Opts) error {
 			cli.printf("nothing changed\n")
 			return nil
 		}
-		return cli.callDaemon(ctx, urMethodIndexerRetireOne, &urIndexerParams{Scope: int32(scope)}, true, nil)
+		return cli.callDaemon(ctx, urMethodIndexerRetireOne, &urIndexerParams{Network: network, Scope: int32(scope)}, true, nil)
 	}
 	services, err := urIndexerServices(options)
 	if err != nil {
 		return err
 	}
 	names := []string{}
-	params := &urIndexerParams{Scope: int32(scope)}
+	params := &urIndexerParams{Network: network, Scope: int32(scope)}
 	for _, service := range services {
 		params.Services = append(params.Services, int32(service))
 		names = append(names, strings.ToLower(strings.TrimPrefix(service.String(), "INDEXER_SERVICE_")))

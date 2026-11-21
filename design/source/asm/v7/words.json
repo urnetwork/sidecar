@@ -12,7 +12,7 @@
   "num": 2,
   "code": "TRUST",
   "words": 9282,
-  "code_words": 21416,
+  "code_words": 21489,
   "ceiling": 3000,
   "over": 6282,
   "over_pct": 209.4
@@ -56,11 +56,11 @@
  {
   "num": 7,
   "code": "TEAM",
-  "words": 12389,
-  "code_words": 14953,
+  "words": 12576,
+  "code_words": 14983,
   "ceiling": 3500,
-  "over": 8889,
-  "over_pct": 254.0
+  "over": 9076,
+  "over_pct": 259.3
  },
  {
   "num": 8,
@@ -92,11 +92,11 @@
  {
   "num": 11,
   "code": "EVS",
-  "words": 22550,
-  "code_words": 55086,
+  "words": 22593,
+  "code_words": 55285,
   "ceiling": 5000,
-  "over": 17550,
-  "over_pct": 351.0
+  "over": 17593,
+  "over_pct": 351.9
  },
  {
   "num": 12,
@@ -164,11 +164,11 @@
  {
   "num": 19,
   "code": "OPS",
-  "words": 10651,
-  "code_words": 11087,
+  "words": 10665,
+  "code_words": 11117,
   "ceiling": 3500,
-  "over": 7151,
-  "over_pct": 204.3
+  "over": 7165,
+  "over_pct": 204.7
  },
  {
   "num": 20,

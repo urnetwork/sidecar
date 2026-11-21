@@ -36,6 +36,7 @@
 package sidecar
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -71,6 +72,8 @@ type searchRemoteRefAsk struct {
 	refId []byte
 	// the repo's place in the request, which breaks time ties in the candidate order
 	place uint16
+	// An owner-bound share needs its served record before the corpus includes this ref in any result.
+	recordServed func() bool
 }
 
 // What the corpus says of one ref asked: rows 4 to 8 of 7.2.2, and the coverage row's fields for a ref it serves.
@@ -152,6 +155,8 @@ type SearchRemoteServerArgs struct {
 	State *SidecarSearchState
 	// The engine whose snapshots, text views and local layers serving reads (search_remote_corpus.go).
 	Engine *SearchEngine
+	// Direct, local generation lookup on a daemon. No remote request may fetch a key.
+	HeldRepoKey func(repoId Id, generation uint64) *EvsRepoKey
 	// The text pin of a content ref this host holds the text of: its mirror's, mounted tree's or bare repository's
 	// replay point (§11.11), and the pushes up to it that no validated index file nor the local layer covers. Nil, or
 	// false, serves the ref from the index (7.2.2's row 7), claiming no span.
@@ -178,7 +183,9 @@ func NewSearchRemoteServer(args *SearchRemoteServerArgs) (*SearchRemoteServer, e
 	if args == nil || args.Engine == nil {
 		return nil, errSearchRemoteServerArgs
 	}
-	return newSearchRemoteServer(args, newSearchEngineRemoteCorpus(args.Engine, args.TextPin))
+	corpus := newSearchEngineRemoteCorpus(args.Engine, args.TextPin)
+	corpus.heldRepoKey = args.HeldRepoKey
+	return newSearchRemoteServer(args, corpus)
 }
 
 // A server over args and corpus, which tests fake.
@@ -210,6 +217,12 @@ func (self *SearchRemoteServer) Handle(ctx context.Context, request *Subprotocol
 	if !ok {
 		return nil, &SubprotocolError{Code: protocol.ErrorCode_ERR_PERMISSION_DENIED}
 	}
+	// Check the authenticated Hello key against the same state that governs this page.
+	if key := request.Peer.IdentityPublicKey; len(key) != 0 {
+		if row := state.SidecarRow(requesterId); row == nil || !bytes.Equal(row.GetIdentityPublicKey(), key) {
+			return nil, &SubprotocolError{Code: protocol.ErrorCode_ERR_UNAUTHENTICATED}
+		}
+	}
 	admission, err := self.args.Budget.Admit(ctx, requesterId)
 	if err != nil {
 		var refusal *SidecarRemoteRefusal
@@ -233,9 +246,6 @@ func (self *SearchRemoteServer) Handle(ctx context.Context, request *Subprotocol
 		return self.failure(protocol.SearchStatus_SEARCH_CURSOR_EXPIRED, parsed)
 	case searchRemoteCursorInvalid:
 		return self.failure(protocol.SearchStatus_SEARCH_INVALID, parsed)
-	case searchRemoteCursorRepeat:
-		admission.Release()
-		return self.repeat(cursor, parsed)
 	}
 	// steps 5 to 7 under the cursor's pageLock; a cursor that must end ends once it is released
 	var failed protocol.SearchStatus
@@ -278,24 +288,19 @@ func (self *SearchRemoteServer) standing(requesterId Id) (*ConfigState, Id, bool
 	if err != nil || state == nil {
 		return nil, Id{}, false
 	}
-	if !searchRemoteRequesterStands(state, requesterId) || !searchRemoteServesSearch(state, selfId, self.args.Services) {
+	now := max(state.timeMs, self.clock.Now().UnixMilli())
+	_, selfStands := state.standingSidecar(selfId, now)
+	_, requesterStands := state.standingSidecar(requesterId, now)
+	if !selfStands || !requesterStands || !searchRemoteRequesterStands(state, requesterId) || !searchRemoteServesSearch(state, selfId, self.args.Services) {
 		return nil, Id{}, false
 	}
 	return state, selfId, true
 }
 
-// A repeat of the cursor's page: its last reply, unchanged, never computed again. A repeat of page 0 that finds the
-// cursor ended, or past page 0, is answered as the table's rows say.
-func (self *SearchRemoteServer) repeat(cursor *searchRemoteCursor, request *protocol.SearchRequest) ([]byte, error) {
-	cursor.pageLock.Lock()
-	defer cursor.pageLock.Unlock()
-	switch {
-	case cursor.ended.Load():
-		return self.failure(protocol.SearchStatus_SEARCH_CURSOR_EXPIRED, request)
-	case cursor.page != request.GetPage() || cursor.lastReply == nil:
-		return self.failure(protocol.SearchStatus_SEARCH_INVALID, request)
-	}
-	return cursor.lastReply, nil
+// A grant or owner-bound share may expire between two pages even when the config tip stays still.
+func (self *SearchRemoteServer) verdict(state *ConfigState, selfId, requesterId, repoId Id) (protocol.SearchServed, bool) {
+	now := max(state.timeMs, self.clock.Now().UnixMilli())
+	return searchRemoteConfigVerdictAt(state, selfId, requesterId, repoId, self.args.Services, now)
 }
 
 // Steps 5 to 7 for a new cursor: each repo authorized to its coverage row, the served ones pinned, the served record
@@ -318,16 +323,28 @@ func (self *SearchRemoteServer) openPage(ctx context.Context, admission *Sidecar
 	repos := []*searchRemoteCursorRepo{}
 	asks := []searchRemoteRefAsk{}
 	askIndexes := []int{}
+	sharedRecords := map[Id]func() bool{}
 	for place, named := range request.GetRepos() {
 		repoId, err := IdFromBytes(named.GetRepoId())
 		if err != nil {
 			return nil, protocol.SearchStatus_SEARCH_INVALID, true
 		}
 		repo := &searchRemoteCursorRepo{repoId: repoId, refId: named.GetRefId(), place: uint16(place)}
-		served, ok := searchRemoteConfigVerdict(state, selfId, requesterId, repoId, self.args.Services)
+		served, ok := self.verdict(state, selfId, requesterId, repoId)
 		repo.row = &protocol.SearchCoverage{RepoId: repoId.Bytes(), RefId: searchRemoteRowRefId(named.GetRefId(), repoId), Served: uint32(served)}
 		if ok {
-			asks = append(asks, searchRemoteRefAsk{repoId: repoId, refId: named.GetRefId(), place: uint16(place)})
+			ask := searchRemoteRefAsk{repoId: repoId, refId: named.GetRefId(), place: uint16(place)}
+			if searchRemoteSharedRead(state, requesterId, repoId) {
+				record := sharedRecords[repoId]
+				if record == nil {
+					record = sync.OnceValue(func() bool {
+						return self.args.State != nil && self.args.State.RecordServed(requesterId, repoId) == nil
+					})
+					sharedRecords[repoId] = record
+				}
+				ask.recordServed = record
+			}
+			asks = append(asks, ask)
 			askIndexes = append(askIndexes, len(repos))
 		}
 		repos = append(repos, repo)
@@ -360,17 +377,6 @@ func (self *SearchRemoteServer) openPage(ctx context.Context, admission *Sidecar
 				repo.row.Uncovered = row.uncovered
 			}
 		}
-		// the served record, once a search, for a repo read only by an EvsShare; none written serves it not
-		for _, index := range askIndexes {
-			repo := repos[index]
-			if !searchRemoteServes(protocol.SearchServed(repo.row.GetServed())) || !searchRemoteSharedRead(state, requesterId, repo.repoId) {
-				continue
-			}
-			if self.args.State == nil || self.args.State.RecordServed(requesterId, repo.repoId) != nil {
-				repo.row.Served = uint32(protocol.SearchServed_REFUSED_ALL_ABSENT)
-				repo.row.RefVersion, repo.row.Chain, repo.row.RefTimeMs, repo.row.LatestFromMs, repo.row.Uncovered = 0, nil, 0, 0, 0
-			}
-		}
 	}
 	// the repos an erasure's EndRepo reads, set under the table's lock too
 	self.table.setRepos(cursor, repos)
@@ -383,26 +389,26 @@ func (self *SearchRemoteServer) nextPage(ctx context.Context, admission *Sidecar
 	requesterId Id, cursor *searchRemoteCursor, request *protocol.SearchRequest) ([]byte, protocol.SearchStatus, bool) {
 	cursor.pageLock.Lock()
 	defer cursor.pageLock.Unlock()
-	switch cursor.decideWithLock(request.GetPage()) {
-	case searchRemoteCursorExpired:
+	action := cursor.decideWithLock(request.GetPage())
+	if action == searchRemoteCursorExpired {
 		return nil, protocol.SearchStatus_SEARCH_CURSOR_EXPIRED, false
-	case searchRemoteCursorRepeat:
-		admission.Release()
-		return cursor.lastReply, protocol.SearchStatus_SEARCH_OK, false
-	case searchRemoteCursorInvalid:
+	}
+	if action == searchRemoteCursorInvalid {
 		return nil, protocol.SearchStatus_SEARCH_INVALID, false
 	}
-	authorized := searchRemoteRequesterStands(state, requesterId)
 	for _, repo := range cursor.repos {
-		if !authorized || !searchRemoteServes(protocol.SearchServed(repo.row.GetServed())) {
-			continue
-		}
-		if _, ok := searchRemoteConfigVerdict(state, selfId, requesterId, repo.repoId, self.args.Services); !ok {
-			authorized = false
+		if searchRemoteServes(protocol.SearchServed(repo.row.GetServed())) {
+			if _, ok := self.verdict(state, selfId, requesterId, repo.repoId); !ok {
+				return nil, protocol.SearchStatus_SEARCH_CURSOR_EXPIRED, true
+			}
 		}
 	}
-	if !authorized || cursor.view != nil && cursor.view.Ended() {
+	if cursor.view != nil && cursor.view.Ended() {
 		return nil, protocol.SearchStatus_SEARCH_CURSOR_EXPIRED, true
+	}
+	if action == searchRemoteCursorRepeat {
+		admission.Release()
+		return cursor.lastReply, protocol.SearchStatus_SEARCH_OK, false
 	}
 	return self.pageWithLock(ctx, admission, cursor, request)
 }

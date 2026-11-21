@@ -142,6 +142,7 @@ type mailClientParts interface {
 	config(repoId Id, args *MailConfigArgs) (*MailConfig, error)
 	repos(args *MailReposArgs) *MailRepos
 	ingestor(repoId Id, args *MailIngestArgs) (*MailIngestor, error)
+	groupRefs(groupId, mailboxId Id) (*MailGroupRefs, error)
 }
 
 // The parts over an EvsClient.
@@ -165,6 +166,11 @@ func (self *mailEvsClientParts) config(repoId Id, args *MailConfigArgs) (*MailCo
 func (self *mailEvsClientParts) repos(args *MailReposArgs) *MailRepos {
 	args.Evs = self.evs
 	return newMailRepos(self.evs, args)
+}
+
+// Tracks the group's index in the member's own mailbox.
+func (self *mailEvsClientParts) groupRefs(groupId, mailboxId Id) (*MailGroupRefs, error) {
+	return NewMailGroupRefs(&MailGroupRefsArgs{Group: self.evs.Repo(groupId), Mailbox: self.evs.Repo(mailboxId), Settings: self.settings.GroupRefs})
 }
 
 // The repo's ingestor.
@@ -349,18 +355,26 @@ func (self *Sidecar) MailWith(settings *MailSettings) (*MailClient, error) {
 // Binds what the client works on, replacing what was bound; what was built over the old binding is dropped and built
 // again at its next use. The component calls it as the Sidecar's pieces stand; a host may call it itself.
 func (self *MailClient) Bind(binding *MailBinding) {
+	self.bindWhen(binding, nil)
+}
+
+// A generation can decline a stale binding, or supply its sender, under the same lock that installs it.
+func (self *MailClient) bindWhen(binding *MailBinding, accept func(*MailBinding) bool) {
 	if binding == nil {
 		return
 	}
 	copied := *binding
 	var closeConfig *MailConfig
-	func() {
+	applied := func() bool {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
+		if accept != nil && !accept(&copied) {
+			return false
+		}
 		if self.binding != nil && self.binding.Evs == copied.Evs && self.binding.Engine == copied.Engine {
 			// the same repos and state: keep what is built, take the rest
 			self.binding = &copied
-			return
+			return true
 		}
 		self.binding = &copied
 		self.repos = nil
@@ -372,11 +386,12 @@ func (self *MailClient) Bind(binding *MailBinding) {
 		self.imapStores = map[Id]*MailImapStore{}
 		self.vaults = map[Id]*MailVault{}
 		self.notifyWithLock()
+		return true
 	}()
 	if closeConfig != nil {
 		closeConfig.Close()
 	}
-	if copied.Gate != nil {
+	if applied && copied.Gate != nil {
 		// so a restart reconciles a reserved send with no caller alive
 		self.registerOutboxLookup(copied.Gate)
 	}
@@ -438,9 +453,20 @@ func (self *MailClient) mailRepos() (*MailRepos, *AclState, error) {
 		self.repos = parts.repos(&MailReposArgs{
 			State:         engine.State,
 			FileStatement: binding.FileStatement,
-			Gkm:           binding.Gkm,
-			SidecarId:     self.sidecarId,
-			Log:           self.log,
+			MailIndexerTag: func(state *AclState) (Id, bool) {
+				view := engine.installed.Load()
+				if view != nil && view.state == state && view.local != nil {
+					for _, name := range view.local.Names {
+						if name.Text == "tag:"+aclMailIndexerTag {
+							return name.Id, true
+						}
+					}
+				}
+				return Id{}, false
+			},
+			Gkm:       binding.Gkm,
+			SidecarId: self.sidecarId,
+			Log:       self.log,
 		})
 	}
 	return self.repos, state, nil
@@ -663,6 +689,53 @@ func (self *MailClient) Aliases(ctx context.Context) ([]*MailAddressLookup, erro
 	return config.Addresses()
 }
 
+// The verified group inboxes for the MCP recipient guard. An unreadable record leaves a general repo unclassified.
+func (self *Sidecar) MailGroupInboxes(ctx context.Context) (map[Id]bool, error) {
+	mail, err := self.Mail()
+	if err != nil {
+		return nil, err
+	}
+	binding, _, state, err := mail.state()
+	if err != nil {
+		return nil, err
+	}
+	follower := self.ConfigFollower()
+	if follower == nil {
+		return nil, ErrMailConfigNotSynced
+	}
+	engine, _ := follower.StandingPolicy()
+	if engine != binding.Engine {
+		return nil, ErrMailConfigNotSynced
+	}
+	for _, repo := range state.Rows().GetRepos() {
+		if repo.GetKind() == protocol.RepoKind_REPO_KIND_MAILCFG && mailRepoStands(repo) && !mailRepoNetworkConfig(repo) {
+			// The network mailcfg alone cannot rule out a group in a Team scope's mailcfg.
+			return nil, ErrMailConfigNotSynced
+		}
+	}
+	config, err := mail.mailConfig()
+	if err != nil {
+		return nil, err
+	}
+	if err := config.Sync(ctx); err != nil {
+		return nil, err
+	}
+	groups, err := config.groupInboxes(state.Rows().GetRepos())
+	if err != nil {
+		return nil, err
+	}
+	standing, _ := follower.StandingPolicy()
+	if standing != engine || engine.State() != state {
+		return nil, ErrMailConfigNotSynced
+	}
+	mail.stateLock.Lock()
+	defer mail.stateLock.Unlock()
+	if mail.binding != binding || mail.config != config {
+		return nil, ErrMailConfigNotSynced
+	}
+	return groups, nil
+}
+
 // What CreateAlias creates.
 type MailAliasCreateArgs struct {
 	// <LocalPart>@<net>.<root>.
@@ -741,8 +814,7 @@ func (self *MailClient) CreateAgentAddress(ctx context.Context, args *MailAgentA
 	})
 }
 
-// A group address and its repo (`ur id group-create`): MailRepos.CreateGroup, which refuses until RepoCreate carries
-// plan-MAIL-group-inbox's marker.
+// Creates the signed group inbox and its address on a confirmed command.
 func (self *MailClient) CreateGroup(ctx context.Context, args *MailCreateGroupArgs) (*EvsRepo, error) {
 	repos, _, err := self.mailRepos()
 	if err != nil {

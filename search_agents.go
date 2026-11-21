@@ -17,6 +17,7 @@ package sidecar
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"time"
 )
@@ -26,6 +27,7 @@ var searchAgentsKinds = []string{"claim", "handoff", "ask", "note", "run"}
 
 // search_agents' request.
 type SearchAgentsRequest struct {
+	allowRepo func(Id) bool
 	// The task, a query as search's; empty lists the agents active in the window.
 	Task string
 	// Zero: now less SearchGroupSettings.AgentsSince, and no end.
@@ -84,7 +86,7 @@ func (self *SearchEngine) Agents(ctx context.Context, session Id, networkId Id, 
 	}
 	settings := self.groups
 	now := self.clock.Now()
-	search := &SearchRequest{Text: request.Task, Repos: request.Repos, Since: request.Since, Until: request.Until}
+	search := &SearchRequest{allowRepo: request.allowRepo, Text: request.Task, Repos: request.Repos, Since: request.Since, Until: request.Until}
 	if search.Since.IsZero() {
 		search.Since = now.Add(-settings.AgentsSince)
 	}
@@ -131,6 +133,9 @@ func (self *SearchEngine) Agents(ctx context.Context, session Id, networkId Id, 
 	if 0 < request.GroupCount && request.GroupCount < len(groups) {
 		groups = groups[:request.GroupCount]
 	}
+	if stream.scopeEnded() {
+		return nil, ErrSearchCursorExpired
+	}
 	result.Groups = groups
 	return result, nil
 }
@@ -156,7 +161,7 @@ func searchCollect(ctx context.Context, stream *searchEngineStream, clock Clock,
 		}
 		page, pageProgress, pageDone, err := stream.nextReporting(pageCtx, report)
 		if err != nil {
-			if !first && waitCtx.Err() != nil && ctx.Err() == nil {
+			if !errors.Is(err, ErrSearchCursorExpired) && !first && waitCtx.Err() != nil && ctx.Err() == nil {
 				// the wait ended mid-page: what landed answers
 				break
 			}

@@ -18,11 +18,9 @@ import (
 	"fmt"
 )
 
-// The args a GkmGroupClient takes from this Sidecar for the network it is enrolled in: its sidecar_id and network, api,
-// Sign, the network's keychain under gkm's namespace (§5.9), which upkeep's records share, mls, its alarms raised as
-// events, settings.Gkm, the clock and the log. What only the verified state and the upkeep know, the reader keys, the
-// repos it reads, recovery keys, anchoring and the witness stop, the caller sets. mls is nil for a sidecar that holds
-// no leaf.
+// Builds network group-client arguments from this sidecar's identity, signer, keychain, clock and settings.
+// It provides the authenticated recovery-key source, local recovery sealing and anchor status. The host supplies
+// ReaderKey upkeep and the repos the device can read. Passing nil for mls selects KeyDelivery.
 func (self *Sidecar) GkmGroupClientArgs(api GkmGroupApi, mls MlsEngine) (*GkmGroupClientArgs, error) {
 	networkId := self.enrolledNetworkId()
 	identity := self.currentIdentity()
@@ -30,17 +28,39 @@ func (self *Sidecar) GkmGroupClientArgs(api GkmGroupApi, mls MlsEngine) (*GkmGro
 		return nil, fmt.Errorf("%w: gkm needs an enrolled network", errInvalidSettings)
 	}
 	return &GkmGroupClientArgs{
-		SidecarId: identity.SidecarId,
-		NetworkId: *networkId,
-		Api:       api,
-		Sign:      self.Sign,
-		Secrets:   self.instance.secrets(*networkId, gkmUpkeepSecretsNamespace),
-		Mls:       mls,
-		Alarm:     self.raiseGkmAlarm,
-		Settings:  self.settings.Gkm,
-		Clock:     self.clock,
-		Log:       self.log,
+		SidecarId:              identity.SidecarId,
+		NetworkId:              *networkId,
+		Api:                    api,
+		Sign:                   self.Sign,
+		Secrets:                self.instance.secrets(*networkId, gkmUpkeepSecretsNamespace),
+		Mls:                    mls,
+		RecoveryKeyAt:          self.gkmRecoveryKeyAt,
+		OwnRecoveryKey:         self.sealOwnRecoveryBinding,
+		AwaitingRecoveryAnchor: self.RecoveryAwaitingAnchor,
+		Alarm:                  self.raiseGkmAlarm,
+		Settings:               self.settings.Gkm,
+		Clock:                  self.clock,
+		Log:                    self.log,
 	}, nil
+}
+
+// Reads an already-held generation directly from the encrypted keychain. Config callbacks can run inside a
+// group flow, so opening a sealed statement must not re-enter a group manager or perform an unauthenticated fetch.
+func (self *Sidecar) GkmHeldKey(repoId Id, generation uint64) *EvsRepoKey {
+	networkId := self.enrolledNetworkId()
+	if networkId == nil || self.instance == nil {
+		return nil
+	}
+	encoded, err := self.instance.secrets(*networkId, gkmUpkeepSecretsNamespace).Get(gkmGenerationRecordName(repoId, generation))
+	if err != nil {
+		return nil
+	}
+	defer clear(encoded)
+	held, err := decodeGkmHeldGeneration(encoded)
+	if err != nil || held.poisoned {
+		return nil
+	}
+	return held.key
 }
 
 // Whether the network's keychain under gkm's namespace holds RK_g of some generation of the repo, read with no state

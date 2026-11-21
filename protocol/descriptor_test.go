@@ -5,6 +5,7 @@
 package protocol
 
 import (
+	"bytes"
 	"maps"
 	"slices"
 	"strings"
@@ -21,6 +22,18 @@ import (
 
 // §4.9: one protobuf package across protocol and protocol/bridge, never connect's "bringyour".
 const testProtoPackage = "urnetwork.sidecar"
+
+// A summary with field 18 absent grants no exact-head capability. On the wire it is a bool at field 18.
+func TestEvsExactHeadCapabilityWire(t *testing.T) {
+	var summary EvsHeadSummary
+	if err := proto.Unmarshal([]byte{0x10, 0x01}, &summary); err != nil || summary.GetVersion() != 1 || summary.GetSupportsExactHead() {
+		t.Fatalf("legacy head summary: version %d, capability %t, %v", summary.GetVersion(), summary.GetSupportsExactHead(), err)
+	}
+	encoded, err := proto.Marshal(&EvsHeadSummary{SupportsExactHead: true})
+	if err != nil || !bytes.Equal(encoded, []byte{0x90, 0x01, 0x01}) {
+		t.Fatalf("capability wire bytes %x: %v", encoded, err)
+	}
+}
 
 // §4.4's files and those the service sections add, each registered by its root-relative path.
 var testProtoFiles = []string{
@@ -315,6 +328,7 @@ func TestServiceEnumNumbersStable(t *testing.T) {
 				"EVS_PUSH_FLAG_NONE": 0, "EVS_PUSH_FORCE": 1, "EVS_PUSH_DELETE": 2, "EVS_PUSH_BASE": 4,
 				"EVS_PUSH_IMMUTABLE": 8, "EVS_PUSH_CONSUME": 16, "EVS_PUSH_PATH_EPOCH": 32, "EVS_PUSH_ERASE": 64,
 				"EVS_PUSH_CLOSURE": 128, "EVS_PUSH_DROP": 256, "EVS_PUSH_CUT": 512, "EVS_PUSH_COMPLETION": 1024,
+				"EVS_PUSH_EXACT_HEAD": 2048,
 			},
 		},
 		{

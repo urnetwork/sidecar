@@ -1,8 +1,9 @@
 //go:build !js && !ios && !android && !sdk_mobile_bind
 
-// ur://evs/{repo}/{+path} (§16.5; D-MCP-17, I-9; MCP-M3-13): a file's newest version as evs_read reads it, under the
-// same guard, allow, trust and taint rule (tools_evs.go's header): its trust by its push's sealed provenance, own or
-// member for an untainted run's version, and an untrusted one, a tainted run's or an import's, tainting the run
+// ur://evs/{repo}/{+path} (§16.5; D-MCP-17, I-9; MCP-M3-13): a file's newest version, or the network and revision
+// an oversized evs_read result selected, under the same guard, allow, trust and taint rule (tools_evs.go's header):
+// its trust by its push's sealed provenance, own or member for an untainted run's version, and an untrusted one,
+// a tainted run's or an import's, tainting the run
 // before it returns (QD-042, QD-851).
 //
 //	subscribe  judged at once: the guard on the repo and path, then §8's allow of read, so a subscription on a refused
@@ -18,6 +19,7 @@ package mcp
 import (
 	"context"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -25,19 +27,60 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 )
 
+const mcpEvsUriPrefix = "ur://evs/"
+
 // The URI of a path's resource: its names each escaped, joined by /.
 func McpEvsUri(repoId sidecar.Id, path string) string {
 	names := strings.Split(path, "/")
 	for i, name := range names {
 		names[i] = url.PathEscape(name)
 	}
-	return "ur://evs/" + repoId.String() + "/" + strings.Join(names, "/")
+	return mcpEvsUriPrefix + repoId.String() + "/" + strings.Join(names, "/")
+}
+
+// A plain path reads main's head. A named ref is reachable only through the original session's hit.
+type mcpEvsResourcePin struct {
+	network string
+	version uint64
+	hit     string
+}
+
+func mcpEvsPinOf(uri string) (mcpEvsResourcePin, error) {
+	_, rawQuery, pinned := strings.Cut(uri, "?")
+	if !pinned {
+		return mcpEvsResourcePin{}, nil
+	}
+	values, err := url.ParseQuery(rawQuery)
+	withHit := len(values) == 3 && len(values["hit"]) == 1 && values.Get("hit") != ""
+	if err != nil || len(values) != 2 && !withHit || len(values["network"]) != 1 || len(values["version"]) != 1 {
+		return mcpEvsResourcePin{}, errMcpResourceNotFound()
+	}
+	networkId, err := sidecar.ParseId(values.Get("network"))
+	if err != nil || networkId == (sidecar.Id{}) {
+		return mcpEvsResourcePin{}, errMcpResourceNotFound()
+	}
+	version, err := strconv.ParseUint(values.Get("version"), 10, 64)
+	if err != nil || version == 0 {
+		return mcpEvsResourcePin{}, errMcpResourceNotFound()
+	}
+	return mcpEvsResourcePin{network: networkId.String(), version: version, hit: values.Get("hit")}, nil
+}
+
+func (pin mcpEvsResourcePin) target(call *McpCall, repoId sidecar.Id, path string) (*sidecar.SearchHitRef, error) {
+	if pin.hit == "" {
+		return &sidecar.SearchHitRef{RepoId: repoId, Path: path, Version: pin.version}, nil
+	}
+	ref, err := mcpEvsReadOf(call, &mcpEvsReadIn{Hit: pin.hit})
+	if err != nil || ref.RefName == "" || ref.RepoId != repoId || ref.Path != path || ref.Version != pin.version {
+		return nil, errMcpResourceNotFound()
+	}
+	return ref, nil
 }
 
 // The network a session's subscription acts on, resolved as a call's is, and ready.
-func (self *McpServer) sessionNetwork(session *McpSession) (sidecar.Id, McpNetwork, error) {
+func (self *McpServer) sessionNetwork(session *McpSession, name string) (sidecar.Id, McpNetwork, error) {
 	hello := session.hello
-	networkId, err := self.daemon.ResolveNetwork(&hello, "")
+	networkId, err := self.daemon.ResolveNetwork(&hello, name)
 	if err != nil {
 		return sidecar.Id{}, nil, newMcpError(McpCodeFailedPrecondition, "no network to act on: name one in the project's .ur", false)
 	}
@@ -67,7 +110,7 @@ type mcpEvsLeaseKey struct {
 }
 
 // Leases path's subscription in repo once for networkId's uri, its changes notifying uri.
-func (self *mcpEvsLeases) lease(ctx context.Context, networkId sidecar.Id, uri string, path string, repo McpEvsRepo, resources *McpResources) error {
+func (self *mcpEvsLeases) lease(ctx context.Context, networkId sidecar.Id, uri string, ref *sidecar.SearchHitRef, repo McpEvsRepo, resources *McpResources) error {
 	key := mcpEvsLeaseKey{networkId: networkId, uri: uri}
 	leased := func() bool {
 		self.stateLock.Lock()
@@ -78,10 +121,14 @@ func (self *mcpEvsLeases) lease(ctx context.Context, networkId sidecar.Id, uri s
 	if leased {
 		return nil
 	}
-	subscription, err := repo.Subscribe(ctx, &sidecar.EvsSubscribeArgs{
-		Paths:   []string{path},
+	args := &sidecar.EvsSubscribeArgs{
+		Paths:   []string{ref.Path},
 		Changes: func(change *sidecar.EvsRepoChange) { resources.Notify(uri) },
-	})
+	}
+	if ref.RefName != "" {
+		args.RefName = []byte(ref.RefName)
+	}
+	subscription, err := repo.Subscribe(ctx, args)
 	if err != nil {
 		return mcpEvsError(err)
 	}
@@ -131,13 +178,21 @@ func addEvsResource(resources *McpResources, server *McpServer) {
 	resources.Add(&McpResourceSpec{
 		UriTemplate: "ur://evs/{repo}/{+path}",
 		Name:        "evs",
-		Description: "A file of a repo at its newest version, as evs_read reads it; content a tainted run wrote, or an import brought in from outside, comes back marked untrusted, and reading it taints the run.",
+		Description: "A file of a repo at its newest version or the revision named in an evs_read result link. Content a tainted run wrote or an import brought in from outside comes back marked untrusted, and reading it taints the run.",
 		Read: func(ctx context.Context, call *McpCall, uri string, variables map[string]string, result *McpResult) (any, error) {
 			repoId, path, err := mcpEvsUriVariables(variables)
 			if err != nil {
 				return nil, err
 			}
-			if refusal := McpGuard([]McpTarget{mcpEvsTarget(call, repoId, McpRepoRead, path)}); refusal != nil {
+			pin, err := mcpEvsPinOf(uri)
+			if err != nil {
+				return nil, err
+			}
+			ref, err := pin.target(call, repoId, path)
+			if err != nil {
+				return nil, err
+			}
+			if refusal := McpGuard([]McpTarget{mcpEvsReadTarget(call, ref)}); refusal != nil {
 				return nil, refusal
 			}
 			network, ok := mcpToolNetworkOf(call)
@@ -151,14 +206,18 @@ func addEvsResource(resources *McpResources, server *McpServer) {
 			if err != nil {
 				return nil, err
 			}
-			return mcpEvsRead(ctx, call, repoId, repo, path, 0, result)
+			return mcpEvsRead(ctx, call, repo, ref, pin.hit, result)
 		},
 		Subscribe: func(ctx context.Context, session *McpSession, uri string, variables map[string]string) error {
 			repoId, path, err := mcpEvsUriVariables(variables)
 			if err != nil {
 				return err
 			}
-			networkId, network, err := server.sessionNetwork(session)
+			pin, err := mcpEvsPinOf(uri)
+			if err != nil {
+				return err
+			}
+			networkId, network, err := server.sessionNetwork(session, pin.network)
 			if err != nil {
 				return err
 			}
@@ -167,7 +226,12 @@ func addEvsResource(resources *McpResources, server *McpServer) {
 				return errMcpNoToolNetwork
 			}
 			call := &McpCall{Session: session, NetworkId: networkId, Network: network}
-			if refusal := McpGuard([]McpTarget{mcpEvsTarget(call, repoId, McpRepoRead, path)}); refusal != nil {
+			call.bindRecipientGuard(ctx)
+			ref, err := pin.target(call, repoId, path)
+			if err != nil {
+				return err
+			}
+			if refusal := McpGuard([]McpTarget{mcpEvsReadTarget(call, ref)}); refusal != nil {
 				return refusal
 			}
 			if toolNetwork.Identity() == nil || !toolNetwork.PolicyInstalled() {
@@ -180,7 +244,7 @@ func addEvsResource(resources *McpResources, server *McpServer) {
 			if err != nil {
 				return err
 			}
-			return leases.lease(ctx, networkId, uri, path, repo, resources)
+			return leases.lease(ctx, networkId, uri, ref, repo, resources)
 		},
 	})
 }

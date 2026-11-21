@@ -40,6 +40,8 @@ func urConfigFollowerSettings() *sidecar.SidecarConfigFollowerSettings {
 	settings.TrustFirstUse = true
 	settings.ConfigClient = sidecar.DefaultConfigClientSettings()
 	settings.ConfigClient.RetainFullTail = true
+	settings.ConfigClient.LogSettings = sidecar.DefaultConfigLogSettings()
+	settings.ConfigClient.LogSettings.AclSpendCheck = sidecar.NewSpendCheck(nil)
 	return settings
 }
 
@@ -71,7 +73,16 @@ func startUrScimSigner(running *sidecar.Sidecar, log sidecar.Logger) *sidecar.Si
 // Sidecar then runs unjudged, and the daemon's other networks are untouched. Nil when none started. A follower that
 // starts has the network's scim_signer started beside it (startUrScimSigner), which reads the state it installs.
 func startUrConfigFollower(running *sidecar.Sidecar, log sidecar.Logger) *sidecar.SidecarConfigFollower {
-	args := &sidecar.SidecarConfigFollowerArgs{Settings: urConfigFollowerSettings()}
+	args := &sidecar.SidecarConfigFollowerArgs{Settings: urConfigFollowerSettings(), BootstrapFirstOwner: true}
+	if urDaemonGkmClient != nil {
+		args.RecordEvs = func() (*sidecar.EvsClient, error) {
+			clients, err := urNetworkClientsOf(running)
+			if err != nil {
+				return nil, err
+			}
+			return clients.evsClient()
+		}
+	}
 	if urDaemonConfigHeads != nil {
 		args.Heads = urDaemonConfigHeads(running)
 	}
@@ -89,7 +100,36 @@ func startUrConfigFollower(running *sidecar.Sidecar, log sidecar.Logger) *sideca
 		log.Warningf("[ur]a network follows no config, and nothing is admitted on it: %s", err)
 		return nil
 	}
+	installSockets := func() {
+		// The Sidecar owns the component and closes it at removal or daemon shutdown.
+		component, err := running.NewSocketComponent(context.Background())
+		if err == nil {
+			_, err = running.AddComponent(component)
+			if err != nil {
+				component.Close()
+			}
+		}
+		if err != nil && !errors.Is(err, sidecar.ErrSidecarClosed) {
+			log.Warningf("[ur]a network could not start its sockets: %s", err)
+		}
+	}
+	if running.NetworkId() != nil {
+		installSockets()
+	} else {
+		// Platform sockets only need enrollment. Application sockets additionally wait for verified config.
+		go installSockets()
+	}
 	startUrScimSigner(running, log)
+	if evsClient := urDaemonEvsClient; evsClient != nil && urDaemonClients != nil && urDaemonClients.StateDirectory != "" && urDaemonClients.GitPath != "" {
+		// Recover persisted pushes without waiting for a git session. Closing the follower also ends the wait.
+		go func() {
+			if _, err := follower.WaitStanding(context.Background()); err == nil {
+				if _, err := evsClient(running); err != nil {
+					log.Warningf("[ur]the network's git mounts could not start: %s", err)
+				}
+			}
+		}()
+	}
 	return follower
 }
 
@@ -148,7 +188,7 @@ func newUrBridgeBuild(args *urBridgeBuildArgs) urBridgeBuildFunction {
 		if err != nil {
 			return nil, err
 		}
-		return wire.network(), nil
+		return newUrBridgeFilingNetwork(wire, running, follower, client)
 	}
 }
 

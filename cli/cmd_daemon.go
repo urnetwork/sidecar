@@ -160,9 +160,11 @@ type urNetworksTarget interface {
 // The daemon's instance and its Sidecars, one per network (CORE-M6-01), and the unenrolled one a further network's
 // enrollment takes, which joins the daemon's registry once it has a network. Safe for concurrent use.
 type urDaemonNetwork struct {
-	instance  *sidecar.SidecarInstance
-	daemon    *sidecar.Daemon
-	noSidecar string
+	instance     *sidecar.SidecarInstance
+	daemon       *sidecar.Daemon
+	noSidecar    string
+	tlsSettings  *sidecar.TlsCustomSettings
+	searchBudget *sidecar.SidecarRemoteBudget
 	// a running Sidecar on the instance's store of networkId, nil for one not enrolled yet
 	start func(networkId *sidecar.Id) (*sidecar.Sidecar, error)
 	// ends a Sidecar the daemon no longer hosts
@@ -177,6 +179,20 @@ type urDaemonNetwork struct {
 	further   *sidecar.Sidecar
 	// the root's bridge methods over bridges (bridge_forward.go), built once and shared by ur bridge and the MCP tools
 	daemonBridges *sidecar.DaemonBridges
+}
+
+// Hosts a newly enrolled or restarted network. Each search server draws on the same daemon budget.
+func (self *urDaemonNetwork) addSidecar(networkId sidecar.Id, running *sidecar.Sidecar) error {
+	if err := self.daemon.AddSidecar(networkId, running); err != nil {
+		return err
+	}
+	if self.searchBudget != nil {
+		if _, err := self.daemon.HostRemoteSearch(networkId, self.searchBudget); err != nil {
+			self.daemon.RemoveSidecar(networkId)
+			return err
+		}
+	}
+	return nil
 }
 
 // The hosted Sidecars, in network order.
@@ -310,13 +326,14 @@ func (self *urDaemonNetwork) enroll(ctx context.Context, credential *sidecar.Sid
 		if networkId == nil {
 			return 0, errors.New("the enrollment named no network")
 		}
-		if err := self.daemon.AddSidecar(*networkId, target); err != nil {
+		if err := self.addSidecar(*networkId, target); err != nil {
 			return 0, err
 		}
 		self.stateLock.Lock()
 		self.further = nil
 		self.stateLock.Unlock()
 	}
+	startUrHostedMail(target)
 	// the keychain's, which the enrollment wrote: Status names it only once the run loop has moved to it
 	return target.BoundGeneration(), nil
 }
@@ -345,13 +362,14 @@ func (self *urDaemonNetwork) PairChild(ctx context.Context, childJwt string) (*s
 		return nil, err
 	}
 	if !hosted {
-		if err := self.daemon.AddSidecar(networkId, target); err != nil {
+		if err := self.addSidecar(networkId, target); err != nil {
 			return nil, err
 		}
 		self.stateLock.Lock()
 		self.further = nil
 		self.stateLock.Unlock()
 	}
+	startUrHostedMail(target)
 	return &sidecar.DaemonPairReply{NetworkId: networkId, Generation: target.BoundGeneration()}, nil
 }
 
@@ -602,6 +620,12 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) error {
 		urlsErr = applyUrHttpsProxy(cli.getenv, settings)
 	}
 
+	if !ephemeral && urlsErr == nil {
+		if hosts, err := sidecar.SidecarHostListV1(); err == nil {
+			settings.Connect.SmtpProver = newSmtpProver(filepath.Join(stateDirectory, "smtp-proof"), hosts.SmtpProofKeysUrl())
+		}
+	}
+
 	var keyStore sidecar.SidecarKeyStore
 	keyStoreKind := osKeyStorePass
 	var backend sidecar.SidecarStoreBackend
@@ -707,7 +731,14 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) error {
 			log.Warningf("[ur]this daemon cannot name its own ur, so its git tier takes no push: %s", err)
 		}
 	}
-	network := &urDaemonNetwork{instance: instance, daemon: daemon, stop: closeSidecar}
+	network := &urDaemonNetwork{instance: instance, daemon: daemon, stop: closeSidecar, tlsSettings: urDesktopTlsSettings()}
+	if settings.Search.RemoteServe {
+		network.searchBudget, err = sidecar.NewSidecarRemoteBudget(settings.Search, settings.Clock)
+		if err != nil {
+			daemon.Close()
+			return err
+		}
+	}
 	// the bridges and ur tun end with the daemon, the tun's routes removed, on every path Run returns by; each network's
 	// bridge is built over its config follower (daemon_config.go)
 	bridgeArgs := urBridgeDaemonArgsOf(cli.instance, log)
@@ -744,7 +775,9 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) error {
 			daemon.Events().Attach(running)
 			// the network's one judge of its log, which starts at the Sidecar's first client generation; one that does
 			// not start leaves this network unjudged and the others following (CORE-M6-01)
-			startUrConfigFollower(running, log)
+			if follower := startUrConfigFollower(running, log); follower != nil {
+				startUrDesktopTls(ctx, running, follower, stateDirectory, network, log)
+			}
 			return running, nil
 		}
 		// a Sidecar per recorded network, each on the one instance, so the key store's wrap of U opens them all
@@ -755,7 +788,7 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) error {
 				log.Warningf("[ur]network %s runs no sidecar: %s", networkId, err)
 				continue
 			}
-			if err := daemon.AddSidecar(networkId, running); err != nil {
+			if err := network.addSidecar(networkId, running); err != nil {
 				log.Warningf("[ur]network %s: %s", networkId, err)
 				closeSidecar(running)
 			}

@@ -18,6 +18,8 @@ import (
 	"context"
 	"slices"
 	"sync"
+
+	"google.golang.org/protobuf/proto"
 )
 
 // Whether two outcomes say the same thing, their times aside.
@@ -35,6 +37,7 @@ func smtpOutcomeCopy(outcome *SmtpDomainOutcome) *SmtpDomainOutcome {
 		return nil
 	}
 	copied := *outcome
+	copied.progress = proto.CloneOf(outcome.progress)
 	return &copied
 }
 
@@ -121,6 +124,21 @@ func (self *smtpOutcomeBoard) writeOutcomes(ctx context.Context, refreshQueued b
 // Replaces or/ with the board's outcomes as they stand.
 func (self *smtpOutcomeBoard) write(ctx context.Context) error {
 	return self.writeOutcomes(ctx, false)
+}
+
+// A completed domain has a delivery or retry decision to keep even when its caller stops. If
+// cancellation interrupts the mailbox write, retry the same idempotent update within the outcome budget.
+func (self *smtpOutcomeBoard) writeResult(ctx context.Context) error {
+	if ctx.Err() == nil {
+		if err := self.write(ctx); err == nil || ctx.Err() == nil {
+			return err
+		}
+	}
+	writeCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	defer cancel()
+	stop := self.sender.clock.AfterFunc(self.sender.settings.OutcomeSendTimeout, cancel)
+	defer stop()
+	return self.write(writeCtx)
 }
 
 // Rewrites or/ every OutboxProgressInterval until stop, which returns once no rewrite runs.

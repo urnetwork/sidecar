@@ -28,9 +28,11 @@ type Sidecar struct {
 	// The sidecar's client of api, on every leg, holding its jwt and DPoP signer (api_client.go).
 	// Set once at construction.
 	sidecarApi *SidecarApi
+	// A member host consumes this network's core rollout across client generations. Guarded by stateLock.
+	followCoreGates bool
 	// Mirrors lifecycle's state for a caller waiting on a change, and is written only with it.
 	state          *MonitorValue[SidecarState]
-	eventCallbacks *CallbackList[SidecarEventFunction]
+	eventCallbacks *CallbackList[func(sidecarQueuedEvent)]
 	// ServiceToken's cache, under its own lock (api_service_token.go).
 	serviceTokens sidecarServiceTokens
 	// The network's DnsClient and its zone watch.
@@ -95,8 +97,11 @@ type Sidecar struct {
 	// search is: the forwarding leg sets up nothing.
 	forwardingSetup atomic.Value
 	// The network's config follower, which a host starts (sidecar_config_follower.go). Held as any, as search is: the
-	// forwarding and page legs build none.
+	// forwarding-only leg builds none.
 	configFollower atomic.Value
+	// The enrolled app or browser host owns one GKM and EVS replica for its identity.
+	memberReplicaLock sync.Mutex
+	memberReplica     interface{ Close() }
 	// The network's mail (Sidecar.Mail, mail_client.go). Held as any, as search is: the forwarding leg holds no mail.
 	mail atomic.Value
 	// What an executed drop reaches beside the mirror and the index cache (state_drop_apply.go). Held as any, as search
@@ -109,7 +114,7 @@ type Sidecar struct {
 	stateLock sync.Mutex
 	lifecycle sidecarLifecycle
 	// raised and not yet delivered, oldest first
-	eventQueue []SidecarEvent
+	eventQueue []sidecarQueuedEvent
 	// a goroutine is delivering eventQueue, which every later event joins
 	eventDelivering bool
 	// The core's namespace of this network's keychain.ur, which holds the identity key, the ClientKey
@@ -210,9 +215,15 @@ type SidecarAction struct {
 	// (QD-740, QD-772). A decision spends only on an action whose Detail is its request's. Nil for none.
 	Detail *SidecarActionDetail
 	// How many distinct actions the agent asks a template's approval to cover (§16.6's multi-use row; QD-1010), filed
-	// as ApprovalRequest.uses, which approvers render and sign: 2 or more with a template (Canonical's scope = true),
-	// and 0 or 1, one use, with any other action. Any other pairing is refused (ErrApprovalUses).
+	// as ApprovalRequest.uses, which approvers render and sign: 2 or more with a template (Canonical's scope = true, or
+	// Template), and 0 or 1, one use, with any other action. Any other pairing is refused (ErrApprovalUses).
 	Uses uint32
+	// A template Canonical falls inside, of its kind (scope = true), built by the daemon as Canonical is, which the
+	// agent asks Uses of in the action's place (owner decision 613: mail_send's uses, NewMailTemplateAction): the gate
+	// spends a decision that covers the action as ever, and where none does it files the template's request, not the
+	// action's, and answers pending with the template's id, so this action and each later one that falls inside the
+	// template spend its uses once a person approves it. Nil for none.
+	Template []byte
 	// The agent's own words about the action, filed as ApprovalRequest.summary and shown to an approver as
 	// untrusted text, never as the action (D-MCP-17). Empty for none.
 	Summary string
@@ -273,6 +284,9 @@ type SidecarOutcome struct {
 	State ApprovalOutcomeState
 	// The component's reference to what it did, opaque to the gate. Empty unless done.
 	EffectRef []byte
+	// The reserved use that returned this outcome, supplied in memory by the gate. A component can recover a
+	// receipt under this key when an older ledger entry recorded an incomplete reference.
+	effectKey []byte
 	// The effect's error in this call; nil on a retry that found a recorded outcome. Never stored.
 	Err error
 }

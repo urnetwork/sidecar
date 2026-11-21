@@ -199,7 +199,17 @@ func TestMailStrictRefusesASpliceBeforeAnySmtpByte(t *testing.T) {
 func TestMailStrictSealsStrictChainOnlyForACustomHostSplice(t *testing.T) {
 	chain := &mailStrictTestChain{}
 	policy := newMailStrictTestPolicy(true, chain)
+	repo, authority := newMailConfigTestWorld(t)
+	device := newMailConfigTestDevice(t, repo, authority, testMailConfigPhoneId, nil)
+	device.createId(t, "ann")
+	device.createId(t, "alice")
+	device.sync(t)
 	world := newMailSessionTestWorld(t, func(args *MailSessionArgs) {
+		args.Resolve = nil
+		args.mailConfig = device.config
+		args.Status = func(context.Context) (*MailNetworkStatus, error) {
+			return &MailNetworkStatus{Enabled: true, VerifiedDomains: []string{"customer.example"}}, nil
+		}
 		clock := args.Clock.(*mailReceiverTestClock)
 		settings := DefaultMailAuthSettings()
 		forwarder := &mailSessionTestForwarder{records: map[string]string{}}
@@ -207,9 +217,6 @@ func TestMailStrictSealsStrictChainOnlyForACustomHostSplice(t *testing.T) {
 		args.Slots = NewMailAuthSlots(settings)
 		args.StrictChain = policy.StrictChain
 	})
-	world.stateLock.Lock()
-	world.recipients["ann@customer.example"] = &MailSessionRecipient{Known: true, Address: "ann@customer.example", RepoId: NewId()}
-	world.stateLock.Unlock()
 	send := func(serverName string, recipient string, subject string) *protocol.MailDeposit {
 		t.Helper()
 		listenerEnd, senderEnd := newSocketStreamPipe(1024 * 1024)
@@ -229,11 +236,19 @@ func TestMailStrictSealsStrictChainOnlyForACustomHostSplice(t *testing.T) {
 		deposits := world.takenDeposits()
 		return deposits[len(deposits)-1].trailer
 	}
+	refusal := world.openNaming(testMailSessionIngress(t), "mx.customer.example")
+	refusal.envelope()
+	refusal.expect("RCPT TO:<ann@other.example>", 550)
+	refusal.expect("RCPT TO:<ann@sub.customer.example>", 550)
+	refusal.expect("RCPT TO:<unknown@customer.example>", 550)
 	custom := send("mx.customer.example", "ann@customer.example", "custom")
+	if !slices.Equal(custom.GetRecipients(), []string{"ann@customer.example"}) || world.takenDeposits()[0].repoId != testMailConfigMailboxId {
+		t.Fatalf("customer alias deposit %v", custom)
+	}
 	if !custom.GetEvidence().GetStrictChain() {
 		t.Fatalf("a customer-signed custom MX splice sealed no strict_chain: %v", custom.GetEvidence())
 	}
-	zone := send(testMailReceiverServerName, testMailSessionAlice, "zone")
+	zone := send(testMailReceiverServerName, "alice@acme.root.example", "zone")
 	if zone.GetEvidence() == nil || zone.GetEvidence().GetStrictChain() {
 		t.Fatalf("a URnetwork-zone splice's evidence %v", zone.GetEvidence())
 	}

@@ -127,7 +127,7 @@ func (self *aclEngineInstall) covers(subject AclSubject, target *protocol.AclTar
 			return !rule.portsLimited
 		}
 		for _, port := range ports {
-			if !aclLocalPortsMatch(rule, self.localRules[rule.index], port.GetProtocol(), port.GetFirst()) {
+			if !aclLocalPortsMatch(rule.portsLimited, self.localRules[rule.index], port.GetProtocol(), port.GetFirst()) {
 				return false
 			}
 		}
@@ -315,6 +315,8 @@ func (self *AclGrantFiler) Effect(action *StoredCanonicalAction) SidecarEffect {
 type aclGrantEffect struct {
 	filer  *AclGrantFiler
 	action *StoredCanonicalAction
+	// When set, a newly posted grant must also be confirmed at its receipt.
+	confirm func(context.Context, *bridge.AuthPin, []byte, []byte) error
 }
 
 // Files the GrantActivate the spend in ctx fixes, under its grant_id, and answers that id; under a standing grant, an
@@ -349,13 +351,22 @@ func (self *aclGrantEffect) Run(ctx context.Context, effectKey []byte) ([]byte, 
 		return nil, fmt.Errorf("%w: %w", ErrSidecarEffectNotDone, err)
 	}
 	testHookBarrier("acl_grant_file.activate.before", "")
-	_, err = act.Run(ctx, nil)
+	pins, err := act.Run(ctx, nil)
 	testHookBarrier("acl_grant_file.activate.after", "")
 	if err != nil {
 		if self.filer.held(grantId[:]) {
 			return grantId[:], nil
 		}
 		return nil, err
+	}
+	if self.confirm != nil {
+		var pin *bridge.AuthPin
+		if len(pins) == 1 {
+			pin = pins[0]
+		}
+		if err := self.confirm(ctx, pin, act.Signed()[0], grantId[:]); err != nil {
+			return nil, err
+		}
 	}
 	return grantId[:], nil
 }

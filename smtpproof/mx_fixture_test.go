@@ -72,7 +72,7 @@ func testRunSendToMx(t *testing.T, suites []uint16, mx sidecartest.MxServer, set
 		mxConn:      edgeMxConn,
 	}
 	edge.run()
-	prover := &Prover{settings: settings, backend: backend, tlsSuites: suites}
+	prover := testSendingProver(settings, backend, suites)
 	result, err := prover.SendSmtp(context.Background(), sidecarConn, job, edge)
 	sidecarConn.Close()
 	<-mxDone

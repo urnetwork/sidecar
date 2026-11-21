@@ -109,6 +109,8 @@ type mailStoreWrite struct {
 	Content []byte
 	// The path's version its writer read, 0 for a path it read as absent.
 	IfVersion uint64
+	// Requires a path with no history, including no removal. Used for an effect's one outbox entry.
+	CreateOnce bool
 	// The content came from outside the network, a received message: the in-ref search index's rows of it carry the
 	// outside bit (EvsPathWrite.Outside; §11.14), which ingest sets on m/ for every message MailEntryUntrusted marks.
 	Outside bool
@@ -166,7 +168,8 @@ func newMailEvsStore(repo *EvsRepo, refName []byte, settings *MailStoreSettings)
 // ReadHead's verified newest version, held to maxByteCount.
 func (self *mailEvsStore) Read(ctx context.Context, path string, maxByteCount int) ([]byte, uint64, error) {
 	out := &mailBoundedBuffer{maxByteCount: maxByteCount}
-	info, err := self.repo.ReadHead(ctx, &EvsReadArgs{RefName: self.refName, Path: path}, out)
+	_, _, segment := parseMailIndexPath(path)
+	info, err := self.repo.readHeadContent(ctx, &EvsReadArgs{RefName: self.refName, Path: path}, out, segment)
 	if err != nil {
 		if errors.Is(err, ErrMailStoreTooLarge) {
 			return nil, 0, ErrMailStoreTooLarge
@@ -174,6 +177,11 @@ func (self *mailEvsStore) Read(ctx context.Context, path string, maxByteCount in
 		return nil, 0, err
 	}
 	return out.buffer.Bytes(), info.Version, nil
+}
+
+// The signed erasure notes for readers that serve messages or cached list entries.
+func (self *mailEvsStore) Erasures(ctx context.Context, afterVersion uint64) ([]*EvsErasure, error) {
+	return self.repo.ReadErasures(ctx, afterVersion)
 }
 
 // List's verified children.
@@ -198,6 +206,9 @@ func (self *mailEvsStore) Write(ctx context.Context, writes []*mailStoreWrite) (
 			continue
 		}
 		pathWrites[i] = &EvsPathWrite{Path: write.Path, Content: bytes.NewReader(write.Content), IfVersion: &write.IfVersion, Outside: write.Outside}
+		if write.CreateOnce {
+			pathWrites[i].IfBaseVersion = new(uint64)
+		}
 		if write.Reserved != EvsReservedNone {
 			pathWrites[i].Options = self.reservedOptions(write.Reserved)
 		}

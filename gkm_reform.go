@@ -1,3 +1,8 @@
+// A v0 re-form files a signed GroupForm and replays the original signed generation ladder without an epoch.
+// Reseed stops after those objects so the restore can reactivate the repo. An active repo then rotates to the
+// first generation signed for its new group and stages the current holders' deliveries. The MLS-specific
+// steps below apply only when the optional draft engine is installed.
+//
 // Re-forming a repo's group (KEYS-M2-25; D-KEYS-12, D-KEYS-13, FI-5, FI-12; §10.8's site loss, plan-KEYS-reform-ladder's
 // rules as QD-074 decided them, DESIGN-DETAILS 6.2.4's Re-form): what a device does after a site loss took gkm's
 // objects, for a group a refused commit stalled, and for a group whose cipher suite IANA renumbered, and what every
@@ -132,7 +137,7 @@ type GkmRepoAdminView interface {
 	RepoAdmins(repoId Id) []Id
 }
 
-// §10.6's GroupForm signer rule at a state: a standing member device that is not read_only and, in an owner-bound
+// §10.6's GroupForm signer rule at a state: a standing writable sidecar and, in an owner-bound
 // repo, the owner's consented device; outside owner-bound kinds, one of the repo's admins, its access log's
 // RepoAdmins (owner decision 8), a device of a network admin, a member whose role is Owner or Admin, or a device a
 // state answering GkmRepoAdminView names. ErrGkmNotWriter for a signer the rule refuses. The rows hold no deletion's
@@ -146,8 +151,8 @@ func GkmFormSignerAllowed(view GkmAuthView, repoId Id, signerId Id) error {
 		return fmt.Errorf("%w: repo %s", ErrGkmNoRepo, repoId)
 	}
 	row := view.SidecarRow(signerId)
-	if !gkmRowStanding(row) || gkmRowReadOnly(row) || !gkmRowMemberDevice(row) {
-		return fmt.Errorf("%w: a GroupForm is a standing member device's that is not read_only", ErrGkmNotWriter)
+	if !gkmRowStanding(row) || gkmRowReadOnly(row) {
+		return fmt.Errorf("%w: a GroupForm needs a standing, writable sidecar", ErrGkmNotWriter)
 	}
 	if ownerMemberId := repo.GetOwnerMemberId(); 0 < len(ownerMemberId) {
 		consented := slices.ContainsFunc(repo.GetConsentedSidecarIds(), func(consentedId []byte) bool {
@@ -173,6 +178,19 @@ func GkmFormSignerAllowed(view GkmAuthView, repoId Id, signerId Id) error {
 	}
 	if adminView, ok := view.(GkmRepoAdminView); ok && slices.Contains(adminView.RepoAdmins(repoId), signerId) {
 		return nil
+	}
+	if config, ok := view.(interface {
+		Acl() (*AclState, error)
+		TimeMs() int64
+	}); ok {
+		acl, err := config.Acl()
+		if err != nil {
+			return err
+		}
+		access := acl.EvsAccess(AclSidecarSubject(signerId), repoId, AclTokenAudienceGkm, time.UnixMilli(config.TimeMs()))
+		if access.Rights.Has(AclEvsAdmin) {
+			return nil
+		}
 	}
 	return fmt.Errorf("%w: a GroupForm is a repo admin's or a network admin's device's", ErrGkmNotWriter)
 }
@@ -459,9 +477,6 @@ func (self *GkmGroupClient) ReformGroup(ctx context.Context, args *GkmReformArgs
 	if args == nil || args.RepoId == (Id{}) {
 		return Id{}, fmt.Errorf("%w: a re-form needs its repo", ErrGkmMalformed)
 	}
-	if self.args.Mls == nil {
-		return Id{}, fmt.Errorf("%w: a sidecar that holds no leaf forms no group", ErrGkmUnavailable)
-	}
 	manager := self.manager(args.RepoId)
 	manager.flowLock.Lock()
 	defer manager.flowLock.Unlock()
@@ -671,18 +686,6 @@ func (self *gkmGroupManager) draftReform(state GkmAuthView) (*gkmReformRecord, e
 	groupId := Id{}
 	// never fails: a broken system generator crashes the program instead
 	rand.Read(groupId[:])
-	var ownerMemberId *Id
-	if owner := repo.GetOwnerMemberId(); 0 < len(owner) {
-		ownerId, err := IdFromBytes(owner)
-		if err != nil {
-			return nil, fmt.Errorf("%w: the repo's owner", ErrGkmMalformed)
-		}
-		ownerMemberId = &ownerId
-	}
-	group, err := client.args.Mls.CreateGroup(groupId, &MlsUrGroup{NetworkId: client.args.NetworkId, RepoId: self.repoId, Kind: repo.GetKind(), OwnerMemberId: ownerMemberId})
-	if err != nil {
-		return nil, err
-	}
 	formBody, err := proto.MarshalOptions{Deterministic: true}.Marshal(&protocol.GroupForm{
 		RepoId: self.repoId.Bytes(), GroupId: groupId.Bytes(), PreviousGroupId: pins.groupId.Bytes(), Generation: generation,
 		// the state this device's right to re-form is judged at (QD-643)
@@ -695,26 +698,40 @@ func (self *gkmGroupManager) draftReform(state GkmAuthView) (*gkmReformRecord, e
 	if err != nil {
 		return nil, err
 	}
-	kek, err := MlsKek(group, self.repoId)
-	if err != nil {
-		return nil, err
+	upload := &protocol.GkmGroupReformRequest{Form: signedForm}
+	if client.args.Mls != nil {
+		var ownerMemberId *Id
+		if owner := repo.GetOwnerMemberId(); 0 < len(owner) {
+			ownerId, err := IdFromBytes(owner)
+			if err != nil {
+				return nil, fmt.Errorf("%w: the repo's owner", ErrGkmMalformed)
+			}
+			ownerMemberId = &ownerId
+		}
+		group, err := client.args.Mls.CreateGroup(groupId, &MlsUrGroup{NetworkId: client.args.NetworkId, RepoId: self.repoId, Kind: repo.GetKind(), OwnerMemberId: ownerMemberId})
+		if err != nil {
+			return nil, err
+		}
+		kek, err := MlsKek(group, self.repoId)
+		if err != nil {
+			return nil, err
+		}
+		genWrap, err := SealGkmGenWrap(top.key, groupId, group.Epoch(), kek)
+		clear(kek)
+		if err != nil {
+			return nil, err
+		}
+		groupInfo, err := group.GroupInfo()
+		if err != nil {
+			return nil, err
+		}
+		sealedGroupInfo, err := SealGkmGroupInfo(top.key, groupId, group.Epoch(), groupInfo)
+		if err != nil {
+			return nil, err
+		}
+		upload.GenWrap, upload.SealedGroupInfo, upload.CipherSuite = genWrap, sealedGroupInfo, uint32(mlsCipherSuiteXWing)
 	}
-	genWrap, err := SealGkmGenWrap(top.key, groupId, group.Epoch(), kek)
-	clear(kek)
-	if err != nil {
-		return nil, err
-	}
-	groupInfo, err := group.GroupInfo()
-	if err != nil {
-		return nil, err
-	}
-	sealedGroupInfo, err := SealGkmGroupInfo(top.key, groupId, group.Epoch(), groupInfo)
-	if err != nil {
-		return nil, err
-	}
-	request, err := proto.MarshalOptions{Deterministic: true}.Marshal(&protocol.GkmGroupReformRequest{
-		Form: signedForm, GenWrap: genWrap, SealedGroupInfo: sealedGroupInfo, CipherSuite: uint32(mlsCipherSuiteXWing),
-	})
+	request, err := proto.MarshalOptions{Deterministic: true}.Marshal(upload)
 	if err != nil {
 		return nil, err
 	}
@@ -728,6 +745,10 @@ func (self *gkmGroupManager) postReform(ctx context.Context, api GkmReformApi, r
 	request := &protocol.GkmGroupReformRequest{}
 	if err := proto.Unmarshal(record.request, request); err != nil {
 		return false, fmt.Errorf("%w: a re-form record's request", ErrGkmMalformed)
+	}
+	if client.KeyDeliveryOnly() {
+		// An interrupted older draft can still file its original signed form and generation.
+		request.GenWrap, request.SealedGroupInfo, request.CipherSuite = nil, nil, 0
 	}
 	for sendCount := 0; sendCount < max(1, client.settings.CommitSendCount); sendCount += 1 {
 		testHookBarrier(gkmBarrierReformFormBefore, gkmPathId(record.groupId))
@@ -890,17 +911,24 @@ func (self *gkmGroupManager) adoptOwnReform(state GkmAuthView, record *gkmReform
 	if err != nil {
 		return err
 	}
-	group, err := client.loadGroup(form.groupId)
-	if err != nil {
-		return err
-	}
-	floorHeader, err := gkmHeaderBytes(record.generation, top.generation.Rotate.GetAuth())
-	if err != nil {
-		return err
+	var authenticator, floorHeader []byte
+	if client.args.Mls != nil {
+		group, err := client.loadGroup(form.groupId)
+		if err != nil {
+			return err
+		}
+		authenticator = group.EpochAuthenticator()
+		floorHeader, err = gkmHeaderBytes(record.generation, top.generation.Rotate.GetAuth())
+		if err != nil {
+			return err
+		}
 	}
 	oldGroupId := pins.groupId
-	if err := client.movePinsToReform(self.repoId, form, group.EpochAuthenticator(), floorHeader); err != nil {
+	if err := client.movePinsToReform(self.repoId, form, authenticator, floorHeader); err != nil {
 		return err
+	}
+	if client.args.Mls == nil {
+		return nil
 	}
 	if forgetter, ok := client.args.Mls.(MlsGroupForgetter); ok {
 		if err := forgetter.ForgetGroup(oldGroupId); err != nil {
@@ -1076,6 +1104,9 @@ func (self *gkmGroupManager) adoptReformInFlow(ctx context.Context, state GkmAut
 		return false, err
 	}
 	oldGroupId := pins.groupId
+	if client.args.Mls == nil {
+		floorHeader = nil
+	}
 	if err := client.movePinsToReform(self.repoId, newest, nil, floorHeader); err != nil {
 		return false, err
 	}

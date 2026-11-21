@@ -74,13 +74,20 @@ message ProjectionRows {             // projrows/<network_id>/<rows_sha256>/_: a
                                      // imports nothing, each EvsShare with its signer and at; with
                                      // AclRepo.holders_shrunk_at; the device role reads only its
                                      // has_document (field 1)
-                                     // 6 stays unused for TeamScopeRow at M6 (protos-bridge-row-fields #3)
+  repeated TeamScopeRow team_scopes = 6; // Team scope labels in label order (QD-059)
   repeated ProposalRow proposals = 7;     // every proposal open at folded_through, by proposal_id
   ProjectionSettings settings = 8;        // the ServiceSettings values a verifier judges by, always present
   repeated RingRow ring = 9;              // the statements that took effect among the 4,096 entries through
                                           //   folded_through, in position order (the replay row)
   repeated IndexerRow indexers = 10;      // each IndexerSet designation that holds, by (sidecar_id, scope)
                                           //   (question team-m2-07-indexer-rows)
+}
+
+// A Team scope's public label and exactly one owner (§7.9, §13.8).
+message TeamScopeRow {
+  string label = 1;
+  bytes member_id = 2; // 16-byte member id when the member owns this scope
+  bytes tag_atom = 3;  // 16-byte opaque tag atom when the tag owns this scope
 }
 
 // An AuthorityProposal open at a state (§7.9's proposal row; DESIGN-DETAILS 5.2.2), so a cosign, veto, void or

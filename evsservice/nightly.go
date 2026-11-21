@@ -232,6 +232,7 @@ type NightlyPass struct {
 	log         sidecar.Logger
 	clock       sidecar.Clock
 	repos       *RepoCache
+	drops       *DropTable
 	holds       *HoldCache
 	orphans     *OrphanGc
 	evacuator   *Evacuator
@@ -268,6 +269,10 @@ func NewNightlyPass(host *sidecar.ServiceHost, deps *NightlyPassDeps) (*NightlyP
 	}
 	clock := host.ClockOrReal()
 	repos := NewRepoCache(clock, evsSettings)
+	drops, err := NewDropTable(host, host.Blobs, evsSettings.Drop, log)
+	if err != nil {
+		return nil, err
+	}
 	holds := deps.Holds
 	if holds == nil {
 		holds = NewHoldCache(host.Blobs, clock, nil)
@@ -314,6 +319,7 @@ func NewNightlyPass(host *sidecar.ServiceHost, deps *NightlyPassDeps) (*NightlyP
 		log:         log,
 		clock:       clock,
 		repos:       repos,
+		drops:       drops,
 		holds:       holds,
 		orphans:     orphans,
 		evacuator:   evacuator,
@@ -517,7 +523,7 @@ func (self *NightlyPass) runRepo(ctx context.Context, cluster sidecar.BlobCluste
 	if err := self.runContainers(ctx, cluster, segmentCluster, listing, result); err != nil {
 		return err
 	}
-	if err := self.countRepo(ctx, cluster, listing, result); err != nil {
+	if err := self.countRepo(ctx, cluster, segmentCluster, listing, result); err != nil {
 		return err
 	}
 

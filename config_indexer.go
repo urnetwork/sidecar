@@ -28,6 +28,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -308,13 +309,19 @@ func configApplySponsorSet(next *configStateBuilder, statement *configStatement)
 // services opens a designation's sealed services, the caller holding the key of the config's generation
 // (ConfigIndexerServicesOpener); a designation it cannot open serves no search.
 func (self *ConfigState) SearchIndexersFor(searcherId Id, repoId Id, services func(indexer ConfigIndexer) ([]protocol.IndexerService, bool)) []Id {
+	return self.searchIndexersAt(searcherId, repoId, services, self.timeMs)
+}
+
+// The signed state remains authoritative as admissions and grants expire between config entries.
+func (self *ConfigState) searchIndexersAt(searcherId Id, repoId Id, services func(ConfigIndexer) ([]protocol.IndexerService, bool), nowMs int64) []Id {
+	nowMs = max(self.timeMs, nowMs)
 	acl, err := self.Acl()
 	if err != nil || services == nil {
 		return nil
 	}
 	repo := acl.Repo(repoId)
 	// E3
-	searcher, standing := self.standingSidecar(searcherId, self.timeMs)
+	searcher, standing := self.standingSidecar(searcherId, nowMs)
 	if repo == nil || !standing || !configRowMemberDevice(searcher) || acl.Suspended(searcherId) {
 		return nil
 	}
@@ -329,7 +336,7 @@ func (self *ConfigState) SearchIndexersFor(searcherId Id, repoId Id, services fu
 	default:
 		return nil
 	}
-	readers := self.RepoReaders(repoId)
+	readers := self.RepoReadersAt(repoId, time.UnixMilli(nowMs))
 	if !slices.Contains(readers, searcherId) {
 		return nil
 	}
@@ -340,7 +347,7 @@ func (self *ConfigState) SearchIndexersFor(searcherId Id, repoId Id, services fu
 		if err != nil || ownerId == (Id{}) {
 			return nil
 		}
-		if !acl.ConsentedFor(searcherId, ownerId) && !self.evsShareSubject(acl, searcherId, repoId) {
+		if !acl.ConsentedFor(searcherId, ownerId) && !self.evsShareSubjectAt(acl, searcherId, repoId, nowMs) {
 			return nil
 		}
 	}
@@ -376,7 +383,7 @@ func (self *ConfigState) SearchIndexersFor(searcherId Id, repoId Id, services fu
 			continue
 		}
 		// E1; Indexers left out a revoked, parked or suspended subject
-		indexer, standing := self.standingSidecar(scopes.sidecarId, self.timeMs)
+		indexer, standing := self.standingSidecar(scopes.sidecarId, nowMs)
 		if !standing || indexer.GetEphemeral() || configRowReadOnly(indexer) || scopes.sidecarId == searcherId {
 			continue
 		}
@@ -402,6 +409,11 @@ func (self *ConfigState) SearchIndexersFor(searcherId Id, repoId Id, services fu
 // share whose signer counts (a consented device of the repo's owner, outside every cascade), unexpired, whose subject
 // names the sidecar as §8.6 reads a share's subject.
 func (self *ConfigState) evsShareSubject(acl *AclState, sidecarId Id, repoId Id) bool {
+	return self.evsShareSubjectAt(acl, sidecarId, repoId, self.timeMs)
+}
+
+// Evaluates a verified share at the instant its reader is asking.
+func (self *ConfigState) evsShareSubjectAt(acl *AclState, sidecarId, repoId Id, atMs int64) bool {
 	repo := acl.repos[repoId]
 	sidecar := acl.sidecarState(sidecarId)
 	if repo == nil || sidecar == nil {
@@ -409,7 +421,7 @@ func (self *ConfigState) evsShareSubject(acl *AclState, sidecarId Id, repoId Id)
 	}
 	for i := range repo.shares {
 		share := &repo.shares[i]
-		if !share.valid || (share.expiresMs != 0 && share.expiresMs <= self.timeMs) {
+		if !share.valid || (share.expiresMs != 0 && share.expiresMs <= atMs) {
 			continue
 		}
 		if acl.namesSidecar(sidecar, share.subject, sidecar.ephemeral) {

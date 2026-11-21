@@ -28,6 +28,8 @@ type NetSettings struct {
 	Barriers   *BarrierDriverSettings
 	// The fakes behind the default host.
 	Host *FakeHostSettings
+	// The origins and issuer settings shared by hosted devices and service engines. Nil takes the fixture defaults.
+	Api *FakeApiSettings
 	// The exchange's seed for packet loss, so a lossy link repeats.
 	LinkSeed int64
 	// How long, in real time, NetClient.Send and the exchange give a connect client to take a frame.

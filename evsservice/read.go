@@ -320,6 +320,7 @@ func (self *readAttempt) readAt() (*readReply, error) {
 		path.stale = path.tokens.Current == nil
 	}
 	reply := &readReply{head: self.headSummary()}
+	reply.head.SupportsExactHead = self.body.GetFresh() && (!evsHeadExists(head) || reply.head.GetRefMode() == protocol.EvsRefMode_EVS_REF_FILE)
 	self.staged = nil
 	if self.head.Absent() || !evsHeadExists(head) {
 		// no commit yet: every path is absent, and nothing is after any pin

@@ -866,6 +866,8 @@ enroll    before base 1, a tagged or ephemeral enrollment answers no_genesis
 
 **Writes.** Readers replay config heads from genesis, refusing a record whose signer lacks the role at its parent head, while api, which never reads or opens the config repo, checks only that each base's head descends from the last (the log's `descent` row). Tag and group names leave sealed tables only as opaque ids, with no key: an atom's id is 16 bytes of crypto/rand, drawn by the writer the first time a head names the tag or group, redrawn if its first 15 bytes are all zero (acl.proto keeps that form for autogroups) and kept beside its name in the config's sealed `tags` or `groups` file for as long as the name lives; compile reads it there and refuses a name with no row, signed tag_ids stay valid because an id never changes, and a tag deleted and made again gets a new id, so old admissions do not regain it. Every record that opens with a `StatementHeader` enters the log at once, through `POST /network/config/delta`: scoped statements, `MemberAdmit`, `Delegation`, an admin's `SidecarAdmit`, `AdminSet` (inside an `AuthorityProposal` at k > 1, alone at k = 1), revocations, proposals, cosigns, vetoes, confirmations, `SponsorSet`, `IndexerSet`, `KeyRegister`, `RecoveryBind`, `RecoveryRebind` and §8.8's statements, a proposal taking effect at its completion, and api and readers verify them against the state at their position until a writer folds them in (owner decisions 8, 74). `ServiceSettings`, `VersioningRules` and `BridgeBlock` carry no header: they ride heads only and take effect at the base naming the head, as the config's files do (policy, tags, groups, names, labels, `K_sock`, the `BridgeShareSigner`s), which is what the cascade's "the base whose config head first holds it" covers.
 
+**Native ACL confirmation.** `ur acl push <policy>` reads the config repo's file-mode `main` ref through an authenticated fresh single-ref read (§11.9). The config writer verifies the head, resolves policy names from the verified directory, checks the scope and limits, runs the policy tests (§8.8) and shows the result. After the user confirms at the local terminal, the writer replans against the same ref, version and chain. It signs the push with EXACT_HEAD (§11.8) only if the fresh read advertises support and the confirmed plan still holds. The stock daemon sets EXACT_HEAD only for the ACL save the user confirmed. The push may include the fold needed for that save. The writer publishes the authorization base only after that push commits. A changed head requires a new preview and confirmation, including when the intervening write touched a disjoint path. A host that omits the capability can serve the preview. Signing and submission require a positive capability from the responding host. A device running an older reader of either EVS format needs an upgrade to replay history past the network's first opted-in config write (owner decision 141, amended 2026-11-20).
+
 **Authorization log** (D-TEAM-19). One linear, hash-chained log per network orders bases and statements. Its position n, advancing on every entry, is the projection version everywhere, A_n its chain digest, and (n, A_n), the `AuthPin`, names a state for readers, gates, gkm, MLS commit headers, evs heads, tokens (`proj_v` = n), BridgeState and approvals.
 
 ```text
@@ -961,9 +963,7 @@ message ProjectionRows {             // projrows/<network_id>/<rows_sha256>/_: a
                                      // imports nothing, each EvsShare with its signer and at; with
                                      // AclRepo.holders_shrunk_at and its time (shrink, below);
                                      // sidecar/device's posture reads only its has_document (field 1)
-                                     // 6 stays unused until M6, when Team scopes define repeated
-                                     // TeamScopeRow team_scopes {label, member_id or tag atom}; format-1
-                                     // readers skip it
+  repeated TeamScopeRow team_scopes = 6;    // Team scopes in label order. A format-1 reader skips field 6.
   repeated ProposalRow proposals = 7;       // every AuthorityProposal open at folded_through, by proposal_id
                                             // (7.9's proposal row; owner decision 314)
   ProjectionSettings settings = 8;          // the ServiceSettings values a verifier judges by, self_admit
@@ -1055,6 +1055,11 @@ message KeyRow {                     // a KeyRegister, with its KeyRevoke's posi
   uint64 at = 7;
   int64 not_after = 8;
   uint64 revoked_at = 9;
+}
+message TeamScopeRow {               // §2.8 api-7, QD-059. Exactly one owner field is present.
+  string label = 1;                  // the public Team scope label
+  bytes member_id = 2;
+  bytes tag_atom = 3;                // the opaque tag atom
 }
 message ProposalRow {                // an AuthorityProposal open at folded_through (proposal)
   bytes proposal_id = 1;

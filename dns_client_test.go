@@ -206,7 +206,9 @@ func testDnsClientZone(networkId Id, version uint64) *DnsZone {
 // table holds the zone's label.
 func TestDnsClientZoneFollowsHints(t *testing.T) {
 	networkId := NewId()
-	block := newTestDnsBlock(testDnsClientZone(networkId, 7))
+	initial := testDnsClientZone(networkId, 7)
+	initial.CustomHosts = []DnsCustomHost{{Host: "app.customer.example", PendingInterfaces: []string{"edge-a"}}}
+	block := newTestDnsBlock(initial)
 	clock := newTokenTestClock()
 	client := newTestDnsClient(t, block, clock, networkId)
 	labels, err := OpenNetworkLabelTable(newTestDnsMemoryStore())
@@ -227,9 +229,10 @@ func TestDnsClientZoneFollowsHints(t *testing.T) {
 	}
 	for range 2 {
 		zone, err := client.Zone(context.Background())
-		if err != nil || zone.Version != 7 {
+		if err != nil || zone.Version != 7 || len(zone.CustomHosts) != 1 || zone.CustomHosts[0].PendingInterfaces[0] != "edge-a" {
 			t.Fatalf("zone %+v %v", zone, err)
 		}
+		zone.CustomHosts[0].PendingInterfaces[0] = "edited"
 	}
 	if zones, _ := block.counts(); zones != 1 {
 		t.Fatalf("%d fetches", zones)

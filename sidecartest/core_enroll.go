@@ -451,7 +451,7 @@ func (self *Net) Api() (*FakeApi, error) {
 	if api != nil {
 		return api, nil
 	}
-	api, err := self.AddApi(nil)
+	api, err := self.AddApi(self.settings.Api)
 	if err != nil {
 		return nil, err
 	}

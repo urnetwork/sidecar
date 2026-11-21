@@ -26,6 +26,9 @@ func TestEvsMaxFormatOneWritesAndReadsAsFormatOne(t *testing.T) {
 		t.Fatal("a format-2 client in the gate is not admitted")
 	}
 	client.settings.MaxFormat = 1
+	if on, known := client.Format2Gate(); !known || !on {
+		t.Fatal("the format-1 binary lost the network's format-2 rollout")
+	}
 	if client.Format2Admitted() {
 		t.Fatal("a client held to format 1 is admitted")
 	}

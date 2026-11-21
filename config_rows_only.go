@@ -95,9 +95,17 @@ func NewConfigLogRowsOnly(settings *ConfigLogSettings, signedGenesis []byte) (*C
 // and one holding a different A_n at its position is ErrConfigRunRefused, so no restart from a stale copy lands lower
 // (§8.9). A floor before what the run holds checks its number alone.
 func RestoreConfigLogRowsOnly(settings *ConfigLogSettings, retained *ConfigRetained, rowsSource ConfigRowsSource, floor *bridge.AuthPin) (*ConfigLog, error) {
+	return restoreConfigLogRowsOnly(settings, retained, rowsSource, floor, nil)
+}
+
+// A network-scoped reader must bind the signed genesis to the network it requested before it reads any rows.
+func restoreConfigLogRowsOnly(settings *ConfigLogSettings, retained *ConfigRetained, rowsSource ConfigRowsSource, floor *bridge.AuthPin, networkId *Id) (*ConfigLog, error) {
 	self, err := NewConfigLogRowsOnly(settings, retained.SignedGenesis)
 	if err != nil {
 		return nil, err
+	}
+	if networkId != nil && self.networkId != *networkId {
+		return nil, &ConfigRunError{Reason: "genesis names another network"}
 	}
 	if err := self.restore(retained, rowsSource, floor); err != nil {
 		return nil, err

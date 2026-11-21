@@ -320,15 +320,8 @@ func NewAclDropLocks(gate EvsAclGate) DropLockView {
 }
 
 func (self *aclDropLocks) LockStanding(networkId sidecar.Id, repoId sidecar.Id) (bool, EvsAuthAnswer) {
-	if self.gate == nil {
-		return false, EvsAuthUnknown
-	}
-	snapshot, status := self.gate.State(networkId)
-	switch {
-	case status == sidecar.AclGateUnknown:
-		self.gate.Changed(networkId)
-		return false, EvsAuthUnknown
-	case status != sidecar.AclGateLoaded || snapshot == nil || snapshot.Acl == nil:
+	snapshot := sidecar.RequestAclGateSnapshot(self.gate, networkId)
+	if snapshot == nil || snapshot.Acl == nil {
 		return false, EvsAuthUnknown
 	}
 	row := snapshot.Acl.Repo(repoId)
@@ -575,6 +568,16 @@ func (self *DropJob) Run(ctx context.Context, clusterId string, repoId sidecar.I
 	}
 	if read.Etag == "" {
 		return result, nil
+	}
+	if err := checkHeldCoverage(ctx, segmentCluster, repoId, read.State, self.settings, nil); err != nil {
+		var missing missingHeldOwners
+		if !errors.As(err, &missing) {
+			return result, err
+		}
+		read, err = self.restoreHeldOwners(ctx, cluster, segmentCluster, repoId, read.State, missing)
+		if err != nil {
+			return result, err
+		}
 	}
 	now := self.clock.Now()
 	if err := self.tidy(ctx, cluster, segmentCluster, repoId, read.State, now); err != nil {
@@ -927,15 +930,20 @@ func setDropPhase(state *DropTableState, job *DropJobRecord, phase protocol.EvsD
 // stay theirs (QD-1127).
 func (self *dropJobRun) end(state DropState) error {
 	ownDropIds := map[sidecar.Id]bool{}
-	if state == DropStateDone && self.last != nil && self.last.Job != nil && self.last.Job.JobId == self.jobId && self.last.Job.Resumed {
+	if self.last.Job.Resumed {
+		if state != DropStateDone {
+			// A refusal cannot release objects this job already withheld.
+			return self.hold()
+		}
 		file, err := self.files.Read(self.ctx, DropFileSnap, 0)
 		if err != nil {
 			return err
 		}
-		if file != nil {
-			for _, drop := range file.Covered {
-				ownDropIds[drop.DropId] = true
-			}
+		if file == nil {
+			return fmt.Errorf("%w: no snap-0 for resumed job", ErrDropJobState)
+		}
+		for _, drop := range file.Covered {
+			ownDropIds[drop.DropId] = true
 		}
 	}
 	movedCount := 0
@@ -1095,7 +1103,13 @@ func (self *dropJobRun) next(table *DropTableState) error {
 	if 0 < len(dueHeldJobs(table, now)) {
 		cover, err := self.job.holds.CoveringRepo(self.ctx, self.repoId, self.repoObject)
 		if err == nil && cover != nil && !cover.Unknown && len(cover.Holds) == 0 {
-			return self.resumeHeld(table.HeldJobs[0].JobId)
+			for _, job := range table.HeldJobs {
+				// Wake the oldest job on hold release. A previously resumed job that
+				// still cannot delete keeps its retry time while others take their turn.
+				if !job.Resumed || !now.Before(time.UnixMilli(job.RetryMs)) {
+					return self.resumeHeld(job.JobId)
+				}
+			}
 		}
 		if err := self.waitHeld(); err != nil {
 			return err
@@ -1140,7 +1154,9 @@ func (self *dropJobRun) resumeHeld(jobId sidecar.Id) error {
 		job := table.HeldJobs[index]
 		table.HeldJobs = slices.Delete(table.HeldJobs, index, index+1)
 		for _, queued := range table.HeldJobs {
-			queued.RetryMs = 0
+			if !queued.Resumed {
+				queued.RetryMs = 0
+			}
 		}
 		job.Held, job.Resumed = false, true
 		job.Phase = protocol.EvsDropPhase_EVS_DROP_HORIZON
@@ -1575,7 +1591,11 @@ func (self *dropJobRun) deleteSet(cursor DropCursor) ([]*DropCandidate, error) {
 	}
 	set := []*DropCandidate{}
 	for _, candidate := range candidates {
-		if candidate.Cursor.before(cursor) || marks[candidate.DropScanId] || answers[candidate.DropScanId].Final() || heldElsewhere[candidate.DropScanId] {
+		answer := answers[candidate.DropScanId]
+		// The deleter checkpoints its cursor before the job parks. A crash
+		// between them must not turn those retained answers into completion.
+		if marks[candidate.DropScanId] || heldElsewhere[candidate.DropScanId] || answer.Final() ||
+			(candidate.Cursor.before(cursor) && answer != DropOutcomeHeld) {
 			continue
 		}
 		set = append(set, candidate)
@@ -1585,6 +1605,11 @@ func (self *dropJobRun) deleteSet(cursor DropCursor) ([]*DropCandidate, error) {
 
 // format2.drop: observe: D recorded as del files, every outcome observed, nothing deleted; each covered drop observed.
 func (self *dropJobRun) observe() error {
+	if self.last.Job.Resumed {
+		// Observed is a final per-object answer. These held objects still need
+		// physical deletion when the gate permits it.
+		return self.hold()
+	}
 	set, err := self.deleteSet(DropCursor{})
 	if err != nil {
 		return err
@@ -1613,6 +1638,14 @@ func (self *dropJobRun) observe() error {
 // next round for young ids, or a wait for unanswered ones.
 func (self *dropJobRun) deletes(table *DropTableState) (*DropTableState, error) {
 	job := table.Job
+	if self.job.format2.DropMode() != sidecar.Format2On {
+		if job.Resumed {
+			return nil, self.hold()
+		}
+		// Physical work may already be checkpointed. Its owner stays in the
+		// table until deletion can run again, even on an observe-only worker.
+		return nil, self.wait(DropWaitUnanswered, job.Phase, self.job.clock.Now().Add(self.job.settings.PauseRetryInterval))
+	}
 	set, err := self.deleteSet(job.Cursor)
 	if err != nil {
 		return nil, err

@@ -49,6 +49,7 @@ import (
 	"io"
 	"log"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -104,6 +105,8 @@ type MailSessionRecipient struct {
 
 // What NewMailSessionServer builds on.
 type MailSessionArgs struct {
+	// The production receiver's signed mailbox configuration. Other hosts can supply Resolve.
+	mailConfig *MailConfig
 	// This receiver, which every deposit names.
 	ReceiverSidecarId Id
 	// An RCPT's address: §15.8's grammar, then mailcfg (MailConfig.Resolve). An error is temporary: mailcfg not
@@ -155,13 +158,16 @@ type MailSessionServer struct {
 	stateLock  sync.Mutex
 	limits     *mailSessionLimits
 	limitsTime time.Time
+
+	statusLock sync.Mutex
 	status     *MailNetworkStatus
 	statusTime time.Time
+	statusErr  error
 }
 
 // A server of sessions over args. Any spool a crash left is swept first.
 func NewMailSessionServer(args *MailSessionArgs) (*MailSessionServer, error) {
-	if args == nil || args.Resolve == nil || args.Limits == nil || args.Depositor == nil || args.SpoolStore == nil {
+	if args == nil || (args.Resolve == nil && args.mailConfig == nil) || args.Limits == nil || args.Depositor == nil || args.SpoolStore == nil {
 		return nil, fmt.Errorf("%w: a session needs its resolver, limits, depositor and spool", ErrMailReceiverInvalid)
 	}
 	settings := args.Settings
@@ -227,32 +233,79 @@ func (self *MailSessionServer) sessionLimits(ctx context.Context) (*mailSessionL
 	return limits, nil
 }
 
-// Whether the network is at its storage limit, from GET /mail/status read again once StatusInterval has passed. An
-// answer not there to read reads as not full: the deposit's own refusal then answers 451.
-func (self *MailSessionServer) storageFull(ctx context.Context) bool {
+// The last status within StatusInterval. On a refresh error the previous value is returned with the error so
+// storage pressure can still defer, while domain ownership requires a fresh successful read.
+func (self *MailSessionServer) networkStatus(ctx context.Context) (*MailNetworkStatus, error) {
 	if self.args.Status == nil {
-		return false
+		return nil, ErrMailUnbound
+	}
+	// One shared read per interval, even when multiple listeners begin new transactions together.
+	self.statusLock.Lock()
+	defer self.statusLock.Unlock()
+	if err := ctx.Err(); err != nil {
+		return self.status, err
 	}
 	now := self.clock.Now()
-	held, fresh := func() (*MailNetworkStatus, bool) {
-		self.stateLock.Lock()
-		defer self.stateLock.Unlock()
-		return self.status, self.status != nil && now.Sub(self.statusTime) < self.settings.StatusInterval
-	}()
-	if fresh {
-		return held.StorageFull
+	if !self.statusTime.IsZero() && now.Sub(self.statusTime) < self.settings.StatusInterval {
+		return self.status, self.statusErr
 	}
 	status, err := self.args.Status(ctx)
-	if err != nil {
-		return held != nil && held.StorageFull
+	if err == nil && status == nil {
+		err = ErrMailUnbound
 	}
-	func() {
-		self.stateLock.Lock()
-		defer self.stateLock.Unlock()
+	if err == nil {
 		self.status = status
-		self.statusTime = now
-	}()
-	return status.StorageFull
+	}
+	if ctx.Err() == nil {
+		self.statusTime, self.statusErr = now, err
+	}
+	return self.status, err
+}
+
+// A failed refresh preserves the last storage pressure reading. EVS still enforces its deposit limit.
+func (self *MailSessionServer) storageFull(ctx context.Context) bool {
+	status, _ := self.networkStatus(ctx)
+	return status != nil && status.StorageFull
+}
+
+// Resolves customer aliases through the same signed record and policy as the network's own alias. The envelope
+// keeps the customer's address so the strict-chain check and sealed evidence use the domain the sender selected.
+func (self *MailSessionServer) resolve(ctx context.Context, address string) (*MailSessionRecipient, error) {
+	config := self.args.mailConfig
+	if config == nil {
+		return self.args.Resolve(ctx, address)
+	}
+	zone, _, err := config.zone()
+	if err != nil {
+		return nil, err
+	}
+	recipient, knownForm := MailReceiverRecipient(zone.Root, address)
+	envelope := recipient.Address()
+	if !knownForm {
+		custom, domain, ok := mailCustomAddress(zone, address)
+		if !ok {
+			return &MailSessionRecipient{}, nil
+		}
+		status, err := self.networkStatus(ctx)
+		if err != nil {
+			return nil, err
+		}
+		verified := status.VerifiedDomains
+		if verified == nil {
+			// An older API only reports the verified domains that have a strict MX host.
+			verified = status.StrictDomains
+		}
+		if !slices.Contains(verified, domain) {
+			return &MailSessionRecipient{}, nil
+		}
+		recipient = custom
+		envelope = custom.LocalPart + "@" + domain
+	}
+	lookup, err := config.Resolve(ctx, recipient)
+	if err != nil {
+		return nil, err
+	}
+	return &MailSessionRecipient{Known: lookup.Known, Address: envelope, RepoId: lookup.MailboxRepoId}, nil
 }
 
 // The replies a session gives. Fixed texts: nothing a lookup said reaches a sender.
@@ -432,7 +485,7 @@ func (self *MailSession) Rcpt(to string, options *smtp.RcptOptions) error {
 		}
 		address = MailSmtpBarePostmaster + "@" + domain
 	}
-	recipient, err := self.server.args.Resolve(self.ctx, address)
+	recipient, err := self.server.resolve(self.ctx, address)
 	if err != nil {
 		return mailSessionReplyTryLater
 	}

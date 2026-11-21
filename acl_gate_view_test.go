@@ -307,8 +307,29 @@ func TestAclGateViewDnsAdmin(t *testing.T) {
 	if decision := world.view.MayAdminDns(world.networkId, listener, "zone-host", aclTestNow); !decision.Allowed {
 		t.Errorf("the zone's admin: %s", decision.Reason)
 	}
+	for _, host := range []string{"app-preview", "zone-host"} {
+		if decision := world.view.MayViewDns(world.networkId, listener, host, aclTestNow); !decision.Allowed {
+			t.Errorf("view of %s: %s", host, decision.Reason)
+		}
+	}
+	if decision := world.view.MayViewDns(world.networkId, AclSidecarSubject(world.stranger), "app-preview", aclTestNow); decision.Allowed {
+		t.Error("another sidecar viewed the publisher's records")
+	}
 	if decision := world.view.MayAdminDns(world.networkId, listener, "app-preview", aclTestNow); decision.Allowed {
 		t.Error("a publish grant administered a zone")
+	}
+}
+
+func TestAclGateViewDnsReceiverReadsOneSnapshot(t *testing.T) {
+	world := newAclGateViewWorld(t)
+	receiver := AclSidecarSubject(world.receiver)
+	for _, scope := range []string{"", "unbound"} {
+		before, _ := world.states.asked()
+		decision := world.view.MayReceiveByScopeLabel(world.networkId, receiver, scope, aclTestNow)
+		after, _ := world.states.asked()
+		if after != before+1 || decision.Allowed != (scope == "") || (scope != "" && decision.Reason != AclReasonNoState) {
+			t.Errorf("receiver scope %q, snapshot reads %d, decision %+v", scope, after-before, decision)
+		}
 	}
 }
 
@@ -336,6 +357,7 @@ func TestAclGateViewFoldsInTheServersHardDenies(t *testing.T) {
 			c.view.MayListen(world.networkId, listener, socket, aclTestNow),
 			c.view.MayPublish(world.networkId, listener, "tls/443/app-preview", protocol.AclAppMode_ACL_APP_MODE_HTTP, aclTestNow),
 			c.view.MayDialSocket(world.networkId, listener, aclTestTokenPath(1), aclTestNow),
+			c.view.MayViewDns(world.networkId, listener, "app-preview", aclTestNow),
 		}
 		for _, decision := range decisions {
 			if decision.Allowed || decision.Reason != c.reason {

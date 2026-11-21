@@ -1114,12 +1114,22 @@ func (self *EvsGitReceiver) Start(ctx context.Context) error {
 
 // Runs the mount: the sync engine's restart and loop, and the receive path's restart and queue, until ctx ends.
 func (self *EvsLocalRepo) Run(ctx context.Context) error {
+	self.start(ctx)
+	return self.run(ctx)
+}
+
+// Reconciles the durable ref and receive journals before the live loops start.
+func (self *EvsLocalRepo) start(ctx context.Context) {
 	if err := self.sync.Start(ctx); err != nil {
 		self.sync.client.log.Warningf("[evs]the mount of repo %s did not start clean: %v", self.RepoId, err)
 	}
 	if err := self.receiver.Start(ctx); err != nil {
 		self.sync.client.log.Warningf("[evs]the receive path of repo %s did not start clean: %v", self.RepoId, err)
 	}
+}
+
+// Publishes queued pushes and follows remote refs until shutdown.
+func (self *EvsLocalRepo) run(ctx context.Context) error {
 	queued := make(chan error, 1)
 	go func() {
 		queued <- self.receiver.runQueue(ctx)

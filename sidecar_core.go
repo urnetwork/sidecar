@@ -14,7 +14,6 @@
 package sidecar
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"sync"
@@ -51,6 +50,13 @@ func (self *Sidecar) run() {
 	defer close(self.done)
 	defer func() {
 		self.stopGeneration()
+		self.memberReplicaLock.Lock()
+		replica := self.memberReplica
+		self.memberReplica = nil
+		self.memberReplicaLock.Unlock()
+		if replica != nil {
+			replica.Close()
+		}
 		if self.leg != nil {
 			self.leg.close()
 		}
@@ -126,131 +132,20 @@ func (self *Sidecar) reconcile(instanceState SidecarInstanceState) {
 	}
 }
 
-// The open instance's half: read this network's identity and token, and run its generation.
-func (self *Sidecar) reconcileOpen() {
-	var networkId *Id
-	var revoked bool
-	var endedGeneration int64
-	func() {
-		self.stateLock.Lock()
-		defer self.stateLock.Unlock()
-		if self.networkId != nil {
-			id := *self.networkId
-			networkId = &id
-		}
-		revoked = self.lifecycle.state == SidecarStateRevoked
-		endedGeneration = self.endedGeneration
-	}()
-	if revoked {
-		self.stopGeneration()
-		return
-	}
-	if networkId == nil {
-		// not enrolled in any network yet
-		self.stopGeneration()
-		self.leaveForUnenrolled("")
-		return
-	}
-	secrets := self.instance.secrets(*networkId, sidecarCoreSecretsNamespace)
-	record, err := loadSidecarIdentity(secrets)
-	switch {
-	case err == nil:
-	case errors.Is(err, ErrSidecarNoIdentity):
-		self.setIdentity(secrets, nil)
-		self.stopGeneration()
-		self.leaveForUnenrolled("")
-		return
-	case errors.Is(err, ErrSidecarKeystoreLost):
-		self.stopGeneration()
-		self.leaveForUnenrolled(SidecarReasonKeystoreLost)
-		return
-	case errors.Is(err, ErrSidecarStoreLocked):
-		// the instance locked under us, which wakes the loop again
-		self.stopGeneration()
-		self.enterLocked()
-		return
-	default:
-		// a keychain that fails decoding or AEAD: as Locked, and alarms, creating nothing (D-CORE-15)
-		self.log.Warningf("[sidecar]the network's keychain failed: %s", err)
-		self.stopGeneration()
-		self.enterLocked()
-		self.emitEvent(SidecarEvent{Kind: SidecarEventRefused})
-		return
-	}
-	defer record.keys.erase()
-	self.setIdentity(secrets, record.identity)
-	if self.lifecycleState() == SidecarStateLocked {
-		self.leaveForUnenrolled("")
-	}
-
-	identity := record.identity
-	if identity.Generation <= endedGeneration {
-		// refused: only a re-enrollment, which binds the next generation, goes on (D-CORE-8)
-		self.stopGeneration()
-		return
-	}
-	if running := self.runningGeneration(); running != nil && running.generation == identity.Generation {
-		if running.leg != nil {
-			running.leg.reconcileComponents()
-		}
-		return
-	}
-	byJwt, err := loadSidecarByJwt(secrets)
-	if err != nil {
-		if !errors.Is(err, ErrSidecarStoreAbsent) {
-			self.log.Warningf("[sidecar]the client token did not load: %s", err)
-		}
-		self.stopGeneration()
-		self.leaveForUnenrolled("")
-		return
-	}
-	if _, tokenClientId, ok := sidecarJwtClient(byJwt); !ok || tokenClientId != identity.ClientId {
-		// the identity and its token are written one after the other, so an enrollment a kill cut short can leave
-		// one generation's token beside another's binding: that runs no client
-		self.log.Warningf("[sidecar]the client token is not generation %d's", identity.Generation)
-		self.stopGeneration()
-		self.leaveForUnenrolled("")
-		return
-	}
-	connectInstanceId, child, ok := self.networkRecordOf(*networkId)
-	if !ok {
-		// enrollment records the network last, so an identity with no record is an enrollment a kill cut short
-		self.log.Warningf("[sidecar]an identity with no network record does not start")
-		self.stopGeneration()
-		self.leaveForUnenrolled("")
-		return
-	}
-	self.stopGeneration()
-	self.startGeneration(&sidecarGenerationArgs{
-		identity:          identity.clone(),
-		networkId:         *networkId,
-		connectInstanceId: connectInstanceId,
-		byJwt:             byJwt,
-		clientKeySeed:     record.keys.clientKeySeedCopy(),
-		binding:           bytes.Clone(record.binding),
-		secrets:           secrets,
-		child:             child,
-	})
-}
-
-// The connect InstanceId and child flag sidecar.json keeps for the network.
-func (self *Sidecar) networkRecordOf(networkId Id) (Id, bool, bool) {
+// The public identity and client sidecar.json has committed for the network.
+func (self *Sidecar) networkRecordOf(networkId Id) (SidecarNetworkRecord, bool) {
 	for _, record := range self.instance.Networks() {
 		if record.NetworkId == networkId {
-			return record.ConnectInstanceId, record.Child, true
+			return record, true
 		}
 	}
-	return Id{}, false, false
+	return SidecarNetworkRecord{}, false
 }
 
 // The connect InstanceId sidecar.json keeps for the network, so a restart keeps the resident (§5.9).
 func (self *Sidecar) connectInstanceIdOf(networkId Id) (Id, bool) {
-	for _, record := range self.instance.Networks() {
-		if record.NetworkId == networkId {
-			return record.ConnectInstanceId, true
-		}
-	}
-	return Id{}, false
+	record, ok := self.networkRecordOf(networkId)
+	return record.ConnectInstanceId, ok
 }
 
 // Points the sidecar at secrets and the identity they hold, nil for none.
@@ -361,6 +256,11 @@ func (self *Sidecar) Status() SidecarStatus {
 // Calls callback with each event from here on, until the answer is called (§5.4). See SidecarEventFunction for what
 // a callback may do.
 func (self *Sidecar) AddEventCallback(callback SidecarEventFunction) func() {
+	return self.addQueuedEventCallback(func(event sidecarQueuedEvent) { callback(event.SidecarEvent) })
+}
+
+// The daemon also consumes the origin captured when the event was raised.
+func (self *Sidecar) addQueuedEventCallback(callback func(sidecarQueuedEvent)) func() {
 	callbackId := self.eventCallbacks.Add(callback)
 	var once sync.Once
 	return func() {
@@ -403,4 +303,20 @@ func (self *Sidecar) isClosed() bool {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	return self.closed
+}
+
+// The network this sidecar is enrolled in, a copy, or nil before enrollment and after a logout.
+func (self *Sidecar) NetworkId() *Id {
+	return self.enrolledNetworkId()
+}
+
+// The network this sidecar is enrolled in, a copy, or nil.
+func (self *Sidecar) enrolledNetworkId() *Id {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.networkId == nil {
+		return nil
+	}
+	id := *self.networkId
+	return &id
 }

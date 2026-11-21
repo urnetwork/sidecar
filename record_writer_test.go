@@ -370,6 +370,16 @@ func (self *testRecordDevice) takeGaps() []string {
 // One process's life of this device's record, over what its store holds now.
 func (self *testRecordDevice) open() *sidecar.SidecarRecord {
 	self.t.Helper()
+	record := self.cold()
+	if err := record.PrepareDirectWrites(self.t.Context()); err != nil {
+		self.t.Fatal(err)
+	}
+	return record
+}
+
+// A new life before the direct writer has reconciled its stream.
+func (self *testRecordDevice) cold() *sidecar.SidecarRecord {
+	self.t.Helper()
 	record, err := sidecar.NewSidecarRecord(&sidecar.SidecarRecordArgs{
 		SidecarId:         self.sidecarId,
 		IdentityPublicKey: self.key.Public().(ed25519.PublicKey),
@@ -504,8 +514,8 @@ func testRecordTexts(t *testing.T, stored []*testRecordStored) []string {
 func TestRecordWriterAppendReturnsWithEvsDown(t *testing.T) {
 	world := newTestRecordWorld(t)
 	device := world.device(true)
-	device.tap.setDown(true)
 	record := device.open()
+	device.tap.setDown(true)
 	for index := range 3 {
 		ref := testRecordAppend(t, record, testRecordNote(nil, fmt.Sprintf("note %d", index)))
 		if ref.Spooled || ref.LogId != world.vaultId || ref.Seq != uint64(index+1) {
@@ -782,5 +792,101 @@ func TestRecordWriterTriesAFailedDrainOncePerCoalesce(t *testing.T) {
 	}
 	if stored := world.storedEntries(device.sidecarId); len(stored) != 11 {
 		t.Errorf("%d entries sealed", len(stored))
+	}
+}
+
+// A cold writer restored from an empty backup captures offline and signs only after adopting the higher remote head.
+func TestRecordWriterRestoredDirectCaptureContinuesTheVerifiedStream(t *testing.T) {
+	world := newTestRecordWorld(t)
+	device := world.device(true)
+	record := device.open()
+	first := testRecordAppend(t, record, testRecordNote(nil, "before restore"))
+	if err := record.Flush(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	device.files = sidecartest.NewFakeStore()
+	var err error
+	device.store, err = device.files.Root().Directory("record", "record")
+	if err != nil {
+		t.Fatal(err)
+	}
+	device.tap.setDown(true)
+	record = device.cold()
+	if ref := testRecordAppend(t, record, testRecordNote(nil, "after restore")); !ref.Spooled {
+		t.Fatal("cold direct writer signed before verifying its stream")
+	}
+	if err := record.Flush(t.Context()); err == nil {
+		t.Fatal("offline cold writer reported the capture delivered")
+	}
+	head, err := sidecar.NewRecordChainStore(device.store, device.sidecarId).Head(world.vaultId)
+	if err != nil || head.Seq != 0 {
+		t.Fatalf("cold chain moved before its stream was available: %+v, %v", head, err)
+	}
+	device.tap.setDown(false)
+	if err := record.Flush(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	entries := world.storedEntries(device.sidecarId)
+	if len(entries) != 2 || entries[1].header.GetSeq() != first.Seq+1 ||
+		!bytes.Equal(entries[1].header.GetPrevSha256(), first.Leaf[:]) {
+		t.Fatalf("restored direct writer did not extend the existing leaf: %+v", entries)
+	}
+	if err := record.Reader().Sync(t.Context(), world.vaultId); err != nil {
+		t.Fatal(err)
+	}
+	if alarms := device.alarmReasons(); len(alarms) != 0 {
+		t.Fatalf("restored writer raised %v", alarms)
+	}
+}
+
+// A snapshot taken between a journaled entry and its first push has no push id. Its exact committed entry is enough
+// to acknowledge the journal, and a second restore still sees the higher remote head.
+func TestRecordWriterRestoredJournalKeepsTheNewestStreamHead(t *testing.T) {
+	world := newTestRecordWorld(t)
+	device := world.device(true)
+	record := device.open()
+	first := testRecordAppend(t, record, testRecordNote(nil, "old journal"))
+	backup := sidecartest.NewFakeStore()
+	for _, path := range device.files.Paths() {
+		content, ok := device.files.Contents(path)
+		if !ok {
+			t.Fatal("missing journal in backup")
+		}
+		file, err := backup.Root().Create(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := file.Write(content); err != nil {
+			t.Fatal(err)
+		}
+		if err := file.Commit(); err != nil {
+			t.Fatal(err)
+		}
+		file.Close()
+	}
+	if err := record.Flush(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	newest := testRecordAppend(t, record, testRecordNote(nil, "newer commit"))
+	if err := record.Flush(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, store := range []*sidecartest.FakeStore{backup, sidecartest.NewFakeStore()} {
+		var err error
+		device.files = store
+		device.store, err = store.Root().Directory("record", "record")
+		if err != nil {
+			t.Fatal(err)
+		}
+		record = device.open()
+		if got := world.storedEntries(device.sidecarId); len(got) != 2 ||
+			!bytes.Equal(got[0].header.GetEntryId(), first.EntryId[:]) || !bytes.Equal(got[1].header.GetEntryId(), newest.EntryId[:]) {
+			t.Fatalf("restored journal appended another copy: %d entries", len(got))
+		}
+	}
+	fresh := testRecordAppend(t, record, testRecordNote(nil, "after both restores"))
+	if fresh.Seq != newest.Seq+1 {
+		t.Fatalf("fresh sequence %d after stream head %d", fresh.Seq, newest.Seq)
 	}
 }

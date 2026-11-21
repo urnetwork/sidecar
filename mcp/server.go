@@ -30,6 +30,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
@@ -120,7 +121,7 @@ func (self *daemonMcpDaemon) Network(networkId sidecar.Id) (McpNetwork, bool) {
 	if !ok {
 		return nil, false
 	}
-	return hosted, true
+	return &mcpSidecarNetwork{Sidecar: hosted, follow: true}, true
 }
 
 func (self *daemonMcpDaemon) Agent(hello *sidecar.DaemonHello) (*sidecar.SidecarAgent, error) {
@@ -474,6 +475,13 @@ func (self *McpServer) middleware(next gomcp.MethodHandler) gomcp.MethodHandler 
 		if params, ok := request.GetParams().(*gomcp.CallToolParamsRaw); ok {
 			network = mcpNetworkArgument(params.Arguments)
 		}
+		if params, ok := request.GetParams().(*gomcp.ReadResourceParams); ok && strings.HasPrefix(params.URI, mcpEvsUriPrefix) {
+			pin, err := mcpEvsPinOf(params.URI)
+			if err != nil {
+				return nil, err
+			}
+			network = pin.network
+		}
 		result, err := session.limits.run(ctx, func(ctx context.Context) (any, error) {
 			call, err := self.call(ctx, session, network)
 			if err != nil {
@@ -519,6 +527,7 @@ func (self *McpServer) call(ctx context.Context, session *McpSession, network st
 		return nil, newMcpError(McpCodeFailedPrecondition, "this device was revoked from the network: run ur login in your own terminal to enroll anew", false)
 	}
 	call := &McpCall{Session: session, NetworkId: networkId, Network: host}
+	call.bindRecipientGuard(ctx)
 	if err := self.binder.readyCall(ctx, call); err != nil {
 		if _, _, isMcpError := McpErrorCode(err); isMcpError {
 			return nil, err

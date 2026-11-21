@@ -15,6 +15,9 @@ package protocol
 // Each block names its file, as a fence does, and each declaration says where the design writes it. A declaration
 // that gains a real fence is then written twice, which says to take it out of here.
 const testUnfencedFence = `
+// sidecar/protocol/acl.proto
+// §8.8's RepoCreate row and QD-102 fix the values of the creation marker.
+enum RepoInbox { REPO_INBOX_NONE = 0; REPO_INBOX_GROUP = 1; REPO_INBOX_ADMIN = 2; }
 // sidecar/protocol/envelope.proto
 // §6.5: each result has its request's fields.
 message HelloResult {
@@ -235,7 +238,7 @@ message EvsHeadChanged { bytes ref_id = 1; uint64 version = 2; bytes chain = 3; 
 enum EvsPushFlag {
   EVS_PUSH_FLAG_NONE = 0; EVS_PUSH_FORCE = 1; EVS_PUSH_DELETE = 2; EVS_PUSH_BASE = 4; EVS_PUSH_IMMUTABLE = 8;
   EVS_PUSH_CONSUME = 16; EVS_PUSH_PATH_EPOCH = 32; EVS_PUSH_ERASE = 64; EVS_PUSH_CLOSURE = 128;
-  EVS_PUSH_DROP = 256; EVS_PUSH_CUT = 512; EVS_PUSH_COMPLETION = 1024;
+  EVS_PUSH_DROP = 256; EVS_PUSH_CUT = 512; EVS_PUSH_COMPLETION = 1024; EVS_PUSH_EXACT_HEAD = 2048;
 }
 enum EvsLocatorKind {
   EVS_LOCATOR_KIND_UNSPECIFIED = 0; EVS_LOCATOR_SEGMENT = 1; EVS_LOCATOR_INLINE = 2;
@@ -432,6 +435,7 @@ message EvsHeadSummary {
   EvsRefMode ref_mode = 6; bytes owner_sidecar_id = 7; bytes sealed_ref_name = 8; EvsOverlay base = 9;
   AuthPin auth = 10; bytes group_id = 11; uint64 generation = 12; bytes generation_commitment = 13;
   EvsPathEpoch path_epoch = 14; uint64 index_epoch = 15; bool deleted = 16; uint64 push_sequence = 17;
+  bool supports_exact_head = 18;
 }
 message EvsReadStatement { uint64 version = 1; bytes statement = 2; }
 message EvsMerkleProof { bytes leaf = 1; uint64 index = 2; uint64 size = 3; repeated bytes path = 4; }
@@ -613,7 +617,9 @@ message MailOutcome {
   uint32 tls_level = 9;
 }
 // The record's send_id is QD-1122's (question mail-m9-06-send-result-owner): the send its o/ entry's Message-ID names.
-message MailOutcomeRecord { repeated MailOutcome outcomes = 1; bytes send_id = 2; }
+message MailOutcomeRecord { repeated MailOutcome outcomes = 1; bytes send_id = 2; repeated MailRecipientProgress recipient_progress = 3; }
+// Optional private progress for partially answered recipient domains, bound to the signed outbox envelope.
+message MailRecipientProgress { string domain = 1; bytes envelope_sha256 = 2; repeated uint32 delivered = 3; repeated uint32 refused = 4; }
 // §15.7's p/ row, with DESIGN-DETAILS 3.7's fields for SMTP-M9-09 in the order it writes them.
 message MailProverRecord {
   uint64 smtp_data_proof_bytes = 1; uint64 data_bytes_per_s = 2; uint64 measure_time_ms = 3;
@@ -637,6 +643,15 @@ var testFenceAdditions = []struct {
 	field    testFenceField
 	question string
 }{
+	{message: "RepoCreate", field: testFenceField{name: "inbox", number: 4, typeName: "RepoInbox"}, question: "plan-MAIL-group-inbox (QD-102)"},
+	{message: "AclRepo", field: testFenceField{name: "inbox", number: 14, typeName: "RepoInbox"}, question: "plan-MAIL-group-inbox (QD-102)"},
+	// RECORD.md section 6.4's ErasureBody: the announcements a moderation's ERASE took off a card, which its note names
+	// (QD-1148)
+	{
+		message:  "ErasureBody",
+		field:    testFenceField{name: "announcement_ids", number: 5, typeName: "bytes", repeated: true},
+		question: "moderated-run-left-out-dropped-erasure",
+	},
 }
 
 // One field an owner's answer takes out of a message the design fences, its number reserved.

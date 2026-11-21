@@ -437,6 +437,9 @@ func (self *EvsRepo) reconstruct(ctx context.Context, result *evsReadResult, ver
 		return nil, err
 	}
 	defer content.close()
+	if err := self.checkMailRead(ctx, result, verified, content); err != nil {
+		return nil, err
+	}
 	if _, err := io.Copy(out, content.reader()); err != nil {
 		return nil, err
 	}
@@ -474,6 +477,9 @@ func (self *EvsRepo) reconstructContent(ctx context.Context, result *evsReadResu
 		}
 	}
 	objectIds = append(objectIds, entry.GetSlotIds()...)
+	if result.searchReceipt != nil {
+		objectIds = [][]byte{result.searchReceipt[:]}
+	}
 	if !result.receiptExempt {
 		if err := self.client.preDecrypt(ctx, self.repoId, result.refId, objectIds); err != nil {
 			return nil, nil, EvsGitOid{}, err

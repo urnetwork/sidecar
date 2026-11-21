@@ -163,7 +163,9 @@ func newGkmAclStateWorld(t *testing.T) *gkmAclStateWorld {
 	}
 	world.cache = sidecar.NewAclGateCache(admission.Context(), world.source, net.Clock(), gateSettings)
 	world.state = gkmservice.NewAclGkmAuthState(world.cache, world.revocations, net.Clock())
-	world.engine, err = gkmservice.NewGkmEngine(t.Context(), net.Host(), nil, &gkmservice.GkmEngineDeps{AuthState: world.state})
+	legacy := gkmservice.DefaultGkmServiceSettings()
+	legacy.DraftMls = true
+	world.engine, err = gkmservice.NewGkmEngine(t.Context(), net.Host(), legacy, &gkmservice.GkmEngineDeps{AuthState: world.state})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -824,8 +826,8 @@ func TestGkmAuthStateHoldsADeletedReposAdminToAdminAlone(t *testing.T) {
 
 // KF1's request for repoId's first group, groupId, by signer: its GroupForm and gen/1 at the tip and the Net's clock,
 // with genWrap as its GenWrap, which gkm checks only once the guard and the form's signer rule have passed it, so 72
-// bytes give a create that lands and any other length one refused 400 past both. The holders hash and the GroupInfo
-// are stand-ins gkm stores and never opens, as the config repo's world makes them (acl_config_repo_test.go).
+// bytes give a create that lands and any other length one refused 400 past both. The draft MLS host stores the
+// supplied holders hash and sealed GroupInfo.
 func (self *gkmAclStateWorld) groupCreate(signer *AdmissionDevice, repoId sidecar.Id, groupId sidecar.Id, genWrap []byte) []byte {
 	self.t.Helper()
 	sign := aclConfigRepoSign(signer)
@@ -858,7 +860,7 @@ func (self *gkmAclStateWorld) groupCreate(signer *AdmissionDevice, repoId sideca
 		GenRotate:       signedRotate,
 		GenWrap:         genWrap,
 		SealedGroupInfo: []byte("sealed group info of the guard repo's epoch 0"),
-		CipherSuite:     aclConfigRepoCipherSuite,
+		CipherSuite:     0x0010,
 	})
 	if err != nil {
 		self.t.Fatal(err)

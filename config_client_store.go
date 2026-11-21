@@ -60,9 +60,20 @@ type configClientDocument struct {
 
 // A config head this device verified: its hash, version and the ServiceSettings it held, deterministically encoded.
 type configClientHeadRecord struct {
-	ConfigHeadSha256 []byte `json:"config_head_sha256"`
-	ConfigVersion    uint64 `json:"config_version"`
-	Settings         []byte `json:"settings,omitempty"`
+	ConfigHeadSha256 []byte                        `json:"config_head_sha256"`
+	ConfigVersion    uint64                        `json:"config_version"`
+	Settings         []byte                        `json:"settings,omitempty"`
+	VersioningRules  []byte                        `json:"versioning_rules,omitempty"`
+	RecoveryKnown    bool                          `json:"recovery_known,omitempty"`
+	Recovery         []*configClientRecoveryRecord `json:"recovery,omitempty"`
+}
+
+// Persists a member's recovery binding statement and its effective log position with the verified head.
+type configClientRecoveryRecord struct {
+	MemberId Id                `json:"member_id"`
+	At       uint64            `json:"at"`
+	Type     bridge.SignedType `json:"type"`
+	Body     []byte            `json:"body"`
 }
 
 // Writes what the log keeps now to authlog/, a joining device's rows-only log while no log is confirmed. No store keeps
@@ -119,6 +130,13 @@ func (self *ConfigClient) save() error {
 				if err == nil {
 					record.Settings = settingsBytes
 				}
+			}
+			if verified.versioningRules != nil {
+				record.VersioningRules, _ = proto.MarshalOptions{Deterministic: true}.Marshal(verified.versioningRules)
+			}
+			record.RecoveryKnown = verified.recoveryKnown
+			for memberId, body := range verified.recoveryBodies {
+				record.Recovery = append(record.Recovery, &configClientRecoveryRecord{MemberId: memberId, At: body.at, Type: body.kind, Body: body.body})
 			}
 			document.VerifiedHeads = append(document.VerifiedHeads, record)
 		}
@@ -190,7 +208,19 @@ func (self *ConfigClient) restoreFromStore() error {
 				continue
 			}
 		}
-		self.rememberHead(record.ConfigHeadSha256, record.ConfigVersion, settings)
+		facts := &ConfigHeadFacts{Settings: settings, recoveryBodies: map[Id]*configRecoveryBody{}}
+		if record.VersioningRules != nil {
+			facts.VersioningRules = &protocol.VersioningRules{}
+			if err := proto.Unmarshal(record.VersioningRules, facts.VersioningRules); err != nil {
+				continue
+			}
+		}
+		for _, binding := range record.Recovery {
+			if binding != nil {
+				facts.recoveryBodies[binding.MemberId] = &configRecoveryBody{at: binding.At, kind: binding.Type, body: binding.Body}
+			}
+		}
+		self.rememberHead(record.ConfigHeadSha256, record.ConfigVersion, facts, record.RecoveryKnown)
 	}
 	if len(document.Entries) == 0 {
 		return nil

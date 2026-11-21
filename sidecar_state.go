@@ -1,6 +1,6 @@
 // §5.4's state machine and §18.5's State block, as a pure function: which moves are legal, and what
 // each does to the state, its reason and the client generation. Nothing else writes a Sidecar's
-// state, and emitEvent is the one way a root file raises an event. Neither names a connect type, so
+// state, and enqueueEvent orders each event for delivery. Neither names a connect type, so
 // both build on every leg.
 //
 // Locked → Unenrolled ⇄ Offline ⇄ Online, a locked store → Locked (§5.9), and only a verified
@@ -177,7 +177,7 @@ func newSidecarBase(host SidecarHost, settings *SidecarSettings) *Sidecar {
 		settings:                settings,
 		log:                     loggerOrDefault(settings.Log),
 		state:                   NewMonitorValue(SidecarStateLocked),
-		eventCallbacks:          NewCallbackList[SidecarEventFunction](),
+		eventCallbacks:          NewCallbackList[func(sidecarQueuedEvent)](),
 		wakes:                   NewMonitorValue[uint64](0),
 		runningGenerationNumber: NewMonitorValue[int64](0),
 		clock:                   settings.ClockOrReal(),
@@ -216,9 +216,20 @@ func (self *Sidecar) applyTransition(transition sidecarTransition) bool {
 	return false
 }
 
-// The one entry other root files use to raise §5.4's kinds. An event of an older client generation
-// is dropped (D-SDK-14), and one naming no generation, which no client raised, is stamped with the
-// current one.
+// The daemon's delivery metadata travels with the payload while it waits behind earlier callbacks.
+type sidecarQueuedEvent struct {
+	SidecarEvent
+	networkId       *Id
+	originSidecarId *Id
+	loggedOut       bool
+}
+
+// Raises an event for the sidecar's current identity.
+func (self *Sidecar) emitEvent(event SidecarEvent) {
+	self.enqueueEvent(sidecarQueuedEvent{SidecarEvent: event})
+}
+
+// An event of an older client generation is dropped (D-SDK-14). One naming no generation takes the current one.
 //
 // Events reach the callbacks in the order they were raised, so no subscriber sees an older generation's
 // event after a newer one's. One raised while another is being delivered, on any goroutine or from
@@ -226,7 +237,7 @@ func (self *Sidecar) applyTransition(transition sidecarTransition) bool {
 // otherwise this goroutine delivers it, and anything raised meanwhile. A callback runs with no lock
 // held, and an event that a newer generation overtook while it waited is dropped at each subscriber it
 // had not reached.
-func (self *Sidecar) emitEvent(event SidecarEvent) {
+func (self *Sidecar) enqueueEvent(event sidecarQueuedEvent) {
 	queued := false
 	deliver := false
 	func() {
@@ -238,6 +249,12 @@ func (self *Sidecar) emitEvent(event SidecarEvent) {
 		if event.Generation < self.lifecycle.generation {
 			return
 		}
+		if !event.loggedOut {
+			event.networkId = self.networkId
+			if self.identity != nil {
+				event.originSidecarId = &self.identity.SidecarId
+			}
+		}
 		queued = true
 		self.eventQueue = append(self.eventQueue, event)
 		if !self.eventDelivering {
@@ -246,7 +263,7 @@ func (self *Sidecar) emitEvent(event SidecarEvent) {
 		}
 	}()
 	if !queued {
-		self.logDroppedEvent(event)
+		self.logDroppedEvent(event.SidecarEvent)
 		return
 	}
 	if deliver {
@@ -265,7 +282,7 @@ func (self *Sidecar) deliverEvents() {
 		}
 	}()
 	for {
-		var event SidecarEvent
+		var event sidecarQueuedEvent
 		func() {
 			self.stateLock.Lock()
 			defer self.stateLock.Unlock()
@@ -291,7 +308,7 @@ func (self *Sidecar) deliverEvents() {
 				return event.Generation < self.lifecycle.generation
 			}()
 			if overtaken {
-				self.logDroppedEvent(event)
+				self.logDroppedEvent(event.SidecarEvent)
 				break
 			}
 			callback(event)

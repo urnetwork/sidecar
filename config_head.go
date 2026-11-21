@@ -551,6 +551,7 @@ func CheckConfigBase(head *ConfigHead, check *ConfigHeadCheck, rows *ConfigCompi
 	if rows == nil {
 		return nil, fmt.Errorf("%w: no rows to compile the head with", ErrConfigHeadMismatch)
 	}
+	facts.recoveryBodies = rows.recoveryBodies
 	compiled, err := CompileProjectionRows(head, rows)
 	if err != nil {
 		return nil, err
@@ -622,6 +623,13 @@ func checkConfigAnchor(head *ConfigHead, check *ConfigHeadCheck) (*ConfigHeadFac
 	}
 
 	facts := &ConfigHeadFacts{}
+	if len(check.Rows) > 0 {
+		rows := &bridge.ProjectionRows{}
+		if err := proto.Unmarshal(check.Rows, rows); err != nil {
+			return nil, fmt.Errorf("%w: binding rows: %w", ErrConfigHeadMismatch, err)
+		}
+		facts.recoveryBodies = configFoldedRecoveryBodies(rows.GetMembers(), records)
+	}
 	settings, _, err := head.ServiceSettings()
 	if err != nil {
 		return nil, err

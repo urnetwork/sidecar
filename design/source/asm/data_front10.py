@@ -2212,3 +2212,9 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     "erased-key judge's leg seam (665), extending @@OD:596@@, a rotation draft's freshness (666), the explorer on "
     "a barrier-free schedule (667), following @@OD:626@@, the shed past a weighted share (668), refining "
     "@@OD:617@@, and index entries above the pin's ref version (669), following @@OD:621@@. ")
+
+# Owner decision 141's file-mode amendment, approved 2026-11-20.
+_i = [row[0] for row in INDEX].index(141)
+_n, _title, _answer = INDEX[_i]
+INDEX[_i] = (_n, _title, _answer + " On 2026-11-20 the owner approved a signed exact-head option for file-mode "
+             "pushes. The native ACL writer uses it after a user confirms a preview.")

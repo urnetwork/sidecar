@@ -1,4 +1,4 @@
-//go:build !ios_extension && !sidecar_http
+//go:build !ios_extension
 
 // A hosted network's config follower (QD-796; TEAM-M2-10, ACL-M2-15, CORE-M2-01): the composition that makes a daemon's
 // Sidecar the device's one judge of its network's §7.9 log. Sidecar.FollowConfig adds it as the Sidecar's "config"
@@ -136,6 +136,8 @@ func DefaultSidecarConfigFollowerSettings() *SidecarConfigFollowerSettings {
 
 // What a follower runs on beyond its Sidecar.
 type SidecarConfigFollowerArgs struct {
+	// A standalone top-level CLI device may propose Genesis on an empty log. The API checks its owner's membership.
+	BootstrapFirstOwner bool
 	// The config repo's head reader through evs: each base's head is checked by it, and the acl follower's local
 	// policy and the bridge's compile read heads through it. Nil holds every base withheld.
 	Heads ConfigHeadReader
@@ -143,10 +145,14 @@ type SidecarConfigFollowerArgs struct {
 	// config repo's generation keys. One that is a GkmConfigJoiner is also handed the rows-only pass's states of a
 	// device joining its network, before the follower stands (QD-817). Nil for none.
 	Gkm GkmClient
+	// Receives GKM notices on each generation when the host owns the member replica.
+	Hints *GkmHints
 	// HeadStopState.ReportFork: a fork of the log stops sealing in shared groups (§6.4). Nil for none.
 	ReportFork func(fork HeadFork)
 	// Nil is DefaultSidecarConfigFollowerSettings.
 	Settings *SidecarConfigFollowerSettings
+	// The host’s file client, used to bind record reads, receipts, writes and erasures before publishing the verified config.
+	RecordEvs func() (*EvsClient, error)
 }
 
 // One network's config follower on its Sidecar (the file's comment).
@@ -224,7 +230,7 @@ func (self *Sidecar) FollowConfig(args *SidecarConfigFollowerArgs) (*SidecarConf
 		cancel()
 		return nil, ErrSidecarConfigFollowing
 	}
-	remove, err := self.AddComponent(follower)
+	remove, err := self.attachConfigFollower(follower)
 	if err != nil {
 		follower.Close()
 		return nil, err
@@ -247,11 +253,9 @@ func (self *SidecarConfigFollower) Name() string {
 	return sidecarConfigFollowerComponentName
 }
 
-// One client generation: its team hints go to the client until the generation ends, a follow is asked for, and the
-// first generation starts the follower on its identity's network. A generation of another network than the first one's
-// is refused: a Sidecar's network never changes, and this log judges only its own.
-func (self *SidecarConfigFollower) Attach(env *SidecarEnv) error {
-	identity := env.Identity
+// Starts the follower at this enrolled identity. A later generation can wake the same
+// network's client. A generation from a different network cannot reuse its log.
+func (self *SidecarConfigFollower) followIdentity(identity *SidecarIdentity) error {
 	if identity == nil {
 		return fmt.Errorf("%w: a generation with no identity", ErrSidecarNoIdentity)
 	}
@@ -266,14 +270,6 @@ func (self *SidecarConfigFollower) Attach(env *SidecarEnv) error {
 	}()
 	if !ours {
 		return fmt.Errorf("the config follower of network %s takes no generation of network %s", networkId, identity.NetworkId)
-	}
-	if env.Subprotocol != nil {
-		if unsubscribe, err := env.Subprotocol.Subscribe(PushTopicTeam, self.receiveNotice); err == nil {
-			go func() {
-				<-env.Ctx.Done()
-				unsubscribe()
-			}()
-		}
 	}
 	if client := self.followingClient(); client != nil {
 		client.requestFollow()
@@ -325,6 +321,9 @@ func (self *SidecarConfigFollower) Close() {
 
 // Keeps the function that takes the component off the Sidecar, or calls it at once when the follower closed meanwhile.
 func (self *SidecarConfigFollower) setRemove(remove func()) {
+	if remove == nil {
+		return
+	}
 	closed := func() bool {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
@@ -427,6 +426,23 @@ func (self *SidecarConfigFollower) Rows() ConfigRowsSource {
 	return &sidecarConfigFollowerRows{follower: self}
 }
 
+// The writable config generation for a new sealed statement on this network's standing log.
+func (self *SidecarConfigFollower) CurrentConfigKey(ctx context.Context) (*EvsRepoKey, error) {
+	client := self.Client()
+	if client == nil || client.Fork() != nil || self.args == nil || self.args.Gkm == nil {
+		return nil, ErrGkmUnavailable
+	}
+	state := client.State()
+	if state == nil {
+		return nil, ErrGkmUnavailable
+	}
+	repoId, err := IdFromBytes(state.Genesis().GetConfigRepoId())
+	if err != nil {
+		return nil, err
+	}
+	return self.args.Gkm.EnsureWritable(ctx, repoId)
+}
+
 // The config repo's key of generation, from the key client: nil before the follower stands, with no key client, and for
 // a generation the client does not give within RepoKeyTimeout, every refusal alike.
 func (self *SidecarConfigFollower) RepoKeyAt(generation uint64) *EvsRepoKey {
@@ -477,6 +493,17 @@ func (self *SidecarConfigFollower) AclEngine() *AclEngine {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	return self.aclEngine
+}
+
+// The verified authorization engine and config client from the same standing follower. Closing or refusing the
+// follower withdraws both together, even while callers still hold its address.
+func (self *SidecarConfigFollower) StandingPolicy() (*AclEngine, *ConfigClient) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.state.Value() != SidecarConfigFollowerStanding {
+		return nil, nil
+	}
+	return self.aclEngine, self.client
 }
 
 // Moves to state for reason, unless the follower refused or closed, which it never leaves. Whether it moved.
@@ -569,7 +596,22 @@ func (self *SidecarConfigFollower) run(networkId Id, sidecarId Id) {
 		}
 		return
 	}
-	self.stand(networkId, sidecarId, client)
+	var removeRecord func()
+	if self.args.RecordEvs != nil {
+		for {
+			if removeRecord, err = self.bindRecord(client); err == nil {
+				break
+			} else {
+				self.moveTo(SidecarConfigFollowerCatchingUp, fmt.Sprintf("waiting for the member record binding: %v", err))
+			}
+			select {
+			case <-self.ctx.Done():
+				return
+			case <-self.clock.After(self.settings.AnchorRetryInterval):
+			}
+		}
+	}
+	self.stand(networkId, sidecarId, client, removeRecord)
 }
 
 // The anchor, asked again at a doubling interval while the keychain is locked or api serves no genesis to trust.
@@ -624,8 +666,18 @@ func (self *SidecarConfigFollower) trustFirstUse(networkId Id) error {
 	ctx, cancel := context.WithTimeout(self.ctx, self.settings.AnchorReadTimeout)
 	defer cancel()
 	projection, err := self.sidecar.sidecarApi.ReadConfigProjection(ctx, 0)
-	if err != nil {
+	bootstrap := self.args.BootstrapFirstOwner && !self.sidecar.Paired()
+	if err != nil && !bootstrap {
 		return err
+	}
+	if projection == nil {
+		projection = &ConfigProjection{}
+	}
+	if bootstrap {
+		projection.SignedGenesis, err = self.firstOwnerGenesis(ctx, networkId, projection.SignedGenesis, err)
+		if err != nil {
+			return err
+		}
 	}
 	if len(projection.SignedGenesis) == 0 {
 		return errors.New("api serves no genesis yet")
@@ -694,6 +746,43 @@ func (self *SidecarConfigFollower) startClient(networkId Id, genesisChain [sha25
 	client, err := NewConfigClient(self.ctx, clientArgs)
 	if err != nil {
 		return nil, err
+	}
+	ref, generalWriter := self.args.Heads.(ConfigHeadRef)
+	if !generalWriter {
+		if source, ok := self.args.Heads.(ConfirmedAclConfigRefProvider); ok {
+			ref = source.ConfirmedAclConfigRef()
+		}
+	}
+	if ref != nil {
+		identity := self.sidecar.Identity()
+		if identity == nil || identity.NetworkId != networkId {
+			client.Close()
+			return nil, ErrSidecarNoIdentity
+		}
+		settings := DefaultConfigWriterSettings()
+		settings.Clock, settings.Log = self.clock, self.log
+		args := &ConfigWriterArgs{
+			SidecarId: identity.SidecarId, Client: client, Heads: ref, Publisher: self.sidecar.sidecarApi,
+			Settings: settings,
+			Sign: func(purpose string, signedType bridge.SignedType, body []byte) (*bridge.Signed, error) {
+				return self.sidecar.Sign(purpose, signedType, body, nil)
+			},
+		}
+		if judge := client.logSettings.BridgeBodyJudge; judge != nil {
+			args.BridgeFold = judge.Fold
+		}
+		if generalWriter {
+			writer, err := NewConfigWriter(client.ctx, args)
+			if err != nil {
+				client.Close()
+				return nil, err
+			}
+			context.AfterFunc(client.ctx, writer.Close)
+		} else {
+			// Only aclSaveContext can select this writer. It never registers a general
+			// config writer or starts a periodic fold. A confirmed save performs its own fold.
+			client.confirmedAclWriter = newConfigWriter(client.ctx, args)
+		}
 	}
 	held := func() bool {
 		self.stateLock.Lock()
@@ -771,7 +860,7 @@ func (self *SidecarConfigFollower) refuseGenesis(anchored [sha256.Size]byte, ser
 
 // Standing: the authority installed, the acl follower started on an engine of its own, the key client let through, and
 // only then the state that makes Client answer. A follower that refused or closed meanwhile takes all of it back.
-func (self *SidecarConfigFollower) stand(networkId Id, sidecarId Id, client *ConfigClient) {
+func (self *SidecarConfigFollower) stand(networkId Id, sidecarId Id, client *ConfigClient, removeRecord func()) {
 	aclSettings := DefaultAclSettings()
 	if self.settings.Acl != nil {
 		copied := *self.settings.Acl
@@ -785,7 +874,13 @@ func (self *SidecarConfigFollower) stand(networkId Id, sidecarId Id, client *Con
 	}
 	engine := NewAclEngine(sidecarId, &sidecarConfigFollowerAclStates{client: client}, self.aclAlarm, self.settings.AclEngine)
 	testHookBarrier("sidecar_config_follower.stand.before", networkId.String())
-	removeAuthority := self.sidecar.InstallAuthority(client.Authority())
+	removeSigningAuthority := self.sidecar.InstallAuthority(client.Authority())
+	removeAuthority := func() {
+		removeSigningAuthority()
+		if removeRecord != nil {
+			removeRecord()
+		}
+	}
 	aclFollower, err := NewAclFollower(self.ctx, &AclFollowerArgs{
 		Source:   client,
 		Engine:   engine,
@@ -798,6 +893,12 @@ func (self *SidecarConfigFollower) stand(networkId Id, sidecarId Id, client *Con
 		removeAuthority()
 		self.refuse(fmt.Errorf("%w: the acl follower did not start: %w", ErrSidecarConfigRefused, err))
 		return
+	}
+	// A native host installs the VPN forwarding setup for the lifetime of this signing authority.
+	if host, ok := any(self).(interface {
+		installForwardingSources(*ConfigClient, func()) func()
+	}); ok {
+		removeAuthority = host.installForwardingSources(client, removeAuthority)
 	}
 	kept := func() bool {
 		self.stateLock.Lock()
@@ -855,6 +956,11 @@ type sidecarConfigFollowerProjection struct {
 	genesisChain [sha256.Size]byte
 	// closes once the follower holds the client, or never will: no read comes before it
 	kept <-chan struct{}
+}
+
+// Gives the config authority the sidecar's clock for judging statement deadlines.
+func (self *sidecarConfigFollowerProjection) statementTime() time.Time {
+	return self.follower.sidecar.statementTime()
 }
 
 // The Sidecar api's read, once the follower holds the client, its genesis checked first.

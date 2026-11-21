@@ -66,8 +66,7 @@ var (
 	_ EvsRepoDeletionSource = (*AclEvsAuthState)(nil)
 )
 
-// The snapshot of the token's network, Unknown while it is not loaded; a network the cache has not heard of is told
-// to it.
+// The snapshot of the token's network. Its binding and scope remain unknown until the cache loads it.
 func (self *AclEvsAuthState) snapshot(principal *sidecar.Principal) (*sidecar.AclGateSnapshot, EvsAuthAnswer) {
 	if principal == nil {
 		return nil, EvsAuthUnknown
@@ -75,20 +74,9 @@ func (self *AclEvsAuthState) snapshot(principal *sidecar.Principal) (*sidecar.Ac
 	return self.networkSnapshot(sidecar.Id(principal.NetworkId))
 }
 
-// The snapshot of a network, Unknown while it is not loaded; a network the cache has not heard of is told to it.
+// The snapshot of a network, requesting a load on a miss.
 func (self *AclEvsAuthState) networkSnapshot(networkId sidecar.Id) (*sidecar.AclGateSnapshot, EvsAuthAnswer) {
-	if self.gate == nil {
-		return nil, EvsAuthUnknown
-	}
-	snapshot, status := self.gate.State(networkId)
-	switch status {
-	case sidecar.AclGateLoaded:
-	case sidecar.AclGateUnknown:
-		self.gate.Changed(networkId)
-		return nil, EvsAuthUnknown
-	default:
-		return nil, EvsAuthUnknown
-	}
+	snapshot := sidecar.RequestAclGateSnapshot(self.gate, networkId)
 	if snapshot == nil || snapshot.Acl == nil {
 		return nil, EvsAuthUnknown
 	}

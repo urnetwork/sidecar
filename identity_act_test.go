@@ -220,6 +220,33 @@ func newActTestSidecar(t *testing.T) (*Sidecar, *testActAuthority, *testDeltaApi
 	return sidecar, authority, deltaApi
 }
 
+func TestStatementDeadlineUsesTheSequencersClock(t *testing.T) {
+	device, _, _ := newActTestSidecar(t)
+	received := device.clock.Now()
+	for _, skew := range []time.Duration{-8 * time.Minute, 8 * time.Minute} {
+		apiTime := received.Add(skew)
+		response := &http.Response{Header: http.Header{"Date": {apiTime.UTC().Format(http.TimeFormat)}}}
+		device.sidecarApi.keepApiClock(response, received.Add(-4*time.Second), received)
+		act, err := device.newAct(SidecarActConfirmed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := act.Add(bridge.SignedType_SIGNED_SIDECAR_REVOKE, &bridge.SidecarRevoke{
+			SidecarId: act.identity.SidecarId.Bytes(), Reason: bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_REMOVED,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		want := apiTime.Add(7 * 24 * time.Hour).UnixMilli()
+		if got := act.statements[0].notAfterMs; got != want {
+			t.Fatalf("device skew %s: signed expiry %d, want %d", skew, got, want)
+		}
+		recovery, err := device.recoveryStatementHeader(act.identity.NetworkId, act.at, rand.Reader)
+		if err != nil || recovery.GetNotAfterMs() != want {
+			t.Fatalf("device skew %s: recovery expiry %d, want %d: %v", skew, recovery.GetNotAfterMs(), want, err)
+		}
+	}
+}
+
 // A presence key, P-256 as ecdsa-p256-sha256 holds it, registered live for the act authority.
 func addTestPresenceKey(t *testing.T, authority *testActAuthority) (*ecdsa.PrivateKey, []byte) {
 	t.Helper()

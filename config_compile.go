@@ -45,10 +45,12 @@ var (
 
 // The rows the log's records give at a head's folded_through, which compile encodes beside the head's acl part.
 type ConfigCompileRows struct {
+	recoveryBodies map[Id]*configRecoveryBody
 	Members        []*bridge.MemberRow
 	Sidecars       []*bridge.SidecarRow
 	Delegations    []*bridge.DelegationRow
 	RegisteredKeys []*bridge.KeyRow
+	TeamScopes     []*bridge.TeamScopeRow
 	// What the log's 0x11xx statements give at folded_through: grants, shares, suspensions and AclRepo rows, which
 	// the acl compile carries into AclRows beside what the head's policy gives (§8.8).
 	AclStatements *protocol.AclRows
@@ -69,10 +71,12 @@ func ConfigCompileRowsOf(state *ConfigState) *ConfigCompileRows {
 		aclStatements = proto.Clone(state.aclRows).(*protocol.AclRows)
 	}
 	return &ConfigCompileRows{
+		recoveryBodies: state.recoveryBodies,
 		Members:        rows.GetMembers(),
 		Sidecars:       rows.GetSidecars(),
 		Delegations:    rows.GetDelegations(),
 		RegisteredKeys: rows.GetRegisteredKeys(),
+		TeamScopes:     rows.GetTeamScopes(),
 		AclStatements:  aclStatements,
 		Proposals:      rows.GetProposals(),
 		Ring:           rows.GetRing(),
@@ -92,6 +96,7 @@ func configCompileRowsFromRows(rows *bridge.ProjectionRows) (*ConfigCompileRows,
 		Sidecars:       rows.GetSidecars(),
 		Delegations:    rows.GetDelegations(),
 		RegisteredKeys: rows.GetRegisteredKeys(),
+		TeamScopes:     rows.GetTeamScopes(),
 		AclStatements:  aclStatements,
 		Proposals:      rows.GetProposals(),
 		Ring:           rows.GetRing(),
@@ -179,6 +184,12 @@ func CompileProjectionRows(head *ConfigHead, rows *ConfigCompileRows) ([]byte, e
 	projection.Sidecars = configSortRows(rows.Sidecars, (*bridge.SidecarRow).GetSidecarId, "sidecars", &sortErr)
 	projection.Delegations = configSortRows(rows.Delegations, (*bridge.DelegationRow).GetDelegationId, "delegations", &sortErr)
 	projection.RegisteredKeys = configSortRows(rows.RegisteredKeys, (*bridge.KeyRow).GetKeyId, "registered_keys", &sortErr)
+	projection.TeamScopes = configSortRows(rows.TeamScopes, func(row *bridge.TeamScopeRow) []byte { return []byte(row.GetLabel()) }, "team_scopes", &sortErr)
+	for _, scope := range projection.TeamScopes {
+		if err := configCheckTeamScope(scope); err != nil {
+			return nil, err
+		}
+	}
 	projection.Proposals = configSortRows(rows.Proposals, (*bridge.ProposalRow).GetProposalId, "proposals", &sortErr)
 	projection.Indexers = configSortRows(rows.Indexers, configIndexerRowKey, "indexers", &sortErr)
 	projection.Ring = configSortRows(rows.Ring, configRingRowKey, "ring", &sortErr)
@@ -198,6 +209,26 @@ func CompileProjectionRows(head *ConfigHead, rows *ConfigCompileRows) ([]byte, e
 		return nil, fmt.Errorf("%w: %d bytes", ErrConfigRowsTooLarge, len(encoded))
 	}
 	return encoded, nil
+}
+
+// The public shape of a scope binding. The owner's id stays reserved when its member or tag leaves.
+func configCheckTeamScope(row *bridge.TeamScopeRow) error {
+	label := row.GetLabel()
+	if !isDnsLowerLdhLabel(label) || (len(label) >= 4 && label[2:4] == "--") || IsReservedDnsLabel(label) || IsWordNumberDnsLabel(label) {
+		return fmt.Errorf("%w: invalid team scope label", ErrConfigRowsMalformed)
+	}
+	memberId, tagAtom := row.GetMemberId(), row.GetTagAtom()
+	switch {
+	case len(memberId) != 0 && len(tagAtom) == 0:
+		if id, err := IdFromBytes(memberId); err == nil && id != (Id{}) {
+			return nil
+		}
+	case len(tagAtom) != 0 && len(memberId) == 0:
+		if id, err := IdFromBytes(tagAtom); err == nil && !aclAtomHasAutogroupForm(id) {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: team scope must have exactly one valid member_id or tag_atom", ErrConfigRowsMalformed)
 }
 
 // A ring row's sort key, its position: the ring runs in position order, at most one statement a position.

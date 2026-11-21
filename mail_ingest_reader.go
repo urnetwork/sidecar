@@ -136,14 +136,27 @@ func (self *mailIngestEvsRepo) Depositors(ctx context.Context) ([]Id, error) {
 	if err != nil {
 		return nil, err
 	}
+	return mailDepositRefOwners(repoId, reply)
+}
+
+// The owners of every listed deposit ref. A partial response or an unidentifiable deposit ref cannot
+// establish which copies stand in the repo.
+func mailDepositRefOwners(repoId Id, reply *protocol.EvsRefsReply) ([]Id, error) {
+	if !reply.GetAll() {
+		return nil, fmt.Errorf("%w: incomplete ref listing", ErrEvsReplyInvalid)
+	}
 	depositorIds := []Id{}
 	for _, head := range reply.GetRefs() {
-		if head.GetRefKind() != protocol.EvsRefKind_EVS_REF_DEPOSIT {
+		switch head.GetRefKind() {
+		case protocol.EvsRefKind_EVS_REF_SHARED, protocol.EvsRefKind_EVS_REF_OWNED, protocol.EvsRefKind_EVS_REF_ERASURE:
 			continue
+		case protocol.EvsRefKind_EVS_REF_DEPOSIT:
+		default:
+			return nil, fmt.Errorf("%w: unrecognized ref kind", ErrEvsReplyInvalid)
 		}
 		depositorId, err := IdFromBytes(head.GetOwnerSidecarId())
-		if err != nil || !bytes.Equal(head.GetRefId(), EvsDepositRefId(repoId, depositorId).Bytes()) {
-			continue
+		if err != nil || depositorId == (Id{}) || !bytes.Equal(head.GetRefId(), EvsDepositRefId(repoId, depositorId).Bytes()) {
+			return nil, fmt.Errorf("%w: invalid deposit ref owner", ErrEvsReplyInvalid)
 		}
 		depositorIds = append(depositorIds, depositorId)
 	}

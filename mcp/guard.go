@@ -18,6 +18,7 @@
 //	                shards as well as its entries, on any ref, so a listing names none of it and an agent holding an
 //	                EvsShare of the mailbox, whose keys open the entries, reaches them by no path (QD-673; §15.7,
 //	                §15.8): only the owner's consented devices read them, through MailVault
+//	recipients      the rcpt/ family on a mailbox or group inbox, including a general repo mailcfg cannot classify
 //	statements      every authority statement, admissions, KeyRegister and IndexerSet included; approval statements
 //	                but the daemon's own harness decisions; acl and bridge statements but the own-resource filings
 //	                16.5's tools make about this sidecar's own resources, which the tool has checked are its own:
@@ -37,7 +38,9 @@
 package mcp
 
 import (
+	"context"
 	"strings"
+	"sync"
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
@@ -116,6 +119,8 @@ type McpTarget struct {
 	Operation McpRepoOperation
 	Ref       string
 	Path      string
+	// A complete, verified view of mailcfg ruled out a group inbox for this general repo.
+	OrdinaryFileRepo bool
 
 	// McpTargetStatement's: its type, and for an acl or bridge statement, whether the tool checked it is one of this
 	// sidecar's own-resource filings, or for an ApprovalDecision, whether it is the daemon's own harness decision.
@@ -180,6 +185,25 @@ func (self *McpTarget) onMailboxVault() bool {
 		(self.Path == mcpMailboxVaultFamily || strings.HasPrefix(self.Path, mcpMailboxVaultFamily+"/"))
 }
 
+// The approved recipients' directory, shards and records.
+func mcpRecipientPath(path string) bool {
+	return path == "rcpt" || strings.HasPrefix(path, "rcpt/")
+}
+
+// Read mailcfg at most once, on the first protected general-repo path in this call or subscription.
+func (self *McpCall) bindRecipientGuard(ctx context.Context) {
+	host, ok := self.Network.(interface {
+		MailGroupInboxes(context.Context) (map[sidecar.Id]bool, error)
+	})
+	if ok {
+		groups := sync.OnceValues(func() (map[sidecar.Id]bool, error) { return host.MailGroupInboxes(ctx) })
+		self.ordinaryFileRepo = func(repoId sidecar.Id) bool {
+			inboxes, err := groups()
+			return err == nil && inboxes != nil && !inboxes[repoId]
+		}
+	}
+}
+
 // §16.6's table, in its order.
 var mcpGuardRows = []mcpGuardRow{
 	{
@@ -234,6 +258,14 @@ var mcpGuardRows = []mcpGuardRow{
 		refusal: NewMcpError(McpCodeRefused, "MCP never reaches a mailbox's vault entries", false),
 		refuses: func(target *McpTarget) bool {
 			return target.Kind == McpTargetRepo && target.onMailboxVault()
+		},
+	},
+	{
+		refusal: NewMcpError(McpCodeRefused, "MCP never reaches approved-recipient records", false),
+		refuses: func(target *McpTarget) bool {
+			return target.Kind == McpTargetRepo && mcpRecipientPath(target.Path) &&
+				(target.RepoKind == protocol.RepoKind_REPO_KIND_MAILBOX ||
+					target.RepoKind == protocol.RepoKind_REPO_KIND_GENERAL && !target.OrdinaryFileRepo)
 		},
 	},
 	{

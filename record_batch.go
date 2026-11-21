@@ -19,9 +19,8 @@
 // stream's counter and drops the plan, in that order, so a kill between leaves a plan whose retry answers the commit
 // again, or one naming a seq already acknowledged, which reads as committed.
 //
-// Before a log's first stream push in this process the writer adopts the newest entry of its chain in its own stream
-// (RecordChainStore.AdoptStream). Sealing does not wait for that: an entry sealed before it, on a device restored from
-// an old backup, forks the chain, which readers alarm on (section 5.3's restart row).
+// Before signing a fresh direct entry on a binding, the writer reconciles the verified stream with its local head
+// and replays pending work. Captures spool during startup. A deposit-only writer never reads the stream (§5.3).
 //
 // Barriers: record.push.before and record.push.after around each send, keyed by the log, with no lock held.
 
@@ -39,9 +38,6 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
-
-// §11.8's slot bound: the rows one slot object holds, which a push of one part carries at most.
-const recordSlotRowCount = 64
 
 // One log's entries on their way to evs. Fields are the writer's stateLock's.
 type recordLogQueue struct {
@@ -155,7 +151,7 @@ func recordKindSendsAtOnce(kind RecordKind) bool {
 
 // The entries a stream push carries at most.
 func recordPushEntryCount(settings *SidecarRecordSettings) int {
-	return min(settings.PushEntryCount, recordSlotRowCount)
+	return min(settings.PushEntryCount, DefaultEvsFormatSettings().SlotMaxKeyCount)
 }
 
 // How this sidecar reaches logId now, by the state's rights: its own stream as a consented writer of a vault, or as a
@@ -271,6 +267,9 @@ func (self *recordWriter) nextWake() (time.Duration, bool) {
 			consider(max(at, queue.nextAttemptMillis))
 		}
 	}
+	if self.spoolBacklog && 0 < self.drainRetryMillis {
+		consider(self.drainRetryMillis)
+	}
 	if !found {
 		return 0, false
 	}
@@ -301,6 +300,13 @@ func (self *recordWriter) pump(ctx context.Context, force bool) error {
 	}
 	errs := []error{}
 	for _, logId := range self.queueLogIds() {
+		if deposit, ok := recordLogMode(self.auth(), self.sidecarId, logId); ok && !deposit {
+			if err := self.adopt(ctx, logId); err != nil {
+				self.backoff(logId)
+				errs = append(errs, err)
+				continue
+			}
+		}
 		for {
 			if err := ctx.Err(); err != nil {
 				return err
@@ -344,12 +350,7 @@ func (self *recordWriter) pumpLog(ctx context.Context, logId Id, force bool) (bo
 			self.backoff(logId)
 			return false, fmt.Errorf("record: log %s takes neither this sidecar's stream nor its deposits now", logId)
 		}
-		if !deposit {
-			if err := self.adopt(ctx, logId); err != nil {
-				self.backoff(logId)
-				return false, err
-			}
-		}
+
 		built, err := self.buildPlan(ctx, auth, logId, deposit)
 		if err != nil {
 			self.backoff(logId)
@@ -373,7 +374,8 @@ func (self *recordWriter) pumpLog(ctx context.Context, logId Id, force bool) (bo
 	return true, nil
 }
 
-// Adopts the newest entry of this writer's chain in its own stream, once a process, before its first push there.
+// Reconciles the verified stream head and resends all already signed work before enabling fresh signatures. The
+// caller holds pumpLock. Read the stream before replay so a restored older batch cannot obscure its higher head.
 func (self *recordWriter) adopt(ctx context.Context, logId Id) error {
 	if func() bool {
 		self.stateLock.Lock()
@@ -382,18 +384,50 @@ func (self *recordWriter) adopt(ctx context.Context, logId Id) error {
 	}() {
 		return nil
 	}
-	raised, err := self.chain.AdoptStream(ctx, self.boundStreams(), logId, self.identityPublicKey)
+	read, err := self.chain.readWriterStream(ctx, self.boundStreams(), logId, self.identityPublicKey)
+	raised := false
+	if err == nil && read.head != nil {
+		raised, err = func() (bool, error) {
+			self.sealLock.Lock()
+			defer self.sealLock.Unlock()
+			if err := self.finishCaptureWithLock(); err != nil {
+				return false, err
+			}
+			return self.chain.Adopt(logId, *read.head)
+		}()
+		if err == nil {
+			err = self.settleRestoredEntries(ctx, logId, read.head.Seq)
+		}
+	}
 	if errors.Is(err, ErrRecordChainForked) {
-		// a pending entry at the stream's head seq with another leaf: readers alarm on what goes out
+		// A conflicting head stops fresh signatures and replay on this binding.
 		self.log.Warningf("[record]this writer's chain in log %s forks its stream's", logId)
 		self.raise(SidecarRecordAlarmChainFork, logId, &self.sidecarId)
-		err = nil
 	}
 	if err != nil {
 		return err
 	}
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		queue := self.queueWithLock(logId)
+		queue.counter = max(queue.counter, read.counter)
+		queue.counterLoaded = true
+	}()
 	if raised {
 		self.log.Warningf("[record]log %s's stream is ahead of this writer's journal; the chain continues from it", logId)
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		progress, err := self.pumpLog(ctx, logId, true)
+		if err != nil {
+			return err
+		}
+		if !progress {
+			break
+		}
 	}
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()

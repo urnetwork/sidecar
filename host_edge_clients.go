@@ -23,6 +23,8 @@ import (
 
 	"github.com/urnetwork/connect"
 	connectprotocol "github.com/urnetwork/connect/protocol"
+
+	"github.com/urnetwork/sidecar/protocol"
 )
 
 // The pool could not be made, or does not hold what was asked of it.
@@ -65,14 +67,20 @@ func DefaultEdgeClientPoolSettings() *EdgeClientPoolSettings {
 	}
 }
 
+// An edge's credential source can reserve a fresh range for the stable slot ID
+// across process restarts. Ranges are strictly increasing values in [1, 2^42).
+// Only a client opening outbound streams needs one.
+type EdgeStreamIdRangeSource interface {
+	ReserveStreamIdRange(ctx context.Context, index int, clientId Id) (uint64, error)
+}
+
 // What NewEdgeClientPool takes.
 type EdgeClientPoolArgs struct {
 	// Where each client's credential comes from, which only the host holds.
 	Source ServiceClientSource
 	// How a client reaches the platform. Nil is connect's own.
 	Platform SidecarPlatform
-	// §8's hook for what a sidecar asks of the engine. Nil refuses every inbound request, so an engine that answers
-	// requests, as smtpedge does SmtpProof, passes its own.
+	// Nil accepts keepalives and frames on streams the edge opened. An engine serving requests supplies its policy.
 	Inbound SubprotocolInboundFunction
 	// Nil is DefaultEdgeClientPoolSettings.
 	Settings *EdgeClientPoolSettings
@@ -109,9 +117,20 @@ type EdgeClientPool struct {
 	closeOnce sync.Once
 }
 
-// Refuses every inbound request: the default for an engine that answers none.
-func edgeClientPoolRefuseInbound(inbound SubprotocolInbound) bool {
-	return false
+// An edge that only dials accepts keepalives and continuations. The dispatcher matches every continuation
+// to a live stream from its authenticated peer. New inbound streams and application calls stay closed.
+func EdgeDialInbound(inbound SubprotocolInbound) bool {
+	switch inbound.MessageType {
+	case protocol.MessageType_PING:
+		return !inbound.Response && inbound.StreamId == 0
+	case protocol.MessageType_PONG:
+		return inbound.Response && inbound.StreamId == 0
+	case protocol.MessageType_STREAM_ACCEPT, protocol.MessageType_STREAM_REJECT, protocol.MessageType_STREAM_DATA,
+		protocol.MessageType_STREAM_WINDOW, protocol.MessageType_STREAM_CLOSE, protocol.MessageType_STREAM_RESET:
+		return !inbound.Response && inbound.StreamId != 0
+	default:
+		return false
+	}
 }
 
 // Opens the K clients, each on the credential source answers for its index, and returns once every one exists; they
@@ -135,7 +154,7 @@ func NewEdgeClientPool(ctx context.Context, args *EdgeClientPoolArgs) (*EdgeClie
 	}
 	inbound := args.Inbound
 	if inbound == nil {
-		inbound = edgeClientPoolRefuseInbound
+		inbound = EdgeDialInbound
 	}
 	clock := args.Clock
 	if clock == nil {
@@ -251,14 +270,21 @@ func (self *EdgeClientPool) openClient(index int, platform SidecarPlatform, stra
 	client.platform.Client.ContractManager().SetProvideModes(map[connectprotocol.ProvideMode]bool{
 		connectprotocol.ProvideMode_Service: true,
 	})
+	var reserveRange func(context.Context) (uint64, error)
+	if source, ok := self.source.(EdgeStreamIdRangeSource); ok {
+		reserveRange = func(ctx context.Context) (uint64, error) {
+			return source.ReserveStreamIdRange(ctx, index, client.clientId)
+		}
+	}
 	client.subprotocol, err = NewSubprotocol(self.ctx, &SubprotocolEnv{
-		Client:   client.platform.Client,
-		Log:      self.log,
-		Settings: self.settings.Protocol,
-		Budget:   budget,
-		Clock:    self.clock,
-		Inbound:  inbound,
-		Role:     SubprotocolRoleEdge,
+		ReserveStreamIdRange: reserveRange,
+		Client:               client.platform.Client,
+		Log:                  self.log,
+		Settings:             self.settings.Protocol,
+		Budget:               budget,
+		Clock:                self.clock,
+		Inbound:              inbound,
+		Role:                 SubprotocolRoleEdge,
 	})
 	if err != nil {
 		self.closeClient(client)

@@ -53,7 +53,7 @@ type GkmAclGate interface {
 	State(networkId sidecar.Id) (*sidecar.AclGateSnapshot, sidecar.AclGateStatus)
 	// Tells the cache a gate needs the network, which starts its load.
 	Changed(networkId sidecar.Id)
-	// ACL-M2-14's scope check at the newest verified state, which also asks for a network the cache has not heard of.
+	// ACL-M2-14's scope check at the newest verified state, which requests a load when the snapshot is missing.
 	HonorScope(networkId sidecar.Id, subjectId sidecar.Id, repoId sidecar.Id, scope sidecar.AclEvsRights, audience sidecar.AclTokenAudience, now time.Time) sidecar.AclScopeAnswer
 }
 
@@ -84,15 +84,11 @@ var _ GkmAuthState = (*AclGkmAuthState)(nil)
 // The snapshot of the token's network, Unknown while it is not loaded, when the cache is asked for it (the file
 // header).
 func (self *AclGkmAuthState) snapshot(principal *sidecar.Principal) (*sidecar.AclGateSnapshot, GkmAuthAnswer) {
-	if self.gate == nil || principal == nil {
+	if principal == nil {
 		return nil, GkmAuthUnknown
 	}
 	networkId := sidecar.Id(principal.NetworkId)
-	snapshot, status := self.gate.State(networkId)
-	if status != sidecar.AclGateLoaded {
-		self.gate.Changed(networkId)
-		return nil, GkmAuthUnknown
-	}
+	snapshot := sidecar.RequestAclGateSnapshot(self.gate, networkId)
 	if snapshot == nil || snapshot.Acl == nil || snapshot.Config == nil {
 		return nil, GkmAuthUnknown
 	}
@@ -314,4 +310,64 @@ func (self *AclGkmAuthState) HoldersDropped(principal *sidecar.Principal, repoId
 		return GkmAuthUnknown
 	}
 	return gkmAclAnswer(dropped)
+}
+
+// RecoveryCoverage reads the binding history and every repo where any of this member's devices makes the recovery
+// identity a holder. Repo scopes of the requesting device cannot limit a member-wide delete.
+func (self *AclGkmAuthState) RecoveryCoverage(principal *sidecar.Principal, memberId sidecar.Id, now time.Time) (*RecoveryWrapCoverage, GkmAuthAnswer) {
+	snapshot, answer := self.snapshot(principal)
+	if answer != GkmAuthAllowed {
+		return nil, answer
+	}
+	row := snapshot.Config.Member(memberId)
+	binding := snapshot.Config.CurrentBinding(memberId)
+	if binding == nil {
+		return nil, GkmAuthDenied
+	}
+	result := &RecoveryWrapCoverage{Current: binding.GetKeySha256()}
+	for _, prior := range row.GetBindings() {
+		if prior.GetAt() < binding.GetAt() {
+			result.Retired = append(result.Retired, prior.GetKeySha256())
+		}
+	}
+	for _, repoId := range snapshot.Acl.RepoIds() {
+		holders, err := sidecar.KeyHolders(snapshot.Config, repoId, now)
+		if err != nil {
+			return nil, GkmAuthUnknown
+		}
+		if holders.Contains(sidecar.GkmHolderRecovery, memberId.Bytes()) {
+			result.RepoIds = append(result.RepoIds, repoId)
+		}
+	}
+	return result, GkmAuthAllowed
+}
+
+// RecoveryBindingsOf gives each current recovery holder and its exact effective binding in a verified repo view.
+func RecoveryBindingsOf(view sidecar.GkmAuthView, repoId sidecar.Id, now time.Time) (map[sidecar.Id][]byte, GkmAuthAnswer) {
+	if view == nil {
+		return nil, GkmAuthUnknown
+	}
+	holders, err := sidecar.KeyHolders(view, repoId, now)
+	if err != nil {
+		return nil, GkmAuthUnknown
+	}
+	bindings := map[sidecar.Id][]byte{}
+	for _, holder := range holders {
+		if holder.Kind == sidecar.GkmHolderRecovery {
+			memberId, err := sidecar.IdFromBytes(holder.Id)
+			if err != nil {
+				return nil, GkmAuthUnknown
+			}
+			bindings[memberId] = view.Member(memberId).GetRecoveryKeySha256()
+		}
+	}
+	return bindings, GkmAuthAllowed
+}
+
+func (self *AclGkmAuthState) RepoRecoveryBindings(principal *sidecar.Principal, repoId sidecar.Id, now time.Time) (map[sidecar.Id][]byte, GkmAuthAnswer) {
+	snapshot, answer := self.snapshot(principal)
+	if answer != GkmAuthAllowed {
+		return nil, answer
+	}
+	return RecoveryBindingsOf(snapshot.Config, repoId, now)
 }

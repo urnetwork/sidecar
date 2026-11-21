@@ -7,7 +7,8 @@
 //
 // A multi-use decision binds a template, an action with scope = true whose non-empty fields every use equals, its
 // recipients a superset of each use's (§16.6's multi-use row), and the empty ones its kind's row binds (TemplateBound:
-// an egress_change's require_default_egress, QD-1060): ActionMatchesTemplate. A server path admits only its
+// an egress_change's require_default_egress, QD-1060): ActionMatchesTemplate. An agent asks for one only through
+// mail_send's uses (owner decision 613), whose template NewMailTemplateAction builds. A server path admits only its
 // kind's column of the table (QD-064): CheckCanonicalActionForServer.
 //
 // The builder takes both of QD-740's forms. A kind that binds a local port, a weight or ALPNs builds its action
@@ -59,8 +60,9 @@ func setFieldNumbers(message protoreflect.Message) []protoreflect.FieldNumber {
 }
 
 // The stored action for what action holds, held to its kind's row: no field outside the row, every required field
-// filled unless the action is a template (scope = true), which fills only the row's TemplateRequired, a domain field
-// in its one form, lowercase with no trailing dot, hashes and ids at their sizes, the preview within 2 KiB, a
+// filled unless the action is a template (scope = true), which fills only the row's TemplateRequired and leaves its
+// TemplateEmpty empty, a domain field in its one form, lowercase with no trailing dot, hashes and ids at their sizes,
+// the preview within 2 KiB, a
 // version the kind takes (0 picks its default) and this build knows, a grant_dst naming subjects alone, with no ip:
 // prefix or port, and nothing the verifiers would refuse, since the bytes go through ParseStoredCanonicalAction before
 // they are answered. The caller's message is not changed. A kind with no row is refused.
@@ -106,6 +108,11 @@ func newCanonicalAction(action *protocol.CanonicalAction, known func(version uin
 	required := row.Required
 	if built.GetScope() {
 		required = row.TemplateRequired
+		for _, number := range row.TemplateEmpty {
+			if message.Has(fields.ByNumber(number)) {
+				return nil, fmt.Errorf("%w: a template of kind %d with field %d", ErrCanonicalActionInvalid, action.GetKind(), number)
+			}
+		}
 	}
 	for _, number := range required {
 		if !message.Has(fields.ByNumber(number)) {
@@ -162,6 +169,23 @@ func canonicalActionClearBytes(clear *protocol.CanonicalAction) ([]byte, error) 
 		return nil, fmt.Errorf("%w: %v", ErrCanonicalActionInvalid, err)
 	}
 	return encoded, nil
+}
+
+// The template mail_send's uses asks for (owner decision 613; §16.6's multi-use row): scope set, from_alias fromAlias,
+// and recipients the allowed set, distinct and in byte order, so the same set asked again in another order is the same
+// action, with no body hash or preview, so each mail from fromAlias to a subset of them falls inside it
+// (ActionMatchesTemplate) whatever its text. A use matches it byte for byte, so the caller gives the alias and the
+// addresses from MailClient's plan, which canonicalizes domains and preserves external local parts.
+// NewCanonicalAction requires an alias and at least one recipient, with no empty address.
+func NewMailTemplateAction(fromAlias string, recipients []string) (*StoredCanonicalAction, error) {
+	allowed := slices.Clone(recipients)
+	slices.Sort(allowed)
+	return NewCanonicalAction(&protocol.CanonicalAction{
+		Kind:       uint32(SidecarActionMail),
+		Scope:      true,
+		Recipients: slices.Compact(allowed),
+		Alias:      fromAlias,
+	})
 }
 
 // Whether use falls inside template (§16.6's multi-use row): template is a scope = true action, use a full one of

@@ -11,12 +11,35 @@ package sidecar
 import (
 	"cmp"
 	"context"
+	"errors"
 	"slices"
 	"testing"
 
 	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
+
+// A completed local leg still invalidates an in-flight remote query when its device learns a cut.
+func TestRemoteSearchExpiresAfterItsCachedLegFinishes(t *testing.T) {
+	team := newTestConfigSearchTeam(t)
+	fixture := newTestSearchRemoteAsker(t, team, team.danaPhone)
+	world := newTestEngineWorld(t, nil, testEngineDocument(t, "seed", 1, 1, "indexed.md", "harbor"))
+	// The remotely served repo has no locally known refs.
+	world.scope.repos = nil
+	fixture.client.args.Local = world.engine
+	fixture.serve(t, team.danaNas).corpus.serveText(team.danaVault, 5, testSearchRemoteDocs("remote", 900, 800)...)
+	stream := fixture.search(t, team.danaVault)
+	first := testSearchRemoteNext(t, stream)
+	if len(first.hits) == 0 || !stream.source.(*searchRemoteSearch).ownDone {
+		t.Fatalf("first remote page: %+v", first)
+	}
+	if err := world.sync.cache.cache.ApplyCut(t.Context(), team.danaVault, world.sync.refId, &protocol.IndexErasureSet{}); err != nil {
+		t.Fatal(err)
+	}
+	if hits, _, done, err := stream.Next(); !done || len(hits) != 0 || !errors.Is(err, ErrSearchCursorExpired) {
+		t.Fatalf("remote continuation: %+v, %t, %v", hits, done, err)
+	}
+}
 
 // QD-707: the first two own indexers are asked at once, with no pair kept warm or named before (owner decision 609),
 // both requests built from one reading and sent before either reply comes, and the first page 0 to serve the vault
@@ -609,5 +632,61 @@ func TestTheFirstChoiceIsNamedAgainOnAConfigChange(t *testing.T) {
 	}
 	if named := fixture.transport.namings(); len(named) != 2 {
 		t.Errorf("named %v, the background naming one", named)
+	}
+}
+
+// Hold the authenticated handoff after the plan has selected a real designation but before any query bytes leave.
+type testSearchRemoteOpening struct {
+	*testSearchRemoteTransport
+	opening chan struct{}
+	resume  chan struct{}
+}
+
+func (self *testSearchRemoteOpening) Call(ctx context.Context, indexer Id, body []byte, allowed func() bool) ([]byte, error) {
+	close(self.opening)
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-self.resume:
+	}
+	return self.testSearchRemoteTransport.Call(ctx, indexer, body, allowed)
+}
+
+func TestRemoteRequesterRechecksConsentAtTheAuthenticatedSend(t *testing.T) {
+	team := newTestConfigSearchTeam(t)
+	fixture := newTestSearchRemoteAsker(t, team, team.danaPhone)
+	fixture.serve(t, team.danaNas)
+	transport := &testSearchRemoteOpening{testSearchRemoteTransport: fixture.transport, opening: make(chan struct{}), resume: make(chan struct{})}
+	if err := fixture.client.setTransport(transport); err != nil {
+		t.Fatal(err)
+	}
+	page := testSearchRemoteNextLater(fixture.search(t, team.danaVault))
+	select {
+	case <-transport.opening:
+	case <-t.Context().Done():
+		t.Fatal(t.Context().Err())
+	}
+	if err := fixture.world.state.SetMode(SearchRemoteOff); err != nil {
+		t.Fatal(err)
+	}
+	close(transport.resume)
+	got := <-page
+	if got.err != nil || len(transport.callsNow()) != 0 || len(got.hits) != 0 {
+		t.Fatalf("changed consent sent %d calls and returned %d hits: %v", len(transport.callsNow()), len(got.hits), got.err)
+	}
+}
+
+func TestRemoteRequesterDropsAnExpiredGranteeWithoutAnotherConfigEntry(t *testing.T) {
+	team := newTestConfigSearchTeam(t)
+	state := team.net.log.State()
+	row := state.SidecarRow(team.agent.sidecarId)
+	if row == nil || row.GetNotAfter() <= state.timeMs {
+		t.Fatal("no standing bounded indexer")
+	}
+	if before := state.searchIndexersAt(team.danaPhone.sidecarId, team.teamRepo, testConfigSearchServices, row.GetNotAfter()-1); !slices.Contains(before, team.agent.sidecarId) {
+		t.Fatal("the standing search indexer was missing")
+	}
+	if after := state.searchIndexersAt(team.danaPhone.sidecarId, team.teamRepo, testConfigSearchServices, row.GetNotAfter()); slices.Contains(after, team.agent.sidecarId) {
+		t.Fatal("the expired device was still a search recipient")
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"io"
 	"net"
@@ -1573,5 +1574,28 @@ func TestTlsFrontMarginMoveWaitsForItsTimer(t *testing.T) {
 		if update := fixture.nextUpdate(); len(update.CertifiedNames) != 0 {
 			t.Fatalf("held %s: at the margin the name is still listed: %+v", hold, update)
 		}
+	}
+}
+
+// An ACME probe pins the exact locally served challenge and the negotiated protocol.
+func TestTlsDesktopChallengeRequiresItsExactPublicLeaf(t *testing.T) {
+	claim := &tlsDesktopChallenge{leaf: []byte("local challenge")}
+	certificate := &x509.Certificate{Raw: []byte("local challenge")}
+	state := tls.ConnectionState{PeerCertificates: []*x509.Certificate{certificate}, NegotiatedProtocol: tlsAlpnAcme}
+	if err := claim.verifyPeer(state); err != nil {
+		t.Fatal(err)
+	}
+	state.NegotiatedProtocol = "http/1.1"
+	if err := claim.verifyPeer(state); err == nil {
+		t.Fatal("the probe accepted an HTTP endpoint")
+	}
+	state.NegotiatedProtocol = tlsAlpnAcme
+	state.PeerCertificates = []*x509.Certificate{{Raw: []byte("foreign challenge")}}
+	if err := claim.verifyPeer(state); err == nil {
+		t.Fatal("the probe accepted a different challenge")
+	}
+	state.PeerCertificates = []*x509.Certificate{certificate, certificate}
+	if err := claim.verifyPeer(state); err == nil {
+		t.Fatal("the probe accepted an extra certificate")
 	}
 }

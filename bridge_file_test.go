@@ -369,13 +369,14 @@ type testBridgeFileGateCall struct {
 // without running the effect again (AU4); with neither, the action waits. A tainted run takes no standing grant and only
 // a decision on a request filed tainted (TS1, owner decision 142).
 type testBridgeFileGate struct {
-	t          testing.TB
-	stateLock  sync.Mutex
-	requester  Id
-	approver   Id
-	notAfterMs int64
-	approves   bool
-	standing   bool
+	t            testing.TB
+	stateLock    sync.Mutex
+	requester    Id
+	approver     Id
+	notAfterMs   int64
+	approves     bool
+	standing     bool
+	signDecision func(*StoredCanonicalAction) *bridge.Signed
 	// runs that read tainted, and approvals whose request was filed tainted
 	taintedRuns      map[Id]bool
 	taintedApprovals map[Id]bool
@@ -409,7 +410,11 @@ func (self *testBridgeFileGate) Authorize(ctx context.Context, action *SidecarAc
 	}
 	payload := sha256.Sum256(stored.Bytes)
 	if decision == nil && approves {
-		decision = testBridgeDecision(self.t, hex.EncodeToString(payload[:]), stored.Bytes, 1, self.requester, self.approver, self.notAfterMs)
+		if self.signDecision != nil {
+			decision = self.signDecision(stored)
+		} else {
+			decision = testBridgeDecision(self.t, hex.EncodeToString(payload[:]), stored.Bytes, 1, self.requester, self.approver, self.notAfterMs)
+		}
 	}
 	if decision == nil {
 		see()

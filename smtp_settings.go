@@ -127,8 +127,8 @@ type SmtpSenderSettings struct {
 	// as an edge crash ends it: 1, the §9 backup ticket (§14.9's failure row). One that ends later holds
 	// the send for its next retry, since the MX may have seen MAIL.
 	EdgeResetRetryCount int
-	// How long the sender's self-report of a send, SmtpOutcome, may take to hand off: 15 s (§14.4's
-	// step 5). It only tightens, so one that cannot go is dropped.
+	// How long the sender may spend handing off its self-report (§14.4's step 5), or recording
+	// a domain's result when cancellation interrupted its mailbox write: 15 s per operation.
 	OutcomeSendTimeout time.Duration
 	// How often a prover host lists the member's o/ when nothing wakes it sooner: 1 min, under the 10 min
 	// another host waits before taking over an entry (D-SMTP-18).

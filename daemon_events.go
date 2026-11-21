@@ -79,6 +79,8 @@ type DaemonEventsReply struct {
 // for none, and Evidence's two pins are FirstEvidence and SecondEvidence. Nothing in it is a secret: ids, states,
 // reasons, alarms, counts, public pins and a path local to this device.
 type DaemonEvent struct {
+	// The local network and identity were removed. Other Unenrolled states can keep an identity.
+	LoggedOut bool `json:"logged_out,omitempty"`
 	// The network of the sidecar that raised it; nil for one not enrolled yet, such as the Sidecar a further
 	// network's enrollment takes.
 	NetworkId *Id `json:"network_id,omitempty"`
@@ -262,6 +264,15 @@ func newDaemonEvents(settings *SidecarLocalSettings, clock Clock) *DaemonEvents 
 // the id source then names. A host attaches each Sidecar it starts and may leave it attached: a Sidecar that closed
 // raises nothing more, and its last events, a logout's state among them, are kept as any other.
 func (self *DaemonEvents) Attach(source DaemonEventSource) func() {
+	if stamped, ok := source.(interface {
+		addQueuedEventCallback(func(sidecarQueuedEvent)) func()
+	}); ok {
+		return stamped.addQueuedEventCallback(func(event sidecarQueuedEvent) {
+			wire := newDaemonEvent(event.networkId, event.originSidecarId, &event.SidecarEvent)
+			wire.LoggedOut = event.loggedOut
+			self.add(wire)
+		})
+	}
 	return source.AddEventCallback(func(event SidecarEvent) {
 		var originSidecarId *Id
 		if identity := source.Identity(); identity != nil {

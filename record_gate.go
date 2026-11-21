@@ -13,15 +13,23 @@
 //	   inbox holds: one whose
 //	   use of this action is reserved, the retry path, else the newest approved, one filed in a tainted run first
 //	   where this run is tainted
-//	4  none: the request found or filed (ApprovalRouter), then ApprovalHarnessEvidence asked for a harness decision on
+//	4  none: the request found or filed (ApprovalRouter), the template's in the action's place where the action asks
+//	   one (SidecarAction.Template; owner decision 613), then ApprovalHarnessEvidence asked for a harness decision on
 //	   it (MCP-M3-10); none answers *ApprovalPendingError with the request's id
 //	5  §16.6's spend steps (record_gate_spend.go): the approval's mutex, spendable, the step 3 refusals, the Reserve's
 //	   fsync, the effect under effect_key, the Outcome, the use's approval_use entry
 //
 // A request whose newest decision for this action denies, or that an approver cancelled, refuses rather than filing
-// again, so a person's no stops the agent instead of asking again. An action whose request expired with no use
-// reserved files a new one. A retry of an action whose use is done or not_done answers that outcome, the effect not
-// run again (AU4).
+// again, so a person's no stops the agent instead of asking again, and so does one for the template an action asks.
+// An action whose request expired with no use reserved files a new one. A retry of an action whose use is done or
+// not_done answers that outcome, the effect not run again (AU4).
+//
+// A template is filed, never spent (§16.6's multi-use row): each use is a full action that falls inside it, which
+// D-MCP-11 hashes, so a template presented as the action takes no standing grant and, once a decision covers it,
+// refuses (ErrApprovalTemplateUse) rather than spend a use on no action. mail_send's uses asks for one beside its mail
+// (owner decision 613): the mail spends a decision that covers it, the template's among them, and with none the
+// template's request is filed for the uses asked, so the agent's call answers pending with the template's id and its
+// first mail, sent again once the template is approved, spends the first use.
 //
 // The gate holds no lock of its own across a step: the ledger's per-approval mutex covers steps 1 to 4 of the spend
 // and nothing else, the router's filing lock a filing, the inbox's intake lock an intake. Safe for concurrent use. On
@@ -48,6 +56,9 @@ var (
 	ErrApprovalExpired = errors.New("approval expired")
 	// The action's kind has no registered Lookup, so no use of it is reserved (plan-MCP-effect-seam).
 	ErrApprovalNoLookup = errors.New("the action's kind registers no lookup")
+	// The action is a template a decision covers, which only the actions that fall inside it spend (§16.6's multi-use
+	// row): presented as itself, it spends nothing.
+	ErrApprovalTemplateUse = errors.New("a template's approval is spent by the actions that fall inside it, never by the template")
 )
 
 // ACL-M4-02's standing grants as the gate asks them, faked until M4: whether an active approved grant covers the
@@ -142,20 +153,24 @@ func (self *ApprovalGate) Authorize(ctx context.Context, action *SidecarAction, 
 	if SidecarActionKind(stored.Action.GetKind()) != action.Kind {
 		return fmt.Errorf("%w: kind %d for an action of kind %d", ErrSidecarActionInvalid, action.Kind, stored.Action.GetKind())
 	}
-	if _, err := approvalActionUses(action, stored); err != nil {
-		// before any decision is looked for, so a count its action cannot take never rides a decision already kept
+	template, err := approvalActionTemplate(action, stored)
+	if err != nil {
+		// before any decision is looked for, so a count its action cannot take never rides a decision already kept, nor
+		// a template the action does not fall inside
 		return fmt.Errorf("%w: %w", ErrSidecarActionInvalid, err)
 	}
 	if err := self.inbox.ensureLoaded(); err != nil {
 		return err
 	}
 	now := self.args.Clock.Now()
+	// a template presented as the action, which is filed and never spent (the file header)
+	isTemplate := stored.Action.GetScope()
 
 	// 1: the run's taint, now
 	tainted := action.RunId != nil && self.args.Runs.RunTainted(*action.RunId)
 
-	// 2: a standing grant, in an untainted run alone
-	if !tainted && self.grants != nil && self.grants.ActiveGrant(stored, self.args.SidecarId, now) {
+	// 2: a standing grant, in an untainted run alone, for an action that is no template
+	if !tainted && !isTemplate && self.grants != nil && self.grants.ActiveGrant(stored, self.args.SidecarId, now) {
 		effectRef, runErr := action.Effect.Run(ctx, nil)
 		action.Outcome = approvalOutcomeOfRun(effectRef, runErr, false)
 		return nil
@@ -181,26 +196,87 @@ func (self *ApprovalGate) Authorize(ctx context.Context, action *SidecarAction, 
 		}
 	}
 
-	// 4: no decision yet: the request, and the harness's evidence on it
+	// 4: no decision yet: the request, the template's where the action asks one, and the harness's evidence on it
 	if !found {
-		request, err := self.router.findOrFile(ctx, action, stored, tainted)
+		approvalId, err = self.request(ctx, action, stored, template, tainted, now)
 		if err != nil {
 			return err
 		}
-		if storedSigned := self.harnessDecision(ctx, action, request); storedSigned != nil {
-			if harnessApprovalId, err := self.inbox.Receive(ctx, storedSigned); err == nil && harnessApprovalId == request.ApprovalId() {
-				approvalId, found = harnessApprovalId, true
-			} else if err != nil {
-				self.log.Warningf("[approval]a harness decision on approval %s was not kept: %s", request.ApprovalId(), err)
-			}
-		}
-		if !found {
-			return &ApprovalPendingError{ApprovalId: request.ApprovalId()}
-		}
+	}
+	if isTemplate {
+		// its uses are the actions that fall inside it: spent here, it would take a use for no action
+		return fmt.Errorf("%w: approval %s", ErrApprovalTemplateUse, approvalId)
 	}
 
 	// 5: the spend
 	return self.spend(ctx, action, stored, approvalId, tainted)
+}
+
+// The template action asks for in its place (SidecarAction.Template; owner decision 613), held to it: one of the
+// action's kind, which the action, no template itself, falls inside, asked for the 2 or more uses a template takes.
+// Nil where it asks none, the action's own uses held as ever (approvalActionUses).
+func approvalActionTemplate(action *SidecarAction, stored *StoredCanonicalAction) (*StoredCanonicalAction, error) {
+	if len(action.Template) == 0 {
+		_, err := approvalActionUses(action, stored)
+		return nil, err
+	}
+	template, err := ParseStoredCanonicalAction(action.Template)
+	if err != nil {
+		return nil, err
+	}
+	// a template of another kind or version, or none, and an action that is a template itself, fall inside nothing
+	if !ActionMatchesTemplate(template, stored) {
+		return nil, errors.New("a template the action does not fall inside")
+	}
+	if _, err := approvalActionUses(action, template); err != nil {
+		return nil, err
+	}
+	return template, nil
+}
+
+// What step 4 files for action: the template it asks for in its place, a copy of it naming the template, which the
+// router holds to the uses asked; else the action itself.
+func approvalFiledAction(action *SidecarAction, stored *StoredCanonicalAction, template *StoredCanonicalAction) (*SidecarAction, *StoredCanonicalAction) {
+	if template == nil {
+		return action, stored
+	}
+	filed := *action
+	filed.Canonical = template.Bytes
+	filed.Template = nil
+	filed.Outcome = nil
+	return &filed, template
+}
+
+// Step 4: the request for action found or filed, the template's in its place where it asks one, and the harness's
+// evidence on it. Answers the approval the action spends, a harness decision on that request's, else
+// *ApprovalPendingError with the request's id. The template's own requests speak as an action's do at step 3: the newest
+// decided one a person denied or cancelled refuses rather than filing again, and one approved since step 3 looked is
+// spent by the action, which falls inside it.
+func (self *ApprovalGate) request(ctx context.Context, action *SidecarAction, stored *StoredCanonicalAction, template *StoredCanonicalAction, tainted bool, now time.Time) (Id, error) {
+	filed, filedStored := approvalFiledAction(action, stored, template)
+	if template != nil {
+		approvalId, found, err := self.candidate(template, filed, tainted, now)
+		if err != nil {
+			return Id{}, err
+		}
+		if found {
+			return approvalId, nil
+		}
+	}
+	request, err := self.router.findOrFile(ctx, filed, filedStored, tainted)
+	if err != nil {
+		return Id{}, err
+	}
+	if storedSigned := self.harnessDecision(ctx, filed, request); storedSigned != nil {
+		harnessApprovalId, err := self.inbox.Receive(ctx, storedSigned)
+		if err == nil && harnessApprovalId == request.ApprovalId() {
+			return harnessApprovalId, nil
+		}
+		if err != nil {
+			self.log.Warningf("[approval]a harness decision on approval %s was not kept: %s", request.ApprovalId(), err)
+		}
+	}
+	return Id{}, &ApprovalPendingError{ApprovalId: request.ApprovalId()}
 }
 
 // The harness decision MCP-M3-10's evidence signs on request, its Signed as stored, nil for none.
@@ -341,6 +417,25 @@ func (self *Sidecar) ApprovalArgs(states func() (ApprovalStates, error)) (*Appro
 // sources for the rest, and installs it behind Authorize in place of whatever gate stood (InstallGate). Answers the gate
 // and its removal. The host runs the gate's Reconcile once before it serves, and its inbox's Run for the poll.
 func (self *Sidecar) InstallApprovalGate(sources *ApprovalGateSources) (*ApprovalGate, func(), error) {
+	return self.installApprovalGate(sources, false)
+}
+
+// Installs the native gate only while the network has no gate. A host that already
+// installed its own gate retains it and receives nil for both the gate and its removal.
+func (self *Sidecar) InstallApprovalGateIfAbsent(sources *ApprovalGateSources) (*ApprovalGate, func(), error) {
+	return self.installApprovalGate(sources, true)
+}
+
+// Wires the inbox and router to the gate, checking for a concurrent installation when the caller requires an empty slot.
+func (self *Sidecar) installApprovalGate(sources *ApprovalGateSources, onlyIfAbsent bool) (*ApprovalGate, func(), error) {
+	if onlyIfAbsent {
+		self.gates.stateLock.Lock()
+		installed := self.gates.gate != nil
+		self.gates.stateLock.Unlock()
+		if installed {
+			return nil, nil, nil
+		}
+	}
 	if sources == nil {
 		sources = &ApprovalGateSources{}
 	}
@@ -364,7 +459,11 @@ func (self *Sidecar) InstallApprovalGate(sources *ApprovalGateSources) (*Approva
 	if err != nil {
 		return nil, nil, err
 	}
-	return gate, self.InstallGate(gate), nil
+	remove := self.installGate(gate, onlyIfAbsent)
+	if remove == nil {
+		return nil, nil, nil
+	}
+	return gate, remove, nil
 }
 
 // The installed §16.6 gate, or ErrApprovalNoState where another gate, or none, stands.

@@ -173,11 +173,13 @@ type MailView struct {
 	// Months and segments kept, least recently used first.
 	months   []*mailViewMonth
 	segments []*mailViewSegment
+	// Signed message tombstones survive cache invalidation.
+	erased map[Id]*mailErasedView
 }
 
 // A view over args' stores, holding nothing until it lists.
 func NewMailView(args *MailViewArgs) *MailView {
-	return &MailView{args: args}
+	return &MailView{args: args, erased: map[Id]*mailErasedView{}}
 }
 
 // Drops every kept month and segment, so the next call reads afresh.
@@ -214,12 +216,7 @@ func (self *MailView) List(ctx context.Context, args *MailListArgs) (*MailListPa
 		return nil, err
 	}
 	page := &MailListPage{Entries: []*MailViewEntry{}}
-	type selected struct {
-		month *mailViewMonth
-		key   mailViewKey
-	}
-	picks := []selected{}
-	var last *mailViewKey
+	masks := map[Id]*mailErasedView{}
 	for _, monthName := range monthNames {
 		if args.After != nil && MailYearMonthOf(args.After.Time) < monthName {
 			continue
@@ -239,31 +236,47 @@ func (self *MailView) List(ctx context.Context, args *MailListArgs) (*MailListPa
 				position += 1
 			}
 		}
-		for ; position < len(month.keys) && len(picks) < limit; position += 1 {
+		invalidate := false
+		for ; position < len(month.keys) && len(page.Entries) < limit; position += 1 {
 			key := month.keys[position]
-			last = &month.keys[position]
-			flags := month.flags.flags(key.id)
-			if self.inFolder(args, key, flags) {
-				picks = append(picks, selected{month: month, key: key})
+			if !self.inFolder(args, key, month.flags.flags(key.id)) {
+				continue
+			}
+			entry, err := self.decode(ctx, month, key)
+			if err != nil {
+				return nil, err
+			}
+			if entry == nil {
+				page.Unreadable += 1
+				continue
+			}
+			// A later page can still hold an old segment. Check the signed erasure
+			// ref once per source before returning its rows or their cursors.
+			mask, seen := masks[entry.RepoId]
+			if !seen {
+				mask, err = self.readErased(ctx, entry.RepoId)
+				if err != nil {
+					return nil, err
+				}
+				masks[entry.RepoId] = mask
+			}
+			if mask != nil {
+				if _, erased := mask.erased(key.id); erased {
+					invalidate = true
+					continue
+				}
+			}
+			page.Entries = append(page.Entries, entry)
+			if len(page.Entries) == limit && (position+1 < len(month.keys) || monthName != monthNames[len(monthNames)-1]) {
+				page.Next = &MailListCursor{Time: key.time, Id: key.id}
 			}
 		}
-		if len(picks) == limit {
-			if position < len(month.keys) || monthName != monthNames[len(monthNames)-1] {
-				page.Next = &MailListCursor{Time: last.time, Id: last.id}
-			}
+		if invalidate {
+			self.InvalidateMonth(monthName)
+		}
+		if len(page.Entries) == limit {
 			break
 		}
-	}
-	for _, pick := range picks {
-		entry, err := self.decode(ctx, pick.month, pick.key)
-		if err != nil {
-			return nil, err
-		}
-		if entry == nil {
-			page.Unreadable += 1
-			continue
-		}
-		page.Entries = append(page.Entries, entry)
 	}
 	return page, nil
 }
@@ -302,6 +315,16 @@ func (self *MailView) find(ctx context.Context, month MailYearMonth, id Id) (*ma
 			return nil, mailViewKey{}, err
 		}
 		if key, ok := viewMonth.key(id); ok {
+			mask, err := self.readErased(ctx, viewMonth.sources[key.source])
+			if err != nil {
+				return nil, mailViewKey{}, err
+			}
+			if mask != nil {
+				if _, erased := mask.erased(id); erased {
+					self.InvalidateMonth(month)
+					return nil, mailViewKey{}, ErrMailViewEntryAbsent
+				}
+			}
 			return viewMonth, key, nil
 		}
 		self.InvalidateMonth(month)
@@ -712,4 +735,47 @@ func (self *MailView) segment(ctx context.Context, viewMonth *mailViewMonth, key
 		}
 	}
 	return content, nil
+}
+
+// The verified tombstones of one source, brought up to date even for a cached page.
+// A transient read error withholds the page. Memory-only stores without an erasure ref have no tombstones.
+func (self *MailView) readErased(ctx context.Context, repoId Id) (*mailErasedView, error) {
+	store := self.args.Mailbox
+	if repoId != self.args.MailboxId {
+		if self.args.Groups == nil {
+			return nil, ErrMailViewEntryAbsent
+		}
+		var err error
+		store, err = self.args.Groups(ctx, repoId)
+		if err != nil {
+			return nil, err
+		}
+	}
+	reader, ok := store.(interface {
+		Erasures(context.Context, uint64) ([]*EvsErasure, error)
+	})
+	if !ok {
+		return nil, nil
+	}
+	self.stateLock.Lock()
+	mask := self.erased[repoId]
+	if mask == nil {
+		mask = newMailErasedView()
+		self.erased[repoId] = mask
+	}
+	self.stateLock.Unlock()
+	_, err := mask.refresh(ctx, reader.Erasures)
+	return mask, err
+}
+
+// Checks only the previously synced erasure ref, for joins whose query must select no reads.
+func (self *MailView) knownErased(repoId Id, id Id) bool {
+	self.stateLock.Lock()
+	mask := self.erased[repoId]
+	self.stateLock.Unlock()
+	if mask == nil {
+		return false
+	}
+	_, erased := mask.erased(id)
+	return erased
 }

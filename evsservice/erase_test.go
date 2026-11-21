@@ -9,6 +9,7 @@ package evsservice
 import (
 	"bytes"
 	"crypto/ed25519"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -311,8 +312,9 @@ func TestClosureRules(t *testing.T) {
 	fixture.requireCommitted(fixture.post(admin, fixture.body(good)), 2)
 }
 
-// A depositor's deposit naming a new slot, then a reader's CONSUME of it: the slot goes and consumed_through rises.
-func TestConsumeDeletesItsSlotsAndRaisesConsumedThrough(t *testing.T) {
+// A committed deposit and the reader's signed request to consume it.
+func consumeTestDeposit(t *testing.T) (*pushFixture, sidecar.Id, sidecar.Id, *protocol.EvsPushRequest) {
+	t.Helper()
 	fixture := newPushFixture(t, nil)
 	depositor := fixture.check.signerId
 	fixture.auth.grant(depositor, fixture.check.repoId, sidecar.AclEvsDeposit)
@@ -349,12 +351,50 @@ func TestConsumeDeletesItsSlotsAndRaisesConsumedThrough(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fixture.requireCommitted(fixture.post(fixture.token(fixture.check.otherId), &protocol.EvsPushRequest{Statement: built.Statement.Bytes, Payload: built.Payload}), 2)
-	if _, err := fixture.cluster.Head(fixture.ctx, SlotKey(fixture.check.repoId, slotId)); err == nil {
-		t.Fatal("a consumed deposit's slot stands")
+	return fixture, refId, slotId, &protocol.EvsPushRequest{Statement: built.Statement.Bytes, Payload: built.Payload}
+}
+
+// A depositor's deposit naming a new slot, then a reader's CONSUME of it: the slot goes and consumed_through rises.
+func TestConsumeDeletesItsSlotsAndRaisesConsumedThrough(t *testing.T) {
+	fixture, refId, slotId, request := consumeTestDeposit(t)
+	fixture.requireCommitted(fixture.post(fixture.token(fixture.check.otherId), request), 2)
+	if _, err := fixture.cluster.Head(fixture.ctx, SlotKey(fixture.check.repoId, slotId)); !errors.Is(err, sidecar.ErrBlobNotFound) {
+		t.Fatalf("the consumed deposit's slot: %v", err)
 	}
 	if head := fixture.headOf(refId); head.Head.GetConsumedThrough() != 1 {
 		t.Fatalf("consumed_through %d", head.Head.GetConsumedThrough())
+	}
+}
+
+// A CONSUME committed before its slot delete failed. The signed request repeats the delete before acknowledging
+// that same commit, including a retry after the delete has already succeeded.
+func TestConsumeRetryFinishesTheSlotDeleteAfterACommittedRemoval(t *testing.T) {
+	fixture, refId, slotId, request := consumeTestDeposit(t)
+	key := SlotKey(fixture.check.repoId, slotId)
+	if _, err := fixture.host.Blobs.Faults().Add(&sidecartest.FaultPlan{
+		Op: sidecartest.FaultOpDelete, KeyPrefix: key, Result: sidecartest.FailBeforeApply, Repeat: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	token := fixture.token(fixture.check.otherId)
+	for range 2 {
+		answer := fixture.post(token, request)
+		requireRefusal(t, answer, http.StatusServiceUnavailable, protocol.EvsRefusalCode_EVS_REFUSAL_UNAVAILABLE)
+		if refusalOf(t, answer).GetOutcome() != protocol.EvsPushOutcome_EVS_PUSH_OUTCOME_UNKNOWN {
+			t.Fatal("the unfinished slot delete did not report an unknown outcome")
+		}
+		if head := fixture.headOf(refId); head.Version() != 2 || head.Head.GetConsumedThrough() != 1 {
+			t.Fatalf("the interrupted CONSUME: version %d, consumed through %d", head.Version(), head.Head.GetConsumedThrough())
+		}
+		if _, err := fixture.cluster.Head(fixture.ctx, key); err != nil {
+			t.Fatalf("the slot before its delete: %v", err)
+		}
+	}
+	for range 2 {
+		fixture.requireCommitted(fixture.post(token, request), 2)
+		if _, err := fixture.cluster.Head(fixture.ctx, key); !errors.Is(err, sidecar.ErrBlobNotFound) {
+			t.Fatalf("the slot after replay: %v", err)
+		}
 	}
 }
 

@@ -65,7 +65,7 @@ var (
 
 // See MailClient.CheckSend and the file header's check row.
 func (self *MailClient) checkSend(ctx context.Context, args *MailSendArgs) (*SmtpSendCheck, error) {
-	plan, err := self.planSend(args)
+	plan, err := self.planSend(ctx, args)
 	if err != nil {
 		return nil, err
 	}
@@ -76,7 +76,7 @@ func (self *MailClient) checkSend(ctx context.Context, args *MailSendArgs) (*Smt
 	}
 	now := self.clock.Now()
 	sendId := newMailOutboxSendId()
-	content, err := (&mailSendContent{draft: mailSendCopyArgs(args)}).message(plan.fromAddress, MailOutboxMessageId(sendId, plan.fromDomain), now)
+	content, err := (&mailSendContent{draft: mailSendCopyArgs(args)}).message(plan, MailOutboxMessageId(sendId, plan.fromDomain), now)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrMailSendInvalid, err)
 	}

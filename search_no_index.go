@@ -15,7 +15,9 @@
 package sidecar
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 )
 
@@ -28,6 +30,10 @@ type SearchScanDocument struct {
 	Version uint64
 	// The version's signed time, ms.
 	TimeMs int64
+	// Provenance of this local version, including when only the display is held.
+	Signer  Id
+	Tainted bool
+	Outside bool
 	// A host with the text: the version's documents, one a chunk, as SearchTextSource gives them.
 	Documents []*IndexDocument
 	// A phone or a browser: the names and mail's i/ fields it holds; nil where Documents is set.
@@ -52,6 +58,46 @@ type SearchScanSource interface {
 	SearchScan(ctx context.Context, after uint64, visit func(position uint64, document *SearchScanDocument) (bool, error)) error
 }
 
+// A locally held view fixed for the lifetime of a search. The key derives the same document identifiers the index
+// would use, so cuts, hit references and chunk identities work without an index or a key fetch.
+type SearchScanView struct {
+	// Whether this source still represents the effective reader view.
+	valid  func() bool
+	Source SearchScanSource
+	RefKey *EvsRefKey
+}
+
+// The local view, retention cutoff and resume position for one ref searched without an index.
+type searchEngineScan struct {
+	view     *SearchScanView
+	scope    *searchScopedRef
+	reason   string
+	since    uint64
+	position uint64
+}
+
+// Matches the next local documents within the ref's retention window and checks each hit against cached erasures.
+func (self *searchEngineScan) page(ctx context.Context, stream *searchEngineStream, limit int) (*searchScanResult, error) {
+	repo, ref := self.scope.repo, self.scope.ref
+	return searchNoIndexScan(ctx, &searchScanArgs{
+		query: stream.query, filters: stream.filters, normalizer: stream.normalizer, settings: stream.engine.results,
+		source: self.view.Source, after: self.position, hitCount: limit, repoId: repo.RepoId, registry: searchRegistryOf(repo.Kind),
+		admit: func(document *SearchScanDocument) bool {
+			return document != nil && document.RefId == ref.RefId && document.Version != 0 && self.since <= indexEntrySeconds(document.TimeMs) &&
+				!indexExcluded(indexPlace{repoKind: repo.Kind, groupInbox: repo.GroupInbox, path: string(document.Name)})
+		},
+		visible: func(document *SearchScanDocument, hit *searchRankedHit) (bool, error) {
+			key, err := indexDocKey(self.view.RefKey.key, ref.RefId, document.Name, uint32(hit.row.chunk))
+			if err != nil {
+				return false, err
+			}
+			hit.key = key
+			erased, err := stream.engine.args.Cache.erasedMask(repo.RepoId, ref.indexId(), key)
+			return !erased.Erase && erased.Through < document.Version, err
+		},
+	})
+}
+
 // What a scan reads.
 type searchScanArgs struct {
 	query      *SearchQuery
@@ -60,6 +106,9 @@ type searchScanArgs struct {
 	settings   *SearchResultSettings
 	source     SearchScanSource
 	repoId     Id
+	registry   *IndexFieldRegistry
+	admit      func(*SearchScanDocument) bool
+	visible    func(*SearchScanDocument, *searchRankedHit) (bool, error)
 	// Where the last page stopped: 0 for the first.
 	after uint64
 	// The hits a page holds; ConfirmPageHitCount where it is not positive.
@@ -91,25 +140,46 @@ func searchNoIndexScan(ctx context.Context, args *searchScanArgs) (*searchScanRe
 		hitCount = args.settings.ConfirmPageHitCount
 	}
 	result := &searchScanResult{position: args.after, indexOff: true, done: true}
-	confirmer := &searchConfirmer{query: args.query, filters: args.filters, normalizer: args.normalizer, settings: args.settings, repoId: args.repoId}
+	confirmer := &searchConfirmer{query: args.query, filters: args.filters, normalizer: args.normalizer, settings: args.settings, repoId: args.repoId, registry: args.registry}
 	err := args.source.SearchScan(ctx, args.after, func(position uint64, document *SearchScanDocument) (bool, error) {
 		if err := ctx.Err(); err != nil {
 			return false, err
 		}
-		if len(result.hits) == hitCount || result.scanned == args.settings.ScanDocumentCount {
+		if len(result.hits) >= hitCount || result.scanned == args.settings.ScanDocumentCount {
 			result.done = false
 			return false, nil
 		}
 		result.scanned += 1
+		if position <= result.position {
+			return false, ErrSearchCacheArgs
+		}
 		result.position = position
+		if args.admit != nil && !args.admit(document) {
+			return true, nil
+		}
 		hits, err := searchScanOne(ctx, confirmer, document)
 		if err != nil {
 			return false, err
 		}
-		result.hits = append(result.hits, hits...)
+		for _, hit := range hits {
+			if args.visible != nil {
+				keep, err := args.visible(document, hit)
+				if err != nil {
+					return false, err
+				}
+				if !keep {
+					continue
+				}
+			}
+			result.hits = append(result.hits, hit)
+		}
 		return true, nil
 	})
 	if err != nil {
+		if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+			result.done = false
+			return result, nil
+		}
 		return nil, err
 	}
 	return result, nil
@@ -122,9 +192,16 @@ func searchScanOne(ctx context.Context, confirmer *searchConfirmer, document *Se
 		return nil, nil
 	}
 	hit := func(row *indexRow, confirmation *searchConfirmation) *searchRankedHit {
+		if document.Tainted {
+			row.flags |= indexRowTainted
+		}
+		if document.Outside {
+			row.flags |= indexRowOutside
+		}
 		return &searchRankedHit{
 			repoId:      confirmer.repoId,
 			refId:       document.RefId,
+			signer:      document.Signer,
 			version:     document.Version,
 			timeSeconds: timeSeconds,
 			row:         row,
@@ -138,6 +215,9 @@ func searchScanOne(ctx context.Context, confirmer *searchConfirmer, document *Se
 	hits := []*searchRankedHit{}
 	if document.Display == nil {
 		for _, chunk := range document.Documents {
+			if chunk == nil || chunk.Kind != document.Kind || !bytes.Equal(chunk.Name, document.Name) || chunk.Version != 0 && chunk.Version != document.Version {
+				return nil, ErrSearchCacheArgs
+			}
 			row := chunk.row(0, false, document.RefId)
 			if err := row.check(false); err != nil {
 				return nil, err

@@ -138,6 +138,8 @@ type sidecarAct struct {
 	at         *bridge.AuthPin
 	random     io.Reader
 	statements []*sidecarActStatement
+	// Set by a browser admission; its second statement depends on the first becoming verified config state.
+	browserTarget *Id
 	// set by CountersignedBytes and Countersign
 	countersigned []byte
 	presence      bool
@@ -300,10 +302,24 @@ func (self *sidecarAct) proposalId(index int) []byte {
 	return proposalId[:]
 }
 
-// A statement's not_after from now, ms since the epoch: StatementTimeout, at most §7.9's 7 days.
+// A statement's expiry uses the sequencer's clock. Its HTTP Date was reached by the time the response arrived,
+// so this bound keeps even the full seven-day default inside the verifier's window on a fast device.
+func (self *Sidecar) statementTime() time.Time {
+	if self.sidecarApi != nil {
+		return self.sidecarApi.statementTime()
+	}
+	return self.clock.Now()
+}
+
+// Adds the configured timeout to the statement clock, limiting the timeout to the verifier's maximum lifetime.
+func (self *Sidecar) statementNotAfterMs() int64 {
+	timeout := min(self.settings.statementTimeout(), time.Duration(configStatementMaxLifetimeMs)*time.Millisecond)
+	return self.statementTime().Add(timeout).UnixMilli()
+}
+
+// Uses the sidecar's expiry policy for each statement header the act prepares.
 func (self *sidecarAct) notAfterMs() int64 {
-	timeout := min(self.sidecar.settings.statementTimeout(), time.Duration(configStatementMaxLifetimeMs)*time.Millisecond)
-	return self.sidecar.clock.Now().Add(timeout).UnixMilli()
+	return self.sidecar.statementNotAfterMs()
 }
 
 // The statement digests in act order, which an act's tree hashes.
@@ -454,6 +470,7 @@ func (self *sidecarAct) Run(ctx context.Context, check SidecarPresenceCheck) ([]
 		return nil, fmt.Errorf("no randomness for an act id: %w", err)
 	}
 	signedStatements := make([]*sidecarPendingStatement, 0, len(self.statements))
+	var browserAdmission *browserAdmissionDependency
 	for index, statement := range self.statements {
 		signed, err := self.sidecar.Sign(statement.purpose, statement.signedType, statement.body, nil)
 		if err != nil {
@@ -475,6 +492,18 @@ func (self *sidecarAct) Run(ctx context.Context, check SidecarPresenceCheck) ([]
 			notAfterMs: statement.notAfterMs,
 			act:        &sidecarPendingAct{actId: actId, index: uint32(index), stale: statement.stale},
 		})
+		if self.browserTarget != nil {
+			switch statement.signedType {
+			case bridge.SignedType_SIGNED_SIDECAR_ADMIT:
+				browserAdmission = &browserAdmissionDependency{target: *self.browserTarget,
+					digest: bridge.SignedBytesSha256(statement.purpose, statement.signedType, signed.GetBody())}
+			case bridge.SignedType_SIGNED_OWNER_CONFIRM, bridge.SignedType_SIGNED_EVS_SHARE:
+				if browserAdmission == nil {
+					return nil, ErrSidecarActState
+				}
+				signedStatements[index].act.admission = browserAdmission
+			}
+		}
 		self.signed = append(self.signed, bytes.Clone(signedBytes))
 	}
 	// every statement is kept before any is posted, so a kill between two posts retries the rest's same bytes

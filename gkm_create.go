@@ -1,42 +1,14 @@
-// KF1, a new repo's group (KEYS-M2-21; D-KEYS-5, D-KEYS-18; DESIGN-DETAILS 6.2.4): what EvsClient.CreateRepo calls
-// between the repo's placement, keying, and its activation.
+// KF1 forms a repo while it is keying. The creator persists its chosen group ID and RK_1 before sending its
+// signed GroupForm and first GenRotate. On a retry it uses the same signed bytes, then stages the first reader,
+// delegation and recovery deliveries. EVS can activate the repo after CreateGroup succeeds (D-KEYS-18).
 //
-//	2  draw group_id, 16 random bytes, RK_1 and GenRotate_1 {generation 1, no parent, cause REQUEST, this state's
-//	   pin, holders_sha256 over KeyHolders there, wrap_count}; create the MLS group, whose only leaf is this
-//	   sidecar's, with ur_group {network, repo, kind, owner}; seal GenWrap_0 and GroupInfo_0 under RK_1; persist the
-//	   draft, the whole request with RK_1, in the keychain
-//	3  POST /gkm/groups: gkm writes the owner marker, the form, epoch/0 and gen/1, each If-None-Match, equal bytes
-//	   resuming; a 409 means the id is another repo's, and another is drawn
-//	4  stage generation 1's deliveries as a rotation stages its own: ReaderWraps to agents and, in the config and
-//	   directory groups, to the member devices among the holders; DelegationWraps; RecoveryWraps
+// For a first config repo, DraftGroup supplies the group ID and RK_1 before base 1 so the first config head
+// can be sealed. Its commitment depends on the key, repo and generation. Once base 1 lands, CreateGroup uses
+// its verified S(1) pin to sign GenRotate_1. A collision on the config group's drafted ID keeps the draft,
+// since the published head already commits to that key (QD-824).
 //
-// Only when step 4 has returned does CreateGroup answer, and only then does EvsClient.CreateRepo have evs activate
-// the repo (plan-EVS1-repo-activate-route), so no content predates its recovery wraps (D-KEYS-18). The engine's
-// first run then adds every pending member device in one Add commit (KF2).
-//
-// A kill resumes: before step 3 from the draft, with the same bytes; after it, the group stands at gkm and in the
-// keychain, and step 4 runs again, each delivery an If-None-Match create. A second CreateGroup of a repo whose group
-// stands answers its generation 1 once its deliveries stand. A creator whose only device is lost before activation
-// leaves the repo keying, and a repo admin's device re-forms or deletes it (FS-20).
-//
-// A sidecar that holds no leaf creates no group: KF1's epoch 0 has one leaf, the creator's. A repo such a sidecar,
-// a tagged or ephemeral one, creates is formed by the first member device gkm's pending hint reaches (QD-638;
-// FormAgentRepos): it runs steps 2 to 4 as the group's creator, and the agent, which stays the repo's admin, activates
-// the repo once it holds generation 1. Two member devices that act at once race at the repo's first form, and the
-// loser's 409, a form standing that is not its own, discards its draft (ErrGkmGroupFormed). The state must already
-// hold the repo's row, its RepoCreate applied, or the holders cannot be computed and CreateGroup answers
-// ErrGkmNoRepo for its caller to retry once the log advances.
-//
-// The config repo's group is split at its network's bootstrap (QD-824). Base 1 names the first config head, so that
-// head's push is sealed and signed before base 1 under the generation pin {group_id, 1, C_1}; but GenRotate_1's auth
-// pin must be past position 0, and gkm's gate holds nothing before base 1. DraftGroup draws step 2's group_id and RK_1
-// alone before base 1, kept as KF1's draft with no request yet, and answers the key the push is sealed under; after
-// base 1, CreateGroup finishes step 2 over that draft at its state, S(1): the MLS group, GenRotate_1 signed over the
-// drawn RK_1, the form, GenWrap_0 and GroupInfo_0. C_g = SHA-256("UR evs 1.0 commit" || repo_id || u64be(g) || RK_g)
-// holds no pin, which makes the split sound. A kill before base 1, or between it and the POST, draws nothing new: the
-// draft answers the same id and RK_1, and a step 2 a kill cut short after the MLS group was made takes that group, at
-// epoch 0, rather than make another under the same id. The config group's id is never drawn again: a 409 on it ends
-// the creation (ErrGkmDraftTaken), its draft kept, since a push base 1 names is sealed under it.
+// KeyDelivery clients use the same formation flow for member devices and authorized agents (owner 610).
+// The optional draft MLS engine adds the creator's leaf and epoch-0 material to the stored request.
 
 package sidecar
 
@@ -47,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -86,14 +59,11 @@ type gkmCreateDraft struct {
 // kept as KF1's draft before this answers, so a kill draws nothing new. Answers RK_1 as the key the network's first
 // config head is sealed under, its generation pin {group_id, 1, C_1}; it carries no gen/1 statement yet, so cause
 // REQUEST, as gen/1's will be, and no auth pin or time. A draft already kept answers its own id and RK_1, a group that
-// stands its generation 1 as held. It reads no state: before base 1 there is only the genesis. The config kind alone,
-// by a sidecar that holds a leaf, in a process that holds the network's state.
+// stands its generation 1 as held. Before base 1 there is only the genesis. Only the config repo can be drafted,
+// in a process that holds the network's state. The verified state determines who can sign its form.
 func (self *GkmGroupClient) DraftGroup(ctx context.Context, args *GkmCreateGroupArgs) (*EvsRepoKey, error) {
 	if args == nil || args.RepoId == (Id{}) || args.Kind != protocol.RepoKind_REPO_KIND_CONFIG {
 		return nil, fmt.Errorf("%w: only the config repo's group is drafted before its network's base 1", ErrGkmMalformed)
-	}
-	if self.args.Mls == nil {
-		return nil, fmt.Errorf("%w: a sidecar that holds no leaf creates no group", ErrGkmUnavailable)
 	}
 	if !self.holdsState() {
 		return nil, fmt.Errorf("%w: this process does not hold the network's state", ErrGkmUnavailable)
@@ -157,9 +127,6 @@ func (self *GkmGroupClient) CreateGroup(ctx context.Context, args *GkmCreateGrou
 	if args == nil || args.RepoId == (Id{}) || args.Kind == protocol.RepoKind_REPO_KIND_UNSPECIFIED {
 		return nil, fmt.Errorf("%w: a group needs its repo and kind", ErrGkmMalformed)
 	}
-	if self.args.Mls == nil {
-		return nil, fmt.Errorf("%w: a sidecar that holds no leaf creates no group", ErrGkmUnavailable)
-	}
 	manager := self.manager(args.RepoId)
 	manager.flowLock.Lock()
 	defer manager.flowLock.Unlock()
@@ -173,8 +140,12 @@ func (self *gkmGroupManager) createInFlow(ctx context.Context, args *GkmCreateGr
 	if err != nil {
 		return nil, err
 	}
-	if state.Repo(self.repoId) == nil {
+	repo := state.Repo(self.repoId)
+	if repo == nil {
 		return nil, fmt.Errorf("%w: repo %s: its RepoCreate has not reached this state", ErrGkmNoRepo, self.repoId)
+	}
+	if args.Inbox != protocol.RepoInbox_REPO_INBOX_NONE && (repo.GetInbox() != args.Inbox || !AclRepoIsInbox(repo)) {
+		return nil, fmt.Errorf("%w: repo %s does not carry the expected inbox role", ErrGkmMalformed, self.repoId)
 	}
 	for drawCount := 0; drawCount < max(1, client.settings.CreateGroupDrawCount); drawCount += 1 {
 		// the group stands: only its deliveries may be missing
@@ -194,7 +165,7 @@ func (self *gkmGroupManager) createInFlow(ctx context.Context, args *GkmCreateGr
 		draft := record.create
 		if draft == nil || len(draft.request) == 0 {
 			// a bootstrap draft's id and RK_1 are its own (DraftGroup); any other creation draws them here
-			draft, err = self.draftCreate(state, args, draft)
+			draft, err = self.draftCreate(ctx, state, args, draft)
 			if err != nil {
 				return nil, err
 			}
@@ -254,19 +225,25 @@ func (self *gkmGroupManager) createInFlow(ctx context.Context, args *GkmCreateGr
 		if err := client.putHeldGeneration(self.repoId, first); err != nil {
 			return nil, err
 		}
-		group, err := client.loadGroup(draft.groupId)
-		if err != nil {
-			return nil, err
-		}
-		headerBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(&protocol.GkmCommitHeader{Generation: 1, Auth: generation.Rotate.GetAuth()})
-		if err != nil {
-			return nil, err
+		var group MlsGroup
+		var headerBytes []byte
+		if client.args.Mls != nil {
+			group, err = client.loadGroup(draft.groupId)
+			if err != nil {
+				return nil, err
+			}
+			headerBytes, err = proto.MarshalOptions{Deterministic: true}.Marshal(&protocol.GkmCommitHeader{Generation: 1, Auth: generation.Rotate.GetAuth()})
+			if err != nil {
+				return nil, err
+			}
 		}
 		err = client.advancePins(self.repoId, func(pins *gkmRepoPins) {
 			pins.groupId = draft.groupId
-			pins.epoch = group.Epoch()
-			pins.epochAuthenticator = group.EpochAuthenticator()
-			pins.epochHeader = headerBytes
+			if group != nil {
+				pins.epoch = group.Epoch()
+				pins.epochAuthenticator = group.EpochAuthenticator()
+				pins.epochHeader = headerBytes
+			}
 			pins.generation = 1
 			pins.commitment = bytes.Clone(generation.Rotate.GetCommitment())
 		})
@@ -281,8 +258,11 @@ func (self *gkmGroupManager) createInFlow(ctx context.Context, args *GkmCreateGr
 // Step 2: the group's id, its MLS state, RK_1 and the whole POST /gkm/groups request. drawn is a bootstrap draft whose
 // id and RK_1 stand (DraftGroup), nil to draw both here. A bootstrap draft's MLS group a kill left made is taken as it
 // stands at epoch 0, since an engine makes no second group under one id.
-func (self *gkmGroupManager) draftCreate(state GkmAuthView, args *GkmCreateGroupArgs, drawn *gkmCreateDraft) (*gkmCreateDraft, error) {
+func (self *gkmGroupManager) draftCreate(ctx context.Context, state GkmAuthView, args *GkmCreateGroupArgs, drawn *gkmCreateDraft) (*gkmCreateDraft, error) {
 	client := self.client
+	if err := GkmFormSignerAllowed(state, self.repoId, client.args.SidecarId); err != nil {
+		return nil, err
+	}
 	groupId := Id{}
 	if drawn != nil {
 		groupId = drawn.groupId
@@ -292,7 +272,7 @@ func (self *gkmGroupManager) draftCreate(state GkmAuthView, args *GkmCreateGroup
 	}
 	urGroup := &MlsUrGroup{NetworkId: args.NetworkId, RepoId: args.RepoId, Kind: args.Kind, OwnerMemberId: args.OwnerMemberId}
 	var group MlsGroup
-	if drawn != nil {
+	if client.args.Mls != nil && drawn != nil {
 		loaded, err := client.args.Mls.LoadGroup(groupId)
 		switch {
 		case err == nil && loaded.Epoch() != 0:
@@ -303,7 +283,7 @@ func (self *gkmGroupManager) draftCreate(state GkmAuthView, args *GkmCreateGroup
 			return nil, err
 		}
 	}
-	if group == nil {
+	if client.args.Mls != nil && group == nil {
 		created, err := client.args.Mls.CreateGroup(groupId, urGroup)
 		if err != nil {
 			return nil, err
@@ -315,12 +295,16 @@ func (self *gkmGroupManager) draftCreate(state GkmAuthView, args *GkmCreateGroup
 	if err != nil {
 		return nil, err
 	}
-	targets, err := self.deliverySet(context.Background(), state, holders, now, group.Roster(), false)
+	var roster []MlsMember
+	if group != nil {
+		roster = group.Roster()
+	}
+	targets, err := self.deliverySet(ctx, state, holders, now, roster, false)
 	if err != nil {
 		return nil, err
 	}
 	generationArgs := &GkmGenerationArgs{Cause: GkmCauseRequest, Auth: state.Pin(), Time: now, HoldersSha256: holders.Sha256(), WrapCount: uint32(len(targets))}
-	if GkmRepoKindTakesDeposits(args.Kind) {
+	if gkmRepoTakesDeposits(state.Repo(self.repoId)) {
 		generationArgs.DropNotAfter = now.Add(client.settings.DropKeyLifetime)
 	}
 	var key *EvsRepoKey
@@ -347,26 +331,28 @@ func (self *gkmGroupManager) draftCreate(state GkmAuthView, args *GkmCreateGroup
 	if err != nil {
 		return nil, err
 	}
-	kek, err := MlsKek(group, self.repoId)
-	if err != nil {
-		return nil, err
+	create := &protocol.GkmGroupCreateRequest{Form: signedForm, GenRotate: signedRotate}
+	if group != nil {
+		kek, err := MlsKek(group, self.repoId)
+		if err != nil {
+			return nil, err
+		}
+		genWrap, err := SealGkmGenWrap(key, groupId, group.Epoch(), kek)
+		clear(kek)
+		if err != nil {
+			return nil, err
+		}
+		groupInfo, err := group.GroupInfo()
+		if err != nil {
+			return nil, err
+		}
+		sealedGroupInfo, err := SealGkmGroupInfo(key, groupId, group.Epoch(), groupInfo)
+		if err != nil {
+			return nil, err
+		}
+		create.GenWrap, create.SealedGroupInfo, create.CipherSuite = genWrap, sealedGroupInfo, uint32(mlsCipherSuiteXWing)
 	}
-	genWrap, err := SealGkmGenWrap(key, groupId, group.Epoch(), kek)
-	clear(kek)
-	if err != nil {
-		return nil, err
-	}
-	groupInfo, err := group.GroupInfo()
-	if err != nil {
-		return nil, err
-	}
-	sealedGroupInfo, err := SealGkmGroupInfo(key, groupId, group.Epoch(), groupInfo)
-	if err != nil {
-		return nil, err
-	}
-	request, err := proto.MarshalOptions{Deterministic: true}.Marshal(&protocol.GkmGroupCreateRequest{
-		Form: signedForm, GenRotate: signedRotate, GenWrap: genWrap, SealedGroupInfo: sealedGroupInfo, CipherSuite: uint32(mlsCipherSuiteXWing),
-	})
+	request, err := proto.MarshalOptions{Deterministic: true}.Marshal(create)
 	if err != nil {
 		return nil, err
 	}
@@ -380,6 +366,10 @@ func (self *gkmGroupManager) postCreate(ctx context.Context, draft *gkmCreateDra
 	request := &protocol.GkmGroupCreateRequest{}
 	if err := proto.Unmarshal(draft.request, request); err != nil {
 		return false, fmt.Errorf("%w: a creation draft's request", ErrGkmMalformed)
+	}
+	if client.KeyDeliveryOnly() {
+		// An interrupted older draft can still file its original signed form and generation.
+		request.GenWrap, request.SealedGroupInfo, request.CipherSuite = nil, nil, 0
 	}
 	for sendCount := 0; sendCount < max(1, client.settings.CommitSendCount); sendCount += 1 {
 		err := client.args.Api.CreateGroup(ctx, self.repoId, request)
@@ -424,9 +414,28 @@ func (self *gkmGroupManager) finishCreate(ctx context.Context, state GkmAuthView
 	if group, err := client.loadGroup(groupId); err == nil {
 		roster = group.Roster()
 	}
+	// Gen/1 is claimed before its wraps are staged. A restarted creator preserves the signed generation and
+	// its reader deliveries, but must seal recovery wraps to bindings still effective when it finishes.
+	changed := client.KeyDeliveryOnly() && draftState.Pin().GetVersion() != state.Pin().GetVersion()
+	if changed {
+		holders = slices.DeleteFunc(holders, func(holder GkmHolder) bool { return holder.Kind == GkmHolderRecovery })
+	}
 	targets, err := self.deliverySet(ctx, draftState, holders, at, roster, false)
 	if err != nil {
 		return nil, err
+	}
+	if changed {
+		now := client.clock.Now()
+		current, err := KeyHolders(state, self.repoId, now)
+		if err != nil {
+			return nil, err
+		}
+		recovery := slices.DeleteFunc(current, func(holder GkmHolder) bool { return holder.Kind != GkmHolderRecovery })
+		wraps, err := self.deliverySet(ctx, state, recovery, now, nil, false)
+		if err != nil {
+			return nil, err
+		}
+		targets = append(targets, wraps...)
 	}
 	if err := self.stageDeliveries(ctx, state, groupId, first.key, targets); err != nil {
 		return nil, err

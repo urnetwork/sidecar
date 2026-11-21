@@ -824,6 +824,17 @@ func TestTlsListenReadsThePublishGrantFromTheProjection(t *testing.T) {
 	if err != nil || platform.PublishGrant(request, "http", now) != nil {
 		t.Fatalf("the platform network answered %v", err)
 	}
+	edge := *request
+	edge.CallerNetworkId = world.edgeNetworkId
+	if !view.MayDial(&edge, now).Allowed || !view.MayPublish(request, now).Allowed {
+		t.Fatal("the public host was unavailable before the scope reservation")
+	}
+	process.projection.SetScopeSource(func(snapshot *sidecar.AclGateSnapshot, label string) (sidecar.AclScope, bool) {
+		return sidecar.AclScope{Label: label}, snapshot != nil && label == "blog"
+	})
+	if view.PublishGrant(request, "http", now) != nil || view.MayPublish(request, now).Allowed || view.MayDial(&edge, now).Allowed {
+		t.Fatal("a Team scope label remained available for registration or lookup as an ordinary host")
+	}
 }
 
 // A receiver's entry for §13.9's system publish: tls/443/mta-sts, http, its listen verdict the receiver's smtp/25/mx
@@ -1547,5 +1558,27 @@ func TestTlsListenRoutesAnAliasOnlyToListenersCertifiedForIt(t *testing.T) {
 		if code != "" || primary != 1 || (backup != -1 && backup != 1) {
 			t.Fatalf("an alias's dial reached %d and %d, %q", primary, backup, code)
 		}
+	}
+}
+
+// SMTP enablement and TLS share the same authoritative network facts. An unknown
+// network stays pending, and mail enablement changes on the next facts read.
+func TestSmtpEnabledFromTheTlsListenFacts(t *testing.T) {
+	scene := newTestTlsListenScene(t, nil)
+	scene.facts.MailNetwork = true
+	scene.source.set(scene.networkId, scene.facts)
+	if enabled, err := scene.hooks.MailEnabled(scene.ctx, scene.networkId); enabled || !errors.Is(err, socketsservice.ErrSocketListenUnavailable) {
+		t.Fatalf("cold mail facts = %v, %v", enabled, err)
+	}
+	scene.awaitLoads(1)
+	if enabled, err := scene.hooks.MailEnabled(scene.ctx, scene.networkId); err != nil || !enabled {
+		t.Fatalf("enabled mail facts = %v, %v", enabled, err)
+	}
+	scene.source.set(scene.networkId, &socketsservice.TlsListenFacts{})
+	scene.clock.Advance(socketsservice.DefaultTlsNamespaceSettings().FactsRefreshInterval)
+	scene.hooks.MailEnabled(scene.ctx, scene.networkId)
+	scene.awaitLoads(2)
+	if enabled, err := scene.hooks.MailEnabled(scene.ctx, scene.networkId); err != nil || enabled {
+		t.Fatalf("disabled mail facts = %v, %v", enabled, err)
 	}
 }

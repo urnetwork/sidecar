@@ -16,9 +16,9 @@
 //	verify   against the text view as SEARCH-M10-24's confirmer reads it, which never fetches
 //	tail     the index-served refs' hits, ranked as a phone ranks them, confirmed then possible
 //
-// Keys: a kept record is opened only with RK_g already in this device's key store. The engine's GkmClient is asked with
-// a context that has already ended, so a generation it would fetch from gkm fails instead (searchRemoteHeldKeys) and its
-// file is not read: a remote search asks gkm for nothing (row 6's last clause), and evs and api are never asked.
+// Keys: a kept record opens only with RK_g already in this device's key store. A hosted server looks it up directly.
+// For an engine supplied without a local key reader, the engine's GkmClient is asked on an ended context. A search
+// never fetches an index or a key.
 //
 // Not safe for concurrent use: a view is one cursor's, used under its pageLock.
 
@@ -27,6 +27,7 @@ package sidecar
 import (
 	"cmp"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"slices"
@@ -38,8 +39,9 @@ import (
 // The corpus over engine. textPin names the content refs this host holds the text of; nil serves every ref from the
 // index.
 type searchEngineRemoteCorpus struct {
-	engine  *SearchEngine
-	textPin func(repoId Id, refId Id) (SearchSyncPin, uint32, bool)
+	engine      *SearchEngine
+	heldRepoKey func(Id, uint64) *EvsRepoKey
+	textPin     func(repoId Id, refId Id) (SearchSyncPin, uint32, bool)
 }
 
 // The corpus over engine, the text pins textPin names.
@@ -50,7 +52,8 @@ func newSearchEngineRemoteCorpus(engine *SearchEngine, textPin func(repoId Id, r
 // The engine's GkmClient answering only from what this device already holds: every call that might reach gkm runs on
 // an ended context, so it fails where a fetch would start. What a remote search opens records with.
 type searchRemoteHeldKeys struct {
-	inner GkmClient
+	inner       GkmClient
+	heldRepoKey func(Id, uint64) *EvsRepoKey
 }
 
 // A context that has already ended.
@@ -62,11 +65,20 @@ func searchRemoteEndedContext() context.Context {
 
 // See GkmClient: what the key store holds, never a fetch.
 func (self *searchRemoteHeldKeys) CurrentRepoKey(ctx context.Context, repoId Id) (*EvsRepoKey, error) {
+	if self.heldRepoKey != nil {
+		return nil, ErrGkmKeyMissing
+	}
 	return self.inner.CurrentRepoKey(searchRemoteEndedContext(), repoId)
 }
 
 // See GkmClient: what the key store holds, never a fetch.
 func (self *searchRemoteHeldKeys) RepoKey(ctx context.Context, repoId Id, generation uint64) (*EvsRepoKey, error) {
+	if self.heldRepoKey != nil {
+		if key := self.heldRepoKey(repoId, generation); key != nil && key.RepoId() == repoId && key.Generation() == generation {
+			return key, nil
+		}
+		return nil, ErrGkmKeyMissing
+	}
 	return self.inner.RepoKey(searchRemoteEndedContext(), repoId, generation)
 }
 
@@ -223,7 +235,7 @@ func (self *searchEngineRemoteCorpus) Open(ctx context.Context, query *searchRem
 	}
 	view := &searchEngineRemoteView{corpus: self, query: parsed, scopeAll: query.scopeAll, places: map[*searchRankSource]uint16{}, firstPass: true}
 	rows := make([]searchRemoteRefRow, len(asks))
-	keys := &searchRemoteHeldKeys{inner: engine.args.Gkm}
+	keys := &searchRemoteHeldKeys{inner: engine.args.Gkm, heldRepoKey: self.heldRepoKey}
 	for i, ask := range asks {
 		row, served, err := view.openRef(ctx, ask, scopeRepos, request, filters, normalizer, keys)
 		if err != nil {
@@ -255,6 +267,69 @@ func (self *searchEngineRemoteCorpus) Open(ctx context.Context, query *searchRem
 	return view, rows, nil
 }
 
+// Eviction can remove a bucket or its wrapped keys after a swap. Check local holdings and key
+// generations against the snapshot without reading postings or asking the network for a key.
+func searchRemoteSnapshotHeld(ctx context.Context, cache *SearchCache, snapshot *SearchSyncSnapshot, held *SearchCacheRef, all bool, keys GkmClient) bool {
+	pin := snapshot.Pin()
+	if pin.Version == 0 || pin.Chain == ([sha256.Size]byte{}) || held == nil || held.RefVersion < pin.Version || held.ErasedOverflow {
+		return false
+	}
+	// Ref returns a private copy. Sorting avoids a second holdings map or a linear lookup per file.
+	compare := func(a, b SearchCacheFile) int {
+		if c := cmp.Compare(a.Key.Path, b.Key.Path); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.Key.Version, b.Key.Version)
+	}
+	slices.SortFunc(held.Files, compare)
+	generations := map[uint64]bool{}
+	rootHeld := false
+	companion := searchRootCompanion(snapshot.manifest.Root)
+	for _, file := range snapshot.manifest.Files {
+		if ctx.Err() != nil {
+			return false
+		}
+		if file.Partition.All && !all {
+			continue
+		}
+		parsed, known := indexParsePath(file.Path, companion)
+		if !known {
+			return false
+		}
+		if file.State != SearchManifestHeld {
+			// Bad postings can contribute only index coverage. Settings and the erasure set govern
+			// whether any result may be shown.
+			if parsed.kind == indexPathSettings || parsed.kind == indexPathErasureSet {
+				return false
+			}
+			continue
+		}
+		key := SearchCacheKey{RepoId: held.RepoId, RefId: held.RefId, Path: file.Path, Version: file.Version}
+		index, found := slices.BinarySearchFunc(held.Files, SearchCacheFile{Key: key}, compare)
+		if !found || held.Files[index].ContentSha256 != file.ContentSha256 || !held.Files[index].KeysKept {
+			return false
+		}
+		meta, err := cache.readMeta(searchCachePartName(key, searchCachePartRecord))
+		if err != nil || meta.keysState() != nil {
+			return false
+		}
+		for _, generation := range []uint64{meta.Generation, meta.headerGeneration()} {
+			if !generations[generation] {
+				key, err := keys.RepoKey(ctx, held.RepoId, generation)
+				if err != nil || key == nil {
+					return false
+				}
+				generations[generation] = true
+			}
+		}
+		switch parsed.kind {
+		case indexPathSlot, indexPathLargeEntry, indexPathBucketShard, indexPathAllShard:
+			rootHeld = true
+		}
+	}
+	return rootHeld
+}
+
 // Opens one asked ref: its row, and the served ref where it serves. An error only for what the engine itself failed
 // at; a ref it cannot serve is a refusal.
 func (self *searchEngineRemoteView) openRef(ctx context.Context, ask searchRemoteRefAsk, scopeRepos []*SearchScopeRepo, request *SearchRequest,
@@ -269,7 +344,7 @@ func (self *searchEngineRemoteView) openRef(ctx context.Context, ask searchRemot
 			repo = candidate
 		}
 	}
-	if repo == nil {
+	if repo == nil || repo.receiptSkipped {
 		return refuse(protocol.SearchServed_REFUSED_ALL_ABSENT)
 	}
 	var ref *SearchScopeRef
@@ -286,17 +361,17 @@ func (self *searchEngineRemoteView) openRef(ctx context.Context, ask searchRemot
 		return refuse(protocol.SearchServed_REFUSED_INDEX_OFF)
 	case ref.IndexOff:
 		return refuse(protocol.SearchServed_REFUSED_INDEX_OFF)
-	case ref.Unbuilt:
+	case ref.Unbuilt || (repo.valid != nil && !repo.valid()) || (ref.valid != nil && !ref.valid()):
 		return refuse(protocol.SearchServed_REFUSED_ALL_ABSENT)
 	}
-	snapshot, err := engine.args.Sync.Snapshot(repo.RepoId, ref.RefId)
+	snapshot, err := engine.args.Sync.Snapshot(repo.RepoId, ref.indexId())
 	if err != nil {
-		if errors.Is(err, ErrSidecarStoreAbsent) || errors.Is(err, ErrSearchSyncUnfollowed) || errors.Is(err, ErrSearchSyncClosed) {
+		if errors.Is(err, errSearchSyncReceipt) || errors.Is(err, ErrSidecarStoreAbsent) || errors.Is(err, ErrSearchSyncUnfollowed) || errors.Is(err, ErrSearchSyncClosed) {
 			return refuse(protocol.SearchServed_REFUSED_ALL_ABSENT)
 		}
 		return searchRemoteRefRow{}, nil, err
 	}
-	held, err := engine.args.Cache.Ref(repo.RepoId, ref.RefId)
+	held, err := engine.args.Cache.Ref(repo.RepoId, ref.indexId())
 	if err != nil {
 		snapshot.Release()
 		return searchRemoteRefRow{}, nil, err
@@ -319,13 +394,20 @@ func (self *searchEngineRemoteView) openRef(ctx context.Context, ask searchRemot
 	case plan.status == searchRefUpdate:
 		snapshot.Release()
 		return refuse(protocol.SearchServed_REFUSED_FORMAT)
-	case self.scopeAll && !snapshot.AllUsable():
+	case self.scopeAll && (!snapshot.AllUsable() || slices.ContainsFunc(holding.allShards, func(shard *searchHeldShard) bool { return !shard.held })):
+		snapshot.Release()
+		return refuse(protocol.SearchServed_REFUSED_ALL_ABSENT)
+	case !searchRemoteSnapshotHeld(ctx, engine.args.Cache, snapshot, held, self.scopeAll, keys):
+		snapshot.Release()
+		return refuse(protocol.SearchServed_REFUSED_ALL_ABSENT)
+	}
+	if ask.recordServed != nil && !ask.recordServed() {
 		snapshot.Release()
 		return refuse(protocol.SearchServed_REFUSED_ALL_ABSENT)
 	}
 	companion := searchRootCompanion(snapshot.manifest.Root)
 	opened := &searchOpenedRef{
-		engine: engine, repoId: repo.RepoId, refId: ref.RefId, snap: snapshot, holding: holding, plan: plan,
+		engine: engine, scoped: &searchScopedRef{repo: repo, ref: ref}, repoId: repo.RepoId, refId: ref.RefId, snap: snapshot, holding: holding, plan: plan,
 		probe: searchProbeOf(snapshot.Versions()), keys: keys, searchableSinceSeconds: searchSearchableSinceSeconds(nowMs, repo.SearchableAge),
 	}
 	if engine.args.Local != nil {
@@ -366,7 +448,7 @@ func (self *searchEngineRemoteView) openRef(ctx context.Context, ask searchRemot
 	}
 	confirmer := &searchConfirmer{
 		query: self.query, filters: filters, normalizer: normalizer, registry: searchRegistryOf(repo.Kind),
-		settings: engine.results, repoId: repo.RepoId,
+		settings: engine.results, repoId: repo.RepoId, acceptRow: repo.acceptRow,
 	}
 	if text && engine.args.Text != nil {
 		confirmer.text = engine.args.Text(repo.RepoId, ref.RefId)
@@ -613,6 +695,10 @@ func (self *searchEngineRemoteView) AllNewestMs() int64 {
 // See searchRemoteView.
 func (self *searchEngineRemoteView) Ended() bool {
 	for _, served := range self.refs {
+		scope := served.opened.scoped
+		if (scope.repo.valid != nil && !scope.repo.valid()) || (scope.ref.valid != nil && !scope.ref.valid()) {
+			return true
+		}
 		select {
 		case <-served.opened.snap.Ended():
 			return true

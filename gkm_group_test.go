@@ -45,6 +45,29 @@ func (self *gkmFlowWorld) createArgs() *sidecar.GkmCreateGroupArgs {
 	return &sidecar.GkmCreateGroupArgs{RepoId: self.repoId, Kind: self.repo.GetKind()}
 }
 
+// The caller cannot turn a plain general repo into a deposit target. Once the verified repo
+// creation marks the inbox, its very first signed generation already carries a drop key.
+func TestGkmFirstGenerationUsesTheVerifiedGroupInboxMarker(t *testing.T) {
+	world, _ := newGkmCreateWorld(t, protocol.RepoKind_REPO_KIND_GENERAL)
+	writer := world.flows[world.a].client
+	args := world.createArgs()
+	args.Inbox = protocol.RepoInbox_REPO_INBOX_GROUP
+	if _, err := writer.CreateGroup(world.ctx, args); !errors.Is(err, sidecar.ErrGkmMalformed) {
+		t.Fatalf("unsourced inbox marker: %v", err)
+	}
+	world.repo.Inbox = args.Inbox
+	state := world.stateFor()
+	key, err := writer.CreateGroup(world.ctx, args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	world.groupId = key.GroupId()
+	gen := world.storedGeneration(state, 1).Rotate
+	if len(gen.GetDropPublicKey()) == 0 || gen.GetDropNotAfterMs() <= world.clock.Now().UnixMilli() {
+		t.Fatal("the first inbox generation lacks a current drop key")
+	}
+}
+
 // CreateGroup as EvsClient.CreateRepo sequences it: the repo is activated only once CreateGroup has returned, and by
 // then generation 1's recovery wrap and reader wrap stand at gkm (D-KEYS-18). Returns whether it activated.
 func (self *gkmFlowWorld) createThenActivate(creator *gkmFlowDevice) (bool, error) {
@@ -175,10 +198,10 @@ func TestCreateGroupResumesAfterAKillAtEachStep(t *testing.T) {
 	}
 }
 
-// A group id another repo owns answers 409 at the owner marker: the creator draws another and forms the group
-// there. A state that does not hold the repo yet, and a sidecar with no leaf, create nothing.
+// After a marker collision the creator draws another group id. Once a form stands,
+// another authorized creator leaves it in place. An unknown repo never reaches gkm.
 func TestCreateGroupDrawsAnotherIdWhenTheMarkerIsTaken(t *testing.T) {
-	world, agent := newGkmCreateWorld(t, protocol.RepoKind_REPO_KIND_GENERAL)
+	world, _ := newGkmCreateWorld(t, protocol.RepoKind_REPO_KIND_GENERAL)
 	a := world.flows[world.a]
 	world.store.refuseOnce("CreateGroup", http.StatusConflict)
 	if activated, err := world.createThenActivate(a); err != nil || !activated {
@@ -190,17 +213,60 @@ func TestCreateGroupDrawsAnotherIdWhenTheMarkerIsTaken(t *testing.T) {
 	if groupId, _, _, err := a.client.TestPins(world.repoId); err != nil || world.store.groupOwnerRepoIds[groupId] != world.repoId {
 		t.Errorf("the creator's group is not the one gkm formed")
 	}
+	if _, err := world.flows[world.b].client.CreateGroup(world.ctx, world.createArgs()); !errors.Is(err, sidecar.ErrGkmGroupFormed) {
+		t.Fatalf("a second creator after the first form: %v", err)
+	}
+	forms := world.store.repoForms[world.repoId]
+	if len(forms) != 1 || !bytes.Equal(forms[0].GetSignerId(), world.a.id.Bytes()) {
+		t.Fatal("the second creator changed the original form")
+	}
 
 	other := newGkmBareFlowWorld(t, protocol.RepoKind_REPO_KIND_GENERAL)
 	unknown := &sidecar.GkmCreateGroupArgs{RepoId: sidecar.NewId(), Kind: protocol.RepoKind_REPO_KIND_GENERAL}
 	if _, err := other.flows[other.a].client.CreateGroup(other.ctx, unknown); !errors.Is(err, sidecar.ErrGkmNoRepo) {
 		t.Errorf("a creation before its RepoCreate reached the state: %v", err)
 	}
-	if _, err := world.flows[agent].client.CreateGroup(world.ctx, world.createArgs()); !errors.Is(err, sidecar.ErrGkmUnavailable) {
-		t.Errorf("a creation by a sidecar with no leaf: %v", err)
-	}
 	if other.store.callCount("CreateGroup") != 0 {
 		t.Errorf("a refused creation reached gkm")
+	}
+}
+
+// A v0 agent can form its own repo once its creation grants it admin. Ordinary write
+// access cannot sign the form. The creator keeps its first key and stages deliveries for the other readers.
+func TestCreateGroupByAgentRequiresFormationAuthority(t *testing.T) {
+	world, agent := newGkmCreateWorld(t, protocol.RepoKind_REPO_KIND_GENERAL)
+	creator := world.flows[agent]
+	world.grant(true, agent)
+	world.stateFor()
+	if _, err := creator.client.CreateGroup(world.ctx, world.createArgs()); !errors.Is(err, sidecar.ErrGkmNotWriter) {
+		t.Fatalf("creation by a writer without admin: %v", err)
+	}
+	if kept, _, err := creator.client.TestCreateDraft(world.repoId); err != nil || kept || world.store.callCount("CreateGroup") != 0 {
+		t.Fatalf("refused creation kept a draft or reached gkm: %v", err)
+	}
+
+	world.repo.Admins = []*protocol.AclRepoAdminRow{{SidecarId: agent.id.Bytes(), Signer: agent.id.Bytes(), At: world.nextPosition()}}
+	view := world.stateFor()
+	key, err := creator.client.CreateGroup(world.ctx, world.createArgs())
+	if err != nil {
+		t.Fatalf("agent's repo creation: %v", err)
+	}
+	world.groupId = key.GroupId()
+	held, _, found, err := creator.client.TestHeldGeneration(world.repoId, 1)
+	if err != nil || !found || held == nil || !bytes.Equal(held.Commitment(), key.Commitment()) {
+		t.Fatalf("creator's first key: %v", err)
+	}
+	if first := world.storedGeneration(view, 1); first.SignerId != agent.id || first.Rotate.GetAuth().GetVersion() != view.Pin().GetVersion() {
+		t.Fatal("first generation did not carry the agent's signature at its admin grant")
+	}
+	if len(world.store.recoveryWrapPaths(world.groupId, 1)) != 1 {
+		t.Fatal("first generation lacks the member's recovery wrap")
+	}
+	recipients := world.deliveryRecipients(1)
+	for _, device := range world.devices {
+		if device != agent && recipients["s:"+device.label] != sidecar.GkmDeliveryStaged {
+			t.Errorf("first generation lacks a reader wrap for %s", device.label)
+		}
 	}
 }
 

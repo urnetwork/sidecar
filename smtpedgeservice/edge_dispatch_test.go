@@ -20,7 +20,6 @@ import (
 	"errors"
 	"sync"
 	"testing"
-	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -53,42 +52,67 @@ func newTestEngineEdgeNet(t *testing.T, names ...string) *testEngineEdgeNet {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// the timeouts are the Net's own clients', for a process with no real network in it
-	edgeSettings := connect.DefaultClientSettingsWithBufferSize(64)
-	edgeSettings.SendBufferSettings.AckTimeout = 60 * time.Second
-	edgeSettings.SendBufferSettings.IdleTimeout = 1 * time.Second
-	edgeSettings.SendBufferSettings.MinResendInterval = 10 * time.Millisecond
-	edgeSettings.ReceiveBufferSettings.GapTimeout = 60 * time.Second
-	edgeSettings.ReceiveBufferSettings.IdleTimeout = 60 * time.Second
-	edgeSettings.ForwardBufferSettings.IdleTimeout = 1 * time.Second
-	edgeSettings.ContractManagerSettings.LegacyCreateContract = false
-	edgeSettings.EncryptionSettings.TlsTimeout = 30 * time.Second
-	sidecar.ApplySidecarClientSettings(edgeSettings)
-	edgeClient := net.AddClient("smtpedge", edgeSettings)
-	edgeClient.Client.ContractManager().SetProvideModes(map[connectprotocol.ProvideMode]bool{connectprotocol.ProvideMode_Service: true})
-	protocolSettings := sidecar.DefaultSidecarProtocolSettings()
-	edge, err := sidecar.NewSubprotocol(t.Context(), &sidecar.SubprotocolEnv{
-		Client:   edgeClient.Client,
-		Log:      sidecar.NewNoopLogger(),
-		Settings: protocolSettings,
-		Budget:   sidecar.NewSubprotocolBudget(protocolSettings, 64*1024*1024),
-		Inbound:  sidecar.SubprotocolInboundWithoutPolicy,
-		Role:     sidecar.SubprotocolRoleEdge,
-	})
+	args, err := net.EdgeClientPoolArgs(sidecar.NewId())
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(edge.Close)
+	args.Settings = sidecar.DefaultEdgeClientPoolSettings()
+	args.Settings.ClientCount = 1
+	args.Inbound = smtpedgeservice.Inbound
+	pool, err := sidecar.NewEdgeClientPool(t.Context(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	edgeClient := pool.Clients()[0]
+	edgeClientId := connect.Id(edgeClient.ClientId)
 	for _, sidecarOnNet := range sidecars {
-		net.SetContractProvideMode(sidecarOnNet.ClientId(), edgeClient.ClientId, connectprotocol.ProvideMode_Service)
-		net.SetContractProvideMode(edgeClient.ClientId, sidecarOnNet.ClientId(), connectprotocol.ProvideMode_Service)
+		net.SetContractProvideMode(sidecarOnNet.ClientId(), edgeClientId, connectprotocol.ProvideMode_Service)
+		net.SetContractProvideMode(edgeClientId, sidecarOnNet.ClientId(), connectprotocol.ProvideMode_Service)
 		release, err := sidecarOnNet.Subprotocol().HoldProvideMode(connectprotocol.ProvideMode_Service)
 		if err != nil {
 			t.Fatal(err)
 		}
 		t.Cleanup(release)
 	}
-	return &testEngineEdgeNet{sidecars: sidecars, edgeClientId: edgeClient.ClientId, edge: edge}
+	return &testEngineEdgeNet{sidecars: sidecars, edgeClientId: edgeClientId, edge: edgeClient.Subprotocol}
+}
+
+// A sender's opens and SMTP methods are accepted only by the serving edge. Both roles keep unrecognized
+// operations closed and route continuations using the stream ID.
+func TestEdgeInboundRoles(t *testing.T) {
+	for _, test := range []struct {
+		messageType protocol.MessageType
+		streamId    uint64
+		response    bool
+		dial        bool
+		smtp        bool
+	}{
+		{messageType: protocol.MessageType_STREAM_OPEN, streamId: 1, smtp: true},
+		{messageType: protocol.MessageType_STREAM_OPEN},
+		{messageType: protocol.MessageType_STREAM_ACCEPT, streamId: 1, dial: true, smtp: true},
+		{messageType: protocol.MessageType_STREAM_REJECT, streamId: 1, dial: true, smtp: true},
+		{messageType: protocol.MessageType_STREAM_DATA, streamId: 1, dial: true, smtp: true},
+		{messageType: protocol.MessageType_STREAM_WINDOW, streamId: 1, dial: true, smtp: true},
+		{messageType: protocol.MessageType_STREAM_CLOSE, streamId: 1, dial: true, smtp: true},
+		{messageType: protocol.MessageType_STREAM_RESET, streamId: 1, dial: true, smtp: true},
+		{messageType: protocol.MessageType_STREAM_DATA},
+		{messageType: protocol.MessageType_PING, dial: true, smtp: true},
+		{messageType: protocol.MessageType_PONG, response: true, dial: true, smtp: true},
+		{messageType: protocol.MessageType_SMTP_HANDSHAKE, smtp: true},
+		{messageType: protocol.MessageType_SMTP_PROOF, smtp: true},
+		{messageType: protocol.MessageType_SMTP_OUTCOME, smtp: true},
+		{messageType: protocol.MessageType_CANCEL, smtp: true},
+		{messageType: protocol.MessageType_SMTP_PROOF, response: true},
+		{messageType: protocol.MessageType_SMTP_PROOF, streamId: 1},
+		{messageType: protocol.MessageType_SEARCH},
+		{messageType: protocol.MessageType_HELLO},
+	} {
+		inbound := sidecar.SubprotocolInbound{MessageType: test.messageType, StreamId: test.streamId, Response: test.response}
+		if sidecar.EdgeDialInbound(inbound) != test.dial || smtpedgeservice.Inbound(inbound) != test.smtp {
+			t.Errorf("unexpected inbound policy for %+v", inbound)
+		}
+	}
 }
 
 // A sender's channel as a daemon's: each part and the SHTS a call marked for the edge, answered by its result's code.

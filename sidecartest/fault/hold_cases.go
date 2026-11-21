@@ -11,7 +11,7 @@
 //	          Fs69HoldBetweenSweepDeletes: two files replaced before the hold, the sweep held after its first DELETE, the
 //	          hold placed and the clock moved past §11.13's 5 s cache: that DELETE stands, and the second, which existed
 //	          at the placement, is kept by the reread. Fs69EraseUnderTheHold, a record repo: an ERASE of a versionless
-//	          entry's keys under the hold destroys them at once, its ciphertext staying
+//	          entry's keys under the hold destroys them at once. Its newest version reads erased while the ciphertext stays
 //	FS-66     Fs66HoldKeepsStagedFromBeforeIt, the registered hold case: h.txt written versionless and staged, then the
 //	          hold, then h.txt replaced twice, each in a batch of its own. At evacuation the first version's staged
 //	          segment, from a batch before the placement, is written to seg/, the second's, written and replaced under
@@ -236,6 +236,7 @@ func fs69EraseSchedule(net *Net, held bool) *Schedule {
 		{Advance: holds.settings.BindTimeout},
 		// keys gone when the ERASE answers, the ciphertext where it was, under the hold as without it
 		{Actor: "admin", Action: world.EraseAtOnce("admin", "v.bin")},
+		{Actor: "reader", Action: world.ReadVersionEnds("reader", "v.bin", 2, EvsWorldReadsErased())},
 	}...)
 	return &Schedule{Id: "FS-69 erase", Steps: steps, Check: holdCaseChecks(world), Tiers: []Tier{TierT2, TierT3}}
 }

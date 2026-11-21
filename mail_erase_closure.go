@@ -58,7 +58,11 @@ func (self *MailEraser) segmentsListing(ctx context.Context, messages []mailEras
 			if err != nil {
 				return nil, err
 			}
-			if _, removedCount := mailSegmentWithout(content, month, messages); 0 < removedCount {
+			_, removedCount, err := mailSegmentWithout(content, month, messages)
+			if err != nil {
+				return nil, err
+			}
+			if 0 < removedCount {
 				listing = append(listing, &mailEraseSegment{segment: mailErasedSegment{Month: month, N: n}, byteCount: int64(len(content))})
 			}
 		}
@@ -66,9 +70,9 @@ func (self *MailEraser) segmentsListing(ctx context.Context, messages []mailEras
 	return listing, nil
 }
 
-// A segment's bytes without the rows of messages under month, and how many rows that took out. A segment that does
-// not parse keeps its bytes past the fault as they are, so nothing a reader could still read is dropped.
-func mailSegmentWithout(segment []byte, month MailYearMonth, messages []mailErasedMessage) ([]byte, int) {
+// A segment's bytes without the rows of messages under month, and how many rows that took out. A partial parse
+// cannot establish which rows remain or supply a replacement for the segment.
+func mailSegmentWithout(segment []byte, month MailYearMonth, messages []mailErasedMessage) ([]byte, int, error) {
 	kept := []byte{}
 	removedCount := 0
 	err := mailSegmentRecords(segment, func(index int, record []byte) error {
@@ -83,9 +87,9 @@ func mailSegmentWithout(segment []byte, month MailYearMonth, messages []mailEras
 		return nil
 	})
 	if err != nil {
-		return segment, 0
+		return nil, 0, err
 	}
-	return kept, removedCount
+	return kept, removedCount, nil
 }
 
 // The erasure's i/ parts over segments, the segments listing its messages, one at a time, the last one's ERASE
@@ -101,7 +105,7 @@ func (self *MailEraser) rewrite(ctx context.Context, erasure *MailErasure, segme
 	}
 	for index, segment := range segments {
 		left(index)
-		err := self.part(ctx, erasure.ErasureId, segment.segment, messages, mayComplete && index == len(segments)-1)
+		paired, err := self.part(ctx, erasure.ErasureId, segment.segment, messages, mayComplete && index == len(segments)-1)
 		if wait, refused := mailEraseRefusedForNow(err); refused {
 			erasure.State = MailErasureWaiting
 			erasure.NextTry = self.clock.Now().Add(wait)
@@ -111,6 +115,12 @@ func (self *MailEraser) rewrite(ctx context.Context, erasure *MailErasure, segme
 		if err != nil {
 			erasure.State = MailErasureRewriting
 			return err
+		}
+		if !paired {
+			// Another writer took the listed row. Its CLOSURE may still need an ERASE. A fresh Resume can
+			// recover those keys before any later segment or format-2 completion ends the erasure.
+			erasure.State = MailErasureRewriting
+			return self.complete(ctx, erasure, false)
 		}
 	}
 	left(len(segments))
@@ -124,31 +134,34 @@ func (self *MailEraser) rewrite(ctx context.Context, erasure *MailErasure, segme
 	return nil
 }
 
-// One part: the segment's CLOSURE without the erasure's rows, then the ERASE of the chain it replaced.
-func (self *MailEraser) part(ctx context.Context, erasureId Id, segment mailErasedSegment, messages []mailErasedMessage, complete bool) error {
+// Pairs a segment's CLOSURE with the ERASE of its replaced chain. False means the listed row disappeared first.
+func (self *MailEraser) part(ctx context.Context, erasureId Id, segment mailErasedSegment, messages []mailErasedMessage, complete bool) (bool, error) {
 	path := MailIndexPath(segment.Month, segment.N)
 	for attempt := 0; ; attempt += 1 {
 		if err := ctx.Err(); err != nil {
-			return err
+			return false, err
 		}
 		content, version, err := self.store.Read(ctx, path, mailIndexSegmentReadMaxByteCount)
 		if errors.Is(err, ErrEvsPathAbsent) {
-			return nil
+			return false, nil
 		}
 		if err != nil {
-			return err
+			return false, err
 		}
-		without, removedCount := mailSegmentWithout(content, segment.Month, messages)
+		without, removedCount, err := mailSegmentWithout(content, segment.Month, messages)
+		if err != nil {
+			return false, err
+		}
 		if removedCount == 0 {
 			// re-checkpointed already: a CLOSURE whose ERASE did not follow is Resume's
-			return nil
+			return false, nil
 		}
 		keys, err := self.pathKeys(ctx, path)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if len(keys) == 0 {
-			return ErrMailNotShreddable
+			return false, ErrMailNotShreddable
 		}
 		testHookBarrier("mail.erase.closure.before", "")
 		err = self.store.Closure(ctx, erasureId, path, without, version, keys)
@@ -158,14 +171,14 @@ func (self *MailEraser) part(ctx context.Context, erasureId Id, segment mailEras
 			continue
 		}
 		if err != nil {
-			return err
+			return false, err
 		}
 		testHookBarrier("mail.erase.keys.before", "")
 		err = self.store.Erase(ctx, &EvsEraseArgs{
 			ErasureId: erasureId, Keys: keys, Complete: complete, Note: mailErasureNote(nil, []mailErasedSegment{segment}),
 		})
 		testHookBarrier("mail.erase.keys.after", "")
-		return err
+		return err == nil, err
 	}
 }
 

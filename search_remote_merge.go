@@ -69,6 +69,7 @@ func searchRemoteMergeKeyOf(hit *SearchHit) searchRemoteMergeKey {
 
 // One leg's span over one repo it serves, and what its coverage row said.
 type searchRemoteSpan struct {
+	refId Id
 	// the leg serves the repo from text, with no push uncovered
 	text      bool
 	uncovered uint32
@@ -118,6 +119,8 @@ type searchRemoteMerge struct {
 	ownIndex func(repoId Id, refId Id) (searchRemoteOwnIndex, bool)
 	// whether this device's ERASE, erasure-set masks or read checks hide a version of a document
 	masked func(key searchRemoteMergeKey, version uint64) bool
+	// Stock member-side joins and verified row policy, applied only to a claim received from an indexer.
+	acceptRemote func(SearchHit) bool
 
 	device  *searchRemoteSource
 	claims  map[searchRemoteMergeKey]map[*searchRemoteSource]*searchRemoteClaim
@@ -195,7 +198,7 @@ func (self *searchRemoteMerge) add(source *searchRemoteSource, hits []SearchHit)
 	touched := []searchRemoteMergeKey{}
 	for _, hit := range hits {
 		key := searchRemoteMergeKeyOf(&hit)
-		if self.masked != nil && self.masked(key, hit.Version) {
+		if self.masked != nil && self.masked(key, hit.Version) || source != self.device && self.acceptRemote != nil && !self.acceptRemote(hit) {
 			continue
 		}
 		sources := self.claims[key]
@@ -247,7 +250,7 @@ func (self *searchRemoteMerge) bound() {
 // Whether a leg's span holds the device's claim of time timeMs in repoId (the file header's five lines).
 func (self *searchRemoteMerge) spanHolds(source *searchRemoteSource, repoId Id, refId Id, timeMs int64) bool {
 	span := source.spans[repoId]
-	if span == nil || source.void || span.void || !span.text || span.uncovered != 0 || !span.checked {
+	if span == nil || span.refId != refId || source.void || span.void || !span.text || span.uncovered != 0 || !span.checked {
 		return false
 	}
 	if timeMs <= span.checkedThroughMs {
@@ -262,36 +265,26 @@ func (self *searchRemoteMerge) spanHolds(source *searchRemoteSource, repoId Id, 
 	return timeMs < span.refTimeMs-self.settings.SkewGuard.Milliseconds()
 }
 
-// The strongest claim of key that counts, nil for none.
-func (self *searchRemoteMerge) strongest(key searchRemoteMergeKey) *searchRemoteClaim {
+// Recheck local masks before showing a retained claim. A CUT or verified read may postdate its page.
+func (self *searchRemoteMerge) strongest(key searchRemoteMergeKey) (*searchRemoteClaim, bool) {
 	var strongest *searchRemoteClaim
+	indexerClaims := false
 	for source, claim := range self.claims[key] {
-		if source.void || source != self.device && source.spans[key.repoId] != nil && source.spans[key.repoId].void {
+		if source.void || source != self.device && source.spans[key.repoId] != nil && source.spans[key.repoId].void ||
+			self.masked != nil && self.masked(key, claim.hit.Version) || source != self.device && self.acceptRemote != nil && !self.acceptRemote(claim.hit) {
 			continue
 		}
+		indexerClaims = indexerClaims || source != self.device
 		if strongest == nil || searchRemoteStronger(claim, strongest) {
 			strongest = claim
 		}
 	}
-	return strongest
+	return strongest, indexerClaims
 }
 
 // The row of key, from its claims: nil for none.
 func (self *searchRemoteMerge) row(key searchRemoteMergeKey) *SearchHit {
-	sources := self.claims[key]
-	var strongest *searchRemoteClaim
-	indexerClaims := false
-	for source, claim := range sources {
-		if source.void || source != self.device && source.spans[key.repoId] != nil && source.spans[key.repoId].void {
-			continue
-		}
-		if source != self.device {
-			indexerClaims = true
-		}
-		if strongest == nil || searchRemoteStronger(claim, strongest) {
-			strongest = claim
-		}
-	}
+	strongest, indexerClaims := self.strongest(key)
 	if strongest == nil {
 		return nil
 	}
@@ -461,11 +454,11 @@ func (self *searchRemoteMerge) recheckPins() []*searchRemotePinWait {
 func (self *searchRemoteMerge) omitted(source *searchRemoteSource, key searchRemoteMergeKey) bool {
 	sources := self.claims[key]
 	own := sources[self.device]
-	if own == nil || own.hit.State != SearchConfirmed || len(sources) != 1 || own.hit.Cut {
+	if own == nil || own.hit.State != SearchConfirmed || len(sources) != 1 || own.hit.Cut || self.masked != nil && self.masked(key, own.hit.Version) {
 		return false
 	}
 	span := source.spans[key.repoId]
-	if span == nil || source.void || span.void || !span.text || span.uncovered != 0 || !span.checked {
+	if span == nil || span.refId != key.refId || source.void || span.void || !span.text || span.uncovered != 0 || !span.checked {
 		return false
 	}
 	timeMs := own.hit.Time.UnixMilli()
@@ -639,13 +632,22 @@ func (self *searchRemoteSearch) checkOpened(hit SearchHit, opened *SearchOpened)
 	defer self.pageLock.Unlock()
 	self.applyDistrust()
 	key := searchRemoteMergeKeyOf(&hit)
-	claim := self.merge.strongest(key)
-	if claim == nil {
-		return &hit, nil
-	}
 	if opened.Dropped || opened.Erased {
 		self.merge.remove(key)
 		return nil, nil
+	}
+	if self.isClosed() || self.scopeEnded() {
+		return nil, ErrSearchCursorExpired
+	}
+	if self.merge.masked != nil && self.merge.masked(key, hit.Version) {
+		return nil, nil
+	}
+	claim, _ := self.merge.strongest(key)
+	if claim == nil {
+		if len(self.merge.claims[key]) != 0 {
+			return nil, nil
+		}
+		return &hit, nil
 	}
 	indexer := claim.source != self.merge.device
 	switch {

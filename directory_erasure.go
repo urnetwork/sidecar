@@ -55,6 +55,11 @@
 //	           a ref whose index holds none of the documents sends no ERASE. Every ERASE of a file's keys, and the
 //	           index's completing one, carries as its sealed note an ErasureBody naming the erasure, its reason and,
 //	           for a revocation, the request, whose id is the erasure's
+//	note       a moderation, a directory admin's erase of an announcement another sidecar's card holds, names that
+//	           announcement in its note too (ErasureBody.announcement_ids; QD-1148), the ERASE of the removed card's
+//	           keys carrying it, every later ERASE of the erasure alike: the card's writer reads it at its next sync and
+//	           journals it, leaving it out of every card after, so another erasure's CUT that drops this one from the
+//	           cards ref's erasure set before the writer's card returns brings nothing back (directory_cards_erasure.go)
 //	files      a CLOSURE rewrites the file's standing bytes, which are still its rightful writer's Signed: the eraser
 //	           signs no card and no repo file. So it rewrites a file only once its standing version no longer holds
 //	           the document: the repo file once the marker stands over it, a card once its writer wrote the run private
@@ -297,6 +302,11 @@ func (self *DirectoryClient) Erase(ctx context.Context, args *DirectoryEraseArgs
 	}
 	if work.found() && self.erasureFiles() == nil {
 		return nil, ErrDirectoryErasureFilesUnbound
+	}
+	if reason == RecordErasureReasonModeration && 0 < len(work.holding) {
+		// the moderation takes the announcement off the cards holding it: its notes name it (the file's header's note
+		// row)
+		work.announcementIds = []Id{args.Id}
 	}
 	result := &DirectoryEraseResult{ErasureId: NewId(), Reason: reason}
 	if 0 < len(entryIds) {
@@ -967,8 +977,10 @@ type directoryErasureLedgerRow struct {
 	Reason     uint32 `json:"reason"`
 	RequestId  []byte `json:"request_id,omitempty"`
 	// A person's erasure this device began, which only it resumes; a request's is every runner's.
-	Own   bool                                `json:"own,omitempty"`
-	Paths map[string]*directoryErasurePathRow `json:"paths,omitempty"`
+	Own bool `json:"own,omitempty"`
+	// A moderation's announcements its notes name, so a resumed call's ERASEs name them as its first did.
+	AnnouncementIds []Id                                `json:"announcement_ids,omitempty"`
+	Paths           map[string]*directoryErasurePathRow `json:"paths,omitempty"`
 	// The documents its CUTs listed on each ref, by name, at their versions.
 	CardsDocuments  map[string]uint64 `json:"cards_documents,omitempty"`
 	StreamDocuments map[string]uint64 `json:"stream_documents,omitempty"`
@@ -1114,6 +1126,9 @@ type directoryErasureWork struct {
 	requestId []byte
 	// a person's erasure this device began
 	own bool
+	// a moderation's announcements, taken off the cards holding them, which its notes name (the file's header's note
+	// row)
+	announcementIds []Id
 	// some device's ERASE names the erasure already: its state at evs is read before anything else
 	began bool
 	// each document's name and the newest version erased, on the cards ref's index and on ur/index
@@ -1143,11 +1158,14 @@ func (self *directoryErasureWork) addStreamDocument(entry *RecordReadEntry, item
 	self.streamDocuments[name] = max(self.streamDocuments[name], item.GetVersion())
 }
 
-// The sealed note of the erasure's ERASEs: its ErasureBody, naming its reason and any request.
+// The sealed note of the erasure's ERASEs: its ErasureBody, naming its reason, any request and a moderation's
+// announcements.
 func (self *directoryErasureWork) note() ([]byte, error) {
-	return proto.MarshalOptions{Deterministic: true}.Marshal(&protocol.ErasureBody{
-		ErasureId: self.erasureId.Bytes(), Reason: uint32(self.reason), RequestId: self.requestId,
-	})
+	body := &protocol.ErasureBody{ErasureId: self.erasureId.Bytes(), Reason: uint32(self.reason), RequestId: self.requestId}
+	for _, announcementId := range self.announcementIds {
+		body.AnnouncementIds = append(body.AnnouncementIds, announcementId.Bytes())
+	}
+	return proto.MarshalOptions{Deterministic: true}.Marshal(body)
 }
 
 // The sidecar whose Signed a standing card or repo file is.
@@ -1327,7 +1345,7 @@ func (self *DirectoryClient) erasureLedgerRowWithLock(state *directoryErasureFil
 	if !ok {
 		row = &directoryErasureLedgerRow{
 			TimeMillis: self.clock.Now().UnixMilli(), Reason: uint32(work.reason), RequestId: bytes.Clone(work.requestId), Own: work.own,
-			CardsDocuments: map[string]uint64{}, StreamDocuments: map[string]uint64{},
+			AnnouncementIds: slices.Clone(work.announcementIds), CardsDocuments: map[string]uint64{}, StreamDocuments: map[string]uint64{},
 		}
 		if work.began {
 			// another device began it: its CUTs may stand with rewrites owed, which each ref's rewrite reads from evs
@@ -1685,6 +1703,7 @@ func (self *DirectoryClient) resumeErasureFiles(ctx context.Context) error {
 			work.erasureId = erasureId
 			work.reason = RecordErasureReason(row.Reason)
 			work.requestId = bytes.Clone(row.RequestId)
+			work.announcementIds = slices.Clone(row.AnnouncementIds)
 			work.own = true
 			owed = append(owed, work)
 		}
@@ -1786,13 +1805,7 @@ func (self *DirectoryEvsErasure) index(ctx context.Context, repoId Id, refName [
 			if err != nil {
 				return nil, err
 			}
-			complete := map[Id]bool{}
-			for _, erasure := range erasures {
-				if erasure.Complete {
-					complete[erasure.ErasureId] = true
-				}
-			}
-			return complete, nil
+			return recordEraseCompleteByNewest(erasures, (*EvsErasure).completionState), nil
 		},
 		refKey: refKey, tables: indexLinkedTables(), mayMerge: func() bool { return true },
 		padKey: func(ctx context.Context) (*indexPadKey, error) { return padKey, nil },
@@ -1884,7 +1897,7 @@ func (self *DirectoryEvsErasure) OrphanCardKeys(ctx context.Context, repoId Id, 
 		if erasure.ErasureId != erasureId {
 			continue
 		}
-		for _, key := range erasure.Keys {
+		for _, key := range erasure.destroyedKeys() {
 			erased[*key] = true
 		}
 	}

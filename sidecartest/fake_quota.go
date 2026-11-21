@@ -24,8 +24,17 @@
 //
 // A lease belongs to its caller's process: the actor its ctx carries, or none outside a schedule. One
 // process shares one lease per network and meter, the last handle's Close settling it
-// (plan-QUOTA-small-readings reading 16), and a restarted actor gets a lease of its own. Safe for
-// concurrent use.
+// (plan-QUOTA-small-readings reading 16), and a restarted actor gets a lease of its own.
+//
+// The calls that write at the store are writes (hostWrite; QD-1155), whose answers §22.8's unknown rule loses
+// on T2: ReportUsage; CountRate, which counts under its debit id; a Lease that draws, the first of its process,
+// network and meter or one whose lease holds nothing, where a Lease on a lease that holds bytes gives a handle
+// with no I/O and only reads; and the Close that settles a lease, its process's last handle's. Limits and
+// OverLimit read. A Lease whose answer is lost leaves its caller no handle, so the fake closes the one the call
+// opened, as server's Lease closes its handle on an unanswered draw; a settle that fails before it applies leaves
+// the unused rest reserved as long as the lease's spent bytes are. A lease's draws as Spend renews it take no
+// plan: Spend has no I/O by the interface, and the real lease's renewals, on a goroutine of its own, repeat an
+// unanswered reserve under its token's name, so no answer of one reaches a caller. Safe for concurrent use.
 
 package sidecartest
 
@@ -439,7 +448,7 @@ func (self *FakeQuota) CountRate(ctx context.Context, networkId connect.Id, keyA
 		return nil, fmt.Errorf("%d paced keys in one call", pacedCount)
 	}
 	var refusal *sidecar.QuotaRefusal
-	err := hostCall(ctx, self.faults, "quota.CountRate", func() error {
+	err := hostWrite(ctx, self.faults, "quota.CountRate", func() error {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		keys := keys
@@ -534,11 +543,14 @@ type fakeQuotaLeaseEntry struct {
 	closed          bool
 	// what was spent when the last handle closed: the bytes still owed a carve
 	closedSpentByteCount int64
+	// closed, and the settle that gives the unused rest back has not applied: the rest stays reserved while
+	// the draws live
+	restHeld bool
 }
 
 // Where the bytes still reserved end: past them, a closed lease gave its rest back.
 func (self *fakeQuotaLeaseEntry) reservedEndWithLock() int64 {
-	if self.closed {
+	if self.closed && !self.restHeld {
 		return self.closedSpentByteCount
 	}
 	return self.drawnByteCount
@@ -646,10 +658,16 @@ func (self *FakeQuota) openLeaseEntryWithLock(actor *Actor, networkId connect.Id
 	return nil
 }
 
-// Drops leases that are closed and owed nothing more.
-func (self *FakeQuota) forgetSettledLeasesWithLock() {
+// Drops leases that are closed and owed nothing more: every spent byte carved, and no rest held by a settle
+// that never applied while one of its draws lives.
+func (self *FakeQuota) forgetSettledLeasesWithLock(now time.Time) {
 	self.leaseEntries = slices.DeleteFunc(self.leaseEntries, func(entry *fakeQuotaLeaseEntry) bool {
-		return entry.closed && entry.closedSpentByteCount <= entry.carvedByteCount
+		if !entry.closed || entry.carvedByteCount < entry.closedSpentByteCount {
+			return false
+		}
+		return !entry.restHeld || !slices.ContainsFunc(entry.draws, func(draw *fakeQuotaDraw) bool {
+			return entry.drawLiveWithLock(draw, now)
+		})
 	})
 }
 
@@ -665,9 +683,19 @@ func (self *FakeQuota) Lease(ctx context.Context, networkId connect.Id, meter st
 		// evs's and relay's bytes draw at apply: no lease spends them
 		return nil, nil, fmt.Errorf("no lease spends meter %q", meter)
 	}
+	actor := ActorFromContext(ctx)
+	// a lease of the process's that holds bytes gives a handle with no I/O, as server's does; any other Lease
+	// draws, a write. Read before the call, which the plan is taken for, so a Spend of the process's that empties
+	// its lease meanwhile makes the call draw as a read.
+	drawing := func() bool {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		entry := self.openLeaseEntryWithLock(actor, networkId, meter)
+		return entry == nil || entry.available.Load() <= 0
+	}()
 	var lease *fakeQuotaLease
 	var refusal *sidecar.QuotaRefusal
-	err := hostCall(ctx, self.faults, "quota.Lease", func() error {
+	err := hostCallWriting(ctx, self.faults, "quota.Lease", drawing, func() error {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		if self.redisFailing {
@@ -675,7 +703,6 @@ func (self *FakeQuota) Lease(ctx context.Context, networkId connect.Id, meter st
 		}
 		now := self.clock.Now()
 		network := self.networkWithLock(networkId)
-		actor := ActorFromContext(ctx)
 		entry := self.openLeaseEntryWithLock(actor, networkId, meter)
 		if entry == nil {
 			drawByteCount := self.settings.LeaseDrawByteCount
@@ -702,6 +729,11 @@ func (self *FakeQuota) Lease(ctx context.Context, networkId connect.Id, meter st
 		return nil
 	})
 	if err != nil {
+		if lease != nil {
+			// the call applied and its answer was lost: its caller holds no handle, so the host closes the one
+			// the call opened, as server's Lease does on an unanswered draw
+			lease.close(false)
+		}
 		return nil, nil, err
 	}
 	if refusal != nil {
@@ -796,7 +828,7 @@ func (self *FakeQuota) ReportUsage(ctx context.Context, batch *sidecar.UsageBatc
 	if batch == nil {
 		return errors.New("no batch")
 	}
-	return hostCall(ctx, self.faults, "quota.ReportUsage", func() error {
+	return hostWrite(ctx, self.faults, "quota.ReportUsage", func() error {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		self.sentBatches = append(self.sentBatches, batch)
@@ -832,7 +864,7 @@ func (self *FakeQuota) ReportUsage(ctx context.Context, batch *sidecar.UsageBatc
 				}
 			}
 		}
-		self.forgetSettledLeasesWithLock()
+		self.forgetSettledLeasesWithLock(now)
 		return nil
 	})
 }
@@ -929,25 +961,64 @@ func (self *fakeQuotaLeaseEntry) markSpent() {
 
 // The last handle's Close gives back the unused rest, the tail of the drawn range and so in reverse draw
 // order, and leaves the spent bytes reserved until a batch carves them. Spend then refuses on this
-// handle.
+// handle. See close.
 func (self *fakeQuotaLease) Close() {
+	self.close(true)
+}
+
+// The handle's close. The last handle's closes the lease where its process holds it, its available bytes
+// zeroed, and then settles it, giving the rest back: a write at the store, which a caller's Close sends
+// (sent, as "quotalease.Close" on its process's context) and the host's own close of a handle whose Lease
+// answer was lost makes with no call of its own. A plan that fails the settle before it applies leaves the
+// rest held (fakeQuotaLeaseEntry.restHeld), a lost answer changes nothing, since Close answers nothing, and a
+// crash plan ends the process before or after it. A killed process sends nothing: its lease lapses as one it
+// never closed.
+func (self *fakeQuotaLease) close(sent bool) {
 	if self.closed.Swap(true) {
 		return
 	}
 	entry := self.entry
 	quota := entry.quota
-	quota.stateLock.Lock()
-	defer quota.stateLock.Unlock()
-	entry.handleCount -= 1
-	if 0 < entry.handleCount {
+	if !entry.processLives() {
 		return
 	}
-	// its tokens are extended to the close, and then lapse unless a batch carves them
-	entry.rollWithLock(quota.clock.Now())
-	entry.closed = true
-	rest := entry.available.Swap(0)
-	entry.closedSpentByteCount = entry.drawnByteCount - rest
-	quota.forgetSettledLeasesWithLock()
+	last := func() bool {
+		quota.stateLock.Lock()
+		defer quota.stateLock.Unlock()
+		entry.handleCount -= 1
+		if 0 < entry.handleCount {
+			return false
+		}
+		// its tokens are extended to the close, and then lapse unless a batch carves them
+		entry.rollWithLock(quota.clock.Now())
+		entry.closed = true
+		rest := entry.available.Swap(0)
+		entry.closedSpentByteCount = entry.drawnByteCount - rest
+		entry.restHeld = true
+		return true
+	}()
+	if !last {
+		return
+	}
+	settle := func() error {
+		quota.stateLock.Lock()
+		defer quota.stateLock.Unlock()
+		entry.restHeld = false
+		quota.forgetSettledLeasesWithLock(quota.clock.Now())
+		return nil
+	}
+	if !sent {
+		settle()
+		return
+	}
+	ctx := context.Background()
+	if entry.actor != nil {
+		// the process's, so a plan naming its actor matches and a crash plan ends it, with no cancel: a Close in
+		// a cleanup after the schedule's context ended still settles
+		ctx = context.WithoutCancel(entry.actor.Context())
+	}
+	// Close answers nothing: a settle a plan failed is restHeld's to show
+	hostWrite(ctx, quota.faults, "quotalease.Close", settle)
 }
 
 func (self *fakeQuotaLease) String() string {
@@ -955,9 +1026,11 @@ func (self *fakeQuotaLease) String() string {
 }
 
 // A Quota whose calls take host plans from faults as FakeQuota's do, by FaultOpHost and
-// "quota.<Method>": how a T3 target puts server's Quota under quotasuite's lost responses and crash
-// points. Leases are the wrapped Quota's own: a lease whose answer a plan drops is lost to its caller and
-// left to lapse, as one lost on the wire is.
+// "quota.<Method>", its ReportUsage, CountRate and Lease writes as FakeQuota's are: how a T3 target puts
+// server's Quota under quotasuite's lost responses and crash points. Leases are the wrapped Quota's own, so
+// their Close takes no plan here, and every Lease is a write, since what the wrapped one draws is not seen
+// from outside it. A Lease whose answer a plan drops leaves its caller no handle, so the wrapper closes the one
+// the call opened, as FakeQuota does.
 func NewFaultQuota(quota sidecar.Quota, faults *FaultQueue) sidecar.Quota {
 	return &faultQuota{quota: quota, faults: faults}
 }
@@ -982,7 +1055,7 @@ func (self *faultQuota) Limits(ctx context.Context, networkId connect.Id) (*side
 
 func (self *faultQuota) CountRate(ctx context.Context, networkId connect.Id, keyAmounts map[string]int64, debitId connect.Id) (*sidecar.QuotaRefusal, error) {
 	var refusal *sidecar.QuotaRefusal
-	err := hostCall(ctx, self.faults, "quota.CountRate", func() error {
+	err := hostWrite(ctx, self.faults, "quota.CountRate", func() error {
 		var err error
 		refusal, err = self.quota.CountRate(ctx, networkId, keyAmounts, debitId)
 		return err
@@ -996,19 +1069,22 @@ func (self *faultQuota) CountRate(ctx context.Context, networkId connect.Id, key
 func (self *faultQuota) Lease(ctx context.Context, networkId connect.Id, meter string) (sidecar.QuotaLease, *sidecar.QuotaRefusal, error) {
 	var lease sidecar.QuotaLease
 	var refusal *sidecar.QuotaRefusal
-	err := hostCall(ctx, self.faults, "quota.Lease", func() error {
+	err := hostWrite(ctx, self.faults, "quota.Lease", func() error {
 		var err error
 		lease, refusal, err = self.quota.Lease(ctx, networkId, meter)
 		return err
 	})
 	if err != nil {
+		if lease != nil {
+			lease.Close()
+		}
 		return nil, nil, err
 	}
 	return lease, refusal, nil
 }
 
 func (self *faultQuota) ReportUsage(ctx context.Context, batch *sidecar.UsageBatch) error {
-	return hostCall(ctx, self.faults, "quota.ReportUsage", func() error {
+	return hostWrite(ctx, self.faults, "quota.ReportUsage", func() error {
 		return self.quota.ReportUsage(ctx, batch)
 	})
 }

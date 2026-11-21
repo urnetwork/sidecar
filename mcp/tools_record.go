@@ -887,7 +887,7 @@ func addRecordResources(resources *McpResources, recordOf mcpRecordOfFunction) {
 
 // A subscription of a log's resource, judged at once: the log resolves for this sidecar and §8 allows read on it.
 func mcpRecordSubscribe(resources *McpResources, recordOf mcpRecordOfFunction, session *McpSession, name string) error {
-	networkId, network, err := resources.server.sessionNetwork(session)
+	networkId, network, err := resources.server.sessionNetwork(session, "")
 	if err != nil {
 		return err
 	}
