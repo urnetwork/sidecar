@@ -263,9 +263,9 @@ func (self *directoryCardWrittenDocument) takeJournal(kept []*directoryCardModer
 // a sync's judge of the erasure ref, which holds syncLock, so it takes the card writer's stateLock and never its
 // writeLock. A journal the store does not keep is held for the document's next keep, and every read of the document
 // meanwhile holds it too.
-func (self *DirectoryClient) journalModerationNotes(notes []*directoryModerationNote) {
+func (self *DirectoryClient) journalModerationNotes(notes []*directoryModerationNote) error {
 	if len(notes) == 0 {
-		return
+		return nil
 	}
 	settings := self.cardSettings()
 	writer := self.cardWriter()
@@ -292,7 +292,7 @@ func (self *DirectoryClient) journalModerationNotes(notes []*directoryModeration
 			written.Moderated = append(written.Moderated, moderated)
 			noted = append(noted, moderated)
 		}
-		if len(noted) == 0 {
+		if len(noted) == 0 && len(writer.unkept) == 0 {
 			return nil
 		}
 		written.keepNewestModerated(settings.ModeratedItemCount)
@@ -306,6 +306,7 @@ func (self *DirectoryClient) journalModerationNotes(notes []*directoryModeration
 	if err != nil {
 		self.log.Warningf("[directory]what a moderation's note names was not journaled: %s", err)
 	}
+	return err
 }
 
 // The items of the card this device put last that the cards ref's erasure set lists at or above the version that
