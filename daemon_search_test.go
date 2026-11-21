@@ -567,3 +567,37 @@ func TestDaemonSearchAllResumesAcrossHostedNetworks(t *testing.T) {
 		t.Fatalf("continued past remote-network cut: %+v, %+v", result, failure)
 	}
 }
+
+// An MCP session's grants constrain implicit scope, metadata and already-issued references without narrowing the host.
+func TestSearchSessionGrantLimitsCoverageAndRetainedHits(t *testing.T) {
+	world := newTestEngineWorld(t, nil, testEngineDocument(t, "doc", 1, 1, "notes/one", "rate limiter"), testEngineDocument(t, "doc", 2, 1, "notes/two", "rate limiter"))
+	host := testSearchTools(t, world)
+	allowed := false
+	session := host.WithRepoAccess(func(repo Id, now time.Time) bool { return allowed && repo == world.sync.repoId })
+	env := &SearchToolEnv{Session: NewId()}
+	query := &SearchToolArgs{Query: "limiter", Limit: 1}
+	denied, err := session.Search(context.Background(), env, query)
+	if err != nil || len(denied.Hits) != 0 || len(denied.Coverage) != 0 {
+		t.Fatalf("denied query: %+v, %v", denied, err)
+	}
+	status, err := session.Status(&SearchStatusToolArgs{})
+	if err != nil || len(status.Repos) != 1 || status.Repos[0].IndexOn {
+		t.Fatalf("denied status: %+v, %v", status, err)
+	}
+	allowed = true
+	page, err := session.Search(context.Background(), env, query)
+	if err != nil || len(page.Hits) != 1 || page.Status.NextCursor == "" {
+		t.Fatalf("allowed query: %+v, %v", page, err)
+	}
+	allowed = false
+	if _, err := session.OpenHit(env.Session, page.Hits[0].HitId); !errors.Is(err, ErrSearchHitUnknown) {
+		t.Fatalf("revoked hit: %v", err)
+	}
+	if _, err := session.Search(context.Background(), env, &SearchToolArgs{Cursor: page.Status.NextCursor}); !errors.Is(err, ErrSearchCursorExpired) {
+		t.Fatalf("revoked cursor: %v", err)
+	}
+	own, err := host.Search(context.Background(), &SearchToolEnv{Session: NewId()}, query)
+	if err != nil || len(own.Hits) != 1 {
+		t.Fatalf("host query: %+v, %v", own, err)
+	}
+}

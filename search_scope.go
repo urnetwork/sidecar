@@ -39,6 +39,8 @@ type SearchScopeRepo struct {
 	GroupInbox bool
 	// This sidecar reads it: a repo it does not read is never listed.
 	Readable bool
+	// Whether this verified host view still stands when a page or hit reference is opened.
+	valid func() bool
 	// It may only deposit to it.
 	DepositOnly bool
 	// Owner-bound and its own member's while this device is parked (owner decision 126).
@@ -118,6 +120,9 @@ func searchResolveScope(repos []*SearchScopeRepo, request *SearchRequest) ([]*se
 	scoped := []*searchScopedRef{}
 	excluded := []SearchExclusion{}
 	for _, repo := range ordered {
+		if request.allowRepo != nil && !request.allowRepo(repo.RepoId) {
+			continue
+		}
 		if !repo.Readable && !repo.DepositOnly {
 			// a repo this sidecar cannot read is never listed
 			continue
