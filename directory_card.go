@@ -558,17 +558,20 @@ func (self *directoryFiles) acceptedAt(path string) *directoryAcceptedFile {
 func (self *directoryFiles) supersedesEntry(version *directoryVersion) bool {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
+	path := DirectoryCardPath(version.writerId)
 	if version.key.Kind == DirectoryAnnouncementKindRepo {
-		repoId := recordIdOf(version.item.GetWhere().GetRepoId())
-		taken := self.accepted[DirectoryRepoPath(repoId)]
-		return taken != nil && taken.file.Removed && version.pushTimeMillis <= taken.file.TimeMillis
+		path = DirectoryRepoPath(recordIdOf(version.item.GetWhere().GetRepoId()))
 	}
-	taken := self.accepted[DirectoryCardPath(version.writerId)]
+	taken := self.accepted[path]
 	if taken == nil {
 		return false
 	}
 	if taken.file.Removed {
 		return min(version.pushTimeMillis, version.item.GetRenewedMillis()) <= taken.file.TimeMillis
+	}
+	if taken.repo != nil {
+		// A current repo file contributes its item to the ordinary version comparison.
+		return false
 	}
 	// An offline stream draft may be delivered after the snapshot. Its renewal
 	// and the card's written time are both signed by this same writer.
