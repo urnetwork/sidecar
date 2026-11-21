@@ -675,6 +675,13 @@ var testFenceAdditions = []struct {
 		field:    testFenceField{name: "record_required", number: 9, typeName: "bool"},
 		question: "plan-MCP-record-required",
 	},
+	// RECORD.md section 6.4's ErasureBody: the announcements a moderation's ERASE took off a card, which its note names
+	// (QD-1148)
+	{
+		message:  "ErasureBody",
+		field:    testFenceField{name: "announcement_ids", number: 5, typeName: "bytes", repeated: true},
+		question: "moderated-run-left-out-dropped-erasure",
+	},
 }
 
 // One field an owner's answer takes out of a message the design fences, its number reserved.
