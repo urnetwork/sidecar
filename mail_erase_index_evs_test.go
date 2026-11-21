@@ -2,8 +2,8 @@
 
 // MAIL-M10-02's CUT through the search index's own eraser (IndexEraser), as NewMailEraser builds it over the mailbox's
 // EvsRepo, on MAIL-M10-01's evs stand-in with the index on: the documents mail lists are the ones the index's writer
-// keyed, so the CUT it commits masks them and the next ingest's push leaves them out. The stand-in serves no erasure
-// ref, so the ERASEs and the index files' rewrite under mail's order run on mail's seam in mail_erase_index_test.go.
+// keyed, so the CUT it commits masks them and the next ingest's push leaves them out. The stand-in's erasure ref
+// stays at version zero. The ERASEs and index files' rewrite run on mail's seam in mail_erase_index_test.go.
 
 package sidecar
 

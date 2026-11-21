@@ -216,12 +216,7 @@ func (self *MailView) List(ctx context.Context, args *MailListArgs) (*MailListPa
 		return nil, err
 	}
 	page := &MailListPage{Entries: []*MailViewEntry{}}
-	type selected struct {
-		month *mailViewMonth
-		key   mailViewKey
-	}
-	picks := []selected{}
-	var last *mailViewKey
+	masks := map[Id]*mailErasedView{}
 	for _, monthName := range monthNames {
 		if args.After != nil && MailYearMonthOf(args.After.Time) < monthName {
 			continue
@@ -241,48 +236,47 @@ func (self *MailView) List(ctx context.Context, args *MailListArgs) (*MailListPa
 				position += 1
 			}
 		}
-		for ; position < len(month.keys) && len(picks) < limit; position += 1 {
+		invalidate := false
+		for ; position < len(month.keys) && len(page.Entries) < limit; position += 1 {
 			key := month.keys[position]
-			last = &month.keys[position]
-			flags := month.flags.flags(key.id)
-			if self.inFolder(args, key, flags) {
-				picks = append(picks, selected{month: month, key: key})
+			if !self.inFolder(args, key, month.flags.flags(key.id)) {
+				continue
 			}
-		}
-		if len(picks) == limit {
-			if position < len(month.keys) || monthName != monthNames[len(monthNames)-1] {
-				page.Next = &MailListCursor{Time: last.time, Id: last.id}
-			}
-			break
-		}
-	}
-	masks := map[Id]*mailErasedView{}
-	for _, pick := range picks {
-		entry, err := self.decode(ctx, pick.month, pick.key)
-		if err != nil {
-			return nil, err
-		}
-		if entry == nil {
-			page.Unreadable += 1
-			continue
-		}
-		// A later page can still hold an old segment. Check the signed erasure ref
-		// after reading its entries, once per source for this page.
-		mask, seen := masks[entry.RepoId]
-		if !seen {
-			mask, err = self.readErased(ctx, entry.RepoId)
+			entry, err := self.decode(ctx, month, key)
 			if err != nil {
 				return nil, err
 			}
-			masks[entry.RepoId] = mask
-		}
-		if mask != nil {
-			if _, erased := mask.erased(pick.key.id); erased {
-				self.InvalidateMonth(pick.month.month)
+			if entry == nil {
+				page.Unreadable += 1
 				continue
 			}
+			// A later page can still hold an old segment. Check the signed erasure
+			// ref once per source before returning its rows or their cursors.
+			mask, seen := masks[entry.RepoId]
+			if !seen {
+				mask, err = self.readErased(ctx, entry.RepoId)
+				if err != nil {
+					return nil, err
+				}
+				masks[entry.RepoId] = mask
+			}
+			if mask != nil {
+				if _, erased := mask.erased(key.id); erased {
+					invalidate = true
+					continue
+				}
+			}
+			page.Entries = append(page.Entries, entry)
+			if len(page.Entries) == limit && (position+1 < len(month.keys) || monthName != monthNames[len(monthNames)-1]) {
+				page.Next = &MailListCursor{Time: key.time, Id: key.id}
+			}
 		}
-		page.Entries = append(page.Entries, entry)
+		if invalidate {
+			self.InvalidateMonth(monthName)
+		}
+		if len(page.Entries) == limit {
+			break
+		}
 	}
 	return page, nil
 }
