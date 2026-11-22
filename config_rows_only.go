@@ -88,8 +88,9 @@ func NewConfigLogRowsOnly(settings *ConfigLogSettings, signedGenesis []byte) (*C
 
 // A rows-only log from a run of entries, as a gate starts cold: at the newest base among retained.Entries, which must
 // reach back to that base's tail (folded_through + 1), then every entry after it, as RestoreConfigLog does for a new
-// device. The base's signer must be a config writer in its own rows, the one thing a reader that never saw the
-// entries before it takes on trust; its chain onward is checked entry by entry.
+// device. The base's signer must be a config writer at S(b-1) as the base gives it, its rows with its tail re-applied
+// by its verdicts, or the genesis owner's device when no base precedes it: what a reader that never saw the entries
+// before it takes on trust; its chain onward is checked entry by entry.
 //
 // floor is the pin the process last held for the network, nil for none: a log ending below it is ErrConfigBelowPin,
 // and one holding a different A_n at its position is ErrConfigRunRefused, so no restart from a stale copy lands lower
