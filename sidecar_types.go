@@ -35,7 +35,7 @@ type Sidecar struct {
 	eventCallbacks *CallbackList[func(sidecarQueuedEvent)]
 	// ServiceToken's cache, under its own lock (api_service_token.go).
 	serviceTokens sidecarServiceTokens
-	// The network's DnsClient and its zone watch.
+	// The network's DnsClient, its label table and its zone watch.
 	dns sidecarDns
 	// D-TLS-8's CT watch, where the tls component runs one.
 	tlsCt sidecarTlsCt
@@ -416,9 +416,13 @@ const (
 	SidecarDnsAlarmZoneMismatch SidecarDnsAlarm = "zone_mismatch"
 )
 
-// The network's DnsClient and the zone watch the daemon attached (dns_client.go, dns_watch.go), which the legs other
-// than ios_extension build, held through interfaces they meet so every leg compiles the Sidecar.
+// The network's DnsClient, which holds the label table it feeds (Sidecar.NetworkLabels), and the zone watch the daemon
+// attached (dns_client.go, dns_watch.go), which the legs other than ios_extension build, held through interfaces they
+// meet so every leg compiles the Sidecar.
 type sidecarDns struct {
+	// One opening of the label table at a time, held across its store read, so never stateLock.
+	labelsLock sync.Mutex
+
 	stateLock sync.Mutex
 	client    sidecarDnsClient
 	watch     sidecarZoneWatch

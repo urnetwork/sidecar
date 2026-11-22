@@ -252,10 +252,12 @@ func (self *NetworkLabelTable) Networks() []NetworkLabelRow {
 }
 
 // Applies change to a copy of the rows, writes the result, and only then installs it, so a failed
-// write changes nothing.
+// write changes nothing. A change that leaves every row as it was writes nothing: a DnsClient feeds the
+// table each zone it fetches, and an unchanged zone costs no sealed write.
 func (self *NetworkLabelTable) update(change func(rows []NetworkLabelRow) ([]NetworkLabelRow, error)) error {
 	self.writeLock.Lock()
 	defer self.writeLock.Unlock()
+	held := self.Networks()
 	rows, err := change(self.Networks())
 	if err != nil {
 		return err
@@ -268,6 +270,13 @@ func (self *NetworkLabelTable) update(change func(rows []NetworkLabelRow) ([]Net
 	})
 	if err := checkNetworkLabelRows(rows); err != nil {
 		return err
+	}
+	unchanged := slices.EqualFunc(rows, held, func(row NetworkLabelRow, heldRow NetworkLabelRow) bool {
+		return row.Root == heldRow.Root && row.NetworkId == heldRow.NetworkId && row.Label == heldRow.Label &&
+			row.Alias == heldRow.Alias && row.LegacyName == heldRow.LegacyName && slices.Equal(row.RetiringAliases, heldRow.RetiringAliases)
+	})
+	if unchanged {
+		return nil
 	}
 	data, err := json.Marshal(&networkLabelTableFile{Format: networkLabelTableFormat, Rows: rows})
 	if err != nil {
