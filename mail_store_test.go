@@ -336,9 +336,11 @@ func TestMailEvsStoreRacingAppendsKeepBothEntries(t *testing.T) {
 	}
 }
 
-// evs's 409 on a parent directory alone, which another device's creation in that directory raced, is no conflict on
-// a path the writer read: the store plans the write again, still create-only, and both files stand. With no retry
-// left the store gives evs's answer back, which is not ErrMailStoreConflict, since no path of the write moved.
+// A creation racing another device's creation of its directory lands beside it, both files standing: evs refuses the
+// directory's second creation alone, and Write plans the write again on the directory that now stands (evs_write.go).
+// A 409 that still names a parent directory alone, to the push and to Write's plan made again, is no conflict on a
+// path the writer read: the store plans the write again, still create-only. With no retry left the store gives evs's
+// answer back, which is not ErrMailStoreConflict, since no path of the write moved.
 func TestMailEvsStorePlansAgainOverARacedDirectory(t *testing.T) {
 	phone := newEvsTestWriter(t)
 	phone.seed(t)
@@ -365,14 +367,31 @@ func TestMailEvsStorePlansAgainOverARacedDirectory(t *testing.T) {
 		}
 	}
 
+	// evs naming the parent alone to the push and to Write's plan made again
+	refuseParent := func() {
+		parent := phone.world.tokens("m/202611/01")
+		for range 2 {
+			phone.server.pushRefusals = append(phone.server.pushRefusals, &evsTestRefusal{status: 409, reply: &protocol.EvsRefusalReply{
+				Code: protocol.EvsRefusalCode_EVS_REFUSAL_PATH_CONFLICT, Paths: []*protocol.EvsTokenPath{parent.Proto()},
+			}})
+		}
+	}
+	refuseParent()
+	if _, err := phoneStore.Write(ctx, []*mailStoreWrite{{Path: "m/202611/01/a", Content: []byte("mine")}}); err != nil {
+		t.Fatalf("a creation evs refused on its parent alone: %v", err)
+	}
+	if content, _, err := phoneStore.Read(ctx, "m/202611/01/a", 64); err != nil || string(content) != "mine" {
+		t.Errorf("m/202611/01/a reads %q %v", content, err)
+	}
+
 	settings := DefaultMailStoreSettings()
 	settings.DirectoryRetryCount = 0
-	phone.server.raceNextPush(race("m/202611/01/b"))
-	_, err := newMailEvsStore(phone.repo, nil, settings).Write(ctx, []*mailStoreWrite{{Path: "m/202611/01/a", Content: []byte("mine")}})
+	refuseParent()
+	_, err := newMailEvsStore(phone.repo, nil, settings).Write(ctx, []*mailStoreWrite{{Path: "m/202611/01/b", Content: []byte("mine")}})
 	if errors.Is(err, ErrMailStoreConflict) || !IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_PATH_CONFLICT) {
-		t.Fatalf("a raced directory with no retry left: %v", err)
+		t.Fatalf("a parent's conflict with no retry left: %v", err)
 	}
-	if _, _, err := phoneStore.Read(ctx, "m/202611/01/a", 64); !errors.Is(err, ErrEvsPathAbsent) {
+	if _, _, err := phoneStore.Read(ctx, "m/202611/01/b", 64); !errors.Is(err, ErrEvsPathAbsent) {
 		t.Errorf("the refused creation: %v", err)
 	}
 }
