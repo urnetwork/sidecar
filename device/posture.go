@@ -31,7 +31,9 @@
 //
 // A narrowing entry it cannot check (its signer not in the rows, a signature that does not verify, a DelegationRevoke
 // of no forwarding Delegation in the state, and every AuthorityProposal, AuthorityCosign, RecoveryRebind, AdminSet,
-// BridgeEgress, tick and base of another config head) waits for the compile: Waiting holds it with the time it was
+// BridgeEgress, tick and base of another config head, and a base whose signer the rows do not name, as a config
+// writer admitted after them, which a state vouches for at the compile: QD-1193, posture_apply.go) waits for the
+// compile: Waiting holds it with the time it was
 // first seen, and once one has waited NarrowingOverdueTimeout the decision reports Overdue and the posture raises
 // PostureAlarmCompileOverdue. While the condition lasts it raises it again at doubling intervals from the oldest
 // waiting entry's first sight, 20 min after the first raise, then 40, 80 and so on up to once a day
@@ -406,8 +408,9 @@ func (self *Posture) SetState(state *bridge.BridgeState, log *PostureLog) (Postu
 
 // Projection deltas between states (§8.9), each entry chained from the posture's pin and verified offline: bases by
 // §7.9's keyless rule, the statements this role applies as denials by their signers' keys, every other entry by its
-// chain alone, those that may narrow joining Waiting. Entries before the first that fails stay applied. In pending no
-// pin exists to chain from, so this takes one statement alone, this sidecar's own sign-out, and nothing else.
+// chain alone, those that may narrow joining Waiting, a base whose signer the rows held do not name among them
+// (QD-1193). Entries before the first that fails stay applied. In pending no pin exists to chain from, so this takes
+// one statement alone, this sidecar's own sign-out, and nothing else.
 func (self *Posture) ApplyDeltas(log *PostureLog) (PostureDecision, error) {
 	self.operationLock.Lock()
 	defer self.operationLock.Unlock()
