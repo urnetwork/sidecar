@@ -1057,3 +1057,32 @@ func TestEvsSubscriberMarksStartAtThePinsAfterARestart(t *testing.T) {
 		t.Fatalf("after the restart: %v, want [%d]", versions, commit)
 	}
 }
+
+// HeadCheck's catch-up (§6.4, evs_witness.go) raises the pin through the log to a replaying peer's head with no read
+// of its own: the commits it passes raise their changes, once, at the next round, with no hint.
+func TestEvsSubscriberHearsTheCommitsHeadChecksCatchUpPinned(t *testing.T) {
+	world := newEvsTestWorld(t)
+	leases := newEvsTestLeases(world)
+	test := newEvsSubscribeTest(t, world, leases, newEvsTestStore(t))
+	world.push(&evsTestChange{path: "docs/a", content: []byte("a")})
+	ctx := context.Background()
+	listened := &evsTestChanges{}
+	test.client.AddRepoChangeListener(&world.repoId, listened.add)
+	if _, err := test.client.Repo(world.repoId).Subscribe(ctx, &EvsSubscribeArgs{RefName: EvsMainRefName, Paths: []string{"docs"}}); err != nil {
+		t.Fatal(err)
+	}
+	test.clock.advance(test.client.settings.SubscribeRereadDelay)
+	test.client.subscriber.runDue(ctx)
+	first := world.push(&evsTestChange{path: "docs/b", content: []byte("b")})
+	second := world.push(&evsTestChange{path: "docs/c", content: []byte("c")})
+	version, chain := world.head()
+	through := &protocol.RefHead{RepoId: world.repoId.Bytes(), RefId: world.refId.Bytes(), Version: version, Chain: chain[:]}
+	if result, err := test.client.CatchUpRef(ctx, through); result != HeadCheckCaughtUp || err != nil {
+		t.Fatalf("the catch-up: %v %v", result, err)
+	}
+	test.client.subscriber.runDue(ctx)
+	test.client.subscriber.runDue(ctx)
+	if versions := listened.versions(); !slices.Equal(versions, []uint64{first, second}) {
+		t.Fatalf("after HeadCheck's catch-up: %v, want [%d %d]", versions, first, second)
+	}
+}
