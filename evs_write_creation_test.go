@@ -3,11 +3,13 @@
 // creating their own files under one directory that does not stand yet, all at once, all land, each in its own path
 // (the e2e-evs-concurrency finding, its case in server/sidecare2e/evs_concurrency_test.go); a creation of a path
 // another writer created meanwhile still answers 409 naming it, the winner's content kept; a 409 naming a parent
-// alone, even to the plan made again, names no written path; and the plan made again is an attempt like the first.
+// alone, even to the plan made again, names no written path; the plan made again is an attempt like the first; and a
+// file the index writer's hook added stays the hook's to plan again, never one of the write's own creations.
 
 package sidecar
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -249,5 +251,65 @@ func TestEvsWriteCreationPlannedAgainRebuildsAndWaits(t *testing.T) {
 	}
 	if read, _, err := writer.read(t, "new.txt"); err != nil || string(read) != "new" {
 		t.Errorf("new.txt reads %q: %v", read, err)
+	}
+}
+
+// A file the index writer's hook added is the hook's, which plans it again on what stands at every plan, never one of
+// the write's own creations: a push refused 409 on directories another writer created at once and on the hook's file,
+// which that writer's hook created too, is planned once more, the hook's file written over the standing one and the
+// write landing, where the 409 went back while every path the plan created counted, directories and hook files alike.
+func TestEvsWriteCreationLeavesTheHooksFilesToTheHook(t *testing.T) {
+	writer := newEvsTestWriter(t)
+	writer.server.format2 = true
+	other := writer.otherWriter(t, "indexing writer")
+	for _, each := range []*evsTestWriter{writer, other} {
+		each.test.client.SetFormat2Source(func() bool { return true })
+		each.test.client.EnableFormat2Reader()
+	}
+	writer.seed(t)
+	// a head's path, one of §11.14's, which a reader takes at versioning 2
+	indexPath := indexFileModePrefix + "i1/b/20340/w/aa/" + strings.Repeat("aa", 16) + "/0"
+	writer.server.know(indexPath)
+	for label, each := range map[string]*evsTestWriter{"mine": writer, "theirs": other} {
+		each.test.client.SetWritePlanHook(func(ctx context.Context, plan *EvsWritePlan) error {
+			// the index writer's stand-in: a file of its own under the index root in every push, on what stands
+			plan.addIndexWrites(&EvsPathWrite{
+				Path: indexPath, Content: strings.NewReader(label), Options: &EvsWriteOptions{Reserved: EvsReservedIndex},
+			})
+			return nil
+		})
+	}
+	writer.server.raceNextPush(func() {
+		if _, err := other.write(t, "notes/theirs.txt", []byte("theirs")); err != nil {
+			t.Error(err)
+		}
+	})
+	posted := writer.server.postCount()
+	written, err := writer.write(t, "notes/mine.txt", []byte("mine"))
+	if err != nil {
+		t.Fatalf("a write whose hook's file another writer's hook created: %v", err)
+	}
+	// the refused push, the racing write's and the one planned again
+	if got := writer.server.postCount() - posted; got != 3 {
+		t.Errorf("%d posts", got)
+	}
+	for path, want := range map[string]string{"notes/mine.txt": "mine", "notes/theirs.txt": "theirs"} {
+		content := &strings.Builder{}
+		if _, err := writer.repo.ReadHead(context.Background(), &EvsReadArgs{Path: path, Fresh: true}, content); err != nil || content.String() != want {
+			t.Errorf("%s reads %q: %v", path, content.String(), err)
+		}
+	}
+	// the racing write's creation, and the write's own push over it
+	versionCount, newestPushId := func() (int, []byte) {
+		writer.world.stateLock.Lock()
+		defer writer.world.stateLock.Unlock()
+		state := writer.world.paths[indexPath]
+		if state == nil || state.versions[state.newest] == nil {
+			return 0, nil
+		}
+		return len(state.versions), state.versions[state.newest].pushId
+	}()
+	if versionCount != 2 || !bytes.Equal(newestPushId, written.PushId.Bytes()) {
+		t.Errorf("the hook's file holds %d versions, its newest not the write's push", versionCount)
 	}
 }
