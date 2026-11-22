@@ -89,6 +89,10 @@ type testBridgeEffectWorld struct {
 	runs       *RunStore
 	inbox      *ApprovalInbox
 	bridges    *DaemonBridges
+	// the gate's standing grants and the filer's compiled policy, which each open takes: nil for none, so every
+	// exposure takes a decision and the filer names route rules only where no document stands
+	grants   ApprovalStandingGrants
+	aclLocal func() *AclLocalPolicy
 	// removes the filer's registered Lookups and the installed gate, for a restart
 	closeOpen func()
 }
@@ -126,6 +130,7 @@ func (self *testBridgeEffectWorld) open() {
 		self.closeOpen()
 	}
 	self.filer = self.newFiler()
+	self.filer.args.AclLocal = self.aclLocal
 	unregister := self.filer.Register()
 	removeForward := self.sidecar.RegisterEffectLookup(SidecarActionForward, self.filer.args.Grants.Lookup)
 	counter, err := NewApprovalPresenceCounts(self.localStore)
@@ -154,7 +159,7 @@ func (self *testBridgeEffectWorld) open() {
 	if err != nil {
 		self.t.Fatal(err)
 	}
-	gate, err := NewApprovalGate(args, inbox, router, &ApprovalGateArgs{Lookups: self.sidecar.effectLookup})
+	gate, err := NewApprovalGate(args, inbox, router, &ApprovalGateArgs{Grants: self.grants, Lookups: self.sidecar.effectLookup})
 	if err != nil {
 		self.t.Fatal(err)
 	}
