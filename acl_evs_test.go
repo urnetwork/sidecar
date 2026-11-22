@@ -903,3 +903,61 @@ func TestAclAuditBlockWithAMalformedRepoId(t *testing.T) {
 		t.Errorf("rights %b", rights)
 	}
 }
+
+// Owner decision 333: a mailbox takes the deposit of every subject of the network the projection marks mail_send, a
+// send grant on mail: in force (D-MAIL-8, §15.8's same-network mail), its own member's consented devices among them,
+// whose read and write give no deposit by themselves; a listen grant on mail: or a lapsed send grant marks no one, and a
+// vault or secret takes no such deposit. A deposit-only sender stays out of RepoReaders.
+func TestAclEvsAccessMailboxDepositForMailSendSubjects(t *testing.T) {
+	fixture := newAclTestFixture()
+	owner := fixture.member(bridge.MemberRole_MEMBER_ROLE_MEMBER)
+	other := fixture.member(bridge.MemberRole_MEMBER_ROLE_MEMBER)
+	tagId := fixture.tag(other)
+	laptop := fixture.invitedDevice(owner)
+	receiver := fixture.device(owner, laptop.Bytes())
+	sender := fixture.invitedDevice(other)
+	lapsed := fixture.device(other, sender.Bytes())
+	listener := fixture.device(other, sender.Bytes())
+	agent := fixture.agent(other, tagId)
+	mailboxId, mailbox := fixture.repo(protocol.RepoKind_REPO_KIND_MAILBOX, owner)
+	mailbox.ConsentedSidecarIds = [][]byte{laptop.Bytes(), receiver.Bytes()}
+	vaultId, vault := fixture.repo(protocol.RepoKind_REPO_KIND_VAULT, owner)
+	vault.ConsentedSidecarIds = mailbox.ConsentedSidecarIds
+	secretId, secret := fixture.repo(protocol.RepoKind_REPO_KIND_SECRET, owner)
+	secret.ConsentedSidecarIds = mailbox.ConsentedSidecarIds
+	mailSend := []*protocol.AclTarget{{MailSend: true}}
+	fixture.rule([]Id{fixture.sidecarAtom(receiver), fixture.sidecarAtom(sender)}, mailSend, protocol.AclAction_ACL_ACTION_SEND)
+	fixture.rule([]Id{tagId}, mailSend, protocol.AclAction_ACL_ACTION_SEND)
+	fixture.rule([]Id{fixture.sidecarAtom(listener)}, mailSend, protocol.AclAction_ACL_ACTION_LISTEN)
+	fixture.rule([]Id{fixture.sidecarAtom(lapsed)}, mailSend, protocol.AclAction_ACL_ACTION_SEND).Expires = aclTestNow.Add(-time.Minute).UnixMilli()
+	state := fixture.state(t)
+	cases := []struct {
+		name      string
+		sidecarId Id
+		repoId    Id
+		rights    AclEvsRights
+	}{
+		{name: "the owner's consented device that sends", sidecarId: receiver, repoId: mailboxId, rights: AclEvsRead | AclEvsWrite | AclEvsDeposit},
+		{name: "the owner's consented device that does not", sidecarId: laptop, repoId: mailboxId, rights: AclEvsRead | AclEvsWrite},
+		{name: "another member's sending device", sidecarId: sender, repoId: mailboxId, rights: AclEvsDeposit},
+		{name: "a tagged sender another member sponsors", sidecarId: agent, repoId: mailboxId, rights: AclEvsDeposit},
+		{name: "a lapsed send grant", sidecarId: lapsed, repoId: mailboxId, rights: 0},
+		{name: "a listen grant on mail", sidecarId: listener, repoId: mailboxId, rights: 0},
+		{name: "a vault", sidecarId: receiver, repoId: vaultId, rights: AclEvsRead | AclEvsWrite},
+		{name: "another member's sender in a vault", sidecarId: sender, repoId: vaultId, rights: 0},
+		{name: "a secret", sidecarId: receiver, repoId: secretId, rights: AclEvsRead | AclEvsWrite},
+		{name: "another member's sender in a secret", sidecarId: sender, repoId: secretId, rights: 0},
+	}
+	for _, c := range cases {
+		access := state.EvsAccess(AclSidecarSubject(c.sidecarId), c.repoId, AclTokenAudienceEvs, aclTestNow)
+		if access.Rights != c.rights {
+			t.Errorf("%s: %b, want %b", c.name, access.Rights, c.rights)
+		}
+	}
+	if access := state.EvsAccess(AclSidecarSubject(sender), mailboxId, AclTokenAudienceEvs, aclTestNow); !access.Allowed || access.Reason != AclReasonKindDefault {
+		t.Errorf("the sender's decision: %+v", access)
+	}
+	if readers := state.RepoReaders(mailboxId, aclTestNow); !slices.Equal(readers, aclTestSorted([]Id{laptop, receiver})) {
+		t.Errorf("readers %v", readers)
+	}
+}

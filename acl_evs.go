@@ -29,9 +29,11 @@
 // kind-default deposits, and the rules, RepoGrants and EvsShares that name it: its sidecar atom, a tag it
 // carries, or autogroup:ephemeral. A parked sidecar gets nothing, and no ephemeral one writes a config head.
 // Deposit implies no read, subscription, key or place in RepoReaders. admin implies write, and write read,
-// within the ceiling (plan-ACL-small-readings #3). A read_only sidecar gets only r, plus the receipt deposit
-// with it (D-TEAM-24), and a reader of an owner-bound repo that does not write gets the receipt deposit too
-// (§16.8).
+// within the ceiling (plan-ACL-small-readings #3), and neither implies deposit. A read_only sidecar gets only r,
+// plus the receipt deposit with it (D-TEAM-24), and a reader of an owner-bound repo that does not write gets the
+// receipt deposit too (§16.8). A mailbox takes the deposit of every subject of the network the projection marks
+// mail_send, a send grant on mail: in force (D-MAIL-8, owner decision 333): its member's consented devices among
+// them, whose read and write give them none, so a receiver that is one deposits the mail it takes once it may send.
 //
 // A repo whose rows' newest RepoDelete stands unrestored gives admin alone, and only to its standing admins: the
 // sidecars §8.8's access log counts as the repo's admins now, which are the ones it lets sign the RepoDelete, a
@@ -375,8 +377,10 @@ func aclStandingAdminAt(repo *aclRepoState, sidecarId Id) uint64 {
 
 // An owner-bound repo's rights: its owner's consented devices read and write, and those of them in its
 // admins administer; its EvsShares' subjects read; in a vault or mailbox the owner's other untagged
-// subjects and the tagged subjects it sponsors deposit (§8.5). A Team scope's own mailcfg takes the first part
-// alone (QD-1107): no EvsShare stands on it, and nobody deposits there.
+// subjects and the tagged subjects it sponsors deposit, and in a mailbox so does every subject of the network the
+// projection marks mail_send, for §15.8's same-network mail (§8.5; D-MAIL-8, owner decision 333), its own member's
+// consented devices among them. A Team scope's own mailcfg takes the first part alone (QD-1107): no EvsShare stands
+// on it, and nobody deposits there.
 func (self *AclState) addOwnerBoundRights(accumulator *aclEvsAccumulator, sidecar *aclSidecarState, repoId Id, repo *aclRepoState, consented bool, nowMs int64) {
 	kindDefault := AclDecision{Reason: AclReasonKindDefault}
 	ownerDevice := consented && sidecar.memberId == repo.ownerId && repo.consents[sidecar.id]
@@ -402,6 +406,19 @@ func (self *AclState) addOwnerBoundRights(accumulator *aclEvsAccumulator, sideca
 			accumulator.add(AclEvsDeposit, kindDefault)
 		}
 	}
+	if repo.kind == protocol.RepoKind_REPO_KIND_MAILBOX && self.sidecarMarkedMailSend(sidecar, nowMs) {
+		accumulator.add(AclEvsDeposit, kindDefault)
+	}
+}
+
+// Whether the projection marks the sidecar mail_send at nowMs: a send grant with mail_send in force whose source holds
+// it, MaySend's answer for it (D-ACL-12), which owner decision 333's mailbox deposit reads. The caller has resolved the
+// sidecar and found it not hard denied.
+func (self *AclState) sidecarMarkedMailSend(sidecar *aclSidecarState, nowMs int64) bool {
+	resolved := aclResolved{sidecar: sidecar, owner: sidecar.owner, hasOwner: sidecar.hasOwner}
+	return self.findResourceRule(&resolved, nowMs, protocol.AclAction_ACL_ACTION_SEND, func(rule *aclRule) bool {
+		return rule.mailSend
+	}) != nil
 }
 
 // The rights the rows' rules give the sidecar on the repo, by kind as the file's header says, within the

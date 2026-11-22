@@ -44,6 +44,9 @@ const (
 	AclKindAudienceReceiptsAndOwner
 	// readers that do not write: the receipt deposit (§16.8)
 	AclKindAudienceReceipts
+	// AclKindAudienceReceiptsAndOwner's, and every subject of the network the projection marks mail_send, for §15.8's
+	// same-network mail (D-MAIL-8, owner decision 333): the mailbox's
+	AclKindAudienceReceiptsOwnerAndSenders
 )
 
 // One kind's row of §8.5's table and the rules around it.
@@ -117,7 +120,7 @@ func AclKindDefaults() []AclKindDefault {
 			Kind:           protocol.RepoKind_REPO_KIND_MAILBOX,
 			Read:           AclKindAudienceOwnerConsented,
 			Write:          AclKindAudienceOwnerConsented,
-			Deposit:        AclKindAudienceReceiptsAndOwner,
+			Deposit:        AclKindAudienceReceiptsOwnerAndSenders,
 			DocumentRights: AclEvsDeposit,
 			OwnerBound:     true,
 			MailIndexers:   AclEvsDeposit,
