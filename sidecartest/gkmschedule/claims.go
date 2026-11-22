@@ -648,9 +648,11 @@ func FsKeysScheduleKillsBetweenWrites(t FsKeysT, newWorld FsKeysNewWorld) {
 
 // QD-956 on gkmservice: in the race, a's Remove carrying generation 1 leaves a while the agent w, a wrapped writer,
 // rotates REMOVE past x's revocation and commits nothing, so gkm's epoch PUT check, reading gen/2, refuses its header
-// 403. a reads gen/ once, takes generation 2 by its ReaderWrap under the rotation checks, and its next pass commits the
-// Remove carrying it, alarming nothing. In the twin w's rotation lands before a's run, which takes it by its own read
-// of gen/: one PUT, answered 200. Either way one REMOVE generation, b converging and x reaching nothing of it.
+// 403, twice: a's batch carries its admin, stronger than the r a commit needs, so its gkm client sends the refused PUT
+// once more under the repo's r scope alone (QD-1179), and the check refuses that too. a reads gen/ once, takes
+// generation 2 by its ReaderWrap under the rotation checks, and its next pass commits the Remove carrying it, alarming
+// nothing. In the twin w's rotation lands before a's run, which takes it by its own read of gen/: one PUT, answered
+// 200. Either way one REMOVE generation, b converging and x reaching nothing of it.
 func FsKeysScheduleRemoveOutrunByARotation(t FsKeysT, newWorld FsKeysNewWorld) {
 	for _, raced := range []bool{true, false} {
 		name := "a rotation before the run"
@@ -711,7 +713,8 @@ func FsKeysScheduleRemoveOutrunByARotation(t FsKeysT, newWorld FsKeysNewWorld) {
 		}
 		want := []int{http.StatusOK}
 		if raced {
-			want = []int{http.StatusForbidden, http.StatusOK}
+			// the refused PUT and its one retry under r alone (QD-1179), then the Remove under generation 2
+			want = []int{http.StatusForbidden, http.StatusForbidden, http.StatusOK}
 		}
 		if !slices.Equal(statuses, want) {
 			t.Errorf("%s: gkm answered a's epoch PUTs %v", name, statuses)
