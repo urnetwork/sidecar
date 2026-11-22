@@ -49,6 +49,11 @@ type SidecarPlatformClientArgs struct {
 	PlatformUrl    string
 	// connect's transport settings with AuthorizationClosed and Log set, a copy the platform may keep.
 	PlatformTransportSettings *connect.PlatformTransportSettings
+	// Provide secret keys by mode that the platform loads into the client's contract manager after it builds the
+	// client and before anything can reach it (ContractManager.LoadProvideSecretKeys), so a contract a peer holds from
+	// an earlier process with the same identity verifies from the first frame (host_edge_identity.go). Borrowed for the
+	// client's life. Nil: connect draws each key as its mode is first provided.
+	ProvideSecretKeys map[connectprotocol.ProvideMode][]byte
 }
 
 // One generation's client and what connects it.
@@ -78,6 +83,10 @@ func (self connectSidecarPlatform) OpenClient(ctx context.Context, args *Sidecar
 	oob := connect.NewApiOutOfBandControl(ctx, args.ClientStrategy, args.Auth.ByJwt, args.ApiUrl)
 	clientSettings := connect.NewOperatorClientSettings(args.ClientSettings, args.ApiUrl, args.ClientStrategy)
 	client := connect.NewClient(ctx, args.ClientId, oob, clientSettings)
+	if 0 < len(args.ProvideSecretKeys) {
+		// before the transport, the client's only way in, exists
+		client.ContractManager().LoadProvideSecretKeys(args.ProvideSecretKeys)
+	}
 	transport := connect.NewPlatformTransport(
 		ctx,
 		args.ClientStrategy,

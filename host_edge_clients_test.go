@@ -75,14 +75,16 @@ type edgePoolTestPlatform struct {
 	opened    []*SidecarPlatformClientArgs
 	connected map[connect.Id]bool
 	auths     map[connect.Id][]string
-	closed    map[connect.Id]bool
+	// the instance id each installed auth named, beside its jwt
+	authInstanceIds map[connect.Id][]connect.Id
+	closed          map[connect.Id]bool
 	// signalled at each SetAuth
 	authSignal chan connect.Id
 	failIndex  int
 }
 
 func newEdgePoolTestPlatform() *edgePoolTestPlatform {
-	return &edgePoolTestPlatform{connected: map[connect.Id]bool{}, auths: map[connect.Id][]string{}, closed: map[connect.Id]bool{}, authSignal: make(chan connect.Id, 64), failIndex: -1}
+	return &edgePoolTestPlatform{connected: map[connect.Id]bool{}, auths: map[connect.Id][]string{}, authInstanceIds: map[connect.Id][]connect.Id{}, closed: map[connect.Id]bool{}, authSignal: make(chan connect.Id, 64), failIndex: -1}
 }
 
 func (self *edgePoolTestPlatform) OpenClient(ctx context.Context, args *SidecarPlatformClientArgs) (*SidecarPlatformClient, error) {
@@ -100,6 +102,7 @@ func (self *edgePoolTestPlatform) OpenClient(ctx context.Context, args *SidecarP
 			self.stateLock.Lock()
 			defer self.stateLock.Unlock()
 			self.auths[clientId] = append(self.auths[clientId], auth.ByJwt)
+			self.authInstanceIds[clientId] = append(self.authInstanceIds[clientId], auth.InstanceId)
 			self.authSignal <- clientId
 		},
 		Connected: func() (bool, <-chan struct{}) {
@@ -303,7 +306,8 @@ func TestNewEdgeClientPoolFailsClosed(t *testing.T) {
 }
 
 // The platform closing a client's authorization has the pool ask the source again for that index, and install the
-// newer jwt on that client alone.
+// newer jwt on that client alone, under the instance id the client opened with: a refreshed jwt is the same
+// in-memory instance to the platform (connect's Auth), not a second one.
 func TestEdgeClientPoolAsksTheSourceAgainWhenAuthorizationCloses(t *testing.T) {
 	source := newEdgePoolTestSource(2)
 	platform := newEdgePoolTestPlatform()
@@ -327,8 +331,15 @@ func TestEdgeClientPoolAsksTheSourceAgainWhenAuthorizationCloses(t *testing.T) {
 	}
 	platform.stateLock.Lock()
 	installed := slices.Clone(platform.auths[source.clientIds[1]])
+	installedInstanceIds := slices.Clone(platform.authInstanceIds[source.clientIds[1]])
 	platform.stateLock.Unlock()
 	if len(installed) != 1 || installed[0] != "synthetic-jwt-b-2" {
 		t.Errorf("installed %v", installed)
+	}
+	if len(installedInstanceIds) != 1 || installedInstanceIds[0] != opened[1].Auth.InstanceId || opened[1].Auth.InstanceId == (connect.Id{}) {
+		t.Errorf("the refreshed auth names another instance")
+	}
+	if opened[0].Auth.InstanceId == opened[1].Auth.InstanceId {
+		t.Errorf("two clients share an instance id")
 	}
 }
