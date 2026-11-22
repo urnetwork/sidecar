@@ -15,7 +15,8 @@
 //
 // The config repo's row is the state's own, from the Genesis (acl_state.go, QD-719): no rows hold one, and its scopes
 // answer in every state.
-//	deposit  §8 gives it deposit, or it reads an owner-bound repo it does not write (§16.8's receipts)
+//	deposit  §8 gives it deposit, or it writes a repo that takes deposits (QD-1173), or it reads an owner-bound
+//	         repo it does not write (§16.8's receipts)
 //
 // A repo whose newest RepoDelete stands unrestored takes one scope, admin, and only for its standing admins (§11.12's
 // refused row, QD-880): EvsAccess gives them admin alone there, so their r, rw and deposit are refused with everyone

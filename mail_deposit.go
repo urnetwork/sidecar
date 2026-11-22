@@ -22,6 +22,13 @@
 //	           write-budget refusal, §11.8's closed gate, a reset. A failure leaves the repos that took the message
 //	           holding it, and the sender's retry deposits it again there, which QD-208 bounds by
 //	           mail_inbound_repos_per_message
+//	right      a repo this receiver's own newest verified state gives no deposit (§8.5; repo:<id>:deposit's table,
+//	           AclExchangeScopes, D-ACL-21) refuses the message before any deposit is made, at once (refuses), so the
+//	           session answers 451 4.3.0 before the body is even spooled, where the exchange's refusal would otherwise
+//	           be retried by evs's client for most of a minute; a repo whose client holds no ACL state to judge by is
+//	           left to the exchange and evs, which judge every deposit whatever this says
+//	bound      the deposits take at most DepositTimeout, past which every one still open is cancelled and the message
+//	           answers 451 4.3.0 inside the sender's wait
 //
 // The spool is read here and never written. Nothing here logs a recipient, an address or a byte of a message (I-13).
 // Safe for concurrent use.
@@ -54,12 +61,45 @@ type mailDepositRepo interface {
 	Deposit(ctx context.Context, args *EvsDepositArgs) (*EvsDepositResult, error)
 }
 
+// A repo that also says, before anything is sent, whether depositorId may deposit there now by the depositor's own
+// newest verified state; known false where it holds none to judge by (the file header's right row).
+type mailDepositRightRepo interface {
+	mailDepositRepo
+	depositRight(depositorId Id) (allowed bool, known bool)
+}
+
+// mailDepositRightRepo over EvsRepo: its client's verified state (EvsClientArgs.Config), whose ACL rows the exchange
+// reads for repo:<id>:deposit, at its client's clock.
+type mailEvsDepositRepo struct {
+	*EvsRepo
+}
+
+// See mailDepositRightRepo.
+func (self mailEvsDepositRepo) depositRight(depositorId Id) (bool, bool) {
+	client := self.client
+	if client == nil || client.args.Config == nil {
+		return false, false
+	}
+	state, ok := client.args.Config().(*ConfigState)
+	if !ok || state == nil {
+		return false, false
+	}
+	acl, err := state.Acl()
+	if err != nil || acl == nil {
+		return false, false
+	}
+	access := acl.EvsAccess(AclSidecarSubject(depositorId), self.repoId, AclTokenAudienceEvs, client.clock.Now())
+	return access.Rights.Has(AclEvsDeposit), true
+}
+
 // What NewMailDepositor builds on.
 type MailDepositorArgs struct {
 	// The repo of an id: EvsClient.Repo.
 	Repo func(repoId Id) *EvsRepo
 	// This receiver.
 	ReceiverSidecarId Id
+	// What DepositTimeout runs on; nil is real time.
+	Clock Clock
 	// Nil logs nothing.
 	Log Logger
 	// Nil takes DefaultMailSessionSettings.
@@ -94,6 +134,7 @@ type MailDepositInput struct {
 type MailDepositor struct {
 	repo              func(repoId Id) mailDepositRepo
 	receiverSidecarId Id
+	clock             Clock
 	log               Logger
 	settings          *MailSessionSettings
 }
@@ -108,7 +149,7 @@ func NewMailDepositor(args *MailDepositorArgs) (*MailDepositor, error) {
 		if repo == nil {
 			return nil
 		}
-		return repo
+		return mailEvsDepositRepo{EvsRepo: repo}
 	}, args), nil
 }
 
@@ -122,7 +163,7 @@ func newMailDepositor(repo func(repoId Id) mailDepositRepo, args *MailDepositorA
 	if log == nil {
 		log = NewNoopLogger()
 	}
-	return &MailDepositor{repo: repo, receiverSidecarId: args.ReceiverSidecarId, log: log, settings: settings}
+	return &MailDepositor{repo: repo, receiverSidecarId: args.ReceiverSidecarId, clock: clockOrReal(args.Clock), log: log, settings: settings}
 }
 
 // The trailer of target's deposit: what every repo shares, and this repo's recipients alone.
@@ -148,12 +189,37 @@ func (self *MailDepositor) trailer(input *MailDepositInput, target *MailDepositT
 	return binary.BigEndian.AppendUint32(trailer, uint32(len(trailer))), nil
 }
 
-// Deposits the message to every target's repo, at most DepositConcurrency at once: nil only once evs confirmed each,
-// else ErrMailDepositFailed with the first failure. See the file header.
+// Whether this receiver's own newest verified state already refuses it a deposit into one of targets' repos, so a
+// message for them is answered 451 4.3.0 with no deposit made (the file header's right row). False where every repo
+// gives it deposit or holds no state to judge by.
+func (self *MailDepositor) refuses(targets []*MailDepositTarget) bool {
+	for _, target := range targets {
+		repo, ok := self.repo(target.RepoId).(mailDepositRightRepo)
+		if !ok {
+			continue
+		}
+		if allowed, known := repo.depositRight(self.receiverSidecarId); known && !allowed {
+			return true
+		}
+	}
+	return false
+}
+
+// Deposits the message to every target's repo, at most DepositConcurrency at once and within DepositTimeout: nil only
+// once evs confirmed each, else ErrMailDepositFailed with the first failure, and at once, with none made, where the
+// receiver's own state refuses it one (refuses). See the file header.
 func (self *MailDepositor) Deposit(ctx context.Context, input *MailDepositInput) error {
 	if input == nil || input.Spool == nil || !input.Spool.finished || len(input.Targets) == 0 {
 		return fmt.Errorf("%w: no message or no repo", ErrMailDepositorInvalid)
 	}
+	if self.refuses(input.Targets) {
+		return fmt.Errorf("%w: this receiver may not deposit into a recipient's repo", ErrMailDepositFailed)
+	}
+	// the bound row: every deposit still open is cancelled at DepositTimeout
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stop := self.clock.AfterFunc(self.settings.DepositTimeout, cancel)
+	defer stop()
 	trailers := make([][]byte, len(input.Targets))
 	for index, target := range input.Targets {
 		if len(target.Recipients) == 0 {

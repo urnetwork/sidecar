@@ -126,8 +126,16 @@ func (self *configRecordAuth) rights(repoId Id, sidecarId Id) AclEvsRights {
 		return 0
 	}
 	switch repo.kind {
-	case protocol.RepoKind_REPO_KIND_VAULT, protocol.RepoKind_REPO_KIND_TEAM_RECORD,
-		protocol.RepoKind_REPO_KIND_DIRECTORY, protocol.RepoKind_REPO_KIND_RECORD:
+	case protocol.RepoKind_REPO_KIND_VAULT:
+		rights := self.acl.EvsAccess(AclSidecarSubject(sidecarId), repoId, AclTokenAudienceEvs, self.at).Rights
+		if rights.Has(AclEvsWrite) {
+			// a vault's writer, its owner's consented device, writes its own stream, which lands in seq order: the
+			// deposit its write implies (QD-1173) is none of the record's, so its chain gap alarms at once
+			// (record_pins.go)
+			rights &^= AclEvsDeposit
+		}
+		return rights
+	case protocol.RepoKind_REPO_KIND_TEAM_RECORD, protocol.RepoKind_REPO_KIND_DIRECTORY, protocol.RepoKind_REPO_KIND_RECORD:
 		return self.acl.EvsAccess(AclSidecarSubject(sidecarId), repoId, AclTokenAudienceEvs, self.at).Rights
 	case protocol.RepoKind_REPO_KIND_MAILBOX, protocol.RepoKind_REPO_KIND_SECRET:
 		// These venues take read receipts, but are not themselves record logs (§16.8).

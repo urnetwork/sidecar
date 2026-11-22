@@ -32,6 +32,13 @@ type MailSessionSettings struct {
 	LimitsInterval time.Duration
 	// One message's deposits at once: §15.7's 4, 2 on mobile (ApplyMobileMailSessionSettings).
 	DepositConcurrency int
+	// The most one message's deposits take, from their start to evs's last confirmation, before the session answers
+	// 451 4.3.0 and every deposit still open is cancelled: a sender waits 10 min for DATA's reply (RFC 5321
+	// §4.5.3.2.6) and the checks before the deposits end within 2 min of the message's last byte (§15.5's receiver
+	// row), so 5 min keeps the reply inside the sender's wait whatever holds a deposit: a drop key gkm holds pending
+	// (D-KEYS-17), a write budget's retry-after, or evs's own retries. A deposit cancelled after its push went out may
+	// have committed, and the sender's retry then duplicates it there, as §15.5 says of any failure.
+	DepositTimeout time.Duration
 }
 
 // The one default: §15.5's and §15.7's numbers.
@@ -46,6 +53,7 @@ func DefaultMailSessionSettings() *MailSessionSettings {
 		StatusInterval:      30 * time.Second,
 		LimitsInterval:      5 * time.Minute,
 		DepositConcurrency:  4,
+		DepositTimeout:      5 * time.Minute,
 	}
 }
 
@@ -58,5 +66,5 @@ func ApplyMobileMailSessionSettings(settings *MailSessionSettings) {
 func (self *MailSessionSettings) valid() bool {
 	return self != nil && 0 < self.MailTimeout && 0 < self.SessionTimeout && 0 < self.ChunkByteCount &&
 		0 < self.LineMaxByteCount && 0 < self.IngressMaxByteCount && 0 < self.TrailerMaxByteCount &&
-		0 < self.StatusInterval && 0 < self.LimitsInterval && 0 < self.DepositConcurrency
+		0 < self.StatusInterval && 0 < self.LimitsInterval && 0 < self.DepositConcurrency && 0 < self.DepositTimeout
 }
