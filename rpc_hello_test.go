@@ -959,7 +959,10 @@ func TestHelloVectors(t *testing.T) {
 // (QD-1197). The restarted gate holds a Hello this side does not, so the restarted peer's opens to this side met INVALID
 // under it, which QD-1185 reads as the listener's own, until HelloCacheTimeout. This side runs one fresh Hello at once,
 // which EnsureHello joins, and the restarted peer's open is accepted. Under a Hello that stands, an unasked HelloResult
-// runs none: the call behind it on the peer's worker finds no fresh Hello started.
+// runs none. The peer answers a Hello from its reply queue's sender and a call from its handler's goroutine, so its
+// answer to the replay could reach this side after the call's, which left the count read after the call short of it,
+// and after the restart below, where it started a fresh Hello beside the replay's answer: the call goes only once that
+// answer is in this side's queue, ahead of the call's answer.
 func TestUnaskedHelloResultRunsAFreshHello(t *testing.T) {
 	pair := newTestRpcPair(t)
 	calleeIdentity := newTestRpcIdentity()
@@ -983,8 +986,21 @@ func TestUnaskedHelloResultRunsAFreshHello(t *testing.T) {
 		return count
 	}
 
-	// under the Hello that stands, the callee's answer to the replay runs nothing
+	// under the Hello that stands, the callee's answer to the replay runs nothing. The answer goes into the caller's
+	// queue before the call goes, so the caller's worker for the callee takes it before the call's answer, and once
+	// the call returns the count holds it and nothing of it is left for the restart
+	replayAnswered := make(chan struct{}, 1)
+	caller.setDeliver(func(from *testRpcSide, to *testRpcSide, envelope *protocol.Envelope) *protocol.Envelope {
+		if from != callee || envelope.Type != uint32(protocol.MessageType_HELLO_RESULT) || envelope.RequestId != earlierHello.RequestId {
+			return envelope
+		}
+		to.subprotocol.receive(connect.SourceId(from.clientId), envelope, from.peerTo(to))
+		replayAnswered <- struct{}{}
+		return nil
+	})
 	replay(callee)
+	testAwait(t, replayAnswered, "answer to the replayed Hello")
+	caller.setDeliver(nil)
 	if response, err := caller.subprotocol.Call(t.Context(), Id(callee.clientId), testCallType, []byte("x"), nil); err != nil || string(response) != "x!" {
 		t.Fatalf("%q, %v", response, err)
 	}
