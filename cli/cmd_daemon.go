@@ -780,6 +780,9 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) error {
 			// its events reach the events method's ring (daemon_events.go) for as long as it runs, a logout's last
 			// state among them, so it stays attached
 			daemon.Events().Attach(running)
+			// the network's label table, which every zone its DnsClient fetches writes, and the zone's hints, from its
+			// first client generation on (daemon_dns.go); added before the follower, so a generation attaches it first
+			startUrDns(running, log)
 			// the network's one judge of its log, which starts at the Sidecar's first client generation; one that does
 			// not start leaves this network unjudged and the others following (CORE-M6-01)
 			if follower := startUrConfigFollower(running, log); follower != nil {
