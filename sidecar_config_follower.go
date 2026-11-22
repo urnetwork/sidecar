@@ -882,12 +882,14 @@ func (self *SidecarConfigFollower) stand(networkId Id, sidecarId Id, client *Con
 		}
 	}
 	aclFollower, err := NewAclFollower(self.ctx, &AclFollowerArgs{
-		Source:   client,
-		Engine:   engine,
-		Acks:     self.sidecar.sidecarApi,
-		Heads:    self.args.Heads,
-		Emit:     self.sidecar.emitEvent,
-		Settings: aclSettings,
+		Source: client,
+		Engine: engine,
+		Acks:   self.sidecar.sidecarApi,
+		Heads:  self.args.Heads,
+		// the keychain's held generations alone: an install runs on the client's callback, which fetches nothing
+		HeldRepoKey: self.sidecar.GkmHeldKey,
+		Emit:        self.sidecar.emitEvent,
+		Settings:    aclSettings,
 	})
 	if err != nil {
 		removeAuthority()

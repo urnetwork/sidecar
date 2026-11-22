@@ -13,17 +13,21 @@
 //	                  from its private ones; a compile holds a rule to its public part by Internet and its prefixes
 //
 // Each answers in rule id order, every rule and activated grant in force at now, and nothing for a hard-denied end. A
-// rule's ports and prefixes are the device's, from AclLocalPolicy.Rule by RuleId (plan-BRIDGE-gate-row-prefixes #1). A
-// route rule with no via reaches exactly its advertisers here, as in MayRoute and at the contract gate, and nothing
-// before an approved route names it.
+// rule's ports and prefixes are the device's: a rule of the head's from AclLocalPolicy.Rule by RuleId
+// (plan-BRIDGE-gate-row-prefixes #1), and an activated grant's from its sealed detail, which a device holding the
+// config key of its generation opens and reads by the one reader every reader reads it by (acl_grant_route.go's
+// aclReadGrantRoute; owner decision 679, QD-1164). A route rule with no via reaches exactly its advertisers here, as in
+// MayRoute and at the contract gate, and nothing before an approved route names it.
 //
 // A route rule that names no ip: destination and no autogroup:internet holds no prefix of its own: it reaches, through
 // each advertiser its via subjects hold for the source that is also among its subject destinations for that source,
 // every prefix of that advertiser's subnet routes in force, whole (§8.4's readings; owner decision 575, QD-1019). So
 // RouteRules answers ViaDestination beside each rule, the compile, AclEngine.AllowRoute and Check's ip ranges read a
 // rule's detail through aclRouteBySubject, and StandingCovers covers a subnet route by such a rule whose via and
-// destinations both name its advertiser. An exit is never reached this way, and a rule whose detail the device does not hold, an activated
-// grant's (QD-003), reaches nothing by it.
+// destinations both name its advertiser. An activated grant whose opened detail names no prefix reaches its
+// advertisers' routes so too. An exit is never reached this way, and a rule whose detail the device does not hold or
+// cannot read, a document rule's local detail missing or an activated grant's sealed detail not opening here or not
+// sealed at all (QD-003), reaches nothing by it.
 //
 // EgressMode exports the mode the contract gate's egressRestricted reads (§17.9's egress spec, D-BRIDGE-13), and
 // StandingCovers answers 12.2.4's "in force" for a bridge rule filed with no approval.
@@ -57,10 +61,12 @@ type AclReachRule struct {
 	GrantId []byte
 	// ms since the epoch; 0 none.
 	ExpiresMs int64
-	// Whether the rule's ip field names ports, which only AclLocalPolicy holds.
+	// Whether the rule's ip field names ports, which only AclLocalPolicy holds; for an activated grant, whether its
+	// action carries a sealed_detail, whose ports a reader opens (aclReadGrantRoute).
 	PortsLimited bool
 	// Whether its dst names autogroup:internet, which takes public destinations through its via subjects; any other
-	// rule takes them only by a prefix that holds them, 0.0.0.0/0, which only AclLocalPolicy holds.
+	// rule takes them only by a prefix that holds them, 0.0.0.0/0, which only AclLocalPolicy or an activated grant's
+	// sealed detail holds.
 	Internet bool
 	// On RouteRules' and ExitRules' answers, whether the rule's subject destinations name the via for this source: an
 	// atom the via holds, its id, or autogroup:self where the two share an owner or sponsor. A route rule that names no
@@ -160,8 +166,9 @@ func (self *AclServedRoutes) advertisersHolding(prefix netip.Prefix) []Id {
 }
 
 // Whether a route rule reaches its subject destinations' routes in force rather than prefixes of its own (§8.4's
-// readings; owner decision 575): the device holds its detail, which names no ip: destination, and it names no
-// autogroup:internet. False for a rule with no local detail, an activated grant's (QD-003), the closed direction.
+// readings; owner decision 575): the device holds its detail, a rule of the head's local one or an activated grant's
+// opened sealed detail (aclReadGrantRoute), which names no prefix, and it names no autogroup:internet. False for a rule
+// whose detail the device does not hold or cannot read, local nil, the closed direction (QD-003).
 func aclRouteBySubject(local *AclLocalRule, internet bool) bool {
 	return local != nil && len(local.Cidrs) == 0 && !internet
 }

@@ -65,6 +65,8 @@ type netExchange struct {
 	contractClasses map[netLinkKey]protocol.ContractClass
 	// the provide mode the issuer gives a pair's contracts, by source and destination, Network when unset
 	contractProvideModes map[netLinkKey]protocol.ProvideMode
+	// the issuer commits each contract to its destination's sequence certificate (Net.CommitSequenceCertificates)
+	commitSequenceCertificates bool
 	// each client's resident, by the client it serves (push_net.go)
 	residents map[connect.Id]*NetResident
 	// the clients the platform opened, which close ends
@@ -219,6 +221,18 @@ func (self *netContractIssuer) issue(createContract *protocol.CreateContract) (*
 	if !ok {
 		return nil, fmt.Errorf("the destination does not provide %s", provideMode)
 	}
+	var provideTlsCertificate [][]byte
+	var signedTlsCertificate []byte
+	if self.exchange.commitsSequenceCertificates() {
+		// what the destination's EncryptedKey publishes, its live chain and its client key's signature over it, which
+		// the platform seals into every contract to it
+		if manager := destination.Client.EncryptionSessionManager(); manager != nil {
+			provideTlsCertificate = manager.SelfCertPem()
+		}
+		if 0 < len(provideTlsCertificate) {
+			signedTlsCertificate = destination.Client.ClientKeyManager().SignCertChain(provideTlsCertificate)
+		}
+	}
 	storedContractBytes, err := connect.ProtoMarshal(&protocol.StoredContract{
 		ContractId:                 connect.NewId().Bytes(),
 		TransferByteCount:          createContract.TransferByteCount,
@@ -226,7 +240,9 @@ func (self *netContractIssuer) issue(createContract *protocol.CreateContract) (*
 		DestinationId:              destinationId.Bytes(),
 		DestinationClientPublicKey: destination.Client.ClientKeyManager().PublicKey(),
 		// C13's class, as the contract gate seals it (§8.10)
-		ContractClass: self.exchange.contractClass(self.sourceId, destinationId),
+		ContractClass:                            self.exchange.contractClass(self.sourceId, destinationId),
+		ProvideTlsCertificate:                    provideTlsCertificate,
+		DestinationClientKeySignedTlsCertificate: signedTlsCertificate,
 	})
 	if err != nil {
 		return nil, err

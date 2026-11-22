@@ -77,6 +77,11 @@ func (self *sidecarHttpLeg) restorers() []SidecarRestorer {
 	return nil
 }
 
+// No: a generation here is a long-poll, with no connect client whose identity a peer holds contracts to.
+func (self *sidecarHttpLeg) keepsConnectIdentity() bool {
+	return false
+}
+
 // Zero: this leg has no dispatcher.
 func (self *sidecarHttpLeg) subprotocolStats() SidecarSubprotocolStats {
 	return SidecarSubprotocolStats{}

@@ -8,18 +8,32 @@
 // refresher, a BringYourApi on the same token, and §6's Subprotocol, which constructing registers on id 21842. It
 // provides Network only; Service and FriendsAndFamily are their owners' to add, and Public never (§6).
 //
-// The persisted connect InstanceId (sidecar.json's network record) keeps the resident across restarts (§5.9). A
-// generation's client, transport, dispatcher and components end with its ctx, and its closeAndWait joins them.
+// The persisted connect InstanceId (sidecar.json's network record) keeps the resident across restarts (§5.9), and the
+// connect identity the core keeps with the generation (identity_connect.go) keeps the contracts its peers hold: the
+// client presents the same ClientKey, sequence certificate and provide keys at every start of the generation, as an
+// sdk device does across an app's restarts, so a restart under the kept generation is reached at once rather than
+// after each peer's AckTimeout. A generation's client, transport, dispatcher and components end with its ctx, and its
+// closeAndWait joins them.
 
 package sidecar
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/hkdf"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"errors"
 	"fmt"
+	"math/big"
 	"net/http"
+	"strconv"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/urnetwork/connect"
 	connectprotocol "github.com/urnetwork/connect/protocol"
@@ -28,6 +42,111 @@ import (
 // The network directory and seal class of §6's dispatcher's own state: PROTO-M2-01's generation floors, and the
 // first-use pins PROTO-M1-04 kept before them, which the admission check drops.
 const sidecarSubprotocolStoreName = "subprotocol"
+
+// The connect identity's derivation labels, each a version of its own: a change to one is a new identity for every
+// generation's client.
+const (
+	sidecarConnectIdentityTlsKeyLabel    = "urnetwork-sidecar-v1/connect-identity/sequence-tls-key"
+	sidecarConnectIdentityTlsSerialLabel = "urnetwork-sidecar-v1/connect-identity/sequence-tls-serial"
+	// followed by the provide mode's number in decimal, one key per mode
+	sidecarConnectIdentityProvideLabelPrefix = "urnetwork-sidecar-v1/connect-identity/provide/"
+)
+
+// The sequence certificate's fixed template: the name connect's own sequence certificates carry, and RFC 5280
+// §4.1.2.5's validity for a certificate with no well-defined expiration, since a peer checks the certificate against a
+// contract's commitment to its bytes and never its dates (connect's DefaultSequenceServerTlsConfig). Ed25519 signs
+// deterministically, so the certificate's bytes follow from the seed alone, as an edge client's do
+// (host_edge_identity.go).
+const sidecarConnectIdentityTlsName = "urnetwork-sequence"
+
+// The serial's bytes from the seed, under a leading 0x01 so the serial is positive and 17 bytes, within RFC 5280's 20.
+// Part of the derivation, as the labels and the template are, and no tunable: a change is a new certificate for every
+// generation's client.
+const sidecarConnectIdentityTlsSerialByteCount = 16
+
+// No connect identity came with a generation on a leg that keeps one: its client does not open (identity_connect.go).
+var errSidecarNoConnectIdentity = errors.New("the generation has no connect identity")
+
+// The modes a sidecar's client may provide, each of which a peer's contract to it is HMAC'd under: its own Network, and
+// on top the Service and FriendsAndFamily its owners hold (Subprotocol.HoldProvideMode), Service while a tls/ or smtp/
+// registration or a ur/ stream lives (§6.10.1's C9 items), so an edge's contracts to the client outlive a restart as a
+// peer sidecar's do, and FriendsAndFamily while a share it hosts stands. A key for a mode the client does not provide
+// verifies nothing and reaches no platform: connect sends and checks only the provided modes' keys.
+func sidecarConnectIdentityProvideModes() []connectprotocol.ProvideMode {
+	return []connectprotocol.ProvideMode{
+		connectprotocol.ProvideMode_Network,
+		connectprotocol.ProvideMode_Service,
+		connectprotocol.ProvideMode_FriendsAndFamily,
+	}
+}
+
+// One generation's connect identity, derived from the seed its keychain keeps (identity_connect.go): the sequence
+// certificate and its key, which every contract to the client commits to, and a provide secret key for each mode of
+// sidecarConnectIdentityProvideModes, which every contract to the client in that mode is HMAC'd with. The same seed
+// derives the same bytes, field for field. The client borrows all of it for its life: connect keeps these slices.
+type sidecarConnectIdentity struct {
+	tlsCertificatePem []byte
+	tlsPrivateKeyPem  []byte
+	provideSecretKeys map[connectprotocol.ProvideMode][]byte
+}
+
+// Derives a generation's connect identity from its seed, each part by HKDF-SHA256 under a label of its own. The seed
+// and the certificate's key reach testHookSecret as they are read and derived; the provide keys go to the platform, as
+// every client's do, so the privacy harness is not told of them.
+func newSidecarConnectIdentity(seed []byte) (*sidecarConnectIdentity, error) {
+	if len(seed) != sidecarConnectIdentitySeedByteCount {
+		return nil, fmt.Errorf("%w: a seed of %d bytes", errSidecarNoConnectIdentity, len(seed))
+	}
+	testHookSecret("connect_identity_seed", seed)
+	derive := func(label string, byteCount int) ([]byte, error) {
+		return hkdf.Key(sha256.New, seed, nil, label, byteCount)
+	}
+	tlsKeySeed, err := derive(sidecarConnectIdentityTlsKeyLabel, ed25519.SeedSize)
+	if err != nil {
+		return nil, err
+	}
+	testHookSecret("connect_sequence_tls_key", tlsKeySeed)
+	tlsKey := ed25519.NewKeyFromSeed(tlsKeySeed)
+	clear(tlsKeySeed)
+	defer clear(tlsKey)
+	serialBytes, err := derive(sidecarConnectIdentityTlsSerialLabel, sidecarConnectIdentityTlsSerialByteCount)
+	if err != nil {
+		return nil, err
+	}
+	template := &x509.Certificate{
+		SerialNumber: new(big.Int).SetBytes(append([]byte{0x01}, serialBytes...)),
+		Subject:      pkix.Name{CommonName: sidecarConnectIdentityTlsName},
+		NotBefore:    time.Date(1970, time.January, 1, 0, 0, 0, 0, time.UTC),
+		NotAfter:     time.Date(9999, time.December, 31, 23, 59, 59, 0, time.UTC),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
+		DNSNames:     []string{sidecarConnectIdentityTlsName},
+	}
+	// Ed25519 ignores the reader, so the certificate's bytes follow from the seed alone
+	certificateDer, err := x509.CreateCertificate(rand.Reader, template, template, tlsKey.Public(), tlsKey)
+	if err != nil {
+		return nil, err
+	}
+	privateKeyDer, err := x509.MarshalPKCS8PrivateKey(tlsKey)
+	if err != nil {
+		return nil, err
+	}
+	tlsPrivateKeyPem := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privateKeyDer})
+	clear(privateKeyDer)
+	provideSecretKeys := map[connectprotocol.ProvideMode][]byte{}
+	for _, mode := range sidecarConnectIdentityProvideModes() {
+		provideSecretKey, err := derive(sidecarConnectIdentityProvideLabelPrefix+strconv.Itoa(int(mode)), sha256.Size)
+		if err != nil {
+			return nil, err
+		}
+		provideSecretKeys[mode] = provideSecretKey
+	}
+	return &sidecarConnectIdentity{
+		tlsCertificatePem: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificateDer}),
+		tlsPrivateKeyPem:  tlsPrivateKeyPem,
+		provideSecretKeys: provideSecretKeys,
+	}, nil
+}
 
 // How a client generation reaches the platform. Nil in SidecarConnectSettings.Platform is connect's own: an
 // ApiOutOfBandControl to ApiUrl and a PlatformTransport to PlatformUrl. sidecartest's Net stands its in-process
@@ -187,11 +306,21 @@ type sidecarConnectLeg struct {
 	closed     bool
 }
 
-// Starts one generation's client: settings from the Sidecar's with the ClientKey seed, the platform's client, a
-// BringYourApi and the dispatcher. The watch on the connection and the components start once the run loop has
-// published the generation (start), so a removal never misses one. See sidecarLeg.
+// Yes: each generation's client is a connect client, which presents the connect identity the core keeps for it.
+func (self *sidecarConnectLeg) keepsConnectIdentity() bool {
+	return true
+}
+
+// Starts one generation's client: settings from the Sidecar's with the ClientKey seed and the connect identity the
+// generation keeps, the platform's client, a BringYourApi and the dispatcher. The watch on the connection and the
+// components start once the run loop has published the generation (start), so a removal never misses one. A
+// generation with no kept connect identity opens no client. See sidecarLeg.
 func (self *sidecarConnectLeg) startGeneration(generation *sidecarGeneration) (sidecarLegGeneration, error) {
 	settings := self.sidecar.settings
+	connectIdentity, err := newSidecarConnectIdentity(generation.connectIdentitySeed)
+	if err != nil {
+		return nil, err
+	}
 	clientSettings := *settings.Connect.ClientSettings
 	if clientSettings.EncryptionSettings != nil {
 		// a copy, since ApplySidecarClientSettings writes through it and the host's settings are its own
@@ -200,6 +329,10 @@ func (self *sidecarConnectLeg) startGeneration(generation *sidecarGeneration) (s
 	}
 	ApplySidecarClientSettings(&clientSettings)
 	clientSettings.ClientKeySeed = generation.clientKeySeed
+	// the sequence certificate every contract to the client commits to, the generation's at every start; a
+	// ServerTlsConfig in the host's settings still wins over it, as connect has it
+	clientSettings.EncryptionSettings.ProvideTlsCertificatePem = connectIdentity.tlsCertificatePem
+	clientSettings.EncryptionSettings.ProvideTlsPrivateKeyPem = connectIdentity.tlsPrivateKeyPem
 	clientSettings.Log = connectLogger(self.sidecar.log)
 
 	clientInfo := connect.UnknownClientInfo()
@@ -226,6 +359,8 @@ func (self *sidecarConnectLeg) startGeneration(generation *sidecarGeneration) (s
 		ApiUrl:                    settings.ApiUrl,
 		PlatformUrl:               settings.PlatformUrl,
 		PlatformTransportSettings: &transportSettings,
+		// so a contract a peer holds from an earlier start of this generation verifies from the first frame
+		ProvideSecretKeys: connectIdentity.provideSecretKeys,
 	})
 	clear(clientSettings.ClientKeySeed)
 	if err != nil {
@@ -236,6 +371,9 @@ func (self *sidecarConnectLeg) startGeneration(generation *sidecarGeneration) (s
 			self.sidecar.log.Warningf("[sidecar]generation %d's client did not close cleanly: %s", generation.generation, err)
 		}
 	}
+	// a platform that loads no keys as it builds a client gets them here, still before any mode is provided, so no
+	// provide frame ever names a key the generation does not keep
+	platformClient.Client.ContractManager().LoadProvideSecretKeys(connectIdentity.provideSecretKeys)
 	platformClient.Client.ContractManager().SetProvideModes(map[connectprotocol.ProvideMode]bool{
 		connectprotocol.ProvideMode_Network: true,
 	})

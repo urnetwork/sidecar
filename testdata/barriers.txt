@@ -431,6 +431,8 @@ barrier identity.change.bind.after identity_binding_retry.go
 barrier identity.change.bind.before identity_binding_retry.go
 barrier identity.cleanup.sign.after identity_cleanup.go
 barrier identity.cleanup.sign.before identity_cleanup.go
+barrier identity.connect_identity.persist.after identity_connect.go
+barrier identity.connect_identity.persist.before identity_connect.go
 barrier identity.enroll.after identity_enroll.go
 barrier identity.enroll.before identity_enroll.go
 barrier identity.enroll_child.mint.after identity_enroll_child.go
@@ -888,6 +890,9 @@ secret by_client_jwt identity_pair.go
 secret by_jwt api_token_source.go
 secret close api_routes_core.go
 secret commit_secret mls_treekem.go
+secret connect_identity_seed identity_connect.go
+secret connect_identity_seed sidecar_new_connect.go
+secret connect_sequence_tls_key sidecar_new_connect.go
 secret delegation_reader_seed config_authkey.go
 secret delegation_reader_seed identity_admission.go
 secret delegation_signing_seed config_authkey.go

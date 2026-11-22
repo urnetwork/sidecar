@@ -17,6 +17,7 @@ acl_consent.go
 acl_eval.go
 acl_evs.go
 acl_grant.go
+acl_grant_route.go
 acl_hujson.go
 acl_implicit.go
 acl_kind.go
