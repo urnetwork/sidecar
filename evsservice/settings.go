@@ -208,6 +208,18 @@ type EvsSettings struct {
 	// The gen/<g> records a process keeps, which never change while their repo lives (§10's gen row). Non-positive
 	// keeps none.
 	GenerationCacheCount int
+	// A statement's gen/<g> resolved through its repo's GroupForms (generation_resolve.go; plan-KEYS-reform-ladder
+	// rule 8): the most forms of one repo its one LIST reads, 1,000, gkm's own FormMaxCount. A re-form is rare
+	// (§10.8), so a repo past it is a fault, which answers 503. Positive.
+	GroupFormMaxCount int
+	// The most bytes of a Signed GroupForm a resolution reads: 16 KiB, gkm's StatementMaxByteCount. Positive.
+	GroupFormMaxByteCount int64
+	// How long a repo's form list stays kept: 5 s, gkm's own FormCacheTtl. Forms are append-only, so a list read
+	// before a new form stood only fails a resolution, which answers 503 and is met again by a retry within it.
+	// Non-positive keeps none, every resolution listing them.
+	GroupFormCacheTtl time.Duration
+	// The most repos whose form lists one process keeps: 4,096. Non-positive keeps none.
+	GroupFormCacheCount int
 	// §11.8's lease row: the longest seal lease a push may ask for, 120 s. At most 120 s; positive.
 	LeaseMaxDuration time.Duration
 
@@ -415,6 +427,10 @@ func DefaultEvsSettings() *EvsSettings {
 		ReseedStatementRetryCount:   4,
 		ReseedPartMaxAge:            24 * time.Hour,
 		GenerationCacheCount:        100 * 1000,
+		GroupFormMaxCount:           1000,
+		GroupFormMaxByteCount:       16 * 1024,
+		GroupFormCacheTtl:           5 * time.Second,
+		GroupFormCacheCount:         4096,
 		LeaseMaxDuration:            evsLeaseMaxDuration,
 
 		ReadPathMaxCount:                64,
@@ -493,6 +509,9 @@ func (self *EvsSettings) Validate() error {
 	}
 	if self.PushTimeBound <= 0 || self.SealTimeBound <= 0 || self.SlotMaxByteCount <= 0 || self.SlotExistingMaxAge <= 0 || self.GenerationRecordMaxByteCount <= 0 {
 		return fmt.Errorf("%w: a push's time bound, a slot's bound or age, or gen/<g>'s bound not positive", ErrEvsSettings)
+	}
+	if self.GroupFormMaxCount <= 0 || self.GroupFormMaxByteCount <= 0 {
+		return fmt.Errorf("%w: the GroupForms a resolution reads, or a form's bound, not positive", ErrEvsSettings)
 	}
 	if self.SlotRewriteRetryCount < 0 || self.ErasureFinishDelay <= 0 || self.CompletionLookbackCount <= 0 {
 		return fmt.Errorf("%w: a slot rewrite's retries negative, or the erasure reconciler's delay or a completion's lookback not positive", ErrEvsSettings)

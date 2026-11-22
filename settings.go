@@ -791,6 +791,11 @@ type GkmSettings struct {
 	// for an active repo/ alone: 15 min, under the hourly resync, so each resync tries once while the syncs a commit
 	// hint or a restart brings between add no refused call. Non-positive tries at every sync.
 	ReformResumeInterval time.Duration
+	// QD-1187: how many times one ReformGroup call drafts again when gkm refuses its form 409 with a generation of the
+	// group it re-forms past the form's, a claim having landed first, taking that generation each time so the next
+	// form and ladder carry it: 3. Past it the call waits (ErrGkmWait), its draft dropped; non-positive drafts none
+	// again.
+	ReformRedraftCount int
 }
 
 // The desktop daemon's gkm settings, the only source of their defaults.
@@ -850,6 +855,7 @@ func DefaultGkmSettings() *GkmSettings {
 		CreateGroupDrawCount:         4,
 		LadderBatchCount:             64,
 		ReformResumeInterval:         15 * time.Minute,
+		ReformRedraftCount:           3,
 	}
 }
 

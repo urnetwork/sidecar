@@ -30,7 +30,6 @@ package evsservice
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -635,73 +634,35 @@ func (self *pushAttempt) depositHeadOf(head *protocol.EvsHead) *protocol.EvsDepo
 
 // gen/<g> records as evs reads them (§11.8 step 4: "the generation record from evs's caches"): the Signed GenRotate
 // gkm created at gkm/<group_id>/gen/<g> on the repo's cluster, where generation g exists and nowhere else
-// (D-KEYS-15), verified under its signer's identity key in the newest state, and kept for the process's life,
-// since it never changes while its repo lives. Safe for concurrent use.
+// (D-KEYS-15), or the one a re-form's ladder carried, resolved through the repo's GroupForms (generation_resolve.go),
+// verified under its signer's identity key in the newest state, and kept for the process's life, since it never
+// changes while its repo lives. Safe for concurrent use.
 type GenerationRecords struct {
 	settings *EvsSettings
+	clock    sidecar.Clock
 
 	stateLock sync.Mutex
 	records   map[generationRecordKey]*protocol.GenRotate
+	// each repo's GroupForms, for GroupFormCacheTtl
+	formLists map[generationFormListKey]*generationFormList
 }
 
-// One record's key: its cluster, group and generation.
+// One resolution's key: its cluster, repo, and the statement's group and generation.
 type generationRecordKey struct {
 	clusterId  string
+	repoId     sidecar.Id
 	groupId    sidecar.Id
 	generation uint64
 }
 
-// An empty cache.
-func NewGenerationRecords(settings *EvsSettings) *GenerationRecords {
-	return &GenerationRecords{settings: settings, records: map[generationRecordKey]*protocol.GenRotate{}}
-}
-
-// gen/<generation> of groupId on cluster, its signature checked against view's identity keys; nil with no error when
-// gkm holds no such generation.
-func (self *GenerationRecords) Read(ctx context.Context, cluster sidecar.BlobCluster, groupId sidecar.Id, generation uint64, view sidecar.GkmAuthView) (*protocol.GenRotate, error) {
-	key := generationRecordKey{clusterId: cluster.ClusterId(), groupId: groupId, generation: generation}
-	if record, ok := func() (*protocol.GenRotate, bool) {
-		self.stateLock.Lock()
-		defer self.stateLock.Unlock()
-		record, ok := self.records[key]
-		return record, ok
-	}(); ok {
-		return record, nil
+// An empty cache on clock.
+func NewGenerationRecords(settings *EvsSettings, clock sidecar.Clock) *GenerationRecords {
+	return &GenerationRecords{
+		settings:  settings,
+		clock:     clock,
+		records:   map[generationRecordKey]*protocol.GenRotate{},
+		formLists: map[generationFormListKey]*generationFormList{},
 	}
-	object, err := cluster.Get(ctx, sidecar.GkmGenerationPath(groupId, generation))
-	if errors.Is(err, sidecar.ErrBlobNotFound) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	defer object.Body.Close()
-	objectBytes, err := readAllLimited(object, self.settings.GenerationRecordMaxByteCount)
-	if err != nil {
-		return nil, err
-	}
-	generationRecord, err := sidecar.ParseGenRotate(objectBytes, groupId, generation, func(signerId sidecar.Id) ([]byte, error) {
-		identityKey := view.IdentityKey(signerId)
-		if len(identityKey) == 0 {
-			return nil, fmt.Errorf("%w: a rotator the state admits no identity key for", sidecar.ErrGkmAuthentication)
-		}
-		return identityKey, nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	if 0 < self.settings.GenerationCacheCount {
-		self.stateLock.Lock()
-		defer self.stateLock.Unlock()
-		if self.settings.GenerationCacheCount <= len(self.records) {
-			for evicted := range self.records {
-				delete(self.records, evicted)
-				break
-			}
-		}
-		self.records[key] = generationRecord.Rotate
-	}
-	return generationRecord.Rotate, nil
 }
 
 // An object's body, at most maxByteCount, else ErrEvsPushInvalid.
