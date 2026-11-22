@@ -146,6 +146,10 @@ type CertsSettings struct {
 	CanaryRetryDelay time.Duration
 	// How long removing an order's challenges may take, on a context of its own. Default 30 s.
 	DnsCleanupTimeout time.Duration
+	// The most TXT values one _acme-challenge name holds: a set's name's and its wildcard's (§12.7, §12.8;
+	// RFC 8555 §8.4). A protocol limit, which dns's challenge route holds writes to (server's
+	// model.DnsChallengeSettings.ValueMaxCount), so it changes on both sides at once. Default 2. Positive.
+	DnsChallengeValueMaxCount int
 	// How old an account key is when it rolls over (RFC 8555 §7.3.5). Default a year (§13.8).
 	AccountRolloverAge time.Duration
 	// How far into its validity a certificate with no ARI window renews (§13.8: two thirds). Between 0
@@ -215,6 +219,7 @@ func DefaultCertsSettings() *CertsSettings {
 		DnsWaitingDelay:           1 * time.Second,
 		CanaryRetryDelay:          30 * time.Second,
 		DnsCleanupTimeout:         30 * time.Second,
+		DnsChallengeValueMaxCount: 2,
 		AccountRolloverAge:        365 * 24 * time.Hour,
 		RenewalLifetimeFraction:   2.0 / 3.0,
 	}
@@ -312,6 +317,7 @@ func (self *CertsSettings) Validate() error {
 		"DnsWaitingDelay":           int64(self.DnsWaitingDelay),
 		"CanaryRetryDelay":          int64(self.CanaryRetryDelay),
 		"DnsCleanupTimeout":         int64(self.DnsCleanupTimeout),
+		"DnsChallengeValueMaxCount": int64(self.DnsChallengeValueMaxCount),
 		"AccountRolloverAge":        int64(self.AccountRolloverAge),
 	} {
 		if value <= 0 {
