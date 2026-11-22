@@ -53,8 +53,8 @@ func (self *testConfigNet) retainedWith(entryBytes []byte) *ConfigRetained {
 	return retained
 }
 
-// The verdict every kind of reader gives entryBytes at the tip's next position: a long-running reader applying it,
-// a new device and a rows-only gate starting at it. Each must fork, naming the signer check.
+// Fails the test unless every kind of reader forks on entryBytes, a base at the tip's next position, naming the signer
+// check: a long-running reader applying it, and a new device and a rows-only gate starting at it.
 func (self *testConfigNet) everyReaderForksOnBase(entryBytes []byte) {
 	self.t.Helper()
 	reader := self.newReader()
