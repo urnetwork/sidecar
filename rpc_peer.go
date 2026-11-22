@@ -291,6 +291,8 @@ type subprotocolPeerIdentity struct {
 	expireTime time.Time
 	// when the Hello verified, which remote search reads as the indexer seen (search_remote_transport.go)
 	sessionTime time.Time
+	// which verified Hello this is, never 0: a call ends only the Hello it went under (rpc_call.go)
+	helloSerial uint64
 	// what the Hello showed; nil only where an internal test opened the gate by hand
 	peer *SubprotocolPeerIdentity
 }
@@ -308,12 +310,26 @@ func (self *Subprotocol) markPeerVerifiedAs(sourceId connect.Id, clientPublicKey
 	expireTime := now.Add(self.settings.HelloCacheTimeout)
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
+	self.helloSerial += 1
 	self.sourceIdIdentities[sourceId] = subprotocolPeerIdentity{
 		clientPublicKey: clientPublicKey,
 		expireTime:      expireTime,
 		sessionTime:     now,
+		helloSerial:     self.helloSerial,
 		peer:            peer,
 	}
+}
+
+// The serial of the Hello with peerId that stands now, and 0 with none standing.
+func (self *Subprotocol) standingHelloSerial(peerId connect.Id) uint64 {
+	now := self.clock.Now()
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	identity, ok := self.sourceIdIdentities[peerId]
+	if !ok || !now.Before(identity.expireTime) {
+		return 0
+	}
+	return identity.helloSerial
 }
 
 // When the Hello with peerId verified, and false with none standing.
@@ -345,10 +361,23 @@ func (self *Subprotocol) forgetPeer(sourceId connect.Id) {
 	delete(self.sourceIdIdentities, sourceId)
 }
 
+// Closes the gate for sourceId only while the Hello that stands is the one helloSerial names: a call that went under
+// that Hello and met a refusal ends it, and leaves alone a fresh one another call's Hello verified meanwhile, which the
+// peer's gate holds too.
+func (self *Subprotocol) forgetPeerHello(sourceId connect.Id, helloSerial uint64) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if identity, ok := self.sourceIdIdentities[sourceId]; ok && identity.helloSerial == helloSerial {
+		delete(self.sourceIdIdentities, sourceId)
+	}
+}
+
 // Whether an envelope belongs to the Hello exchange the gate exists for, and so passes it closed: a
 // Hello, a HelloResult answering one this side sent, or an Error answering one. Call and OpenStream go
-// through ensurePeerVerified, so a Hello is the only request this side ever sends a peer the gate is
-// closed to, and an Error from one either answers it or matches no pending request at all.
+// through ensurePeerVerified, so a Hello is the only request this side sends a peer the gate is closed
+// to, but a call's Hello may end while the call is in flight. An Error passes and answers that call, the
+// gate's UNAUTHENTICATED among them, and any other answer the gate refuses tells the call it was dropped
+// (noteAnswerRefused).
 func helloExchange(messageType uint32, flags uint32) bool {
 	response := flags&EnvelopeFlagResponse != 0
 	switch protocol.MessageType(messageType) {

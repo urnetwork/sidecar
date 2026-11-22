@@ -20,6 +20,18 @@
 // the peer's still stands: a call meets the gate's UNAUTHENTICATED with one fresh Hello, and a stream open meets its
 // INVALID with one, since connect reports that the daemon lost its session with the peer, which ends the peer's Hello
 // (QD-1185).
+//
+// Connect also replays to the restarted daemon what the peer sent before the restart and the old process never
+// acknowledged: the peer's Hello, the earlier stream's open and its held write. The restarted daemon answers the Hello,
+// and its gate opens to the peer, so frames that reach the gate after it are admitted. In about one run in five that
+// is the call. The daemon answers it, and the peer's own gate, whose Hello connect's report ended, refuses the answer.
+// The call used to wait out RecoveryTimeout for an answer its gate had dropped, failing ERR_DEADLINE_EXCEEDED in a run
+// that followed another test as often as in one alone (QD-1195). It now meets that refusal as it meets the restarted
+// gate's, with one fresh Hello and the same request again (rpc_call.go;
+// TestCallAnsweredAfterItsHelloEndedRunsHelloAgain reproduces the order on demand). Now and then it is the earlier
+// stream's open. The daemon's listener takes it as a new stream ahead of the peer's new one, and the peer resets it
+// RST_PROTOCOL, since it answered that open before the restart. So a test waits for the incoming of the stream it
+// opened (restartIdentityOpen).
 
 package sidecartest
 
@@ -115,19 +127,25 @@ func (self *restartIdentityMaterial) disjoint(other *restartIdentityMaterial) bo
 	return true
 }
 
-// Opens a stream from opener's dispatcher to the target on peerId and waits for the peer's accept, both within ctx.
+// Opens a stream from opener's dispatcher to the target on peerId and waits for the peer's incoming of that stream,
+// both within ctx. An incoming of another stream is passed over: the open of a stream from before a restart, which
+// connect replays to the restarted listener and its opener resets.
 func restartIdentityOpen(t *testing.T, ctx context.Context, opener *SubprotocolSidecar, peerId connect.Id, target string, incomings <-chan *sidecar.StreamIncoming) (*sidecar.SubprotocolStream, *sidecar.StreamIncoming) {
 	t.Helper()
 	stream, err := opener.Subprotocol().OpenStream(ctx, sidecar.Id(peerId), &sidecar.StreamOpenRequest{Target: target})
 	if err != nil {
 		t.Fatalf("%s's open: %v", opener.Name, err)
 	}
-	select {
-	case incoming := <-incomings:
-		return stream, incoming
-	case <-ctx.Done():
-		t.Fatal("the peer never saw the open")
-		return nil, nil
+	for {
+		select {
+		case incoming := <-incomings:
+			if incoming.Stream.StreamId() == stream.StreamId() {
+				return stream, incoming
+			}
+		case <-ctx.Done():
+			t.Fatal("the peer never saw the open")
+			return nil, nil
+		}
 	}
 }
 
@@ -298,7 +316,8 @@ func waitingRestartedSidecar(t *testing.T, settings *restartIdentitySettings) (*
 // dispatcher listens again and sends nothing, and the peer, which still holds its session to the daemon's client id and
 // the send sequence its held write keeps, opens the stream after the restart. The stream opens, and carries bytes both
 // ways, within RecoveryTimeout of the restart, which takes connect's per-peer session recovering against a restarted
-// responder (QD-1176), and the peer's open meeting the restarted gate's INVALID with one fresh Hello (QD-1185).
+// responder (QD-1176), and the peer's open meeting the restarted gate's INVALID with one fresh Hello (QD-1185), or
+// admitted at once when connect's replay of the peer's earlier Hello opened that gate first.
 func TestWaitingRestartedSidecarIsReachedAtOnceUnderItsKeptGeneration(t *testing.T) {
 	settings := defaultRestartIdentitySettings()
 	daemon, peer, restartTime := waitingRestartedSidecar(t, settings)
@@ -327,7 +346,9 @@ func TestWaitingRestartedSidecarIsReachedAtOnceUnderItsKeptGeneration(t *testing
 
 // The waiting restarted daemon answers a call instead: the peer's call is answered within RecoveryTimeout of the
 // restart, which takes connect's per-peer session recovering against a restarted responder (QD-1176), and the call
-// meeting the restarted gate's UNAUTHENTICATED with one fresh Hello.
+// meeting the restarted gate's UNAUTHENTICATED with one fresh Hello. Or, when connect's replay of the peer's earlier
+// Hello opened that gate first, it takes the call's answer meeting the peer's own gate, which connect's report closed,
+// with one fresh Hello and the same request.
 func TestWaitingRestartedSidecarAnswersACallAtOnceUnderItsKeptGeneration(t *testing.T) {
 	settings := defaultRestartIdentitySettings()
 	daemon, peer, restartTime := waitingRestartedSidecar(t, settings)

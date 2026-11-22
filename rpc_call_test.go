@@ -3,7 +3,8 @@
 // §6.6's peer RPC between two dispatchers: round trips plain and chunked, the timeout's default, cap and
 // refusal, an immediate send refusal sent again under its request_id, a lost response returned with its
 // id and not retried, the response shapes that fail without retry, Cancel reaching a running handler,
-// handlers' refusals, a peer's bound on runs, and a gate that closed under a call. A call marked for an edge
+// handlers' refusals, a peer's bound on runs, and a gate at either end that closed under a call, met with a fresh
+// Hello that leaves a newer one another call's Hello verified standing. A call marked for an edge
 // (owner decision 624) runs no Hello, takes the edge's answer and its UNAUTHENTICATED as they come, and is refused
 // for a peer known as a sidecar, on an edge's dispatcher and for a type an edge drops; an unmarked call to a known
 // edge is refused before its Hello. Every wait is on the sides' fake clocks.
@@ -451,6 +452,147 @@ func TestCallRunsHelloAgainWhenThePeerForgot(t *testing.T) {
 	}
 	if hellos := testSentOfType(a, protocol.MessageType_HELLO); len(hellos) != 2 {
 		t.Errorf("%d Hellos", len(hellos))
+	}
+}
+
+// Restarts side under its identity, as a daemon that keeps its generation's connect identity restarts: a new
+// dispatcher on the same client id and keys, whose gate holds no Hello.
+func testRestartRpcSide(pair *testRpcPair, side *testRpcSide, identity *testRpcIdentity) *testRpcSide {
+	side.subprotocol.Close()
+	side.cancel()
+	return pair.addClient(side.clientId, identity, nil)
+}
+
+// The callee restarts under its identity while a call to it is in flight, as sidecartest's
+// TestWaitingRestartedSidecarAnswersACallAtOnceUnderItsKeptGeneration has it over connect: the call goes under the
+// caller's standing Hello; connect reports that the callee lost its session with this client, which ends that Hello
+// (QD-1185), and replays the caller's earlier Hello to the restarted callee ahead of the call, which opens the
+// restarted gate, so the callee admits the call and its handler answers. The caller's gate, which holds no Hello with
+// the callee any more, refuses that answer. The call does not wait out its deadline for it: it runs one fresh Hello
+// and sends the same request again, under its request_id, which the mutating handler answers from what it kept,
+// having run once.
+func TestCallAnsweredAfterItsHelloEndedRunsHelloAgain(t *testing.T) {
+	pair := newTestRpcPair(t)
+	calleeIdentity := newTestRpcIdentity()
+	callee := pair.addClient(connect.NewId(), calleeIdentity, nil)
+	caller := pair.add(nil, nil)
+	if err := caller.subprotocol.EnsureHello(t.Context(), Id(callee.clientId)); err != nil {
+		t.Fatal(err)
+	}
+	earlierHello := testFirstSent(caller.sent(), protocol.MessageType_HELLO)
+	restarted := testRestartRpcSide(pair, callee, calleeIdentity)
+	runCount := testEchoHandler(t, restarted, &HandleOptions{Mutating: true})
+
+	replayed := atomic.Bool{}
+	caller.setDeliver(func(from *testRpcSide, to *testRpcSide, envelope *protocol.Envelope) *protocol.Envelope {
+		if from != caller || envelope.Type != uint32(testCallType) || replayed.Swap(true) {
+			return envelope
+		}
+		caller.losePeerSession(restarted.clientId)
+		restarted.subprotocol.receive(connect.SourceId(caller.clientId), proto.Clone(earlierHello).(*protocol.Envelope), caller.peerTo(restarted))
+		// the restarted gate stands once its HelloResult goes, which reaches the caller unasked for
+		guard := time.After(testSubprotocolAwaitTimeout)
+		for {
+			_, changed := restarted.sentCount.Get()
+			if testFirstSent(restarted.sent(), protocol.MessageType_HELLO_RESULT) != nil {
+				return envelope
+			}
+			select {
+			case <-changed:
+			case <-guard:
+				t.Error("the restarted callee never answered the replayed Hello")
+				return envelope
+			}
+		}
+	})
+	results := testStartCall(caller, t.Context(), restarted, testCallType, []byte("x"), nil)
+	// on the fake clocks the call's deadline never comes, so a call that waits on the refused answer sends nothing more
+	callsOf := func(sent []*protocol.Envelope) []*protocol.Envelope {
+		calls := []*protocol.Envelope{}
+		for _, envelope := range sent {
+			if envelope.Type == uint32(testCallType) {
+				calls = append(calls, envelope)
+			}
+		}
+		return calls
+	}
+	testAwaitSent(t, caller, func(sent []*protocol.Envelope) bool {
+		return 2 <= len(callsOf(sent))
+	})
+	result := testAwait(t, results, "call")
+	if result.err != nil || string(result.body) != "x!" {
+		t.Fatalf("%q, %v", result.body, result.err)
+	}
+	if calls := callsOf(caller.sent()); len(calls) != 2 || calls[0].RequestId != calls[1].RequestId {
+		t.Errorf("%d sends of the call", len(calls))
+	}
+	if runCount.Load() != 1 {
+		t.Errorf("the handler ran %d times", runCount.Load())
+	}
+	if hellos := testSentOfType(caller, protocol.MessageType_HELLO); len(hellos) != 2 {
+		t.Errorf("%d Hellos, want the first and one fresh", len(hellos))
+	}
+	if refused := caller.subprotocol.stats.identityRefusedCount.Load(); refused != 1 {
+		t.Errorf("the caller's gate refused %d frames, want the one answer", refused)
+	}
+	if _, ok := caller.subprotocol.PeerIdentity(Id(restarted.clientId)); !ok {
+		t.Error("no Hello stands with the restarted callee")
+	}
+}
+
+// Two calls go under the Hello a callee restarted under its identity no longer holds, as a call and the HeadCheck
+// beside it do, and its gate refuses each UNAUTHENTICATED. The first call's fresh Hello opens both gates and its
+// answer comes. The second call's refusal comes after it, and ends only the Hello that call went under, which is
+// gone already, so the second call sends its request again under the first call's fresh Hello, running no Hello of
+// its own. Ending the fresh Hello would leave an answer that Hello admits to meet a closed gate.
+func TestCallRefusedUnderAnEndedHelloLeavesANewerOne(t *testing.T) {
+	pair := newTestRpcPair(t)
+	calleeIdentity := newTestRpcIdentity()
+	callee := pair.addClient(connect.NewId(), calleeIdentity, nil)
+	caller := pair.add(nil, nil)
+	if err := caller.subprotocol.EnsureHello(t.Context(), Id(callee.clientId)); err != nil {
+		t.Fatal(err)
+	}
+	restarted := testRestartRpcSide(pair, callee, calleeIdentity)
+	runCount := testEchoHandler(t, restarted, &HandleOptions{Mutating: true})
+	const firstRequestId, secondRequestId = uint64(0x1001), uint64(0x1002)
+
+	// the restarted gate's refusal of the second call is held back until the first call has its answer
+	heldRefusals := make(chan *protocol.Envelope, 1)
+	caller.setDeliver(func(from *testRpcSide, to *testRpcSide, envelope *protocol.Envelope) *protocol.Envelope {
+		if from == restarted && envelope.Type == uint32(protocol.MessageType_ERROR) && envelope.RequestId == secondRequestId {
+			select {
+			case heldRefusals <- envelope:
+				return nil
+			default:
+			}
+		}
+		return envelope
+	})
+	second := testStartCall(caller, t.Context(), restarted, testCallType, []byte("second"), &CallOptions{RequestId: secondRequestId})
+	heldRefusal := testAwait(t, heldRefusals, "the restarted gate's refusal of the second call")
+
+	response, err := caller.subprotocol.Call(t.Context(), Id(restarted.clientId), testCallType, []byte("first"), &CallOptions{RequestId: firstRequestId})
+	if err != nil || string(response) != "first!" {
+		t.Fatalf("the first call: %q, %v", response, err)
+	}
+	freshSerial := caller.subprotocol.standingHelloSerial(restarted.clientId)
+	if freshSerial == 0 {
+		t.Fatal("no Hello stands after the first call")
+	}
+	caller.subprotocol.receive(connect.SourceId(restarted.clientId), heldRefusal, restarted.peerTo(caller))
+	result := testAwait(t, second, "the second call")
+	if result.err != nil || string(result.body) != "second!" {
+		t.Fatalf("the second call: %q, %v", result.body, result.err)
+	}
+	if serial := caller.subprotocol.standingHelloSerial(restarted.clientId); serial != freshSerial {
+		t.Errorf("the second call replaced the first call's fresh Hello (serial %d, then %d)", freshSerial, serial)
+	}
+	if hellos := testSentOfType(caller, protocol.MessageType_HELLO); len(hellos) != 2 {
+		t.Errorf("%d Hellos, want the first and the first call's fresh one", len(hellos))
+	}
+	if runCount.Load() != 2 {
+		t.Errorf("the handler ran %d times, want once a call", runCount.Load())
 	}
 }
 
