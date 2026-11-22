@@ -187,9 +187,15 @@ type GkmServiceSettings struct {
 	// default is the client's (sidecar.GkmSettings.LadderBatchCount), so the two sides keep one.
 	LadderMaxCount int
 	// How many writes a re-form's closing of the group it re-forms makes to the group's closing marker before it
-	// answers 503 (QD-1186; reform.go): a write past the first follows one that another request's write to the marker,
-	// between this one's read of it and its own, refused.
+	// answers 503 (QD-1186; reform_fence.go): a write past the first follows one that another request's write to the
+	// marker, between this one's read of it and its own, refused.
 	ReformCloseWriteCount int
+	// How old, by the store's LastModified and gkm's clock, a closing marker whose closing has no verdict must be before
+	// another re-form at an equal or higher generation may void it and take the marker (QD-1188; reform_fence.go): 10
+	// minutes, far past the lb's 30 s and the store's deadlines, so only a closing whose re-former stopped between its
+	// marker and its verdict gives way. The verdict's one If-None-Match create keeps a takeover safe at any age; this
+	// keeps two live re-forms from voiding each other in turn.
+	ReformClosingStallAge time.Duration
 	// The generations whose commitment and auth pin one process remembers: gen/ is create-only, so an entry never
 	// goes stale, and an evicted one costs a GET.
 	GenerationCacheCount int
@@ -293,6 +299,7 @@ func DefaultGkmServiceSettings() *GkmServiceSettings {
 		GenerationListMaxCount:     64 * 1024,
 		LadderMaxCount:             sidecar.DefaultGkmSettings().LadderBatchCount,
 		ReformCloseWriteCount:      4,
+		ReformClosingStallAge:      10 * time.Minute,
 		GenerationCacheCount:       256 * 1024,
 		WrapBatchMaxCount:          sidecar.DefaultGkmSettings().WrapBatchMaxCount,
 		DeliveryMaxByteCount:       8 * 1024,
@@ -372,6 +379,7 @@ func (self *GkmServiceSettings) Validate() error {
 		{name: "GenerationListMaxCount", value: int64(self.GenerationListMaxCount)},
 		{name: "LadderMaxCount", value: int64(self.LadderMaxCount)},
 		{name: "ReformCloseWriteCount", value: int64(self.ReformCloseWriteCount)},
+		{name: "ReformClosingStallAge", value: int64(self.ReformClosingStallAge)},
 		{name: "WrapBatchMaxCount", value: int64(self.WrapBatchMaxCount)},
 		{name: "DeliveryMaxByteCount", value: self.DeliveryMaxByteCount},
 		{name: "WrapPutConcurrency", value: int64(self.WrapPutConcurrency)},

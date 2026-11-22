@@ -240,16 +240,18 @@ func configShrinkRepoIds(state *ConfigState) []Id {
 // Advances holders_shrunk_at on next, the state at entry n being built from before, S(n-1), for each repo the entry
 // shrinks at its time or at the repo's t_s (§7.9's shrink row, QD-883), the config repo among them, with the entry's
 // time beside it as the repo's next t_s (QD-1015). Called once an entry's effects are written, in Apply, in a base's
-// re-application and in StateAt's rebuild alike, so every verifier holds one value.
+// re-application and in StateAt's rebuild alike, so every verifier holds one value. It first lists the devices the
+// entry consented in their owners' owner-bound repos (configAdvanceConsents), so the holders it compares are the
+// entry's finished rows'; a consent only adds holders, so no listing is a shrink.
 func configAdvanceShrinks(before *ConfigState, next *configStateBuilder, effects []*configStatement) {
 	touched := 0 < len(next.sidecarsCopied) || 0 < len(next.membersCopied) || 0 < len(next.delegationsCopied) ||
 		next.state.aclRows != before.aclRows
 	if !touched {
 		return
 	}
-	retirements := configCompromisesOf(effects)
 	// the state the entry made, an immutable view with an acl part of its own
-	after := configCopyState(next.state)
+	after := configAdvanceConsents(next)
+	retirements := configCompromisesOf(effects)
 	at := time.UnixMilli(next.state.timeMs)
 	shrunk := map[Id]bool{}
 	for _, repoId := range configShrinkRepoIds(after) {
@@ -262,6 +264,37 @@ func configAdvanceShrinks(before *ConfigState, next *configStateBuilder, effects
 		}
 	}
 	configSetShrunkAt(next, func(repoId Id) bool { return shrunk[repoId] })
+}
+
+// Lists, in each owner-bound repo's row of next, the state an entry built, every device next consents for the row's
+// owner that the row does not list yet (§8.5; §8.8's AclRepo row, the owner's consented sidecar_ids), on a copy of
+// its acl rows: a device an owner's consented device or recovery key admitted after the repo's RepoCreate (the scoped
+// clause), one an AdmissionConfirm by the owner's consented device confirmed, and an invited first device, each at the
+// entry that consents it, a proposal's completing cosign or activating tick included, as ACL's fold lists an
+// OwnerConfirm's (acl_access_log.go's consented row). So such a device reads and writes its owner's vault, mailbox and
+// secrets from that entry on at every reader, gate and the exchange, which already took it for consented (owner
+// decision 355). Rows a state cannot index list nothing more, their readers already refusing what they would open.
+//
+// Returns the state the entry made with the listing, an immutable view with an acl part of its own, which the shrink
+// step reads: the view this step judged consent on where it listed nothing, so an entry builds one acl state here.
+func configAdvanceConsents(next *configStateBuilder) *ConfigState {
+	after := configCopyState(next.state)
+	repos := next.state.aclRows.GetRepos()
+	if !slices.ContainsFunc(repos, aclRepoRowOwnerBound) {
+		return after
+	}
+	acl, err := after.Acl()
+	if err != nil {
+		return after
+	}
+	listed, changed := acl.listConsentedOwnerDevices(repos)
+	if !changed {
+		return after
+	}
+	rows := aclRowsCopy(next.state.aclRows)
+	rows.Repos = listed
+	next.setAclRows(rows)
+	return configCopyState(next.state)
 }
 
 // Sets holders_shrunk_at to the builder's position and holders_shrunk_time_ms to its time, the repo's next t_s
