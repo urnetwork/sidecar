@@ -15,7 +15,8 @@ import (
 type SidecarProtocolSettings struct {
 	// How long a peer's Hello stands: 10 min. Since connect signals no sequence exit, it ends sooner at
 	// any change of the peer's C15 key, checked per frame, or on a send's ack error
-	// (plan-PROTO-small-readings.md's reading 1).
+	// (plan-PROTO-small-readings.md's reading 1), or when connect reports that the peer lost its session
+	// with this client (QD-1185).
 	HelloCacheTimeout time.Duration
 	// A call's timeout when its caller sets none: 15 s. The protocol's maximum is 55 s, before the 60 s
 	// sequence exit (§6.6).
