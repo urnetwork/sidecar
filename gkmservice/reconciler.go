@@ -1507,11 +1507,11 @@ func readRepoForms(ctx context.Context, cluster sidecar.BlobCluster, repoId side
 // The facts of a group's newest generation, by one listing of gen/ and one read, through the accessor: found false
 // for a group with none.
 func gkmNewestGenerationFacts(ctx context.Context, cluster sidecar.BlobCluster, groupId sidecar.Id, settings *GkmServiceSettings) (*gkmGenerationFacts, bool, error) {
-	generations, err := listGkmGenerations(ctx, cluster, groupId, 0, settings.ListPageCount)
+	generations, err := listGkmGenerations(ctx, cluster, groupId, 0, settings.ListPageCount, settings.GenerationListMaxCount)
 	if err != nil || len(generations) == 0 {
 		return nil, false, err
 	}
-	objectBytes, err := readGkmGeneration(ctx, cluster, groupId, generations[len(generations)-1])
+	objectBytes, err := readGkmGeneration(ctx, cluster, groupId, generations[len(generations)-1], settings.StatementMaxByteCount)
 	if err != nil {
 		return nil, false, err
 	}

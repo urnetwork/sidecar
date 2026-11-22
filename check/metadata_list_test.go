@@ -74,6 +74,41 @@ type metadataListAddition struct {
 // sweep's (owner decisions 658, 656 and 655), and QD-1165's with the fourth late fold's (owner decision 680); each
 // here waits for the next fold.
 var metadataListAdditions = []metadataListAddition{
+	{
+		question: "e2e-gkm-concurrency-reform-old-group-claim",
+		block:    "# metadata_list.yml v66;",
+		list:     "# metadata_list.yml v67;",
+	},
+	{
+		question: "e2e-gkm-concurrency-reform-old-group-claim",
+		block:    "# unchanged, and no column, family or proto field changes.\n",
+		list: "# unchanged, and no column, family or proto field changes.\n" +
+			"# v67, updated 2026-11-22 for the owner's answer QD-1186 (e2e-gkm-concurrency-reform-old-group-claim), adds to\n" +
+			"# gkm-1 a re-formed group's closing marker, gkm/<group_id>/closed, the re-form's GroupForm byte for byte, written\n" +
+			"# before that form, and each closing's verdict, gkm/<group_id>/closing/<h>, that form's bytes again or none, both\n" +
+			"# kept until the repo's shred; they show nothing the GroupForm chain does not, and no column, Redis family or\n" +
+			"# proto field changes.\n",
+	},
+	{
+		question: "e2e-gkm-concurrency-reform-old-group-claim",
+		block:    "gkm/<group_id>/owner and gkm/<group_id>/epoch/0 (metadata cluster)",
+		list:     "gkm/<group_id>/owner, gkm/<group_id>/closed, gkm/<group_id>/closing/<h> and gkm/<group_id>/epoch/0 (metadata cluster)",
+	},
+	{
+		question: "e2e-gkm-concurrency-reform-old-group-claim",
+		block:    "through which alone gkm resolves the group (owner decision 201); and each forwarding Delegation's",
+		list:     "through which alone gkm resolves the group (owner decision 201); each re-formed group's closing marker, the GroupForm that re-formed it byte for byte, and each closing's verdict, that form's bytes again or none (QD-1186); and each forwarding Delegation's",
+	},
+	{
+		question: "e2e-gkm-concurrency-reform-old-group-claim",
+		block:    "why: one accepted commit per epoch; re-forming; one repo to a group;",
+		list:     "why: one accepted commit per epoch; re-forming; no claim, wrap or commit in a group a re-form closed (QD-1186); one repo to a group;",
+	},
+	{
+		question: "e2e-gkm-concurrency-reform-old-group-claim",
+		block:    "an owner marker until the repo's shred, a re-seed's form writing it again;",
+		list:     "an owner marker until the repo's shred, a re-seed's form writing it again; a closing marker and its verdicts until the repo's shred;",
+	},
 }
 
 // §2.8's block with each addition in place, in order, and a finding for each that does not apply.

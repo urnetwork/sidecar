@@ -17,6 +17,9 @@
 //	           for its pairs (the deadline's own timing is the client's, which search_remote_ask_test.go holds on its
 //	           clock); held, its reply waits for a release; a planted handler wraps its server's, which a mutant uses (an
 //	           early short reply, a sync before answering)
+//	budget     each indexer's own D-CORE-17 budget on the world's clock, its CPU meter CpuClock where a test gives one:
+//	           a leg the requester stopped waiting for may still hold a slot when the test moves the clock, which on
+//	           the one clock would count the whole move as compute
 //	requests   a device's requests of servers while a search runs are its index sources' reads, "evs read <path>":
 //	           what a device asks evs for an index, the only thing either device of a remote search could ask
 //
@@ -44,6 +47,8 @@ import (
 // What a remote search world is made of.
 type SearchRemoteWorldArgs struct {
 	Clock sidecar.SearchTestClock
+	// The indexers' budgets' CPU meter, what RemoteCpuPerMinute and PageCpu are spent on; nil Clock.
+	CpuClock sidecar.Clock
 	// Each device's newest verified config state, by its sidecar_id, read at every send and page.
 	Config func(sidecarId sidecar.Id) (*sidecar.ConfigState, error)
 	// Opens a designation's sealed services; nil names search for every designation.
@@ -149,11 +154,12 @@ func (self *SearchRemoteWorld) changedWithLock() {
 	self.callsChanged = make(chan struct{})
 }
 
-// One indexer: its device, its server and how the transport reaches it.
+// One indexer: its device, its server, the budget the server admits by, and how the transport reaches it.
 type SearchRemoteIndexer struct {
 	SidecarId sidecar.Id
 	Device    *sidecar.SearchTestNetworkDevice
 	Server    *sidecar.SearchRemoteServer
+	Budget    *sidecar.SidecarRemoteBudget
 	world     *SearchRemoteWorld
 
 	stateLock sync.Mutex
@@ -195,7 +201,7 @@ func (self *SearchRemoteWorld) AddIndexer(ctx context.Context, args *SearchRemot
 		device.Close()
 		return nil, err
 	}
-	budget, err := sidecar.NewSidecarRemoteBudget(settings, self.args.Clock)
+	budget, err := sidecar.NewSearchTestRemoteBudget(settings, self.args.Clock, self.args.CpuClock)
 	if err != nil {
 		device.Close()
 		return nil, err
@@ -222,7 +228,7 @@ func (self *SearchRemoteWorld) AddIndexer(ctx context.Context, args *SearchRemot
 		device.Close()
 		return nil, err
 	}
-	indexer := &SearchRemoteIndexer{SidecarId: indexerId, Device: device, Server: server, world: self}
+	indexer := &SearchRemoteIndexer{SidecarId: indexerId, Device: device, Server: server, Budget: budget, world: self}
 	self.stateLock.Lock()
 	self.indexers[indexerId] = indexer
 	self.stateLock.Unlock()
@@ -677,6 +683,8 @@ type SearchRemoteTeamArgs struct {
 	Text func(indexer string, repo string) sidecar.SearchTextSource
 	// Phones of m beside its own, each a requester of its own: a load's simulated requesters.
 	Requesters int
+	// The indexers' budgets' CPU meter (SearchRemoteWorldArgs.CpuClock); nil the network's clock.
+	CpuClock sidecar.Clock
 }
 
 // The repos each device reads, as the team grants them.
@@ -845,8 +853,9 @@ func newSearchRemoteTeam(ctx context.Context, args *SearchRemoteTeamArgs) (*Sear
 		team.Worlds[repo] = world
 	}
 	remote, err := NewSearchRemoteWorld(&SearchRemoteWorldArgs{
-		Clock:  clock,
-		Config: func(sidecarId sidecar.Id) (*sidecar.ConfigState, error) { return net.State(), nil },
+		Clock:    clock,
+		CpuClock: args.CpuClock,
+		Config:   func(sidecarId sidecar.Id) (*sidecar.ConfigState, error) { return net.State(), nil },
 	})
 	if err != nil {
 		return nil, err

@@ -7,8 +7,9 @@
 // (gkm_paths.go), since the client and evs build them too; this file names them beside the rest.
 //
 // No key prefixes another as a path, since MinIO stores an object as a directory and lists it without descending
-// (§11.3): every group id is 32 hex characters, which none of repo, kp, rk, welcome, recovery or dkey is, and a claim
-// is <ref>.claim beside <ref>, never under it.
+// (§11.3): every group id is 32 hex characters, which none of repo, kp, rk, welcome, recovery or dkey is, a claim
+// is <ref>.claim beside <ref>, never under it, and a group's closing marker, closed, sits beside its closings'
+// verdicts, closing/<h>, never above them.
 //
 // Group objects live on the cluster place/<repo_id> names, and per-sidecar ones (kp/, rk/, welcome/<sidecar_id>/)
 // on the first cluster, beside place/ (§10.6's placement row), as does a forwarding Delegation's reader key
@@ -275,6 +276,19 @@ func parseGkmWelcomePointerKey(prefix string, key string) (sidecar.Id, uint64, b
 // gkm/<group_id>/owner: the group's owner marker, a GkmGroupOwner, the first write of a creation or a re-form.
 func GkmGroupOwnerKey(groupId sidecar.Id) string {
 	return sidecar.GkmGroupOwnerPath(groupId)
+}
+
+// gkm/<group_id>/closed: the closing marker a re-form writes in the group it re-forms before its form (QD-1186), the
+// Signed GroupForm of that re-form byte for byte, which names the new group and the generation its ladder carries;
+// empty once a closing whose form the group had moved past has opened the group again (reform.go).
+func GkmGroupClosedKey(groupId sidecar.Id) string {
+	return GkmGroupPrefix(groupId) + "closed"
+}
+
+// gkm/<group_id>/closing/<h>: what one closing of the group came to, h the SHA-256 of the closing form's bytes in 64
+// lowercase hex characters: those bytes once its form may be filed, nothing once it never will be (reform.go).
+func GkmGroupClosingKey(groupId sidecar.Id, formSha256 []byte) string {
+	return GkmGroupPrefix(groupId) + "closing/" + hex.EncodeToString(formSha256)
 }
 
 // gkm/dkey/<network_id>/: a network's forwarding Delegations' reader keys, by LIST, on the first cluster (QD-763).
