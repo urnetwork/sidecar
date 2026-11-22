@@ -20,6 +20,9 @@
 //	          the catch-up, every entry above the sink's state pin replayed with its denials, waiting for the client's
 //	          follow where its store lagged the posture's and alarming catch_up_waiting after CatchUpAlarmTimeout; a
 //	          compile at the tip where one can run; and only then the provider, so no frame reaches the NAT before it
+//	shares    each state the device role takes in force, and each GrantRevoke of a served share's grant, moves the hold
+//	          of FriendsAndFamily on every generation's dispatcher, held while a share this host serves stands
+//	          (bridge_share.go)
 //
 // The bindings a compile waits for are fetched on a goroutine of their own (GET /sidecar/identity), verified under the
 // identity key the config admits (VerifyBridgeBinding), kept in the cache and the component's store, and only change
@@ -282,6 +285,9 @@ type BridgeComponent struct {
 	// the share signers the newest compiled head carries, and the generations signed with (bridge_share_signer.go);
 	// its own lock
 	shares bridgeComponentShares
+	// FriendsAndFamily on each generation's dispatcher while a share this host serves stands (bridge_share.go); its own
+	// lock and goroutine
+	shareMode *bridgeShareMode
 }
 
 var _ SidecarComponent = (*BridgeComponent)(nil)
@@ -319,6 +325,7 @@ func NewBridgeComponent(ctx context.Context, args *BridgeComponentArgs) (*Bridge
 	if self.parts == nil {
 		self.parts = defaultBridgeProviderParts(settings)
 	}
+	self.shareMode = newBridgeShareMode(cancelCtx, args.NetworkId, clock, self.log)
 	var shareRows BridgeShareRowSource = &bridgeComponentShareRows{component: self}
 	if args.ShareRows != nil {
 		shareRows = args.ShareRows
@@ -462,6 +469,8 @@ func (self *BridgeComponent) Attach(env *SidecarEnv) error {
 			self.store = env.Store
 		}
 	}()
+	// the generation's dispatcher provides FriendsAndFamily while a share this host serves stands (bridge_share.go)
+	self.shareMode.attach(env.Ctx, env.Subprotocol)
 	self.loadBindings(env)
 	if self.args.OnAttach != nil {
 		self.args.OnAttach(env)
@@ -599,6 +608,7 @@ func (self *BridgeComponent) Close() {
 		self.removeEntry()
 	}
 	<-self.done
+	<-self.shareMode.done
 	self.stopReach()
 }
 
@@ -720,6 +730,10 @@ func (self *BridgeComponent) handEntries(reads []*BridgeConfigEntry) {
 			testHookBarrier("bridge_component.revoke.before", self.args.NetworkId.String())
 			if err := sink.Revoke(denial.Type, denial.Id, read.N); err != nil {
 				self.log.Warningf("[bridge]%s the device role refused the denial at %d: %v", self.args.NetworkId, read.N, err)
+			}
+			if denial.Type == bridge.SignedType_SIGNED_GRANT_REVOKE {
+				// a served share whose grant this revokes stands no more, before any compile drops it
+				self.shareMode.revoke(denial.Id)
 			}
 		}
 		if !read.Pure {
@@ -905,9 +919,10 @@ func (self *BridgeComponent) compileNow() {
 		for _, read := range self.args.Config.BridgeEntries(base.GetVersion(), state.Pin().GetVersion()) {
 			run.Entries = append(run.Entries, read.EntryBytes)
 		}
-		if err := sink.SetState(compiled.State, run); err != nil {
+		setErr := sink.SetState(compiled.State, run)
+		if setErr != nil {
 			// the posture drops a state below the one in force whole, and refuses one it cannot verify
-			self.log.Warningf("[bridge]%s the device role refused the state at %d: %v", self.args.NetworkId, state.Pin().GetVersion(), err)
+			self.log.Warningf("[bridge]%s the device role refused the state at %d: %v", self.args.NetworkId, state.Pin().GetVersion(), setErr)
 		} else if self.args.ServedRoutes != nil && proto.Equal(sink.Decision().StatePin, compiled.State.GetAuth()) {
 			// the routes of the state the device role holds in force: one it dropped, below the state it keeps, or
 			// refused leaves the engine on the routes of the state it keeps
@@ -920,6 +935,11 @@ func (self *BridgeComponent) compileNow() {
 			self.compiled = compiled
 			self.compileCount += 1
 		}()
+		if setErr == nil && proto.Equal(sink.Decision().StatePin, compiled.State.GetAuth()) {
+			// FriendsAndFamily while a share the state in force serves stands (bridge_share.go): a state the role
+			// dropped or refused leaves the hold on the state it keeps
+			self.shareMode.serve(compiled.State)
+		}
 		// a share whose signer changed has its links' window clients signed again (§17.9's resign row)
 		if changed := self.shares.setHead(head); 0 < len(changed) {
 			self.ResignShares(changed)

@@ -268,6 +268,8 @@ type SocketListenSettings struct { // defaults as in 9.5
     Exclusive  bool
     Affinity   bool
     Decision   *bridge.Signed // ApprovalDecision for tls/ and smtp/ (§5.4's gate)
+    Expires    time.Duration  // tls/ and smtp/: how long the grant asked lasts, filed as an absolute expiry held
+                              // to the requests rule's maxExpiry; 0 takes its expiresDefault (§8.6; owner decision 687)
 }
 type SocketDialSettings struct {
     Protocol      string
@@ -303,7 +305,7 @@ var (
 )
 ```
 
-CLI (added to cli/UI.md): `ur socket`; `ur socket listen <addr> [<ip>:]<port>` (to a local port; `serving=false` while it refuses; prints `ur approve <id>` for outward names); `ur socket dial <addr> [--listen=[<ip>:]<port>]` (a local forward: 0.0.0.0/:: unless `<ip>` is given, without the TLS-only rule; D-TRUST-8, owner decisions 84, 130; else stdin/stdout (`ssh -o ProxyCommand`); `ur socket ls [<net>]` (unseals names locally); `ur socket drain <addr>`. `ur bridge public-tls` (cli/UI.md:47) is `listen tls/443/<host>`; §16.5 maps the MCP tools.
+CLI (added to cli/UI.md): `ur socket`; `ur socket listen <addr> [<ip>:]<port> [--expires=d]` (to a local port; `serving=false` while it refuses; prints `ur approve <id>` for outward names, whose grant asks `--expires` as `tls_publish` does, the rule's `expiresDefault` when it is omitted; owner decision 687); `ur socket dial <addr> [--listen=[<ip>:]<port>]` (a local forward: 0.0.0.0/:: unless `<ip>` is given, without the TLS-only rule; D-TRUST-8, owner decisions 84, 130; else stdin/stdout (`ssh -o ProxyCommand`); `ur socket ls [<net>]` (unseals names locally); `ur socket drain <addr>`. `ur bridge public-tls` (cli/UI.md:47) is `listen tls/443/<host>`; §16.5 maps the MCP tools.
 
 **Share (D-SOCK-16).** `ur share add <path> [--count=n] [--expires=d]` hashes the file, writes the record below, listens `exclusive` on `share/<token>` (`<token>`: 16 random bytes, lowercase base32) and prints the link `<net>:share/<token>#<k>`, whose fragment `k` is base64url(the sharer's `sidecar_id` ‖ a 256-bit secret). An omitted `--count` means one use, `--count=n` n, and `--count=0` unlimited uses until the expiry; with `uses` 0 only a Remove or `expire_millis` ends a share, since the end row's Done for each of `uses` Reserves cannot fire. `--expires` defaults to 24 h, and `ur share add` refuses more than 30 days, the longest ordinary grant (owner decision 74), so every share ends. `ur share get <link> <out>`, which also takes `-` for the link and then reads it from stdin, so that the link's reusable secret stays out of argv, `ps` and shell history (owner decision 336), dials from a sidecar of the sharer's network, the only one an application name reaches (§6.4), and before OPEN refuses a listener whose verified `sidecar_id` is not `k`'s. `ur share` blocks and lists live shares with their remaining uses and expiry; `ur share rm <token>` ends one early (`--expires` and `rm` added to cli/UI.md). Records survive restarts, but a share is served only while the sharing sidecar runs (the daemon stays up while one is live, §5.8), as the CLI and `ur status` say. Both ends need §8's `listen` and `dial` on `share/`, which the implicit document gives untagged subjects; bytes count toward the network's transfer balance like any same-network stream (§20.6).
 

@@ -97,7 +97,9 @@ team mode   a network is in team mode for a kind once the config head this sidec
 personal    otherwise; every kind goes to the author's vault (§16.8)
 author      the member a sidecar's admission names, or a tagged or ephemeral sidecar's sponsor (§7.10); a tagged
             sidecar whose sponsor is gone has no author until a SponsorSet
-vault path  a consented device writes its own stream; the author's other sidecars deposit (§8.5, §16.8)
+vault path  a consented device writes its own stream, the deposit its write implies (§8.4; owner decision 688)
+            being none of the record's, so a gap in its chain alarms at once; the author's other sidecars deposit
+            (§8.5, §16.8)
 no author   raw capture stays in the spool (§16.7), each cut a coverage gap, and approvals take §16.8's route
 twice       a kind that section 6.3 sends to V and T is two entries, each with its own chain position, key and
             commitment: the vault entry holds everything, and T's projection holds only section 6.4's unmarked

@@ -2,7 +2,7 @@
  "reviewer_ids": [
   {
    "file": "09-SOCK.md",
-   "line": 440,
+   "line": 442,
    "id": "R8",
    "ctx": "region-aware-selection) (one lb site today, [R:ext-edge] \u00a75 R8), [slow start](DESIGN-DEFER.md#sock-slo"
   }
