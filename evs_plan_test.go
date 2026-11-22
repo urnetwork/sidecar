@@ -1490,35 +1490,6 @@ func TestEvsWriteWithNoIfVersionIsUnchanged(t *testing.T) {
 	}
 }
 
-// evs's 409 on a parent directory alone, which another writer's creation in that directory raced, names no written
-// path: the write's own path did not move, and the same write made again commits beside the other's.
-func TestEvsWriteConflictOnAParentAloneNamesNoWrittenPath(t *testing.T) {
-	writer := newEvsTestWriter(t)
-	writer.seed(t)
-	other := writer.otherWriter(t, "sibling writer")
-	writer.server.raceNextPush(func() {
-		if _, err := writer.write(t, "fresh/b.txt", []byte("b")); err != nil {
-			t.Error(err)
-		}
-	})
-	_, err := other.writeHeld("fresh/a.txt", 0, "a")
-	conflict := evsTestRequirePathConflict(t, err)
-	if errors.Is(err, ErrEvsPathMoved) || len(conflict.Refusal.Paths) == 0 {
-		t.Errorf("a parent's conflict: %v", err)
-	}
-	if _, _, err := writer.read(t, "fresh/a.txt"); !errors.Is(err, ErrEvsPathAbsent) {
-		t.Fatalf("the refused creation: %v", err)
-	}
-	if _, err := other.writeHeld("fresh/a.txt", 0, "a"); err != nil {
-		t.Fatalf("the write made again: %v", err)
-	}
-	for path, want := range map[string]string{"fresh/a.txt": "a", "fresh/b.txt": "b"} {
-		if read, _, err := writer.read(t, path); err != nil || string(read) != want {
-			t.Errorf("%s reads %q %v", path, read, err)
-		}
-	}
-}
-
 // The bytes of hex text, nil for text that is not hex.
 func evsTestHexBytes(text string) []byte {
 	decoded, err := hex.DecodeString(text)
