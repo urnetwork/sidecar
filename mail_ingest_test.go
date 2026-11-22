@@ -1142,10 +1142,11 @@ func TestMailIngestTeamGroupKeepsItsMailIndexerAMailDepositor(t *testing.T) {
 }
 
 // A read_only sidecar's deposit is §16.8's receipt deposit alone (§7.8's exchange), which only an owner-bound repo
-// takes. On a personal network the member's read_only device reads the group and holds deposit there, yet none of its
-// deposits is mail: ingest consumes them unrecorded with an alarm, where QD-1181's rule alone would file them as the
-// member's mail, trusted where it may send as their From. In the member's mailbox, which it reads as a consented
-// device, it stays a receipt depositor.
+// takes. On a personal network the member's read_only device reads the group and holds no deposit there (QD-1183), so
+// evs refuses its deposits; ingest's read_only line stays a second check, so one evs took anyway is no mail: ingest
+// consumes it unrecorded with an alarm, where QD-1181's rule alone would file it as the member's mail, trusted where it
+// may send as their From. In the member's mailbox, which it reads as a consented device, it keeps the receipt deposit
+// and stays a receipt depositor.
 func TestMailIngestReadOnlyDeviceDepositsNoMailInAGroup(t *testing.T) {
 	repos := newMailReposTestWorld(t)
 	member, owner := repos.fixture.memberWithDevice(bridge.MemberRole_MEMBER_ROLE_OWNER)
@@ -1157,9 +1158,9 @@ func TestMailIngestReadOnlyDeviceDepositsNoMailInAGroup(t *testing.T) {
 	repos.rebuild()
 	groupId := mailReposTestGroupWithMember(t, repos, repos.repos(owner), owner, member)
 	state := repos.state()
-	for _, repoId := range []Id{groupId, mailboxId} {
-		if rights := aclTestRights(state, pageWorker, repoId, AclTokenAudienceEvs); rights != AclEvsRead|AclEvsDeposit {
-			t.Fatalf("the read_only device holds %b on %s", rights, repoId)
+	for repoId, want := range map[Id]AclEvsRights{groupId: AclEvsRead, mailboxId: AclEvsRead | AclEvsDeposit} {
+		if rights := aclTestRights(state, pageWorker, repoId, AclTokenAudienceEvs); rights != want {
+			t.Fatalf("the read_only device holds %b on %s, not %b", rights, repoId, want)
 		}
 	}
 	authority := mailIngestTestAclAuthority(t, owner, state)
