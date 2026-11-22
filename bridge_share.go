@@ -217,7 +217,7 @@ func (self *bridgeShareMode) standingWithLock(now time.Time) (bool, time.Time) {
 // that changed nothing arms nothing.
 func (self *bridgeShareMode) run() {
 	defer close(self.done)
-	held := []*bridgeShareModeGeneration{}
+	heldGenerations := []*bridgeShareModeGeneration{}
 	// the end the armed wake is for, zero for none, and what stops it
 	var wakeEnd time.Time
 	var stopWake func() bool
@@ -226,7 +226,7 @@ func (self *bridgeShareMode) run() {
 			stopWake()
 		}
 		// the component's end: every hold goes, and no generation's end wakes it any more
-		for _, generation := range held {
+		for _, generation := range heldGenerations {
 			self.release(generation)
 		}
 		generations := func() []*bridgeShareModeGeneration {
@@ -245,8 +245,8 @@ func (self *bridgeShareMode) run() {
 		var version uint64
 		var standing bool
 		var nextEnd time.Time
-		var live []*bridgeShareModeGeneration
-		ended := []*bridgeShareModeGeneration{}
+		var liveGenerations []*bridgeShareModeGeneration
+		endedGenerations := []*bridgeShareModeGeneration{}
 		func() {
 			self.stateLock.Lock()
 			defer self.stateLock.Unlock()
@@ -255,19 +255,19 @@ func (self *bridgeShareMode) run() {
 			kept := make([]*bridgeShareModeGeneration, 0, len(self.generations))
 			for _, generation := range self.generations {
 				if generation.ctx.Err() != nil {
-					ended = append(ended, generation)
+					endedGenerations = append(endedGenerations, generation)
 					continue
 				}
 				kept = append(kept, generation)
 			}
 			self.generations = kept
-			live = slices.Clone(kept)
+			liveGenerations = slices.Clone(kept)
 		}()
-		for _, generation := range ended {
+		for _, generation := range endedGenerations {
 			self.release(generation)
 		}
 		heldCount := 0
-		for _, generation := range live {
+		for _, generation := range liveGenerations {
 			switch {
 			case standing && generation.release == nil && !generation.refused:
 				testHookBarrier("bridge_share.provide_mode.before", self.networkId.String())
@@ -286,7 +286,7 @@ func (self *bridgeShareMode) run() {
 				heldCount += 1
 			}
 		}
-		held = slices.DeleteFunc(live, func(generation *bridgeShareModeGeneration) bool { return generation.release == nil })
+		heldGenerations = slices.DeleteFunc(liveGenerations, func(generation *bridgeShareModeGeneration) bool { return generation.release == nil })
 		self.applied.Set(bridgeShareModeApplied{version: version, heldCount: heldCount})
 		if !wakeEnd.IsZero() && !now.Before(wakeEnd) {
 			// the wake for that end fired, or is due: this pass read past it
