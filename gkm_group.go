@@ -131,6 +131,12 @@ type GkmGroupClientArgs struct {
 	ReaderPrivateKey func(keySha256 []byte) (hpke.PrivateKey, error)
 	// The digest of this sidecar's current ReaderKey, which a late ask wants a delivery to. Nil asks for none.
 	ReaderKeySha256 func() []byte
+	// Asks the ReaderKey upkeep for a pass now (GkmUpkeep.Refresh), which uploads the current ReaderKey where gkm does
+	// not hold it yet, and whose upload resyncs the hint intake: what a late ask that finds no current ReaderKey calls
+	// instead of asking, at most once a LateAskInterval, since no holder can seal a delivery to a sidecar gkm serves
+	// no ReaderKey for (DESIGN-DETAILS 6.2.4's asker row: such a device publishes one first). It must not block. Nil
+	// leaves the ask to the upkeep's own next pass.
+	PublishReaderKey func()
 	// A member's current RecoveryBind key, from the config repo's sealed RecoveryBindBody, which TEAM's ConfigClient
 	// opens (§7.9). Nil, or an answer of none for a member that holds a recovery identity, refuses the rotation
 	// rather than leave that member without its RecoveryWrap (D-KEYS-18).
@@ -191,6 +197,8 @@ type GkmGroupClient struct {
 	repoIdHeads map[Id]*gkmRepoHead
 	// when a late ask for a GroupInfo or a waiting leaf's want last went, by repo (H2)
 	repoIdWantAskedAt map[Id]time.Time
+	// when a late ask with no current ReaderKey last asked the upkeep to publish one (PublishReaderKey), zero for never
+	readerKeyAskedAt time.Time
 	// when this device last joined a group through its last-resort KeyPackage, read from the keychain at first use
 	lastResortJoinedAt     time.Time
 	lastResortJoinedLoaded bool
@@ -251,7 +259,9 @@ func NewGkmGroupClient(args *GkmGroupClientArgs) (*GkmGroupClient, error) {
 
 // §7.9's applier, after each entry it applies. It never blocks, and a state at or below one already given changes
 // nothing (I-16). The flows a new state makes due, a commit of pending changes and a rotation, run when their
-// driver calls RunPending: at a pending hint, at EnsureWritable (KEYS-M2-22) and at the hint intake's resync.
+// driver calls RunPending: at a pending hint, at EnsureWritable (KEYS-M2-22) and at the hint intake's resync. Once
+// hints are attached, a KeyDelivery client also takes the first wrap of each repo the new state lets it read, and
+// writes the first wraps of the admissions it signed that the new state holds (deliverAdmittedFirstWraps).
 func (self *GkmGroupClient) AuthAdvanced(state GkmAuthView) {
 	if state == nil {
 		return
@@ -273,6 +283,43 @@ func (self *GkmGroupClient) AuthAdvanced(state GkmAuthView) {
 	}
 	if ctx != nil && self.KeyDeliveryOnly() && self.args.ReaderRepoIds != nil {
 		go self.syncNewReaderRepos(ctx, before)
+	}
+	if ctx != nil && self.KeyDeliveryOnly() && before != nil {
+		go self.deliverAdmittedFirstWraps(ctx, before, state)
+	}
+}
+
+// The first wraps of the admissions this device signed (§3.7's F1 and §7.9's wrapped row: "signing an admission, it
+// writes the new device's first wrap"; KF2's wrapped row): in v0 every member device and agent reads the config and the
+// team directory by wraps, so for each config or directory repo this device holds, each sidecar that reads it at state
+// but not at before, whose admission this device signed, gets one LATE delivery of the newest generation at once
+// (DeliverFirstWrap), under the late delivery's checks, so a self-admitted device reads with no config writer online.
+// One whose ReaderKey gkm does not serve yet is passed: its ask's wrap-pending, which this device as the granting
+// device answers at once, or this device's next sync delivers it. A first state, with nothing before it to tell the
+// new admissions by, writes none, the syncs answering those instead.
+func (self *GkmGroupClient) deliverAdmittedFirstWraps(ctx context.Context, before GkmAuthView, state GkmAuthView) {
+	repoIds, err := self.heldRepoIds()
+	if err != nil {
+		return
+	}
+	now := self.clock.Now()
+	for _, repoId := range repoIds {
+		if ctx.Err() != nil {
+			return
+		}
+		if !gkmGroupLeafRanked(state.Repo(repoId)) {
+			continue
+		}
+		readBefore := before.RepoReadersAt(repoId, now)
+		for _, readerId := range state.RepoReadersAt(repoId, now) {
+			// the admission first, a row's few signers, so only the devices this one admitted are looked for before
+			if readerId == self.args.SidecarId || !gkmAdmissionSignedBy(state, readerId, self.args.SidecarId) || slices.Contains(readBefore, readerId) {
+				continue
+			}
+			self.hintWork(ctx, "first-wrap:"+gkmPathId(readerId), repoId, func() {
+				self.logFlowError("first wrap", self.DeliverFirstWrap(ctx, repoId, readerId))
+			})
+		}
 	}
 }
 
@@ -1318,6 +1365,13 @@ func (self *GkmGroupClient) heldRepoOfGroup(groupId Id) (Id, bool) {
 // gkm_sync.go), and a resync also runs each repo's due self-update and its drop key's renewal. Each wake's work runs
 // on its own goroutine until ctx ends, one at a time per repo and kind, so a wait never holds the intake and a
 // repeated hint piles nothing up.
+//
+// In KeyDelivery mode pending names a group: one this device holds takes what gkm holds past it at once, a delivery
+// to it among them, and then, where it would hand something on (KeyDeliveryPending: a LATE delivery to a holder the
+// newest claim did not reach, a rotation), the granting device answers at once and every other holder after
+// PendingCommitWait, whose PUT then meets the granting device's delivery (KF2, KF3); one it holds nothing of may carry
+// a first wrap or a creation's STAGED delivery to it, so each readable repo it holds nothing of takes what stands for
+// it at once and then waits as a held one does.
 func (self *GkmGroupClient) AttachHints(ctx context.Context, hints *GkmHints) {
 	if hints == nil {
 		return
@@ -1347,11 +1401,14 @@ func (self *GkmGroupClient) AttachHints(ctx context.Context, hints *GkmHints) {
 		if self.args.RecoveryKeyAt != nil {
 			go self.followRecoveryBinding(ctx)
 		}
-		syncReadable := func(ctx context.Context) {
+		wakeRebind := func() {
 			select {
 			case self.rebindWake <- struct{}{}:
 			default:
 			}
+		}
+		syncReadable := func(ctx context.Context) {
+			wakeRebind()
 			if self.args.ReaderRepoIds == nil {
 				return
 			}
@@ -1363,8 +1420,47 @@ func (self *GkmGroupClient) AttachHints(ctx context.Context, hints *GkmHints) {
 				})
 			}
 		}
+		pendingDelivery := func(ctx context.Context, repoId Id) {
+			self.hintWork(ctx, "pending", repoId, func() {
+				pending, granting, err := self.KeyDeliveryPending(ctx, repoId)
+				if err != nil || !pending {
+					// nothing this device hands on: what the wake brought it was taken, and the rest runs at once
+					granting = true
+				}
+				if self.wait(ctx, self.PendingCommitWait(granting)) != nil {
+					return
+				}
+				self.logFlowError("sync", self.SyncRepo(ctx, repoId))
+				self.logFlowError("pending", self.RunPending(ctx, repoId))
+				self.logFlowError("drop key renewal", self.RenewDropKey(ctx, repoId))
+			})
+		}
+		// each readable repo this device holds no group of: what a pending wake about a group it does not hold may
+		// bring, a first wrap or a creation's STAGED delivery to it, which the pending work takes first, and then waits
+		// as for any group before it answers another's late ask
+		pendingUnheld := func(ctx context.Context) {
+			if self.args.ReaderRepoIds == nil {
+				return
+			}
+			for _, repoId := range self.args.ReaderRepoIds() {
+				if _, err := self.repoPins(repoId); errors.Is(err, ErrGkmKeyMissing) {
+					pendingDelivery(ctx, repoId)
+				}
+			}
+		}
 		hints.AddResync(syncReadable)
-		hints.SetHandler(protocol.GkmHintKind_GKM_HINT_PENDING, func(ctx context.Context, wake *GkmHintWake) { syncReadable(ctx) })
+		hints.SetHandler(protocol.GkmHintKind_GKM_HINT_PENDING, func(ctx context.Context, wake *GkmHintWake) {
+			if wake.GroupId == nil {
+				syncReadable(ctx)
+				return
+			}
+			wakeRebind()
+			if repoId, ok := self.heldRepoOfGroup(*wake.GroupId); ok {
+				pendingDelivery(ctx, repoId)
+				return
+			}
+			pendingUnheld(ctx)
+		})
 		hints.SetHandler(protocol.GkmHintKind_GKM_HINT_COMMIT, func(ctx context.Context, wake *GkmHintWake) {
 			if wake.GroupId != nil {
 				if repoId, ok := self.heldRepoOfGroup(*wake.GroupId); ok {
@@ -1530,13 +1626,13 @@ func (self *GkmGroupClient) noteAgentRepoRefused(repoId Id, version uint64) bool
 	return true
 }
 
-// Coalesce work by repo. A native sync arriving during a pass may carry the first
-// delivery for a device that was still waiting at that pass, so run it once more.
+// Coalesce work by repo. A native sync or pending wake arriving during a pass may carry the first delivery for a
+// device that was still waiting at that pass, so run it once more.
 func (self *GkmGroupClient) hintWork(ctx context.Context, kind string, repoId Id, work func()) {
 	key := kind + ":" + gkmPathId(repoId)
 	self.stateLock.Lock()
 	if _, running := self.hintWorkKeys[key]; running {
-		if kind == "sync" && self.KeyDeliveryOnly() {
+		if (kind == "sync" || kind == "pending") && self.KeyDeliveryOnly() {
 			self.hintWorkKeys[key] = true
 		}
 		self.stateLock.Unlock()

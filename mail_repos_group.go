@@ -5,10 +5,12 @@
 //
 //	create    `ur id group-create [--private]`: a general repo announced in a team network with requests closed and
 //	          no roles offered, or a private marker with --private, and the group's address in mailcfg. The
-//	          signed RepoCreate.inbox role selects the drop key and per-message slots. On Team networks the
-//	          creator also grants deposit to tag:mail (QD-102).
+//	          signed RepoCreate.inbox role selects the drop key and per-message slots. The creator also grants the
+//	          group's deposit to whichever devices may run the network's receiver (groupDepositSubject): tag:mail on
+//	          a Team network (QD-102), and on a personal network autogroup:member, its one member's devices
+//	          (QD-1177), beside the reader grant group-add files to that member.
 //	          The device keeps the reserved random repo id and publication choice in its sealed store until the
-//	          approved address, repo activation, directory publication and Team deposit grant have all succeeded.
+//	          approved address, repo activation, directory publication and deposit grant have all succeeded.
 //	join      `ur id group-add` is the only way in: it writes the member into the group's mailcfg record and files
 //	          the RepoGrant that lets the member's devices read the repo, together: the record first, then the grant,
 //	          each a no-op where it already stands, so a call cut short between them is finished by the same call
@@ -62,7 +64,7 @@ type MailCreateGroupArgs struct {
 	Action    MailConfigActionArgs
 }
 
-// Creates the approved address, activates its signed inbox repo, and files its deposit grant on Team networks.
+// Creates the approved address, activates its signed inbox repo, and files its deposit grant (groupDepositSubject).
 // A failed step leaves the original random id and directory choice available to the next confirmed invocation.
 func (self *MailRepos) CreateGroup(ctx context.Context, config *MailConfig, args *MailCreateGroupArgs) (*EvsRepo, error) {
 	if config == nil || args == nil || self.fileStatement == nil {
@@ -84,7 +86,7 @@ func (self *MailRepos) CreateGroup(ctx context.Context, config *MailConfig, args
 	if err != nil {
 		return nil, err
 	}
-	if _, err := self.groupDepositTag(state); err != nil {
+	if _, err := self.groupDepositSubject(state); err != nil {
 		return nil, err
 	}
 	zone, _, err := config.zone()
@@ -175,12 +177,12 @@ func (self *MailRepos) CreateGroup(ctx context.Context, config *MailConfig, args
 	if row.GetInbox() != protocol.RepoInbox_REPO_INBOX_GROUP || !mailRepoStands(row) || !self.created(row) {
 		return nil, ErrMailReposAbsent
 	}
-	mailTag, err := self.groupDepositTag(state)
+	depositSubject, err := self.groupDepositSubject(state)
 	if err != nil {
 		return nil, err
 	}
-	if mailTag != (Id{}) && !mailRepoGrantStands(row, mailTag, protocol.RepoGrantRole_REPO_GRANT_ROLE_DEPOSIT) {
-		grant := &protocol.RepoGrant{RepoId: creation.RepoId.Bytes(), Subject: mailTag.Bytes(), Role: protocol.RepoGrantRole_REPO_GRANT_ROLE_DEPOSIT}
+	if !mailRepoGrantStands(row, depositSubject, protocol.RepoGrantRole_REPO_GRANT_ROLE_DEPOSIT) {
+		grant := &protocol.RepoGrant{RepoId: creation.RepoId.Bytes(), Subject: depositSubject.Bytes(), Role: protocol.RepoGrantRole_REPO_GRANT_ROLE_DEPOSIT}
 		if err := self.fileStatement(ctx, bridge.SignedType_SIGNED_REPO_GRANT, grant); err != nil {
 			return nil, err
 		}
@@ -191,10 +193,16 @@ func (self *MailRepos) CreateGroup(ctx context.Context, config *MailConfig, args
 	return self.evs.Repo(creation.RepoId), nil
 }
 
-// Returns the team's required mail indexer tag for deposit grants, or zero on a personal network.
-func (self *MailRepos) groupDepositTag(state *AclState) (Id, error) {
+// The subject a group repo's deposit grant names, so that whichever device runs the network's receiver deposits its
+// mail there: on a Team network the required mail indexer tag, tag:mail (§15.8), and ErrMailGroupIndexerTag while that
+// is unavailable; on a personal network, a network of one member (owner decision 391), autogroup:member, which there
+// names that member's untagged devices as a grant to the member would (§8.8's subject row), so each of them deposits,
+// the receiver and same-network senders among them (QD-1177). Not the member itself: group-add's reader grant names
+// the member, and the access log's fold keeps one RepoGrant a subject, the newest, so a deposit grant to the member
+// would leave its devices reading alone once the member joined the group.
+func (self *MailRepos) groupDepositSubject(state *AclState) (Id, error) {
 	if !state.teamNetwork() {
-		return Id{}, nil
+		return AclAutogroupAtom(protocol.AclAutogroup_ACL_AUTOGROUP_MEMBER), nil
 	}
 	if self.mailIndexerTag != nil {
 		if tag, ok := self.mailIndexerTag(state); ok && tag != (Id{}) {
@@ -204,7 +212,10 @@ func (self *MailRepos) groupDepositTag(state *AclState) (Id, error) {
 	return Id{}, ErrMailGroupIndexerTag
 }
 
-// Whether a RepoGrant of role, or a wider one, stands for subject in repo with no expiry.
+// Whether a RepoGrant to subject stands in repo, with no expiry and no config writer's revoke of the subject, that
+// gives role's right: a grant of that role, or a writer's, whose write gives read and, in a repo that takes deposits as
+// a group inbox does, deposit (QD-1173). A reader grant gives no deposit and a deposit grant no read
+// (aclGrantRoleRights), so neither stands for the other whatever their roles' numbers.
 func mailRepoGrantStands(repo *protocol.AclRepo, subject Id, role protocol.RepoGrantRole) bool {
 	revoked := slices.ContainsFunc(repo.GetRevokes(), func(revoke *protocol.AclRepoRevokeRow) bool {
 		revokedId, err := IdFromBytes(revoke.GetSubject())
@@ -215,7 +226,14 @@ func mailRepoGrantStands(repo *protocol.AclRepo, subject Id, role protocol.RepoG
 	}
 	return slices.ContainsFunc(repo.GetGrants(), func(grant *protocol.AclRepoGrantRow) bool {
 		grantedId, err := IdFromBytes(grant.GetSubject())
-		return err == nil && grantedId == subject && role <= grant.GetRole() && grant.GetExpires() == 0
+		if err != nil || grantedId != subject || grant.GetExpires() != 0 {
+			return false
+		}
+		if grant.GetRole() == role {
+			return true
+		}
+		return grant.GetRole() == protocol.RepoGrantRole_REPO_GRANT_ROLE_WRITER &&
+			(role == protocol.RepoGrantRole_REPO_GRANT_ROLE_READER || (role == protocol.RepoGrantRole_REPO_GRANT_ROLE_DEPOSIT && gkmRepoTakesDeposits(repo)))
 	})
 }
 

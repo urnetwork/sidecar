@@ -167,7 +167,7 @@ func TestGkmStagedWrapChecksRefuseAndTheirTwinsPass(t *testing.T) {
 	if code, _ := world.postWraps(readOnlyToken, 2, gkmTestC8(key2), staged); code != http.StatusForbidden {
 		t.Errorf("a read_only uploader: %d", code)
 	}
-	deliveries := make([][]byte, gkmWrapBatchMaxCount+1)
+	deliveries := make([][]byte, DefaultGkmServiceSettings().WrapBatchMaxCount+1)
 	for i := range deliveries {
 		deliveries[i] = staged
 	}
