@@ -21,6 +21,15 @@
 // in batches of 64 paths, the push based on the first batch's head. Where M10's index writer joins (§11.20) is the
 // client's EvsWritePlanHook, run on every plan before it is sealed.
 //
+// Own pushes. A plan that is not fresh (EvsPlanArgs.Fresh false, a write's first) reads through evs's head cache,
+// which evs fills only in step 8, after it answered a push (§11.9's cache row), so for a while it serves the head
+// before this device's own last push. A plan on that head would base this device's own paths on the versions its push
+// replaced, which 5g refuses 409 PATH_CONFLICT, or read a path its push created as absent (TestE2eChurnLoad's writer,
+// refused 48 ms after its own write was answered). So the first batch is read again, fresh, when the head it was
+// served is below a version this device's own push committed at (evsClientEpochs.committedVersion), as an epoch state
+// is (freshEpochState). The other batches are read fresh already, and a fresh read is not read again: a cluster still
+// behind this device's push, as a site loss leaves it until its reseed, is planned on as it stands.
+//
 // Path epochs (DESIGN-DETAILS 9.2.5). The plan reads every path by 9.2.4's rules and takes each one's floor from that
 // read. A creation is planned only where the read found the path absent, looked up in its parent's table when it has
 // no floor; no due holds it, every due being batched (QD-1046). A
@@ -553,6 +562,14 @@ func (self *EvsRepo) PlanWrite(ctx context.Context, args *EvsPlanArgs) (*EvsWrit
 			result, err := self.read(ctx, args.RefId, batch, 0, fresh)
 			if err != nil {
 				return err
+			}
+			if !fresh && result.head.Version < self.client.epochs.committedVersion(self.repoId, args.RefId) {
+				// evs's cache had not reached a push of this device's own: read again fresh (the file header's own
+				// push paragraph)
+				result.objects.close()
+				if result, err = self.read(ctx, args.RefId, batch, 0, true); err != nil {
+					return err
+				}
 			}
 			defer result.objects.close()
 			head := result.head.Head
