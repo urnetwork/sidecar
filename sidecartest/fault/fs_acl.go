@@ -213,7 +213,8 @@ func fs19CheckCeiling(net *sidecartest.AdmissionNet, world *fs19World) error {
 			{what: "the burner on the vault", rights: aclRights(net, acl, burner, world.vaultId, evs), want: sidecar.AclEvsDeposit},
 			{what: "the burner on the mailbox", rights: aclRights(net, acl, burner, world.mailboxId, evs), want: sidecar.AclEvsDeposit},
 			{what: "the burner on the secret", rights: aclRights(net, acl, burner, world.secretId, evs), want: 0},
-			{what: "the laptop on the vault", rights: aclRights(net, acl, laptop, world.vaultId, evs), want: ownerBound},
+			// and the vault's deposit, which its write implies there (QD-1173)
+			{what: "the laptop on the vault", rights: aclRights(net, acl, laptop, world.vaultId, evs), want: ownerBound | sidecar.AclEvsDeposit},
 			// the config, on the row each state adds from the Genesis (QD-719): the burner reads it and writes it at
 			// neither audience; the laptop, the Genesis's owner sidecar and a config writer, holds §7.9's bootstrap admin
 			{what: "the burner on the config at evs", rights: aclRights(net, acl, burner, world.configId, evs), want: sidecar.AclEvsRead},
@@ -672,7 +673,8 @@ func fs14AclExpectConfirmed(net *sidecartest.AdmissionNet, world *fsTeamWorld, c
 		rights := aclRights(net, acl, tablet.SidecarId, vault, sidecar.AclTokenAudienceEvs)
 		want := sidecar.AclEvsDeposit
 		if confirmed {
-			want = sidecar.AclEvsRead | sidecar.AclEvsWrite
+			// the consented device's read and write, and the deposit its write implies in a vault (QD-1173)
+			want = sidecar.AclEvsRead | sidecar.AclEvsWrite | sidecar.AclEvsDeposit
 		}
 		return aclExpectRights("the tablet on its member's vault", rights, want)
 	})
