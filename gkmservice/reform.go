@@ -9,8 +9,10 @@
 //
 //   - admin on the group's repo (the guard), with repo/ active or keying, or deleted while §19.10's re-seed mode is
 //     on: a repo re-seeded as deleted takes its GroupForm and this ladder and nothing else (owner decision 82);
-//   - the repo's newest GroupForm names the group and is a re-form, and the group's epoch/1 does not exist yet;
-//   - at most 64 statements a call, consecutive and ascending, none past the form's generation, each a Signed
+//   - the repo's newest GroupForm names the group and is a re-form, and the group's epoch/1 does not exist yet; that
+//     form was filed only once its closing of the group it re-forms was sealed (reform_fence.go), so the old group
+//     holds nothing past the form's generation that a member took;
+//   - at most LadderMaxCount (64) statements a call, consecutive and ascending, none past the form's generation, each a Signed
 //     GenRotate of the repo held to its shape, whose parent_commitment is gen/<k-1>'s commitment, the call's own
 //     previous statement or the one stored, so the ladder goes up in order from generation 1;
 //   - each is written If-None-Match, equal bytes answering success, so a call a crash cut short is sent again;
@@ -38,9 +40,6 @@ import (
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
-// The most Signed GenRotates one ladder call carries (QD-074 rule 4): a format value a client batches to.
-const gkmLadderMaxCount = 64
-
 // A GenLink's bytes, which every generation past the first carries.
 const gkmGenLinkByteCount = gkmSealedKeyByteCount
 
@@ -50,14 +49,15 @@ type gkmLadderItem struct {
 	rotate *protocol.GenRotate
 }
 
-// A ladder statement's shape: a Signed GenRotate of repoId whose ids, commitment, parent and pin are at their sizes.
-// gkm verifies no signature here and holds the statement to no group: it names its old one.
-func parseGkmLadderItem(signed *bridge.Signed, repoId sidecar.Id) (*gkmLadderItem, bool) {
+// A ladder statement's shape: a Signed GenRotate of repoId, at most maxByteCount (StatementMaxByteCount), whose ids,
+// commitment, parent and pin are at their sizes. gkm verifies no signature here and holds the statement to no group:
+// it names its old one.
+func parseGkmLadderItem(signed *bridge.Signed, repoId sidecar.Id, maxByteCount int64) (*gkmLadderItem, bool) {
 	if signed == nil || signed.GetType() != uint32(bridge.SignedType_SIGNED_GEN_ROTATE) || len(signed.GetSignerId()) != 16 {
 		return nil, false
 	}
 	raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(signed)
-	if err != nil || gkmStatementMaxByteCount < len(raw) {
+	if err != nil || maxByteCount < int64(len(raw)) {
 		return nil, false
 	}
 	rotate := &protocol.GenRotate{}
@@ -161,7 +161,7 @@ func (self *GkmEngine) serveLadder(request *GkmRequest) {
 		return
 	}
 	signeds := ladderRequest.GetGenerations()
-	if len(signeds) == 0 || gkmLadderMaxCount < len(signeds) {
+	if len(signeds) == 0 || self.settings.LadderMaxCount < len(signeds) {
 		request.BadRequest()
 		return
 	}
@@ -169,7 +169,7 @@ func (self *GkmEngine) serveLadder(request *GkmRequest) {
 	prices := self.settings.Prices
 	price := int64(0)
 	for index, signed := range signeds {
-		item, ok := parseGkmLadderItem(signed, request.RepoId)
+		item, ok := parseGkmLadderItem(signed, request.RepoId, self.settings.StatementMaxByteCount)
 		if !ok {
 			request.BadRequest()
 			return

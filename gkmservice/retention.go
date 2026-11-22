@@ -334,7 +334,7 @@ func (self *GkmReconciler) listGroup(ctx context.Context, cluster sidecar.BlobCl
 		}
 	}
 	// gen/ through its one accessor, which a gen pack's fallback extends (§10.16)
-	generations, err := listGkmGenerations(ctx, cluster, groupId, 0, self.settings.Service.ListPageCount)
+	generations, err := listGkmGenerations(ctx, cluster, groupId, 0, self.settings.Service.ListPageCount, self.settings.Service.GenerationListMaxCount)
 	if err != nil {
 		return nil, err
 	}
@@ -388,7 +388,7 @@ func (self *GkmReconciler) sweepGroup(ctx context.Context, cluster sidecar.BlobC
 
 // gen/<g>'s facts on cluster, through the one gen accessor.
 func (self *GkmReconciler) generationFacts(ctx context.Context, cluster sidecar.BlobCluster, groupId sidecar.Id, generation uint64) (*gkmGenerationFacts, error) {
-	objectBytes, err := readGkmGeneration(ctx, cluster, groupId, generation)
+	objectBytes, err := readGkmGeneration(ctx, cluster, groupId, generation, self.settings.Service.StatementMaxByteCount)
 	if err != nil {
 		return nil, err
 	}

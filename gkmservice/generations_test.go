@@ -265,3 +265,35 @@ func TestGkmDepositScopeReachesTheDropKeyRouteAlone(t *testing.T) {
 		t.Errorf("renewal hints an hour later: %d", count)
 	}
 }
+
+// QD-1186's fence in KeyDelivery mode, gkm's v0: a claim that won before a re-form carrying its generation closed the
+// group, sent again for its lost answer, answers 409 with the closing marker, naming the new group, and not its old
+// 201, whether it reaches the create or the recovery check's own reading of what won, as after a rebind; its claimer
+// follows the form, whose ladder carries the generation.
+func TestGkmKeyDeliveryClaimSentAgainInAClosedGroupFollowsTheForm(t *testing.T) {
+	world := newGkmGroupWorld(t)
+	world.createAndActivate()
+	fixture := world.fixture
+	fixture.settings = DefaultGkmServiceSettings()
+	fixture.start()
+	oldGroupId := world.groupId
+	_, claim2 := world.nextGeneration(world.admin, world.key1, nil)
+	if recorder := world.postClaim(world.adminToken, 2, claim2); recorder.Code != http.StatusCreated {
+		t.Fatalf("the claim of generation 2: %d", recorder.Code)
+	}
+	marker := world.reformBytes(testId("group-new"), oldGroupId, 2)
+	fixture.put("meta-2", GkmGroupClosedKey(oldGroupId), marker)
+	if recorder := world.postClaim(world.adminToken, 2, claim2); recorder.Code != http.StatusConflict || !bytes.Equal(recorder.Body.Bytes(), marker) {
+		t.Errorf("the won claim sent again in the closed group: %d", recorder.Code)
+	}
+	// a rebind since: the claim's generation lacks a RecoveryWrap to the member's current binding
+	digest := sha256Of([]byte("the member's rebound recovery key"))
+	fixture.auth.recovery[world.memberId] = &RecoveryWrapCoverage{Current: digest, RepoIds: []sidecar.Id{world.repoId}}
+	if recorder := world.postClaim(world.adminToken, 2, claim2); recorder.Code != http.StatusConflict || !bytes.Equal(recorder.Body.Bytes(), marker) {
+		t.Errorf("the won claim sent again after a rebind in the closed group: %d", recorder.Code)
+	}
+	world.emptyClosingMarker(oldGroupId)
+	if recorder := world.postClaim(world.adminToken, 2, claim2); recorder.Code != http.StatusCreated {
+		t.Errorf("the won claim sent again after a rebind once the group is open: %d", recorder.Code)
+	}
+}

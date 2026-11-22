@@ -17,10 +17,13 @@
 //     re-formed group, whose epoch 0 carries no pin, below gen/<the form's generation>'s auth, which the ladder must
 //     have written first (DESIGN-DETAILS 6.2.2; reform.go). A commit onto any other epoch with no pin is refused;
 //   - repo/ is reread as the write issues, so a write in flight at a shred lands before §11.12 repeats the group's
-//     deletion (§10.6's checks row), and 60 commits an hour per uploader per group.
+//     deletion (§10.6's checks row), and 60 commits an hour per uploader per group;
+//   - no closing marker of a re-form stands in the group, read just before the PUT (QD-1186; reform_fence.go): 409
+//     with the marker, naming the new group.
 //
 // The store operations of a commit are §10.6's list: GET epoch/<n-1>, GET repo/<id> (5 s cache), GET gen/<g+1> (404)
-// and the PUT, besides a HEAD of gen/<g> when the generation moved since epoch n-1, and at 16 leaves or fewer one
+// and the PUT, besides the closing marker's GET (404 but in a closed group), a HEAD of gen/<g> when the generation
+// moved since epoch n-1, and at 16 leaves or fewer one
 // group-info GET (5 s cache) and, 16 epochs past the pointer, the pointer's PUT (groupinfo.go). A retry of a lost
 // answer finds its own commit standing and answers the original 200 (FI-2). A success hints commit on gkm:<group_id>
 // to the repo's readers, versioned epoch × 2^24 + generation (D-KEYS-19).
@@ -158,6 +161,17 @@ func (self *GkmEngine) serveEpochCommit(request *GkmRequest) {
 	}
 	barrierKey := gkmBarrierNumberKey(groupId, upload.epoch)
 	testHookBarrier(BarrierEpochPutBefore, barrierKey)
+	// the fence (QD-1186; reform_fence.go): a group a re-form closed takes no commit, read before the PUT rather than
+	// after, since a commit answered 409 is a loser its committer discards (KF6), and one whose epoch stands must not be
+	closing, err := self.readGroupClosing(request.Ctx, request.Cluster, groupId)
+	if err != nil {
+		self.answerStoreError(request, err)
+		return
+	}
+	if closing.closes() {
+		request.Conflict(closing.raw)
+		return
+	}
 	winner, err := createGkmObject(writeCtx, request.Cluster, GkmEpochKey(groupId, upload.epoch), objectBytes, self.settings.ObjectMaxByteCount)
 	testHookBarrier(BarrierEpochPutAfter, barrierKey)
 	if err != nil {

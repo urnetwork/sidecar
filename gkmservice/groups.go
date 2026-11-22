@@ -17,12 +17,14 @@
 //     the request is written; equal bytes resume a crashed request. Every group route resolves through the marker
 //     (resolveGroup): the repo it names must be among the token's scopes and that repo's forms must name the group,
 //     so a form for one repo naming another's group reaches none of its routes, whichever form a process read first.
-//   - A re-form (§10.8; D-KEYS-12, D-KEYS-13) writes the marker, then the repo's next form, which names the repo's
-//     newest group as its previous one, then the new group's epoch/0, whose header holds the form's generation and
-//     no auth pin, as GkmGroupReformRequest's landed body has it; the group's generations follow by the ladder route
-//     (reform.go). After a site loss gkm holds no form, so the re-form is the repo's first. Epoch 1's pin floor in
-//     a re-formed group is gen/<form.generation>'s auth (DESIGN-DETAILS 6.2.2; reform.go's reformPinFloor), so a
-//     re-formed group takes no commit until its ladder has reached that generation.
+//   - A re-form (§10.8; D-KEYS-12, D-KEYS-13) writes the marker, then closes the repo's newest group, which it
+//     re-forms, by that group's closing marker and the closing's verdict (QD-1186; reform_fence.go), then the repo's
+//     next form, which names that group as its previous one, then the new group's epoch/0, whose header holds the
+//     form's generation and no auth pin, as GkmGroupReformRequest's landed body has it; the group's generations follow
+//     by the ladder route (reform.go). A try that finds its form filed already closed the group before it. After a
+//     site loss gkm holds no form, so the re-form is the repo's first and closes nothing, no group of the repo
+//     standing at gkm. Epoch 1's pin floor in a re-formed group is gen/<form.generation>'s auth (DESIGN-DETAILS 6.2.2;
+//     reform.go's reformPinFloor), so a re-formed group takes no commit until its ladder has reached that generation.
 //
 // No KeyHolders or proposal is read here: members check the form's signer, their cached C_g and gen/1 (§10.9).
 
@@ -52,12 +54,6 @@ const gkmSealedKeyByteCount = 24 + 32 + 16
 // The purpose a GroupForm is signed under (QD-527).
 const gkmGroupFormPurpose = "group-form"
 
-// A GkmGroupOwner's bytes: two 16-byte ids, each under a tag and a length.
-const gkmGroupOwnerByteCount = 2 * (2 + 16)
-
-// The most bytes of a Signed GroupForm or GenRotate a route reads: a GenRotate with a drop key is about 1.7 KB.
-const gkmStatementMaxByteCount = 16 * 1024
-
 // A GroupForm a request carries, held to its shape.
 type gkmFormUpload struct {
 	signed  *bridge.Signed
@@ -75,7 +71,7 @@ func (self *GkmEngine) readFormUpload(request *GkmRequest, signed *bridge.Signed
 		return nil, false
 	}
 	raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(signed)
-	if err != nil || gkmStatementMaxByteCount < len(raw) {
+	if err != nil || self.settings.StatementMaxByteCount < int64(len(raw)) {
 		request.BadRequest()
 		return nil, false
 	}
@@ -194,7 +190,7 @@ func (self *GkmEngine) checkFirstGeneration(request *GkmRequest, form *gkmFormUp
 		return nil, nil, false
 	}
 	raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(signed)
-	if err != nil || gkmStatementMaxByteCount < len(raw) {
+	if err != nil || self.settings.StatementMaxByteCount < int64(len(raw)) {
 		request.BadRequest()
 		return nil, nil, false
 	}
@@ -264,6 +260,12 @@ func gkmGroupOwnerBytes(repoId sidecar.Id, networkId sidecar.Id) ([]byte, error)
 		RepoId:    repoId.Bytes(),
 		NetworkId: networkId.Bytes(),
 	})
+}
+
+// The bytes of the owner marker a creation or re-form of repoId writes under request's token, which its write is priced
+// by.
+func gkmGroupOwnerByteCount(repoId sidecar.Id, request *GkmRequest) int {
+	return proto.Size(&protocol.GkmGroupOwner{RepoId: repoId.Bytes(), NetworkId: request.Principal.NetworkId.Bytes()})
 }
 
 // Writes the form's group's owner marker, If-None-Match, the first write of a creation or a re-form: the token's
@@ -338,9 +340,12 @@ func (self *GkmEngine) formSeq(request *GkmRequest, form *gkmFormUpload, reform 
 // Files a form at seq, If-None-Match, after its group's owner marker: a form that loses its seq to other bytes
 // answers 409 with them. false once it has answered.
 func (self *GkmEngine) fileForm(request *GkmRequest, form *gkmFormUpload, seq uint64) bool {
-	if !self.createGroupOwner(request, form) {
-		return false
-	}
+	return self.createGroupOwner(request, form) && self.fileFormAt(request, form, seq)
+}
+
+// Files a form at seq, If-None-Match, its group's owner marker written: a form that loses its seq to other bytes
+// answers 409 with them. false once it has answered.
+func (self *GkmEngine) fileFormAt(request *GkmRequest, form *gkmFormUpload, seq uint64) bool {
 	if !request.CheckRepoWritable() {
 		return false
 	}
@@ -417,7 +422,7 @@ func (self *GkmEngine) serveGroupCreate(request *GkmRequest) {
 		return
 	}
 	prices := self.settings.Prices
-	byteCharge := prices.create(gkmGroupOwnerByteCount) + prices.create(len(form.raw)) + prices.create(len(generationBytes))
+	byteCharge := prices.create(gkmGroupOwnerByteCount(form.repoId, request)) + prices.create(len(form.raw)) + prices.create(len(generationBytes))
 	var epochZero *protocol.GkmEpochObject
 	if self.settings.DraftMls && (len(createRequest.GetGenWrap()) != 0 || len(createRequest.GetSealedGroupInfo()) != 0 || createRequest.GetCipherSuite() != 0) {
 		if !self.checkEpochZeroUpload(request, createRequest.GetGenWrap(), createRequest.GetSealedGroupInfo(), createRequest.GetCipherSuite()) {
@@ -483,7 +488,8 @@ func (self *GkmEngine) serveReform(request *GkmRequest) {
 		return
 	}
 	prices := self.settings.Prices
-	charge := prices.create(gkmGroupOwnerByteCount) + prices.create(len(form.raw))
+	// the owner marker and the form, and the fence's closing marker and verdict, each of the form's bytes
+	charge := prices.create(gkmGroupOwnerByteCount(form.repoId, request)) + 3*prices.create(len(form.raw))
 	var epochZero *protocol.GkmEpochObject
 	if len(reformRequest.GetGenWrap()) != 0 || len(reformRequest.GetSealedGroupInfo()) != 0 || reformRequest.GetCipherSuite() != 0 {
 		if !self.settings.DraftMls {
@@ -506,8 +512,17 @@ func (self *GkmEngine) serveReform(request *GkmRequest) {
 		return
 	}
 	request.Ctx = writeCtx
-	seq, _, ok := self.formSeq(request, form, true)
-	if !ok || !self.fileForm(request, form, seq) {
+	seq, retry, ok := self.formSeq(request, form, true)
+	if !ok || !self.createGroupOwner(request, form) {
+		return
+	}
+	// the fence (reform_fence.go): the group the form re-forms is closed before the form is filed, after the owner
+	// marker, so a taken group id leaves nothing closed; a try that finds the form filed closed it already, and a
+	// repo with no form, a site loss's, has no group standing at gkm to close
+	if !retry && 1 < seq && !self.closeGroupForReform(request, form) {
+		return
+	}
+	if !self.fileFormAt(request, form, seq) {
 		return
 	}
 	if epochZero != nil && !self.createEpochZero(request, form.groupId, epochZero) {

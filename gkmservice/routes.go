@@ -6,6 +6,11 @@
 // api/check-routes.sh reads this file against bringyour.yml's /gkm/ operations (connect-m1-c11-route-scope). A route
 // whose handler has not landed has a nil Serve and answers 501 once the guard passes it.
 //
+// Beyond its row, a group a re-form closed takes nothing on the claim, wraps, recovery-wraps and epochs routes, and
+// serves nothing past the closing form's generation on gen and drop-key (QD-1186; reform_fence.go): the guard's own
+// check that the repo's newest form names the group reads the forms, cached and before the write, so the handlers
+// hold those writes to the group's closing marker, which the forms route writes before the form.
+//
 // The rows, with the decided readings folded in (QD-177: own and read need r, rw or admin on some repo, and a
 // deposit-only token reaches drop-key alone; QD-066: the batched wraps, recovery-wraps and reader-keys routes;
 // QD-156: the repo-keyed drop-key and the forms read; QD-074: the ladder):

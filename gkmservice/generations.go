@@ -110,22 +110,22 @@ func (self *gkmGenerationCache) forgetGroup(groupId sidecar.Id) {
 	}
 }
 
-// gen/<g>'s bytes as stored: sidecar.ErrBlobNotFound for none. The one read of gen/ the engine and the reconciler
-// make, where a gen pack's fallback goes (§10.16).
-func readGkmGeneration(ctx context.Context, cluster sidecar.BlobCluster, groupId sidecar.Id, generation uint64) ([]byte, error) {
-	objectBytes, _, err := readGkmObject(ctx, cluster, GkmGenerationKey(groupId, generation), gkmStatementMaxByteCount)
+// gen/<g>'s bytes as stored, at most maxByteCount (GkmServiceSettings.StatementMaxByteCount): sidecar.ErrBlobNotFound
+// for none. The one read of gen/ the engine and the reconciler make, where a gen pack's fallback goes (§10.16).
+func readGkmGeneration(ctx context.Context, cluster sidecar.BlobCluster, groupId sidecar.Id, generation uint64, maxByteCount int64) ([]byte, error) {
+	objectBytes, _, err := readGkmObject(ctx, cluster, GkmGenerationKey(groupId, generation), maxByteCount)
 	return objectBytes, err
 }
 
-// The generations a group holds after since, ascending: the one listing of gen/, where a gen pack's fallback lists
-// its packs too (§10.16).
-func listGkmGenerations(ctx context.Context, cluster sidecar.BlobCluster, groupId sidecar.Id, since uint64, pageCount int) ([]uint64, error) {
+// The generations a group holds after since, ascending, at most maxCount (GkmServiceSettings.GenerationListMaxCount)
+// before it alarms: the one listing of gen/, where a gen pack's fallback lists its packs too (§10.16).
+func listGkmGenerations(ctx context.Context, cluster sidecar.BlobCluster, groupId sidecar.Id, since uint64, pageCount int, maxCount int) ([]uint64, error) {
 	prefix := GkmGenerationPrefix(groupId)
 	startAfter := ""
 	if 0 < since {
 		startAfter = GkmGenerationKey(groupId, since)
 	}
-	infos, err := listGkmKeysAfter(ctx, cluster, prefix, startAfter, pageCount, gkmGenerationListMaxCount)
+	infos, err := listGkmKeysAfter(ctx, cluster, prefix, startAfter, pageCount, maxCount)
 	if err != nil {
 		return nil, err
 	}
@@ -142,7 +142,7 @@ func listGkmGenerations(ctx context.Context, cluster sidecar.BlobCluster, groupI
 
 // gen/<g>'s bytes as stored, through the accessor.
 func (self *GkmEngine) readGeneration(ctx context.Context, cluster sidecar.BlobCluster, groupId sidecar.Id, generation uint64) ([]byte, error) {
-	return readGkmGeneration(ctx, cluster, groupId, generation)
+	return readGkmGeneration(ctx, cluster, groupId, generation, self.settings.StatementMaxByteCount)
 }
 
 // gen/<g>'s facts, from this process's cache or one GET: sidecar.ErrBlobNotFound for none.
@@ -179,7 +179,7 @@ func (self *GkmEngine) generationExists(ctx context.Context, cluster sidecar.Blo
 
 // Creates gen/<g> If-None-Match, as createGkmObject does: winner nil when objectBytes stand there.
 func (self *GkmEngine) createGeneration(ctx context.Context, cluster sidecar.BlobCluster, groupId sidecar.Id, generation uint64, objectBytes []byte) ([]byte, error) {
-	winner, err := createGkmObject(ctx, cluster, GkmGenerationKey(groupId, generation), objectBytes, gkmStatementMaxByteCount)
+	winner, err := createGkmObject(ctx, cluster, GkmGenerationKey(groupId, generation), objectBytes, self.settings.StatementMaxByteCount)
 	if err != nil {
 		return nil, err
 	}
@@ -193,13 +193,15 @@ func (self *GkmEngine) createGeneration(ctx context.Context, cluster sidecar.Blo
 	return winner, nil
 }
 
-// The most generation keys one listing of a group's gen/ reads before it alarms: years of monthly and REMOVE
-// rotations stay far below it.
-const gkmGenerationListMaxCount = 64 * 1024
-
-// The generations a group holds after since, ascending, through the accessor.
+// The generations a group serves after since, ascending, through the accessor: what gen/ lists, past which a group a
+// re-form closed serves nothing beyond its closing form's generation (reform_fence.go). The reads that serve gen/,
+// GET gen and the drop-key route, come through here.
 func (self *GkmEngine) generationNumbers(ctx context.Context, cluster sidecar.BlobCluster, groupId sidecar.Id, since uint64) ([]uint64, error) {
-	return listGkmGenerations(ctx, cluster, groupId, since, self.settings.ListPageCount)
+	generations, err := listGkmGenerations(ctx, cluster, groupId, since, self.settings.ListPageCount, self.settings.GenerationListMaxCount)
+	if err != nil {
+		return nil, err
+	}
+	return self.servedGenerations(ctx, cluster, groupId, generations)
 }
 
 // The Signed GenRotates of generations, in order, each read through the accessor. One deleted since its LIST, which
@@ -272,10 +274,14 @@ func (self *GkmEngine) serveGenerationsRead(request *GkmRequest) {
 //	signer  admitted, not read_only, and not revoked, parked or suspended in gkm's newest state
 //	leaf    a leaf wrap's epoch exists
 //	rate    60 an hour per uploader per group
+//	fence   no closing marker of a re-form stands in the group, read after the create (QD-1186; reform_fence.go)
 //
 // The first claim wins: a 412 carries the winner, which the rotator judges (§10.5's Rotate, step 4), and the same
-// bytes again answer 201, so a lost answer's retry succeeds once. A success hints commit on gkm:<group_id> at the
-// newest epoch and g, so a rotation with no commit is seen (D-KEYS-19).
+// bytes again answer 201, so a lost answer's retry succeeds once. A claim in a group a re-form closed answers 409 with
+// the closing marker, the re-form's GroupForm, naming the new group, whatever its create left: the forms check above
+// reads the forms and then the create comes, which nothing conditions on a form landing between, so the marker is
+// what decides, and the rotator follows the form. A success hints commit on gkm:<group_id> at the newest epoch and g,
+// so a rotation with no commit is seen (D-KEYS-19).
 func (self *GkmEngine) serveGenerationClaim(request *GkmRequest) {
 	groupId := *request.GroupId
 	generation, err := parseGkmNumber(request.Http.PathValue(gkmPathValueGeneration))
@@ -284,7 +290,7 @@ func (self *GkmEngine) serveGenerationClaim(request *GkmRequest) {
 		request.BadRequest()
 		return
 	}
-	body, ok := request.ReadBody(gkmStatementMaxByteCount)
+	body, ok := request.ReadBody(self.settings.StatementMaxByteCount)
 	if !ok {
 		return
 	}
@@ -324,10 +330,12 @@ func (self *GkmEngine) serveGenerationClaim(request *GkmRequest) {
 	if !self.settings.DraftMls && rotate.GetLeafWrap() != nil {
 		// An installed client's response could have been lost across the upgrade. Only its already
 		// committed signed bytes can succeed on this path. A new generation must use KeyDelivery.
-		winner, err := readGkmGeneration(request.Ctx, request.Cluster, groupId, generation)
+		winner, err := readGkmGeneration(request.Ctx, request.Cluster, groupId, generation, self.settings.StatementMaxByteCount)
 		switch {
 		case err == nil && bytes.Equal(winner, raw):
-			request.Created()
+			if self.checkGroupOpen(request, groupId) {
+				request.Created()
+			}
 		case err == nil || errors.Is(err, sidecar.ErrBlobNotFound):
 			request.BadRequest()
 		default:
@@ -399,6 +407,11 @@ func (self *GkmEngine) serveGenerationClaim(request *GkmRequest) {
 	testHookBarrier(BarrierGenClaimAfter, barrierKey)
 	if err != nil {
 		self.answerStoreError(request, err)
+		return
+	}
+	// the fence: a group a re-form closed takes no claim, whatever this one's create left, and no winner of one
+	// is judged, since the winner may be a claim the fence refused before this one
+	if !self.checkGroupOpen(request, groupId) {
 		return
 	}
 	if winner != nil {

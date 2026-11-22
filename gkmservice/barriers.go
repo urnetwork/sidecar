@@ -25,6 +25,14 @@ const (
 	// keyed by the group.
 	BarrierGroupOwnerBefore = "gkm.group_owner.before"
 	BarrierGroupOwnerAfter  = "gkm.group_owner.after"
+	// Around each conditional write of a group's closing marker, gkm/<group_id>/closed, the first write of a re-form
+	// of that group (QD-1186), keyed by the group it closes.
+	BarrierGroupCloseBefore = "gkm.group_close.before"
+	BarrierGroupCloseAfter  = "gkm.group_close.after"
+	// Around the If-None-Match create of a closing's verdict, gkm/<group_id>/closing/<h>, which settles whether its
+	// form is filed (QD-1186), keyed by the group it closes.
+	BarrierGroupClosingBefore = "gkm.group_closing.before"
+	BarrierGroupClosingAfter  = "gkm.group_closing.after"
 	// Around epoch/<n>'s If-None-Match, one commit per epoch (KEYS-M2-14), keyed by <group>:<n>.
 	BarrierEpochPutBefore = "gkm.epoch_put.before"
 	BarrierEpochPutAfter  = "gkm.epoch_put.after"
