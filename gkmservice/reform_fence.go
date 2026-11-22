@@ -206,6 +206,14 @@ func (self *GkmEngine) closeGroupForReform(request *GkmRequest, form *gkmFormUpl
 		request.BadRequest()
 		return false
 	}
+	// a form whose closing an earlier try voided closes the group no more: it is refused as that try was
+	sealed, found, ok := self.readClosingVerdict(request, oldGroupId, form.raw)
+	if !ok {
+		return false
+	}
+	if found && !sealed {
+		return self.refuseVoidClosing(request, oldGroupId, form)
+	}
 	closing, ok := self.takeGroupClosing(request, oldGroupId, form)
 	if !ok {
 		return false
@@ -394,10 +402,17 @@ func (self *GkmEngine) settleGroupClosing(request *GkmRequest, oldGroupId sideca
 	if sealed {
 		return true
 	}
+	return self.refuseVoidClosing(request, oldGroupId, form)
+}
+
+// Refuses a form whose closing came to void: empties the old group's marker where it still holds the form, opening
+// the group again, and answers 409 with the generation past the form's, which its re-former takes before it forms
+// again. Always false, once it has answered.
+func (self *GkmEngine) refuseVoidClosing(request *GkmRequest, oldGroupId sidecar.Id, form *gkmFormUpload) bool {
 	if !self.openGroup(request, oldGroupId, form.raw) {
 		return false
 	}
-	newer, ok := self.newerGeneration(request, oldGroupId, closing.generation)
+	newer, ok := self.newerGeneration(request, oldGroupId, form.body.GetGeneration())
 	if !ok {
 		return false
 	}
@@ -406,7 +421,6 @@ func (self *GkmEngine) settleGroupClosing(request *GkmRequest, oldGroupId sideca
 		self.answerStoreError(request, errors.Join(errGkmStoreFault, errors.New("a void closing with no generation past its form's")))
 		return false
 	}
-	// the generation the form does not carry: its re-former takes it and forms again
 	request.Conflict(newer)
 	return false
 }
