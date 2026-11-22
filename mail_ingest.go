@@ -16,10 +16,10 @@
 //	          this device does not hold yet leaves the deposit for a later pass, which Run makes after RetryInterval
 //	          rather than its hourly resync, since no change of the mailbox comes when this device's state catches up.
 //	          A pin before what this device retains, a lagging depositor's once two bases landed since it read, is
-//	          not judged and counts against no one (QD-1178): the depositor is classed at the installed state, and one
-//	          that state gives no right leaves its deposit standing, unjudged (MailIngestAclAuthority.DepositorClass).
-//	          A deposit ref takes only its depositor's own deposits (§11.8's refs table), so one another sidecar
-//	          signed is consumed unrecorded
+//	          not judged and counts against no one (QD-1196, as QD-1178 has it for evs statements): the depositor is
+//	          classed at the installed state, and one that state gives no right leaves its deposit standing, unjudged
+//	          (MailIngestAclAuthority.DepositorClass). A deposit ref takes only its depositor's own deposits (§11.8's
+//	          refs table), so one another sidecar signed is consumed unrecorded
 //	erased    a signed ERASE consumes its deposit without a message. If a deposit-only ERASE races the mailbox push,
 //	          the post-commit check withholds callbacks. Readers mask the signed message id and a repo admin's next
 //	          pass destroys any new body and index slots under the original erasure id (mail_erase_late.go)
@@ -109,7 +109,7 @@ const (
 	MailDepositorReceipts
 	// The push's pin is before what this device retains, so it is not judged, and the installed state gives the
 	// depositor no right there: the deposit stands, counting against no one, and no pass waits for it, since no later
-	// state of this device judges that pin (QD-1178).
+	// state of this device judges that pin (QD-1196).
 	MailDepositorUnjudged
 )
 
@@ -162,11 +162,11 @@ func (self *MailIngestAclAuthority) Ingests(repoId Id, sidecarId Id) bool {
 //
 // A pin before what this device retains (ErrConfigPinNotRetained from a log that judges pins: before its previous
 // base, as a depositor's push is when it deposited on a state two bases behind this device's, or before the base a
-// restored log starts at) is not judged, and counts against no one, as the evs read took the deposit's push (QD-1178,
-// §10.9's judged row): that read checked the push's signature by the key the oldest retained rows give its signer,
-// refusing a signer they do not admit at the pin, and ingest holds the signer to the depositor. Left for a later
-// state, such a deposit would stand forever, since no later state of this device judges that pin, and the mail it
-// carried, answered delivered, would never be listed. So the depositor is classed at the installed state, whose
+// restored log starts at) is not judged, and counts against no one (QD-1196), as the evs read took the deposit's push
+// (QD-1178, §10.9's judged row): that read checked the push's signature by the key the oldest retained rows give its
+// signer, refusing a signer they do not admit at the pin, and ingest holds the signer to the depositor. Left for a
+// later state, such a deposit would stand forever, since no later state of this device judges that pin, and the mail
+// it carried, answered delivered, would never be listed. So the depositor is classed at the installed state, whose
 // repo kind and sidecar row no later state changes: a receipt depositor or a read_only one outside an owner-bound
 // repo as above, and a mail depositor where that state gives it deposit or write. One that state gives no right, a
 // sidecar revoked or a grant ended since its deposit, is MailDepositorUnjudged: its deposit stands rather than being

@@ -1,7 +1,7 @@
 // The group mail lost after a delivered answer (TestE2eChurnLoad's runs 4, 5 and 8, track mail-group-ingest-loss): a
 // deposit whose push is pinned before what the ingesting device retains, as a lagging depositor's is once two bases
 // landed since it read, was classed MailDepositorUnknown on every pass and so stood forever, never written to m/ or
-// i/, while its depositor had been answered delivered. It is now classed at the installed state, unjudged (QD-1178),
+// i/, while its depositor had been answered delivered. It is now classed at the installed state, unjudged (QD-1196),
 // and ingested. Beside it, the invariants a racing or refused ingest keeps: two passes racing on a group's deposits
 // land each message once, a push refused 429 or 409 leaves its deposit for the next pass, and a message answered
 // delivered is listed in the member's view through its r/ reference.
