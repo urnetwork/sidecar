@@ -94,6 +94,8 @@ func TestDefaultSidecarTlsSettingsMatchDesign(t *testing.T) {
 		ProbeTimeout:                   3 * time.Second,
 		ProbeResponseMaxByteCount:      64 * 1024,
 		PublishLinkCertificateLifetime: 7 * 24 * time.Hour,
+		// a forward's AddressLandTimeout, for a publish's grant to reach this device's engine (tls_publish.go)
+		PublishGrantLandTimeout: 30 * time.Second,
 	}
 	if settings := DefaultSidecarSettings(); !reflect.DeepEqual(*settings.Tls, want) {
 		t.Errorf("tls settings %+v, want %+v", *settings.Tls, want)
