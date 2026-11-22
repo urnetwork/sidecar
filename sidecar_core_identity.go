@@ -1,11 +1,15 @@
 //go:build !ios_extension
 
-// The app and daemon restore their enrolled sidecar identity before starting a client generation.
+// The app and daemon restore their enrolled sidecar identity before starting a client generation. On a leg whose
+// generations run a connect client, the generation's connect identity comes with it (identity_connect.go): read with
+// the identity at every pass, so a record that fails is Failed as the identity's would be, and drawn and kept at the
+// generation's first start, before its client opens.
 
 package sidecar
 
 import (
 	"bytes"
+	"crypto/rand"
 	"errors"
 )
 
@@ -82,6 +86,16 @@ func (self *Sidecar) reconcileOpen() {
 		return
 	}
 	defer record.keys.erase()
+	keepsConnectIdentity := self.leg != nil && self.leg.keepsConnectIdentity()
+	var connectIdentitySeed []byte
+	if keepsConnectIdentity {
+		connectIdentitySeed, err = loadSidecarConnectIdentitySeed(secrets, record.identity)
+		if err != nil {
+			self.connectIdentityFailed(err)
+			return
+		}
+		defer clear(connectIdentitySeed)
+	}
 	self.setIdentity(secrets, record.identity)
 	if self.lifecycleState() == SidecarStateLocked {
 		self.leaveForUnenrolled("")
@@ -124,17 +138,54 @@ func (self *Sidecar) reconcileOpen() {
 		self.leaveForUnenrolled("")
 		return
 	}
+	if keepsConnectIdentity && connectIdentitySeed == nil {
+		// the generation's first start, the keychain holding no record or a predecessor's: a connect identity of its own,
+		// kept before its client opens, so a peer never holds a contract to material the keychain lacks
+		connectIdentitySeed, err = newSidecarConnectIdentitySeed(rand.Reader)
+		if err != nil {
+			self.log.Errorf("[sidecar]generation %d has no connect identity: %s", identity.Generation, err)
+			self.stopGeneration()
+			return
+		}
+		defer clear(connectIdentitySeed)
+		if err := persistSidecarConnectIdentitySeed(secrets, identity, connectIdentitySeed); err != nil {
+			if errors.Is(err, ErrSidecarStoreLocked) || errors.Is(err, ErrSidecarStoreFailed) || errors.Is(err, ErrSidecarKeystoreLost) {
+				self.connectIdentityFailed(err)
+				return
+			}
+			// the keychain is open and the write did not finish: the client runs on the seed all the same, and a later
+			// start that finds no record of it draws another, a restart costing its peers' contracts as without one
+			self.log.Warningf("[sidecar]generation %d's connect identity was not kept: %s", identity.Generation, err)
+		}
+	}
 	self.stopGeneration()
 	self.startGeneration(&sidecarGenerationArgs{
-		identity:          identity.clone(),
-		networkId:         *networkId,
-		connectInstanceId: networkRecord.ConnectInstanceId,
-		byJwt:             byJwt,
-		clientKeySeed:     record.keys.clientKeySeedCopy(),
-		binding:           bytes.Clone(record.binding),
-		secrets:           secrets,
-		child:             networkRecord.Child,
+		identity:            identity.clone(),
+		networkId:           *networkId,
+		connectInstanceId:   networkRecord.ConnectInstanceId,
+		byJwt:               byJwt,
+		clientKeySeed:       record.keys.clientKeySeedCopy(),
+		connectIdentitySeed: bytes.Clone(connectIdentitySeed),
+		binding:             bytes.Clone(record.binding),
+		secrets:             secrets,
+		child:               networkRecord.Child,
 	})
+}
+
+// The keychain answered err for the generation's connect identity, as it may for the identity record (D-CORE-15):
+// Locked while it is locked, Unenrolled with keystore_lost for a lost one, and for a record that fails decoding or a
+// keychain that fails, Locked with the alarm, the record left as it is.
+func (self *Sidecar) connectIdentityFailed(err error) {
+	switch {
+	case errors.Is(err, ErrSidecarStoreLocked):
+		self.stopGeneration()
+		self.enterLocked()
+	case errors.Is(err, ErrSidecarKeystoreLost):
+		self.stopGeneration()
+		self.leaveForUnenrolled(SidecarReasonKeystoreLost)
+	default:
+		self.lockFailedKeychain(err)
+	}
 }
 
 // A failed keychain read during binding recovery or identity loading locks this network and raises its alarm (D-CORE-15).

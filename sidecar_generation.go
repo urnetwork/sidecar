@@ -1,7 +1,9 @@
 // One client generation (§5.5): what every leg runs for it, and the seam to what only the leg runs. On every leg a
 // generation installs its token and the ClientKey's DPoP signer in SidecarApi and runs D-CORE-8's refresher
 // (api_token_manager.go); on connect legs the leg adds the client, its subprotocol and each component's Attach
-// (sidecar_new_connect.go), and installs each refreshed token in connect's holders too.
+// (sidecar_new_connect.go), and installs each refreshed token in connect's holders too. A connect leg's client
+// presents the connect identity the core keeps with its generation and hands it at every start (identity_connect.go),
+// so a restart under the kept generation costs its peers none of the contracts they hold to its client.
 //
 // Only the run loop starts and ends a generation, so a generation's teardown never runs on a goroutine it would
 // join: the refresher's refusal, connect's notifications and a component's call each ask the run loop, through
@@ -26,9 +28,15 @@ import (
 // ErrSidecarStoreFailed in, so the core names that store and no other as the reason (owner decision 616).
 var errSidecarSubprotocolStoreFailed = errors.New("the subprotocol store failed")
 
+// A generation's connect identity seed (identity_connect.go): HKDF-SHA256's input, 32 bytes, a cryptographic constant.
+const sidecarConnectIdentitySeedByteCount = 32
+
 // What only a leg runs beside the core. Every method is called from the run loop or a host's call, never under
 // stateLock.
 type sidecarLeg interface {
+	// Whether each generation's client is a connect client, whose connect identity the core keeps with the generation
+	// in the keychain and hands the leg at every start (identity_connect.go).
+	keepsConnectIdentity() bool
 	// Starts the leg's half of generation, which must end with generation's ctx. An error leaves nothing running, and
 	// one from a sealed file of the network's subprotocol store wraps errSidecarSubprotocolStoreFailed.
 	startGeneration(generation *sidecarGeneration) (sidecarLegGeneration, error)
@@ -63,6 +71,9 @@ type sidecarGenerationArgs struct {
 	byJwt             string
 	// a copy, which the generation erases once the leg has read it
 	clientKeySeed []byte
+	// the seed of the connect identity the keychain keeps for the generation, on a leg that keeps one
+	// (identity_connect.go), nil on one that does not; a copy, erased as clientKeySeed is
+	connectIdentitySeed []byte
 	// the generation's marshalled SignedSidecarIdentityBinding, which §6's Hello carries
 	binding []byte
 	// the core's namespace of the network's keychain
@@ -81,6 +92,8 @@ type sidecarGeneration struct {
 	byJwt             string
 	// read by the leg while it starts, then erased
 	clientKeySeed []byte
+	// the kept connect identity's seed, read by the leg while it starts, then erased
+	connectIdentitySeed []byte
 	// the generation's marshalled SignedSidecarIdentityBinding, which §6's Hello carries
 	binding []byte
 	ctx     context.Context
@@ -136,6 +149,7 @@ func (self *Sidecar) runningGeneration() *sidecarGeneration {
 // the leg starts, so a store that fails again raises nothing more.
 func (self *Sidecar) startGeneration(args *sidecarGenerationArgs) {
 	defer clear(args.clientKeySeed)
+	defer clear(args.connectIdentitySeed)
 	generationNumber := args.identity.Generation
 	// The generation's proof signer and token are installed before the status names the generation, so a host
 	// or component that acts on that status finds them. A refused move takes them back out.
@@ -172,17 +186,18 @@ func (self *Sidecar) startGeneration(args *sidecarGenerationArgs) {
 
 	generationCtx, cancel := context.WithCancel(self.ctx)
 	generation := &sidecarGeneration{
-		sidecar:           self,
-		generation:        generationNumber,
-		identity:          args.identity,
-		networkId:         args.networkId,
-		connectInstanceId: args.connectInstanceId,
-		byJwt:             args.byJwt,
-		clientKeySeed:     args.clientKeySeed,
-		binding:           args.binding,
-		ctx:               generationCtx,
-		cancel:            cancel,
-		core:              sidecarCoreSync{requests: NewMonitorValue(sidecarCoreRequest{})},
+		sidecar:             self,
+		generation:          generationNumber,
+		identity:            args.identity,
+		networkId:           args.networkId,
+		connectInstanceId:   args.connectInstanceId,
+		byJwt:               args.byJwt,
+		clientKeySeed:       args.clientKeySeed,
+		connectIdentitySeed: args.connectIdentitySeed,
+		binding:             args.binding,
+		ctx:                 generationCtx,
+		cancel:              cancel,
+		core:                sidecarCoreSync{requests: NewMonitorValue(sidecarCoreRequest{})},
 	}
 	if self.leg != nil {
 		testHookBarrier("sidecar.generation.start.before", args.identity.SidecarId.String())
