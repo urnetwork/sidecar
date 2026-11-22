@@ -79,6 +79,8 @@ barrier bridge_share.grant_file.after bridge_share_invite.go
 barrier bridge_share.grant_file.before bridge_share_invite.go
 barrier bridge_share.invite.after bridge_share_invite.go
 barrier bridge_share.invite.before bridge_share_invite.go
+barrier bridge_share.provide_mode.after bridge_share.go
+barrier bridge_share.provide_mode.before bridge_share.go
 barrier bridge_share.signer.after bridge_share_invite.go
 barrier bridge_share.signer.before bridge_share_invite.go
 barrier bridge_share_key.create.after bridge_share_key.go
