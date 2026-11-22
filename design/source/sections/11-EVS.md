@@ -914,12 +914,15 @@ directory a push's directory change is a delta {names added, child tokens remove
           CAS, since each child's own path is checked, except that a child directory D is checked both ways: a push
           removing D gets 409 with D's path if a delta to D committed after its base, and a push changing D gets
           that 409 if D's removal committed after its base; a fold applies committed deltas to the name table {child
-          token, kind, sealed name}; at most 4,096 children and 448 KiB of name table (its EvsName rows: tokens,
-          kinds, sealed names with nonce and tag; a carried row counted at its untagged size, so the bound holds
-          through a copy, its epoch adding 3-5 B, under 466 KiB at the bound, within idx/'s 512 KiB), checked in
-          step 5g against the folded table plus the deltas after h (newest, above; 409 DIRECTORY_FULL), which is
-          v0's git limit; the bytes bind first, at 3,584 children whose names are under 64 B; `layout` reserves
-          paging; §15 and §16 shard by sequence and size directories by these bytes
+          token, kind, sealed name}, in commit order, each delta at the version its writer read plus one, so a
+          directory's own versions may repeat and fall when writers overlap, its newest being the delta committed
+          last, and readers hold it by that delta's commit version (11.9's reader row; owner decision 685); at
+          most 4,096 children and 448 KiB of name table (its EvsName rows: tokens, kinds, sealed names with nonce
+          and tag; a carried row counted at its untagged size, so the bound holds through a copy, its epoch adding
+          3-5 B, under 466 KiB at the bound, within idx/'s 512 KiB), checked in step 5g against the folded table
+          plus the deltas after h (newest, above; 409 DIRECTORY_FULL), which is v0's git limit; the bytes bind
+          first, at 3,584 children whose names are under 64 B; `layout` reserves paging; §15 and §16 shard by
+          sequence and size directories by these bytes
 name      sealed alone: the name, then 0x80 and zeros to the next multiple of 64 B, under a random 24 B nonce with
           a 16 B tag; AAD repo_id || path epoch || parent and child tokens; with its token, kind and framing, an
           untagged row takes 128 B for a name under 64 B, 194 B under 128 B, and 64 B more per further 64 B
@@ -1675,12 +1678,20 @@ reader    checks each returned statement's signature against its config's writer
           sets pin_version to the record's pin, not the ref's (a request of several paths takes the oldest of
           their pins), checks every statement after it as above, refuses and alarms if the served version is
           below the record's or a later statement changes the path, then raises the record (owner decision 209);
-          on a gap head, a re-pin past the budget (below), it takes a recorded path that evs serves absent, or
-          serves its removal, with no alarm and drops its record, the gap having marked the versions before the
-          re-pin as evs's word, so the path reads as a never-read path does (Q-EVS-6) and its later versions are
-          held to the walk alone, while a version served below the record is still refused, gap or not (owner
-          decision 600); a head below its pin is refused unless a verified EvsReseed covers it (11.13, §19.10),
-          which it shows as a loss
+          a directory is held to the ref version of its newest delta: its deltas merge without a path-level
+          CAS, each at the version its writer read plus one (11.7's directory row), so its own versions may
+          repeat and fall, and it is below its record only where its newest delta committed below the commit
+          version the record holds, which only rises, the position of a delta committed below the statements
+          the read walks being evs's word, as the folded table is; a file keeps the entry-version rule, since
+          5g makes its versions rise; two records of a path merge by commit version once both hold one, and a
+          directory's record stored before the commit version was kept stays on the entry-version rule,
+          failing closed (owner decision 685); on a gap head, a re-pin past the budget (below), it takes a
+          recorded path that evs serves absent, or serves its removal, with no alarm and drops its record, the
+          gap having marked the versions before the re-pin as evs's word, so the path reads as a never-read path
+          does (Q-EVS-6) and its later versions are held to the walk alone, while a version served below the
+          record, a directory's by its newest delta's commit, is still refused, gap or not (owner decision 600);
+          a head below its pin is refused unless a verified EvsReseed covers it (11.13, §19.10), which it shows
+          as a loss
 collected from T, the end of the UTC minute in the replacing record's EvsPlace plus 60 s, every read of a replaced
           versionless version answers `collected` by evs's checked clock, whether or not its bytes remain (staged in
           a batch, purge: observe, or kept by a hold), evs serving it before T and never using time_ms, which may
@@ -4032,7 +4043,7 @@ never     a query, which documents match it, or which trigrams documents share: 
 
 **D-EVS-30 (proposed).** evs group-commits push, part and seal records into immutable minute-bucketed batches of at most 256 KiB, written at once when load is light, within 20 ms under load, and evacuated whole after 25-26 h. *Why:* bursts, and a process's stream to a cluster past ~50 pushes/s, share one create and one delete per batch (owner decision 140); at ~8 evs processes a set near capacity sees ~1-1.6 records a batch.
 
-**D-EVS-31 (proposed).** `idx/` holds only committed versions, folded lazily (the oldest 64 at 96 unfolded, the rest after 10 min idle, always before a page-out and in a path epoch's own commit), a file's newest version per fold and every directory delta in order; a removal writes, If-Match and only over an older version, a marker that keeps the path's version, and markers go in head-announced collection windows once the horizon passes them by a base range, their DELETEs cancelled before the window ends, and folds over covered markers held past it, by margins that cover the clock bounds and the cancel's lag; a creation's version is max(its push's effective base version, on an overlay its base_version plus its chain's base versions, a standing removal's) + 1, so a path's versions never restart once its marker goes, nor fall below those it held on a base ref; reads and the CAS read an entry only after a head and merge the window versions after that head's folded_through. *Why:* a busy path is written once per fold, nothing pending evicts a committed version (owner decision 140), and a DELETE, which MinIO applies unconditionally, could remove an entry a later fold wrote; versions must only rise, for 5g and the search index's newest-wins rule (owner decision 148).
+**D-EVS-31 (proposed).** `idx/` holds only committed versions, folded lazily (the oldest 64 at 96 unfolded, the rest after 10 min idle, always before a page-out and in a path epoch's own commit), a file's newest version per fold and every directory delta in order; a removal writes, If-Match and only over an older version, a marker that keeps the path's version, and markers go in head-announced collection windows once the horizon passes them by a base range, their DELETEs cancelled before the window ends, and folds over covered markers held past it, by margins that cover the clock bounds and the cancel's lag; a creation's version is max(its push's effective base version, on an overlay its base_version plus its chain's base versions, a standing removal's) + 1, so a path's versions never restart once its marker goes, nor fall below those it held on a base ref; reads and the CAS read an entry only after a head and merge the window versions after that head's folded_through; a directory's versions may repeat and fall under merged deltas, its newest being the delta committed last (owner decision 685). *Why:* a busy path is written once per fold, nothing pending evicts a committed version (owner decision 140), and a DELETE, which MinIO applies unconditionally, could remove an entry a later fold wrote; a file's versions must only rise, for 5g and the search index's newest-wins rule, whose documents are files and never directories (owner decision 148), while a directory's deltas merge with no path-level CAS, so its reader holds it by its newest delta's commit version, which only rises (11.9).
 
 **D-EVS-32 (proposed).** Hourly evacuation moves each repo's records and log pages older than 24 h into one HDD pack once they reach 256 KiB; below that it moves the records into NVMe parcels while the log pages wait at log/, both packing within 7 d. *Why:* owner decision 136's residency, with whole-batch deletes and no tiny HDD objects.
 

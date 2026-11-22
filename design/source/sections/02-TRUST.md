@@ -116,7 +116,7 @@ Feedback (sidecar/FEEDBACK-SYSTEM.md:11) and hosted models are out of scope.
 **The list** (the only TTL table; I-18):
 
 ```yaml
-# metadata_list.yml v65; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
+# metadata_list.yml v66; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
 # §7.9, §10, §11). v6 adds to v5 (2026-11-04) connect-1's ShareCert, api-6's push-token slot sentinels, api-7's
 # {acl_}q, cascade signers, recovery bindings, restored bindings' recovery windows and orphaned networks, api-13's
 # per-eraser closure counters, evs-1's secret kind and orphans, evs-3's creation block, fence time, deleted flag
@@ -351,6 +351,10 @@ Feedback (sidecar/FEEDBACK-SYSTEM.md:11) and hosted models are out of scope.
 # cert-1 network_tls_custom_challenge, a delegated DNS-01 challenge's receipt per domain and claim, which api
 # captures for the certs worker and the worker completes with the serial its write took, kept at most the
 # challenge's hour.
+# v66, updated 2026-11-21 for the owner's answer QD-1171 (owner decision 686), adds no row: api-5's internal
+# lookup of sidecars' current clients is POST /internal/gate/sidecar-identity-clients, on api's internal gate
+# prefix, which the lb refuses from outside, for the gkm and mxedge classes' bearers; what it sees and logs is
+# unchanged, and no column, family or proto field changes.
 # Each row gives service, store (tables, Redis families, object families, logs or memory),
 # sees, why, ttl, and owner: the section that designs the value and states its ttl. Withdrawn rows keep
 # their ids so citations resolve. Public: this list ships in DESIGN.md on the public sidecar repo (owner
@@ -444,7 +448,7 @@ api-4:
 api-5:
   service: api
   store: sidecar_identity, sidecar_identity_binding
-  sees: sidecar_id, network_id, identity public key and algorithm, status, create and revoke times; append-only bindings (generation, client_id, client public key, dual signatures, time); identity lookups (GET /sidecar/identity/<sidecar_id>, with its pages of older bindings, and GET /sidecar/identity?client_id=, caller and target; the internal POST /sidecar/identity/clients, by which gkm and other hosts without Postgres turn sidecar ids into client ids for §6.8's hints, logs no per-target record)
+  sees: sidecar_id, network_id, identity public key and algorithm, status, create and revoke times; append-only bindings (generation, client_id, client public key, dual signatures, time); identity lookups (GET /sidecar/identity/<sidecar_id>, with its pages of older bindings, and GET /sidecar/identity?client_id=, caller and target; the internal POST /internal/gate/sidecar-identity-clients, by which gkm and other hosts without Postgres turn sidecar ids into client ids for §6.8's hints, logs no per-target record)
   why: durable identity across the reaper; peer binding checks (§5.5, §6.4); git committer resolution (owner decision 81)
   ttl: never reaped; deleted with their network; lookups only in ops-1's logs
   owner: §5.15

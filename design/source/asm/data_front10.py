@@ -2391,3 +2391,50 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     _D683, _D683 + "A fourth late fold the same day numbers the answer recorded after that: a begun directory "
     "erasure whose request's entry the copy no longer holds, expired or refused after its signer's compromise "
     "revocation (684), extending @@OD:682@@ and @@OD:683@@. ")
+
+# The fifth late fold (dr14-late-fold, 2026-11-21): the six answers recorded after the fourth late fold, QD-1170 to
+# QD-1175, which the end-to-end tests' fix tracks raised.
+INDEX += [
+    (685, "A directory's read record",
+     'A head reader holds a directory to the ref version its newest delta committed at, since merged deltas let '
+     'its own versions fall.'),
+    (686, "The identity lookup's gate path",
+     "§5.15's internal lookup of sidecars' current clients is `POST /internal/gate/sidecar-identity-clients`, for "
+     'the gkm and mxedge classes.'),
+    (687, "A listen's grant expiry",
+     "A `tls/` or `smtp/` listen asks its grant's expiry, held to the rule's `maxExpiry`, a mail receiver 7 days by "
+     'default.'),
+    (688, 'Write implies deposit',
+     "A repo's writers deposit wherever it takes deposits, so a consented receiver deposits mail with no send "
+     'grant.'),
+    (689, 'Edge client identities',
+     "Each edge client's connect identity derives from the edge bearer and its id, so a restart presents the same "
+     'one.'),
+    (690, 'A label comes with its zone',
+     "From M5 a label's draw writes its zone's mail-off set, taking a root serial in the label map's order."),
+]
+for _n, _note in [
+        (14, " Extended by @@OD:690@@: from M5 a label's draw writes its zone's mail-off set."),
+        (74, ' Followed by @@OD:687@@: a `tls/` or `smtp/` listen asks its own expiry, a mail receiver 7 days by '
+             'default.'),
+        (209, " Refined by @@OD:685@@: a directory's record is held to the ref version its newest delta committed "
+              'at.'),
+        (333, ' Extended by @@OD:688@@: every writer of a repo that takes deposits deposits there.'),
+        (340, " Followed by @@OD:686@@: §5.15's identity lookup joins the prefix."),
+        (428, " Extended by @@OD:689@@: each client's connect identity derives from the edge bearer, so a restart "
+              'presents it again.'),
+        (577, " Extended by @@OD:689@@: a slot's clients keep their connect identity from process to process."),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 691))
+DATES.update({_n: '2026-11-21' for _n in range(685, 691)})
+_D684 = "revocation (684), extending @@OD:682@@ and @@OD:683@@. "
+assert DECISIONS_INTRO.count(_D684) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D684, _D684 + "A fifth late fold the same day numbers the six answers the end-to-end tests' fix tracks raised "
+    "after that: a directory's read record held to its newest delta's commit (685), refining @@OD:209@@; §5.15's "
+    "identity lookup under the gate prefix (686), following @@OD:340@@; a listen's grant expiry (687), following "
+    "@@OD:74@@; write implying deposit (688), extending @@OD:333@@; edge clients' derived identities (689), "
+    "extending @@OD:428@@ and @@OD:577@@; and a label drawn with its zone (690), extending @@OD:14@@. ")

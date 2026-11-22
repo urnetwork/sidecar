@@ -12,7 +12,7 @@
   "num": 2,
   "code": "TRUST",
   "words": 9282,
-  "code_words": 21630,
+  "code_words": 21691,
   "ceiling": 3000,
   "over": 6282,
   "over_pct": 209.4
@@ -38,11 +38,11 @@
  {
   "num": 5,
   "code": "CORE",
-  "words": 11134,
+  "words": 11163,
   "code_words": 8601,
   "ceiling": 3500,
-  "over": 7634,
-  "over_pct": 218.1
+  "over": 7663,
+  "over_pct": 218.9
  },
  {
   "num": 6,
@@ -56,65 +56,65 @@
  {
   "num": 7,
   "code": "TEAM",
-  "words": 12831,
-  "code_words": 15094,
+  "words": 12877,
+  "code_words": 15106,
   "ceiling": 3500,
-  "over": 9331,
-  "over_pct": 266.6
+  "over": 9377,
+  "over_pct": 267.9
  },
  {
   "num": 8,
   "code": "ACL",
-  "words": 13041,
-  "code_words": 5343,
+  "words": 13264,
+  "code_words": 5350,
   "ceiling": 3800,
-  "over": 9241,
-  "over_pct": 243.2
+  "over": 9464,
+  "over_pct": 249.1
  },
  {
   "num": 9,
   "code": "SOCK",
-  "words": 6446,
-  "code_words": 1791,
+  "words": 6464,
+  "code_words": 1819,
   "ceiling": 3000,
-  "over": 3446,
-  "over_pct": 114.9
+  "over": 3464,
+  "over_pct": 115.5
  },
  {
   "num": 10,
   "code": "KEYS",
-  "words": 11849,
+  "words": 11856,
   "code_words": 9649,
   "ceiling": 4500,
-  "over": 7349,
-  "over_pct": 163.3
+  "over": 7356,
+  "over_pct": 163.5
  },
  {
   "num": 11,
   "code": "EVS",
-  "words": 22752,
-  "code_words": 55954,
+  "words": 22805,
+  "code_words": 56135,
   "ceiling": 5000,
-  "over": 17752,
-  "over_pct": 355.0
+  "over": 17805,
+  "over_pct": 356.1
  },
  {
   "num": 12,
   "code": "DNS",
-  "words": 6475,
-  "code_words": 2026,
+  "words": 6711,
+  "code_words": 2124,
   "ceiling": 3000,
-  "over": 3475,
-  "over_pct": 115.8
+  "over": 3711,
+  "over_pct": 123.7
  },
  {
   "num": 13,
   "code": "TLS",
-  "words": 10381,
+  "words": 10619,
   "code_words": 1421,
   "ceiling": 3800,
-  "over": 6581,
-  "over_pct": 173.2
+  "over": 6819,
+  "over_pct": 179.4
  },
  {
   "num": 14,
@@ -128,11 +128,11 @@
  {
   "num": 15,
   "code": "MAIL",
-  "words": 11307,
+  "words": 11351,
   "code_words": 2356,
   "ceiling": 4500,
-  "over": 6807,
-  "over_pct": 151.3
+  "over": 6851,
+  "over_pct": 152.2
  },
  {
   "num": 16,
@@ -164,11 +164,11 @@
  {
   "num": 19,
   "code": "OPS",
-  "words": 10665,
+  "words": 10685,
   "code_words": 11117,
   "ceiling": 3500,
-  "over": 7165,
-  "over_pct": 204.7
+  "over": 7185,
+  "over_pct": 205.3
  },
  {
   "num": 20,
