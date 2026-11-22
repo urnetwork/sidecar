@@ -73,10 +73,10 @@
 // depositor's pin takes a new group id at a generation past its pin, along a chain it verified, where rule 8 speaks
 // of an equal (g, C_g), which a depositor, holding no group, never meets.
 //
-// Not built here, each failing closed: evs's resolution of gen/<g> through the newest GroupForm (rule 8) is evs's; a
-// member two re-forms behind, whose middle form a second site loss took, refuses the chain and alarms, and returns by
-// a re-add or its recovery code; and a re-form keeps suite 0x0010, the one the subset speaks, until IANA's migration
-// has another.
+// evs resolves a statement's gen/<g> through the repo's GroupForms by GkmVerifyGroupForm (evsservice's
+// generation_resolve.go). Not built here, each failing closed: a member two re-forms behind, whose middle form a
+// second site loss took, refuses the chain and alarms, and returns by a re-add or its recovery code; and a re-form
+// keeps suite 0x0010, the one the subset speaks, until IANA's migration has another.
 //
 // Calls testHookSecret through the ladder's own functions at every key sealed.
 
@@ -244,6 +244,31 @@ func gkmParseGroupForm(state GkmAuthView, repoId Id, signed *bridge.Signed) (*gk
 		return nil, err
 	}
 	return form, nil
+}
+
+// What a server reads of a GroupForm to resolve a statement's gen/<g> through a repo's forms (plan-KEYS-reform-ladder
+// rule 8): the group the form makes, the group it re-forms, zero for a creation's, and the newest generation its
+// ladder carries.
+type GkmGroupFormFacts struct {
+	GroupId         Id
+	PreviousGroupId Id
+	Generation      uint64
+}
+
+// A Signed GroupForm of repoId, its stored bytes verified under its signer's admitted key in state and held to their
+// shape, as a member verifies one before it judges the signer (gkmParseGroupForm), for a server that resolves a
+// statement's gen/<g> through the repo's forms (rule 8). Who may sign one is GkmFormSignerAllowed's, which a server
+// does not judge: it may retain no state at the form's pin, and every member judges it before it adopts the group.
+func GkmVerifyGroupForm(state GkmAuthView, repoId Id, signedBytes []byte) (*GkmGroupFormFacts, error) {
+	signed := &bridge.Signed{}
+	if err := proto.Unmarshal(signedBytes, signed); err != nil {
+		return nil, fmt.Errorf("%w: a stored GroupForm: %w", ErrGkmMalformed, err)
+	}
+	form, err := gkmParseGroupForm(state, repoId, signed)
+	if err != nil {
+		return nil, err
+	}
+	return &GkmGroupFormFacts{GroupId: form.groupId, PreviousGroupId: form.previousGroupId, Generation: form.generation}, nil
 }
 
 // §10.6's GroupForm signer rule judged at the auth pin the form carries (QD-643; R1's judged row): at the state of

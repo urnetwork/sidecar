@@ -87,7 +87,8 @@ func (self *pushAttempt) pathEpochDueOver(head *protocol.EvsHead) (*pathEpochDue
 	}
 	due := &pathEpochDue{batchedDelay: self.settings.PathEpochBatchedDelay}
 	for generation := from + 1; generation <= to; generation += 1 {
-		record, err := self.engine.generations.Read(self.ctx, self.cluster, groupId, generation, self.gateView)
+		// a generation a re-form's ladder carried into the push's group is read as the group it was claimed in held it
+		record, err := self.engine.generations.Read(self.ctx, self.cluster, self.repoId, groupId, generation, self.gateView)
 		if err != nil {
 			return nil, err
 		}
