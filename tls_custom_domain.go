@@ -470,14 +470,19 @@ func (self *TlsCustomDomainOrderer) alarm(name string) {
 	}
 }
 
-// Waits timeout on the orderer's clock, or until ctx ends.
+// Waits timeout on the orderer's clock, or until ctx ends. ctx's error once ctx has ended, a timer that fired as it
+// ended included, and nil only for a timeout passed with ctx live, so neither Run's loop nor a holder's pause goes on
+// past its context; a context already ended asks the clock for nothing.
 func (self *TlsCustomDomainOrderer) wait(ctx context.Context, timeout time.Duration) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
 	case <-self.clock.After(timeout):
-		return nil
 	}
+	// select takes either of two ready cases at random: a timer that fired as ctx ended reads as the end
+	return ctx.Err()
 }
 
 // The account's key from the key file this desktop reads, from the account's repo or its local copy, checked
@@ -1667,10 +1672,11 @@ func (self *TlsCustomDomainOrderer) rollState(ctx context.Context, account *TlsC
 }
 
 // 17.2.7's loop until ctx ends: a pass, then PollInterval moved by up to PollJitter of it either way after a pass that
-// listed work, else IdlePollInterval, the same after a pass that failed. report, when not nil, takes each pass's
-// report and error, nil for no failure.
+// listed work, else IdlePollInterval, the same after a pass that failed. No pass starts once ctx has ended, before
+// the first or at a wait whose timer fired with the end. report, when not nil, takes each pass's report and error, nil
+// for no failure.
 func (self *TlsCustomDomainOrderer) Run(ctx context.Context, report func(passReport *TlsCustomPassReport, err error)) {
-	for {
+	for ctx.Err() == nil {
 		passReport, err := self.RunOnce(ctx)
 		if report != nil {
 			report(passReport, err)
