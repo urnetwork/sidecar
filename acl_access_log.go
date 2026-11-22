@@ -30,9 +30,15 @@
 //	             fold holds at the entry, which every reader holds alike). Every other mailcfg is owned, a member's
 //	             second too, so none of them ever reads as the network's; which of a member's is its scope's, the
 //	             first in log order, is the reader's (MailRepos.ScopeMailConfigRepo)
-//	consented    an owner-bound repo's owner's devices consented at its RepoCreate, an owned mailcfg's too, and each
-//	             its owner's OwnerConfirm adds; a device consented any other way between bases waits for the next
-//	             base's compile
+//	consented    the owner's consented devices (§8.5) of an owner-bound repo, an owned mailcfg's too: those consented
+//	             at its RepoCreate, each its owner's OwnerConfirm adds, and each device consented after the RepoCreate
+//	             any other way, by its admission's signers (the scoped clause), an AdmissionConfirm from the owner's
+//	             consented device or the invited clause, which TEAM's configAdvanceConsents lists at the entry that
+//	             consents it (AclState.listConsentedOwnerDevices), so a member's second device reads its vault from
+//	             its admission on, between bases included (owner decision 355), at every reader, gate and api alike.
+//	             A listed device that stops being consented keeps its id, as before: AclState's readers judge
+//	             consented(d, M) now beside the list, and gkm's rows-only members and form checks the device's row's
+//	             standing
 //	shrunk time  RepoCreate's entry time_ms as holders_shrunk_time_ms, the repo's t_s while holders_shrunk_at is 0,
 //	             which §7.9's shrink row compares its holders at (QD-883); TEAM's configSetShrunkAt writes both
 //	             fields at each shrink after, and bases carry them, so a verifier that starts at a base reads the
@@ -243,6 +249,60 @@ func FoldAclRepos(repos []*protocol.AclRepo, entries []AclAccessLogEntry) ([]*pr
 		}
 	}
 	return next, nil
+}
+
+// repos with each owner-bound row, an owned mailcfg's included, listing every device this state consents for the
+// row's owner now (§8.5's consented(d, M)) that it does not list yet, each appended in sidecar_id order after those it
+// lists: the file header's consented row, which TEAM's configAdvanceConsents runs on the state an entry built. A
+// pure function of the rows and the state's consent replay, so every reader appends the same ids at the same entry.
+// repos is not changed: a row that gains an id is copied, the list with it, and false is returned with repos itself
+// when none does. A row naming no valid owner gains nothing.
+func (self *AclState) listConsentedOwnerDevices(repos []*protocol.AclRepo) ([]*protocol.AclRepo, bool) {
+	// each member's consented devices, in sidecar_id order, built only for the owners the rows name
+	var memberConsentedIds map[Id][]Id
+	consentedIds := func(memberId Id) []Id {
+		if memberConsentedIds == nil {
+			memberConsentedIds = map[Id][]Id{}
+			for i := range self.sidecars {
+				sidecar := &self.sidecars[i]
+				if self.sidecarConsented(sidecar) {
+					memberConsentedIds[sidecar.memberId] = append(memberConsentedIds[sidecar.memberId], sidecar.id)
+				}
+			}
+		}
+		return memberConsentedIds[memberId]
+	}
+	var next []*protocol.AclRepo
+	for i, repo := range repos {
+		if !aclRepoRowOwnerBound(repo) {
+			continue
+		}
+		ownerId, err := IdFromBytes(repo.GetOwnerMemberId())
+		if err != nil || ownerId == (Id{}) {
+			continue
+		}
+		var copied *protocol.AclRepo
+		for _, sidecarId := range consentedIds(ownerId) {
+			listed := slices.ContainsFunc(repo.GetConsentedSidecarIds(), func(listedId []byte) bool {
+				return bytes.Equal(listedId, sidecarId.Bytes())
+			})
+			if listed {
+				continue
+			}
+			if copied == nil {
+				if next == nil {
+					next = slices.Clone(repos)
+				}
+				copied = proto.Clone(repo).(*protocol.AclRepo)
+				next[i] = copied
+			}
+			copied.ConsentedSidecarIds = append(copied.ConsentedSidecarIds, sidecarId.Bytes())
+		}
+	}
+	if next == nil {
+		return repos, false
+	}
+	return next, true
 }
 
 // Whether a repo row stands: no RepoDelete, or its newest one restored.
