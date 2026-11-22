@@ -95,9 +95,15 @@ func (self *aclWriterSubjectResolver) ResolveNetwork(ctx context.Context, text s
 	return id, err == nil, err
 }
 
-// Combines the enrollment's current zone label and alias with its locally retained retiring aliases.
+// Combines the enrollment's current zone label and alias with its locally retained retiring aliases: the label table
+// its DnsClient feeds, opened in its dns/ directory where no composition attached it yet (Sidecar.NetworkLabels), so the
+// fetch below writes the enrollment's row before its retiring aliases are read.
 func aclWriterNetworkLabel(ctx context.Context, running *Sidecar) (NetworkLabelRow, error) {
 	dns, err := running.Dns()
+	if err != nil {
+		return NetworkLabelRow{}, err
+	}
+	registered, err := running.NetworkLabels()
 	if err != nil {
 		return NetworkLabelRow{}, err
 	}
@@ -108,15 +114,6 @@ func aclWriterNetworkLabel(ctx context.Context, running *Sidecar) (NetworkLabelR
 	row, err := canonicalNetworkLabelRow(NetworkLabelRow{Root: zone.Root, NetworkId: zone.NetworkId, Label: zone.Label, Alias: zone.Alias})
 	if err != nil {
 		return NetworkLabelRow{}, err
-	}
-	dns.stateLock.Lock()
-	registered := dns.labels
-	dns.stateLock.Unlock()
-	if registered == nil {
-		registered, err = OpenNetworkLabelTable(running.LocalStore())
-		if err != nil {
-			return NetworkLabelRow{}, err
-		}
 	}
 	for _, held := range registered.Networks() {
 		if held.Root == row.Root && held.NetworkId == row.NetworkId {
