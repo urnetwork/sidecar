@@ -13,9 +13,9 @@
 //	          withholds an anchor's head; a chain value no version holds is a mismatch, as in order
 //	after     a device whose state lets w alone write takes v's past push at an anchor whose keys admit v, the gap the
 //	          owner accepted, and refuses v's push after the anchor, judged in full at its pin
-//	re-anchor a device following in order whose base names a head with a push before its window withholds that base,
-//	          starts again at a later base once api's retention point passes its next position, and follows on from
-//	          there in order
+//	re-anchor a device following in order whose base names a head with a push before its window takes that push on
+//	          its signature and stands on the base (QD-1178); one api's retention point passes the next position of
+//	          starts again at a later base, and follows on from there in order
 
 package sidecartest
 
@@ -520,23 +520,22 @@ func TestConfigClientReanchorsADeviceWhoseHeadPredatesItsWindow(t *testing.T) {
 	}
 
 	// a push at evs's first position, then evs's log moves on and this device's window with it, past that position:
-	// the next base names a head on that push, which a device following in order can no longer judge
+	// the next base names a head on that push, whose pin a device following in order no longer judges, and takes on its
+	// signature, its chain reaching the head the base names (QD-1178)
 	world.saveWith(world.writer, map[string][]byte{sidecar.ConfigHeadNamesPath: []byte("names at evs's first position")})
 	world.advance([]string{"w", "v", "m", "r", "d"}, 0, nil)
 	mirror.retain(2)
-	withheld := world.fold()
-	if err := world.catchUp(client); !errors.Is(err, sidecar.ErrConfigHeadUnavailable) || !errors.Is(err, sidecar.ErrGkmAuthNotRetained) {
+	taken := world.fold()
+	if err := world.catchUp(client); err != nil {
 		t.Fatalf("a base on a push before the window: %v", err)
 	}
-	if base := client.State().Base(); base.GetVersion() != 1 {
-		t.Fatalf("a withheld base %d moved the device to base %d", withheld.GetVersion(), base.GetVersion())
-	}
+	world.requireBase(client, taken, "on a push before the window")
 
 	// api's retention point passes the device's next position: it starts again at the newest base, its anchor, held to
 	// the pin it stood at
-	world.fold()
+	passed := world.fold()
 	anchor := world.fold()
-	projection.retainFrom(withheld.GetVersion() + 1)
+	projection.retainFrom(passed.GetVersion() + 1)
 	if err := world.catchUp(client); err != nil {
 		t.Fatalf("the re-anchor: %v", err)
 	}
