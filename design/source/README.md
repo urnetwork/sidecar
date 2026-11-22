@@ -1141,7 +1141,7 @@ The design-records track dr14-late-fold (wave f47c) folds the six answers that t
 - **Index rows.** Owner decisions 14, 74, 209, 333, 340, 428 and 577 note the decisions that extend, follow or refine them.
 - **"Later decisions".** QD-024 (§4) and QD-1086 (§22) are neither on this track's list nor in its sections, and keep the Not folded lines the final sweep gave them.
 
-`build.sh` on this folder reproduces DESIGN.md (SHA-256 `ee8bbb2f2027af2c5e21207a91442f141f82b75b9738a23a5d3bcbcbb7796cb7`) and DESIGN-DEFER.md (SHA-256 `c0e7b5f18658b6b8c90e08c6fa8062799826945d640fca6458420c37e4ab9f4d`, unchanged), and the validation shows:
+`build.sh` on this folder reproduces DESIGN.md (SHA-256 `c069c784f4397bcb363fe98d0381871389d0e1d0bf64efd8aa95dd07088e774b`) and DESIGN-DEFER.md (SHA-256 `c0e7b5f18658b6b8c90e08c6fa8062799826945d640fca6458420c37e4ab9f4d`, unchanged), and the validation shows:
 
 - **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item and no new §2.8 row, so no guard line was needed.
 - **Owner decisions.** All 690 rows are present and cited; APPLY.md's section pairs hold. `LATE_DATES` takes the new rows' date, which `validate10.py`'s row pattern already took.

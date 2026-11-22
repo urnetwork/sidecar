@@ -8119,8 +8119,8 @@ type SocketListenSettings struct { // defaults as in 9.5
     Exclusive  bool
     Affinity   bool
     Decision   *bridge.Signed // ApprovalDecision for tls/ and smtp/ (§5.4's gate)
-    Expires    time.Duration  // tls/ and smtp/: the grant's expiry the request asks, absolute, held to the
-                              // requests rule's maxExpiry; 0 takes its expiresDefault (§8.6; owner decision 687)
+    Expires    time.Duration  // tls/ and smtp/: how long the grant asked lasts, filed as an absolute expiry held
+                              // to the requests rule's maxExpiry; 0 takes its expiresDefault (§8.6; owner decision 687)
 }
 type SocketDialSettings struct {
     Protocol      string
