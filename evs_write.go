@@ -8,7 +8,9 @@
 // and "off" is ErrEvsFormatUnsupported.
 //
 // Each attempt: GkmClient.EnsureWritable first, so nothing is sealed to a generation a non-reader holds (§8.12); a
-// plan on a verified read (evs_plan.go); its records sealed (evs_upload.go); a new push id; its segments uploaded with
+// plan on a verified read (evs_plan.go), the first attempt's through evs's head cache, read again fresh when the
+// cache has not reached this device's own last push, so back-to-back writes of one path each land (evs_plan.go's own
+// push paragraph); its records sealed (evs_upload.go); a new push id; its segments uploaded with
 // ?push=P; the statement built on the head the plan read and sent, retried under that one push id until evs answers
 // (evs_push.go), and re-tokenized on 412 PATH_EPOCH with what it sealed kept (DESIGN-DETAILS 9.2.5). A refusal asking
 // for a rebuild runs the attempt again under a new push id from a fresh read; rebuilds and retokens together at most
