@@ -812,8 +812,10 @@ func (self *EvsVerifier) Pin(verified *EvsVerifiedHead) error {
 		case evsPinStale:
 			return ErrEvsReadStale
 		case evsPinPassed:
-			// the pin stands past this head, on its history, or past a page of it: nothing to raise, no gap to mark
+			// the pin stands past this head, on its history, or past a page of it: nothing to raise, no gap to mark,
+			// though its statements may fill what the raise past it carried none of (evs_subscribe.go's marks row)
 			verified.pinned = true
+			self.client.subscriber.notePinned(verified)
 			return nil
 		}
 	} else if err := self.client.pins.Raise(pin); err != nil {
@@ -829,6 +831,9 @@ func (self *EvsVerifier) Pin(verified *EvsVerifiedHead) error {
 		repoId, refId := verified.RepoId, verified.RefId
 		self.client.emit(SidecarEvent{Kind: SidecarEventEvsGap, RepoId: &repoId, RefId: &refId, VerifiedSince: now})
 	}
+	// every statement past the pin raises its change to the ref's subscriptions, whichever call of the client verified
+	// it (evs_subscribe.go's changes row)
+	self.client.subscriber.notePinned(verified)
 	return nil
 }
 

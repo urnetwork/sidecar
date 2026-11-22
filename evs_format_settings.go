@@ -82,6 +82,9 @@ type EvsFormatSettings struct {
 	// The epochs one read names a path in, one token path an epoch, which evs matches by the epoch field: 8
 	// (DESIGN-DETAILS 9.2.2's EvsReadPath). evs refuses a path naming more.
 	ReadPathMaxEpochCount int
+	// §11.10's lease row: the token prefixes one lease request names, 16. evs refuses a request naming more, and the
+	// client's Subscribe refuses more paths before it sends anything.
+	SubscriptionMaxPrefixCount int
 	// §11.6's commit row: the source epochs a head lists at most, 3, a PATH_EPOCH committing only while fewer stand;
 	// and the ones a batched epoch waits while, 2, which every epoch is (QD-1046), so no third is taken. The client's
 	// status, alarm and mapper wait by the same values.
@@ -130,6 +133,7 @@ func DefaultEvsFormatSettings() *EvsFormatSettings {
 		ReseedStatementMaxByteCount: 4 * 1024,
 
 		ReadPathMaxEpochCount:          8,
+		SubscriptionMaxPrefixCount:     16,
 		PathEpochMaxSourceCount:        3,
 		PathEpochBatchedMaxSourceCount: 2,
 		PathEpochBatchedDelay:          24 * time.Hour,

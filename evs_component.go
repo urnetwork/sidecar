@@ -8,7 +8,11 @@
 // Hints arrive through the generation's Subprotocol.Subscribe on the evs: family (§6.8): a notice carrying an
 // EvsHeadChanged goes to ReceiveHint, and a reset's notice to ReceiveResync, each through the generation's queue, and
 // the client's subscriptions read what they call for (evs_hint.go). Hints carry no authority either way: every read
-// verifies whatever it finds.
+// verifies whatever it finds. A hint's work on the queue does no I/O: the mapper's tick it asks for runs on the
+// mapper's loop (runMapper), since a tick reads the head fresh and may build, upload and commit a map, which on the
+// queue would hold every later hint behind it until the bounded queue dropped them, each a commit no subscriber
+// heard of until a later hint or the hourly resync. Whichever call raises the pin first, the tick's read or the
+// subscriber's, the subscriptions raise the changes it passed (evs_subscribe.go's marks row).
 //
 // The repo's prefix write rules (EVS1-M6-04, EVS1-M6-05): each generation runs the prefix timer, which on a device
 // whose composition repairs passes the repair runner and the owed pin pushes every RepairPassInterval; the Sidecar
@@ -181,13 +185,14 @@ func (self *EvsComponent) ReceiveHint(topic string, version uint64, delta []byte
 	deltaCopy := append([]byte{}, delta...)
 	return env.Enqueue(len(deltaCopy), func(ctx context.Context) {
 		self.client.ReceiveHint(repoId, version, deltaCopy)
-		self.tickMapper(ctx, repoId, deltaCopy)
+		self.askMapper(repoId, deltaCopy)
 	})
 }
 
-// The mapper's tick on a hint's ref (DESIGN-DETAILS 9.2.7): a ref whose epoch is due maps on this device when it is
-// eligible, and anything that waits ticks again on the next hint or the timer (runMapper).
-func (self *EvsComponent) tickMapper(ctx context.Context, repoId Id, delta []byte) {
+// The mapper's tick on a hint's ref (DESIGN-DETAILS 9.2.7), asked of the mapper's loop and never run on the queue
+// (see the file header): a ref whose epoch is due maps on this device when it is eligible. An ask the mapper drops,
+// its ref's tick running or its loop full, and anything that waits tick again on the next hint or the timer.
+func (self *EvsComponent) askMapper(repoId Id, delta []byte) {
 	changed := &protocol.EvsHeadChanged{}
 	if err := proto.Unmarshal(delta, changed); err != nil {
 		return
@@ -196,11 +201,12 @@ func (self *EvsComponent) tickMapper(ctx context.Context, repoId Id, delta []byt
 	if err != nil {
 		return
 	}
-	self.tickRef(ctx, repoId, refId)
+	self.client.mapper().wake(repoId, refId, changed.GetVersion())
 }
 
-// The mapper's loop until ctx ends: a tick of each ref a verified head, a new generation or this device's own
-// rotation asks one of (evs_epoch_map.go's wake row), and every MapperSpread a tick of each ref this client pins.
+// The mapper's loop until ctx ends: a tick of each ref a hint (askMapper), a verified head, a new generation or this
+// device's own rotation asks one of (evs_epoch_map.go's wake row), and every MapperSpread a tick of each ref this
+// client pins.
 func (self *EvsComponent) runMapper(ctx context.Context) {
 	mapper := self.client.mapper()
 	timer := self.client.clock.After(self.client.settings.MapperSpread)
