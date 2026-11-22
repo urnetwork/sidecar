@@ -6,9 +6,9 @@
 //	          gone from the head after the removal and standing in the one before; by a device that never read the
 //	          ref, by one that read on, and by one restarted on its pin
 //	refusals  a chain value no version holds and a head named at another version are a mismatch; a version evs does
-//	          not serve yet, a config version of 0 and a push whose authorization pin this device no longer retains
-//	          are unavailable; a push by a sidecar this device's state does not let write the config is a mismatch,
-//	          the head before it still read
+//	          not serve yet and a config version of 0 are unavailable; a push by a sidecar this device's state does not
+//	          let write the config is a mismatch, the head before it still read; a push whose authorization pin this
+//	          device no longer retains is taken on its signature, not judged (QD-1178)
 //	epochs    a head saved after a path epoch's cut-over, its pushes naming paths by the new epoch's tokens, read by a
 //	          device that replays across the cut-over
 //	client    BootstrapNetwork's base 1 on FakeApi names the evs ref's (1, C_1), and a ConfigClient whose head reader
@@ -426,7 +426,10 @@ func TestEvsConfigHeadReaderRefusesANonWritersPush(t *testing.T) {
 	world.requireHead(world.reader(world.device("d", nil)), 3, "a device whose state lets v write")
 }
 
-func TestEvsConfigHeadReaderWithholdsAPushItCannotJudge(t *testing.T) {
+// Pushes pinned at positions every device's window has moved past are taken on their signatures, not judged
+// (QD-1178): a device that never read the ref reads a head on them, and one pinned before the second walks it above
+// its pin to the head named and past it.
+func TestEvsConfigHeadReaderTakesAPushPinnedBeforeItsWindow(t *testing.T) {
 	world := newConfigHeadWorld(t)
 	world.saveWith(world.writer, map[string][]byte{sidecar.ConfigHeadNamesPath: []byte("names at 2")})
 	// a device that pinned head 1 while it could judge its push
@@ -440,21 +443,18 @@ func TestEvsConfigHeadReaderWithholdsAPushItCannotJudge(t *testing.T) {
 	world.log.Retain(2)
 
 	late := world.device("d", nil)
-	if _, err := world.reader(late).ReadConfigHead(world.ctx, 2, world.chains[2][:]); !errors.Is(err, sidecar.ErrConfigHeadUnavailable) || errors.Is(err, sidecar.ErrConfigHeadMismatch) {
-		t.Fatalf("a head on pushes a device cannot judge: %v", err)
+	world.requireHead(world.reader(late), 2, "a device on pushes pinned before its window")
+	if pinned := world.pinVersion(late); pinned != 2 {
+		t.Fatalf("the late device's pin after head 2 is at %d", pinned)
 	}
-	if pinned := world.pinVersion(late); pinned != 0 {
-		t.Fatalf("an unjudged push pinned the ref at %d", pinned)
-	}
-	// the early device's pin vouches for head 1, and it cannot judge the push after it either
+	// the early device's pin vouches for head 1, and the push after it stands on the chain to the head named
 	restarted := world.deviceOn("r", early.store, nil)
 	world.requireHead(world.reader(restarted), 1, "the early device at its pin")
-	if _, err := world.reader(restarted).ReadConfigHead(world.ctx, 2, world.chains[2][:]); !errors.Is(err, sidecar.ErrConfigHeadUnavailable) {
-		t.Fatalf("a head past the pin on a push the device cannot judge: %v", err)
-	}
-	// head 3's own push pins a position the window holds, and the walk to it passes the unjudged one
-	if _, err := world.reader(restarted).ReadConfigHead(world.ctx, 3, world.chains[3][:]); !errors.Is(err, sidecar.ErrConfigHeadUnavailable) {
-		t.Fatalf("a head past an unjudged push: %v", err)
+	world.requireHead(world.reader(restarted), 2, "the early device past its pin")
+	// head 3's own push pins a position the window holds, judged in full, and the walk to it passes the unjudged one
+	world.requireHead(world.reader(restarted), 3, "the early device past an unjudged push")
+	if pinned := world.pinVersion(restarted); pinned != 3 {
+		t.Fatalf("the early device's pin after head 3 is at %d", pinned)
 	}
 }
 

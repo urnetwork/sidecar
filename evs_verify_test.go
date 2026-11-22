@@ -680,21 +680,30 @@ func TestEvsReplayPathsVersionRules(t *testing.T) {
 	}
 }
 
-// A statement pinned at a state this device's config no longer retains is refused, but proves nothing against its
-// signer, so it raises no alarm.
-func TestEvsUnretainedStatePinRefusesQuietly(t *testing.T) {
+// A statement pinned at a state this device's config no longer retains is not judged and counts against no one
+// (QD-1178): it is taken on its signature, with no alarm, from a state that keeps no window of its own as from a log's;
+// one whose signature the key its signer's rows give does not verify is refused and alarmed as tampering
+// (evs_unretained_pin_test.go runs both on a real log).
+func TestEvsUnretainedStatePinTakenOnItsSignature(t *testing.T) {
 	world := newEvsTestWorld(t)
 	world.push(&evsTestChange{path: "a.txt", content: []byte("1")})
 	world.config.stateLock.Lock()
 	world.config.atErr = ErrGkmAuthNotRetained
 	world.config.stateLock.Unlock()
 	reader := world.reader(t, evsTestId("reader"))
-	if _, _, err := evsTestRead(t, reader, world, "a.txt"); !errors.Is(err, ErrGkmAuthNotRetained) {
-		t.Fatalf("an unretained pin: %v", err)
+	if content, _, err := evsTestRead(t, reader, world, "a.txt"); err != nil || string(content) != "1" {
+		t.Fatalf("an unretained pin: %q %v", content, err)
 	}
-	if alarms := reader.eventsOf(SidecarEventEvsAlarm); len(alarms) != 0 {
-		t.Errorf("alarms %v", alarms)
+	evsTestRequireNoAlarm(t, "an unretained pin", reader)
+
+	world.config.stateLock.Lock()
+	world.config.identityKeys[world.signer.sidecarId] = newEvsTestSigner("another key").publicKey()
+	world.config.stateLock.Unlock()
+	other := world.reader(t, evsTestId("other reader"))
+	if _, _, err := evsTestRead(t, other, world, "a.txt"); !errors.Is(err, ErrEvsStatementRefused) {
+		t.Fatalf("an unretained pin under another key: %v", err)
 	}
+	evsTestRequireTamper(t, "an unretained pin under another key", other, 1)
 }
 
 // The refs table on a record-class owned stream, the statement read alone: its owner creates, a repo admin's BASE of

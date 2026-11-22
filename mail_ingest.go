@@ -7,11 +7,14 @@
 //	order     one pass reads the erasure ref first, then each depositor's ref in id order, its standing deposits
 //	          oldest first; a deposit that settles (written, found written, erased or refused) joins the ref's one
 //	          CONSUME at the end of its read, and one left standing holds nothing back
-//	class     the depositor is judged at the deposit push's own pin (MailIngestAuthority): a reader that does not
-//	          write deposits §16.8's read receipts, which are the record's and are left alone; one with no right to
-//	          deposit there is consumed unrecorded; a pin this device does not hold yet leaves the deposit for a later
-//	          pass, which Run makes after RetryInterval rather than its hourly resync, since no change of the mailbox
-//	          comes when this device's state catches up
+//	class     the depositor is judged at the deposit push's own pin (MailIngestAuthority). Only an owner-bound repo,
+//	          a mailbox, takes read receipts (§11.12; QD-1181): there a reader that does not write deposits §16.8's
+//	          read receipts, which are the record's and are left alone. In a group repo, a general one, deposit or
+//	          write makes a mail depositor even while it reads, so the member's other devices deposit a personal
+//	          network's group mail; a read_only sidecar's deposit is the receipt deposit alone (§7.8's exchange), so
+//	          none of its deposits there is mail. One with no right to deposit there is consumed unrecorded; a pin
+//	          this device does not hold yet leaves the deposit for a later pass, which Run makes after RetryInterval
+//	          rather than its hourly resync, since no change of the mailbox comes when this device's state catches up
 //	erased    a signed ERASE consumes its deposit without a message. If a deposit-only ERASE races the mailbox push,
 //	          the post-commit check withholds callbacks. Readers mask the signed message id and a repo admin's next
 //	          pass destroys any new body and index slots under the original erasure id (mail_erase_late.go)
@@ -93,9 +96,11 @@ const (
 	MailDepositorUnknown MailDepositorClass = iota
 	// No right to deposit there at the pin: its deposits are consumed unrecorded.
 	MailDepositorNone
-	// A receiver or a member's device: its deposits are mail.
+	// A receiver or a member's device, by its deposit or write, which in a group repo holds while it also reads: its
+	// deposits are mail.
 	MailDepositorMail
-	// A reader that does not write (§8.5, §11.12): its deposits are §16.8's read receipts, which mail leaves alone.
+	// In an owner-bound repo, a reader that does not write (§8.5, §11.12): its deposits are §16.8's read receipts,
+	// which mail leaves alone. No other repo takes receipts (QD-1181).
 	MailDepositorReceipts
 )
 
@@ -141,7 +146,10 @@ func (self *MailIngestAclAuthority) Ingests(repoId Id, sidecarId Id) bool {
 	return access.Rights.Has(AclEvsRead | AclEvsWrite)
 }
 
-// The depositor's rights at the pin: read without write is a receipt depositor, deposit or write a mail depositor.
+// The depositor's rights at the pin. In an owner-bound repo read without write is a receipt depositor (§11.12), the
+// one kind the read-receipt gate deposits into (evs_receipt_gate.go); in any other, a group repo among them, deposit
+// or write is a mail depositor even while it reads (QD-1181), but a read_only sidecar, whose deposit is §16.8's
+// receipt deposit alone (§7.8's exchange), deposits no mail there.
 func (self *MailIngestAclAuthority) DepositorClass(repoId Id, depositorId Id, pin *bridge.AuthPin) MailDepositorClass {
 	if self == nil || self.Engine == nil {
 		return MailDepositorUnknown
@@ -158,9 +166,14 @@ func (self *MailIngestAclAuthority) DepositorClass(repoId Id, depositorId Id, pi
 		return MailDepositorUnknown
 	}
 	rights := state.EvsAccess(AclSidecarSubject(depositorId), repoId, AclTokenAudienceEvs, clockOrReal(self.Clock).Now()).Rights
+	ownerBound := aclRepoKindOwnerBound(state.Repo(repoId).GetKind())
+	depositor := state.sidecarState(depositorId)
 	switch {
-	case rights.Has(AclEvsRead) && !rights.Has(AclEvsWrite):
+	case ownerBound && rights.Has(AclEvsRead) && !rights.Has(AclEvsWrite):
 		return MailDepositorReceipts
+	case !ownerBound && depositor != nil && depositor.readOnly:
+		// its deposit right is for receipts, which no repo but an owner-bound one takes
+		return MailDepositorNone
 	case rights.Has(AclEvsDeposit) || rights.Has(AclEvsWrite):
 		return MailDepositorMail
 	}
@@ -519,7 +532,7 @@ func (self *MailIngestor) Ingest(ctx context.Context) (*MailIngestPass, error) {
 			return pass, err
 		}
 		if self.authority.DepositorClass(self.repoId, depositorId, nil) == MailDepositorReceipts {
-			// a reader's receipt ref, which the record ingests: never opened here
+			// an owner-bound repo's reader's receipt ref, which the record ingests: never opened here
 			continue
 		}
 		if err := self.ingestRef(ctx, depositorId, pass); err != nil {

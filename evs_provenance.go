@@ -160,23 +160,33 @@ func EvsCheckPushProvenance(check *EvsPushProvenanceCheck) (*EvsPushProvenance, 
 }
 
 // A push's provenance as this client reads it: EvsCheckPushProvenance under the signer's identity key at the
-// statement's own pin, a refused subkey signature alarmed as tampering and read unattributed, with Refused set.
+// statement's own pin, a refused subkey signature alarmed as tampering and read unattributed, with Refused set. A pin
+// before what this device retains gives the key the oldest retained rows that admit the signer give it (QD-1178).
 func (self *EvsClient) checkPushProvenance(repoId Id, refId Id, statement *EvsStatement, metadata *protocol.EvsSealedMetadata) (*EvsPushProvenance, error) {
 	newest, err := self.verifier.config()
 	if err != nil {
 		return nil, err
 	}
 	state, err := newest.At(statement.Push.GetAuth())
-	if err != nil {
+	unjudged := errors.Is(err, ErrGkmAuthNotRetained)
+	if err != nil && !unjudged {
 		return nil, err
 	}
 	signerId, err := IdFromBytes(statement.Push.GetSignerSidecarId())
 	if err != nil {
 		return nil, fmt.Errorf("%w: its signer", ErrEvsStatementRefused)
 	}
+	var identityKey []byte
+	if unjudged {
+		if identityKey, err = evsUnjudgedSignerKey(newest, signerId, statement.Push.GetAuth()); err != nil {
+			return nil, err
+		}
+	} else {
+		identityKey = state.IdentityKey(signerId)
+	}
 	read, err := EvsCheckPushProvenance(&EvsPushProvenanceCheck{
 		RepoId: repoId, RefId: refId, Statement: statement, Metadata: metadata,
-		IdentityPublicKey: state.IdentityKey(signerId), Settings: self.args.AgentSubkeys,
+		IdentityPublicKey: identityKey, Settings: self.args.AgentSubkeys,
 	})
 	if errors.Is(err, ErrAgentProvenanceInvalid) {
 		self.alarm(repoId, refId, SidecarEvsAlarmTamper, "", &signerId)

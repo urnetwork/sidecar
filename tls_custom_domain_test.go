@@ -285,9 +285,24 @@ type tlsCustomStep struct {
 	fire    chan time.Time
 }
 
-// A clock whose waits go to the test, one at a time.
+// A clock whose waits go to the test, one at a time, for one loop the clock starts. Each of the test's waits on the
+// loop is bounded by timeout, so a loop that stops asking, or asks after its context ended, fails the test in seconds
+// rather than hanging the package; once the test ends, a wait the loop asks for is answered with one that never fires,
+// which the loop's context ends.
 type tlsCustomStepClock struct {
-	steps chan *tlsCustomStep
+	t       *testing.T
+	timeout time.Duration
+	steps   chan *tlsCustomStep
+	ended   chan struct{}
+}
+
+func newTlsCustomStepClock(t *testing.T) *tlsCustomStepClock {
+	return &tlsCustomStepClock{
+		t:       t,
+		timeout: 10 * time.Second,
+		steps:   make(chan *tlsCustomStep),
+		ended:   make(chan struct{}),
+	}
 }
 
 func (self *tlsCustomStepClock) Now() time.Time {
@@ -296,12 +311,114 @@ func (self *tlsCustomStepClock) Now() time.Time {
 
 func (self *tlsCustomStepClock) After(timeout time.Duration) <-chan time.Time {
 	step := &tlsCustomStep{timeout: timeout, fire: make(chan time.Time, 1)}
-	self.steps <- step
+	select {
+	case self.steps <- step:
+	case <-self.ended:
+	}
 	return step.fire
 }
 
 func (self *tlsCustomStepClock) AfterFunc(timeout time.Duration, function func()) (stop func() bool) {
 	return func() bool { return true }
+}
+
+// Starts orderer's loop on its own goroutine, answering its context's cancel and a channel closed when Run returns.
+// When the test ends, the context is cancelled and the clock's waits released, and the loop must end within the
+// timeout.
+func (self *tlsCustomStepClock) start(orderer *TlsCustomDomainOrderer, report func(passReport *TlsCustomPassReport, err error)) (context.CancelFunc, chan struct{}) {
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		orderer.Run(ctx, report)
+	}()
+	self.t.Cleanup(func() {
+		cancel()
+		close(self.ended)
+		select {
+		case <-done:
+		case <-time.After(self.timeout):
+			self.t.Errorf("the loop did not end within %v of the test's end", self.timeout)
+		}
+	})
+	return cancel, done
+}
+
+// The next wait the loop asks for.
+func (self *tlsCustomStepClock) next() *tlsCustomStep {
+	self.t.Helper()
+	return tlsCustomReceive(self.t, self.steps, self.timeout, "wait")
+}
+
+// Waits for the loop whose context ended to end: it asks for no wait after that, and one it asks for fails the test.
+func (self *tlsCustomStepClock) awaitEnd(done chan struct{}) {
+	self.t.Helper()
+	select {
+	case <-done:
+	case step := <-self.steps:
+		self.t.Fatalf("a wait of %v asked after the loop's context ended", step.timeout)
+	case <-time.After(self.timeout):
+		self.t.Fatalf("the loop did not end within %v of its context's end", self.timeout)
+	}
+}
+
+// The next of values within timeout, failing the test with what otherwise.
+func tlsCustomReceive[T any](t *testing.T, values <-chan T, timeout time.Duration, what string) T {
+	t.Helper()
+	select {
+	case value := <-values:
+		return value
+	case <-time.After(timeout):
+		t.Fatalf("no %s within %v", what, timeout)
+		var zero T
+		return zero
+	}
+}
+
+// A clock whose waits fire at once, counted, until the one at which it ends a context as its timer fires, as a cancel
+// landing with the timer does; a wait after that one never fires.
+type tlsCustomEndingClock struct {
+	stateLock sync.Mutex
+	// the wait, from 1, at which end runs, 0 for none
+	endIndex  int
+	end       context.CancelFunc
+	waitCount int
+}
+
+func (self *tlsCustomEndingClock) Now() time.Time {
+	return time.Date(2026, time.December, 1, 0, 0, 0, 0, time.UTC)
+}
+
+func (self *tlsCustomEndingClock) After(timeout time.Duration) <-chan time.Time {
+	var end context.CancelFunc
+	fires := func() bool {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.waitCount += 1
+		if self.waitCount == self.endIndex {
+			end = self.end
+		}
+		return self.endIndex == 0 || self.waitCount <= self.endIndex
+	}()
+	if end != nil {
+		end()
+	}
+	fire := make(chan time.Time, 1)
+	if fires {
+		fire <- time.Time{}
+	}
+	return fire
+}
+
+func (self *tlsCustomEndingClock) AfterFunc(timeout time.Duration, function func()) (stop func() bool) {
+	return func() bool { return true }
+}
+
+// The waits asked so far.
+func (self *tlsCustomEndingClock) waits() int {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.waitCount
 }
 
 // An orderer on api, keys and repos, its clock clock.
@@ -334,23 +451,18 @@ func TestTlsCustomOrdererRunWaitsByWhatItsPassFound(t *testing.T) {
 	}
 	settings := DefaultTlsCustomSettings()
 	settings.PollJitter = 0
-	clock := &tlsCustomStepClock{steps: make(chan *tlsCustomStep)}
+	clock := newTlsCustomStepClock(t)
 	orderer := newTlsCustomTestOrderer(t, api, &tlsCustomTestKeys{files: map[Id][]byte{}, locals: map[string][]byte{}}, clock, settings)
-	ctx, cancel := context.WithCancel(context.Background())
 	reports := make(chan error, 8)
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		orderer.Run(ctx, func(passReport *TlsCustomPassReport, err error) {
-			reports <- err
-		})
-	}()
+	cancel, done := clock.start(orderer, func(passReport *TlsCustomPassReport, err error) {
+		reports <- err
+	})
 	for index, want := range []time.Duration{settings.PollInterval, settings.IdlePollInterval, settings.IdlePollInterval} {
-		step := <-clock.steps
+		step := clock.next()
 		if step.timeout != want {
 			t.Fatalf("wait %d: %v, want %v", index, step.timeout, want)
 		}
-		if err := <-reports; (err != nil) != (index == 2) {
+		if err := tlsCustomReceive(t, reports, clock.timeout, "pass report"); (err != nil) != (index == 2) {
 			t.Fatalf("pass %d: %v", index, err)
 		}
 		if index < 2 {
@@ -358,40 +470,105 @@ func TestTlsCustomOrdererRunWaitsByWhatItsPassFound(t *testing.T) {
 		}
 	}
 	cancel()
-	<-done
+	// the last wait, never fired, ends with the context
+	clock.awaitEnd(done)
 }
 
-// The jitter moves a wait by at most PollJitter of PollInterval either way.
+// The jitter moves a wait by at most PollJitter of PollInterval either way, and the loop ends with its context: the
+// last fire may start a pass before the cancel lands, whose wait, fired too, still ends the loop, with no wait after
+// it. Before the loop read a timer that fired with its context's end as the end, this test hung its package under
+// tip-check's load at 83011cb3 for 1h46m: the loop took both fires as passed and asked for a wait nobody took.
 func TestTlsCustomOrdererRunJittersItsPoll(t *testing.T) {
 	api := &tlsCustomScriptedApi{
 		works: []*TlsCertsResult{{QueuedCsrs: []*TlsCertRecord{{CertId: NewId(), CustomDomain: "customer.example", WaitMs: 1000}}}},
 		errs:  []error{nil},
 	}
 	settings := DefaultTlsCustomSettings()
-	clock := &tlsCustomStepClock{steps: make(chan *tlsCustomStep)}
+	clock := newTlsCustomStepClock(t)
 	orderer := newTlsCustomTestOrderer(t, api, &tlsCustomTestKeys{files: map[Id][]byte{}, locals: map[string][]byte{}}, clock, settings)
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		orderer.Run(ctx, nil)
-	}()
+	cancel, done := clock.start(orderer, nil)
 	spread := time.Duration(settings.PollJitter * float64(settings.PollInterval))
 	for range 50 {
-		step := <-clock.steps
+		step := clock.next()
 		if step.timeout < settings.PollInterval-spread || settings.PollInterval+spread < step.timeout {
 			t.Fatalf("a wait of %v", step.timeout)
 		}
 		step.fire <- time.Time{}
 	}
 	cancel()
-	// the loop's next wait sees the cancel
 	select {
 	case step := <-clock.steps:
 		step.fire <- time.Time{}
 	case <-done:
+	case <-time.After(clock.timeout):
+		t.Fatalf("neither a wait nor the loop's end within %v of the cancel", clock.timeout)
 	}
-	<-done
+	clock.awaitEnd(done)
+}
+
+// The orderer's wait asks the clock for nothing once its context has ended, and answers the end where its timer fired
+// as the context ended. select takes either of two ready cases at random, and a wait that took the timer's answered
+// nil, so Run started a pass, and asked for a wait, after its context ended; 64 rounds leave that coin no chance
+// (2^-64) to pass.
+func TestTlsCustomOrdererWaitEndsWithItsContext(t *testing.T) {
+	settings := DefaultTlsCustomSettings()
+	keys := &tlsCustomTestKeys{files: map[Id][]byte{}, locals: map[string][]byte{}}
+	ended, cancel := context.WithCancel(context.Background())
+	cancel()
+	clock := &tlsCustomEndingClock{}
+	orderer := newTlsCustomTestOrderer(t, &tlsCustomScriptedApi{}, keys, clock, settings)
+	if err := orderer.wait(ended, settings.PollInterval); !errors.Is(err, context.Canceled) || clock.waits() != 0 {
+		t.Fatalf("an ended context's wait: %v, %d asked of the clock", err, clock.waits())
+	}
+	if err := orderer.wait(context.Background(), settings.PollInterval); err != nil || clock.waits() != 1 {
+		t.Fatalf("a live context's wait: %v, %d asked of the clock", err, clock.waits())
+	}
+	for round := range 64 {
+		ctx, cancel := context.WithCancel(context.Background())
+		clock := &tlsCustomEndingClock{endIndex: 1, end: cancel}
+		orderer := newTlsCustomTestOrderer(t, &tlsCustomScriptedApi{}, keys, clock, settings)
+		if err := orderer.wait(ctx, settings.PollInterval); !errors.Is(err, context.Canceled) {
+			t.Fatalf("round %d, a timer fired as the context ended: %v", round, err)
+		}
+	}
+}
+
+// Run starts no pass once its context has ended: a cancel landing as a wait's timer fires ends the loop after the pass
+// before that wait, in each of 64 rounds, and a context ended before Run starts none. Each loop runs on its own
+// goroutine, its end awaited within a deadline.
+func TestTlsCustomOrdererRunStartsNoPassAfterItsContextEnds(t *testing.T) {
+	settings := DefaultTlsCustomSettings()
+	timeout := 10 * time.Second
+	// the passes the loop made before it ended
+	run := func(ctx context.Context, clock *tlsCustomEndingClock) int {
+		api := &tlsCustomScriptedApi{
+			works: []*TlsCertsResult{{QueuedCsrs: []*TlsCertRecord{{CertId: NewId(), CustomDomain: "customer.example", WaitMs: 1000}}}},
+			errs:  []error{nil},
+		}
+		orderer := newTlsCustomTestOrderer(t, api, &tlsCustomTestKeys{files: map[Id][]byte{}, locals: map[string][]byte{}}, clock, settings)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			orderer.Run(ctx, nil)
+		}()
+		tlsCustomReceive(t, done, timeout, "end of the loop")
+		api.stateLock.Lock()
+		defer api.stateLock.Unlock()
+		return api.workCount
+	}
+	for round := range 64 {
+		ctx, cancel := context.WithCancel(context.Background())
+		clock := &tlsCustomEndingClock{endIndex: 3, end: cancel}
+		if passCount := run(ctx, clock); passCount != 3 || clock.waits() != 3 {
+			t.Fatalf("round %d: %d passes and %d waits, want 3 of each", round, passCount, clock.waits())
+		}
+	}
+	ended, cancel := context.WithCancel(context.Background())
+	cancel()
+	clock := &tlsCustomEndingClock{}
+	if passCount := run(ended, clock); passCount != 0 || clock.waits() != 0 {
+		t.Fatalf("a context ended before Run: %d passes and %d waits", passCount, clock.waits())
+	}
 }
 
 // What `ur tls account status` reads: each account of the work list, its rows, the key this desktop's file gives for

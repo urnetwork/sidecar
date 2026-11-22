@@ -4,7 +4,9 @@
 // behind Sidecar.Authorize for an action a grant must cover.
 //
 //	active    under an active grant Authorize passes with no decision (§16.6's step 2, untainted runs only, TS1):
-//	          AclEngine.ActiveGrant, which MCP's ApprovalGate reads as its ApprovalStandingGrants
+//	          AclEngine.ActiveGrant, which MCP's ApprovalGate reads as its ApprovalStandingGrants, and for a bridge
+//	          exposure, whose action names no grant, AclEngine.StandingRule over the rule it files, its
+//	          ApprovalStandingRules (record_gate_standing.go)
 //	request   otherwise MatchAclRequest finds the requests rule at the installed state, and AclGrantFiler.Action fills
 //	          the CanonicalAction's grant fields, rule_id, subject and expires_millis, on the caller's action of its
 //	          kind, and only then seals a dial or route grant's detail beside them, which the gate files as the
@@ -23,7 +25,8 @@
 // names it (owner decision 142), which the gate reads from AclLocalPolicy, never evidenceDefault. A gate's view of a
 // grant carries no run id, agent id, recipient or preview (AD4): Grants answers only what rows hold. api counts
 // tls_endpoints at activation in the delta route (§20.7; QUOTA-M4-04's model.CheckGrantActivationLimits).
-// §13.10's and §17.9's callers and MCP's tools are theirs; this gives them ActiveGrant, Grants and AclGrantFiler.
+// §13.10's and §17.9's callers and MCP's tools are theirs; this gives them ActiveGrant, StandingRule, Grants and
+// AclGrantFiler.
 //
 // Of the kinds whose action carries a grant, socket_listen and tls_publish build at version 1, and bridge_forward,
 // a dial or route grant, at version 4 (QD-740): its request carries the detail, the target's port inside, which the
@@ -55,6 +58,22 @@ import (
 var ErrAclGrantFile = errors.New("acl grant filing refused")
 
 var _ ApprovalStandingGrants = (*AclEngine)(nil)
+
+var _ ApprovalStandingRules = (*AclEngine)(nil)
+
+// Whether a rule the spender files with no approval, a bridge exposure's route or map (§17.7, §17.8's approval row),
+// stands under the installed state and local policy for the spender, by the predicate every reader holds such a rule
+// in force by (AclLocalPolicy.StandingCovers), so §16.6's gate passes the exposure with nothing filed. As ActiveGrant
+// holds a grant, the rule must still stand at now plus the clock skew, which only narrows: a standing rule's expiry and
+// the owner's admission both end in time, so a cover that ends within the skew asks a person instead. A rule another
+// sidecar owns covers nothing here, and nothing installed covers nothing. Reads the installed state with no lock.
+func (self *AclEngine) StandingRule(rule *BridgeLedgerRule, spender Id, now time.Time) bool {
+	installed := self.installed.Load()
+	if installed == nil || rule == nil || rule.Owner != spender {
+		return false
+	}
+	return installed.local.StandingCovers(installed.state, rule, now.Add(max(0, self.settings.ClockSkew)))
+}
 
 // Whether an active grant covers the action for the spender at now: the action's grant fields (QD-064's 8, 10, 11,
 // 28, 29) name the spender as subject, and each action it asks is allowed on each destination of a kind the action

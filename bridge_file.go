@@ -29,13 +29,15 @@
 //
 // An exposure's rule id is §17.8's: under a decision SHA-256("urnetwork-sidecar-v1/bridge-rule" || effect_key) of the
 // use the gate reserved, its body carrying that spend's BridgeApproval, so a retry or a restart files one id; under a
-// standing grant 32 random bytes and no approval. The effect is idempotent per key: it files nothing when the ledger
-// holds its rule id, and a re-signed retry of a filing whose answer was lost files the same id, which every reader holds
-// once (a filing of a held id activates nothing). A route names the §8 route rules of the head that hold it for this
-// advertiser (AclLocalPolicy's own predicate, StandingCovers), which QD-764's rows carry at id level: a rule whose
-// prefixes hold the route, and for a subnet route a rule that names no ip: destination and no autogroup:internet whose
-// via and subject destinations both name this advertiser, as Team's grant 1 names a member's own device (owner
-// decision 575).
+// standing grant 32 random bytes and no approval. The gate takes the standing path where the rule the effect names
+// (bridgeRuleEffect.StandingRule) stands under a standing grant of the policy in force, as every reader then holds it
+// (record_gate_standing.go), and otherwise asks a person. The effect is idempotent per key: it files nothing when the
+// ledger holds its rule id, and a re-signed retry of a filing whose answer was lost files the same id, which every
+// reader holds once (a filing of a held id activates nothing). A route names the §8 route rules of the head that hold
+// it for this advertiser (AclLocalPolicy's own predicate, StandingCovers), which QD-764's rows carry at id level: a
+// rule whose prefixes hold the route, and for a subnet route a rule that names no ip: destination and no
+// autogroup:internet whose via and subject destinations both name this advertiser, as Team's grant 1 names a member's
+// own device (owner decision 575).
 //
 // Every statement goes through sidecarAct (C-02), which signs only §5.8's own-resource filings for MCP, a hook or an
 // unconfirmed call. The filer refuses before that what is not this sidecar's own, as every verifier does after (§7.9,
@@ -543,8 +545,8 @@ func (self *BridgeFiler) Expose(ctx context.Context, origin *BridgeFileOrigin, r
 		return nil, err
 	}
 	effect := &bridgeRuleEffect{
-		filer: self, action: stored, origin: origin, signedType: bridge.SignedType_SIGNED_BRIDGE_ROUTE, route: route,
-		routeRuleIds: self.routeRuleIds(view, route),
+		filer: self, action: stored, origin: origin, owner: view.self, signedType: bridge.SignedType_SIGNED_BRIDGE_ROUTE,
+		route: route, routeRuleIds: self.routeRuleIds(view, route),
 	}
 	action, err := self.newAction(origin, stored, effect, nil)
 	if err != nil {
@@ -730,7 +732,10 @@ func (self *BridgeFiler) ExposeMap(ctx context.Context, origin *BridgeFileOrigin
 	if err != nil {
 		return nil, err
 	}
-	effect := &bridgeRuleEffect{filer: self, action: stored, origin: origin, signedType: bridge.SignedType_SIGNED_BRIDGE_MAP, mapPlan: plan}
+	effect := &bridgeRuleEffect{
+		filer: self, action: stored, origin: origin, owner: view.self, signedType: bridge.SignedType_SIGNED_BRIDGE_MAP,
+		mapPlan: plan, heldAddress: view.address(),
+	}
 	// the request binds the port the map exposes on this host, as an approver sees it beside the action's target port
 	var detail *SidecarActionDetail
 	if 0 < request.FirstPort {
@@ -748,17 +753,21 @@ func (self *BridgeFiler) ExposeMap(ctx context.Context, origin *BridgeFileOrigin
 }
 
 // The bridge component's effect for one exposure (§16.6's bridge row): a route or a map under the rule id the spend
-// fixes. Run once per call by the gate; what it filed is kept for the caller.
+// fixes, or under a standing grant one of random bytes, which StandingRule names for the gate to judge first. Run once
+// per call by the gate; what it filed is kept for the caller.
 type bridgeRuleEffect struct {
-	filer      *BridgeFiler
-	action     *StoredCanonicalAction
-	origin     *BridgeFileOrigin
+	filer  *BridgeFiler
+	action *StoredCanonicalAction
+	origin *BridgeFileOrigin
+	// this host, the rule's advertiser or host
+	owner      Id
 	signedType bridge.SignedType
 	// a route's body without its approval, and the route rules it names
 	route        *bridge.BridgeRouteBody
 	routeRuleIds [][]byte
-	// a map's plan
-	mapPlan *bridgeMapPlan
+	// a map's plan, and this host's address as the ledger held it when the map was asked, invalid for none yet
+	mapPlan     *bridgeMapPlan
+	heldAddress netip.Addr
 
 	// what the run filed or found
 	approvalId   Id
@@ -769,6 +778,35 @@ type bridgeRuleEffect struct {
 // What the call filed, with the rule id the gate answered.
 func (self *bridgeRuleEffect) result(ruleId []byte) *BridgeFiling {
 	return &BridgeFiling{RuleId: ruleId, ApprovalId: self.approvalId, Address: self.address, AddressFiled: self.addressFiled}
+}
+
+var _ SidecarStandingRuleEffect = (*bridgeRuleEffect)(nil)
+
+// The rule this exposure files under a standing grant (§17.8's approval row: none), as every reader judges it: this
+// host its owner, a route's body and the route rules it names, a map's body and expiry. A map's match prefix is this
+// host's address where the ledger held one when the map was asked, and none before its first map claims one, which no
+// reader's coverage reads: a standing grant covers a map by its host, protocol and ports
+// (AclLocalPolicy.StandingCovers). §16.6's gate asks whether one covers it before it asks a person
+// (record_gate_standing.go).
+func (self *bridgeRuleEffect) StandingRule() *BridgeLedgerRule {
+	rule := &BridgeLedgerRule{SignedType: self.signedType, Owner: self.owner, Standing: true}
+	switch {
+	case self.signedType == bridge.SignedType_SIGNED_BRIDGE_ROUTE && self.route != nil:
+		rule.Route = proto.Clone(self.route).(*bridge.BridgeRouteBody)
+		for _, ruleId := range self.routeRuleIds {
+			rule.RouteRuleIds = append(rule.RouteRuleIds, bytes.Clone(ruleId))
+		}
+	case self.signedType == bridge.SignedType_SIGNED_BRIDGE_MAP && self.mapPlan != nil:
+		ipv4, held := bridgeIpv4Of(self.heldAddress)
+		rule.Map = self.mapPlan.body(ipv4)
+		if !held {
+			rule.Map.MatchPrefix = nil
+		}
+		rule.Expires = self.mapPlan.expiresMs
+	default:
+		return nil
+	}
+	return rule
 }
 
 // What an exposure files under: the rule id and the BridgeApproval the spend in ctx fixes for effectKey, or under a
