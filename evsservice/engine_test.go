@@ -1,6 +1,7 @@
 package evsservice
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -52,6 +53,9 @@ type fakeAuthState struct {
 	// HonorScope's answer to a right set that a test fixes, ahead of the rights held: as a state that stops
 	// answering between two asks
 	rightsHonorAnswers map[sidecar.AclEvsRights]EvsAuthAnswer
+	// called by CheckRevocation with no lock held, before it answers: a test holds a write there, past the guard's
+	// drain check and before its route, so the write is in flight
+	revocationHold func()
 }
 
 func newFakeAuthState() *fakeAuthState {
@@ -85,7 +89,23 @@ func (self *fakeAuthState) setRepo(repoId sidecar.Id, facts *EvsRepoFacts) {
 	self.repoFacts[repoId] = facts
 }
 
+// Has each later CheckRevocation call hold first, with no lock held; nil holds none.
+func (self *fakeAuthState) holdRevocation(hold func()) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.revocationHold = hold
+}
+
 func (self *fakeAuthState) CheckRevocation(ctx context.Context, principal *sidecar.Principal) error {
+	var hold func()
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		hold = self.revocationHold
+	}()
+	if hold != nil {
+		hold()
+	}
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	self.revocationCount += 1
@@ -894,6 +914,257 @@ func TestEvsEngineDrainAnswersNewRequests503(t *testing.T) {
 	fixture.engine.Drain()
 	requireRefusal(t, fixture.serve(http.MethodGet, "/evs/v1/repos/"+sidecar.EvsKeyId(repoId)+"/probe", fixture.token(sidecarId, repoScope(repoId, "r")), nil),
 		http.StatusServiceUnavailable, protocol.EvsRefusalCode_EVS_REFUSAL_UNAVAILABLE)
+}
+
+// The notifier step 8 calls first, holding each Notify where it begins until the test closes release and then
+// handing it to the engine's own: a step 8 held at its start, as BarrierPushStep8Before holds one, on both legs. Each
+// held commit goes on arrived first. Safe for concurrent use.
+type heldCommitNotifier struct {
+	inner   EvsCommitNotifier
+	arrived chan *EvsCommitted
+	release chan struct{}
+}
+
+// Holds engine's notifier, set before any commit, so no step 8 reads the field as it changes.
+func holdCommitNotifier(engine *EvsEngine) *heldCommitNotifier {
+	held := &heldCommitNotifier{
+		inner:   engine.notifier,
+		arrived: make(chan *EvsCommitted, 16),
+		release: make(chan struct{}),
+	}
+	engine.notifier = held
+	return held
+}
+
+func (self *heldCommitNotifier) Notify(ctx context.Context, committed *EvsCommitted) (uint64, error) {
+	self.arrived <- committed
+	select {
+	case <-self.release:
+	case <-ctx.Done():
+		// Close ended the engine's ctx under the held step 8, as it ends one still running
+		return 0, ctx.Err()
+	}
+	return self.inner.Notify(ctx, committed)
+}
+
+func (self *heldCommitNotifier) Unsent() (int, chan struct{}) {
+	return self.inner.Unsent()
+}
+
+// The push fixture with a whole-ref lease, whose hints go to the writer's client, check.clientId, and
+// stepEightDrainTimeout, which the drain tests set to a time no other timer of the engine's takes, so a test finds
+// Drain's step-8 wait on the clock.
+func newDrainFixture(t *testing.T, stepEightDrainTimeout time.Duration) *pushFixture {
+	fixture := newPushFixture(t, func(settings *EvsSettings) {
+		settings.StepEightDrainTimeout = stepEightDrainTimeout
+	})
+	fixture.allowSubscribers(1000)
+	if recorder := fixture.subscribe(http.MethodPost, fixture.check.signerId, fixture.leaseRequest()); recorder.Code != http.StatusOK {
+		t.Fatalf("lease answered %d (%s)", recorder.Code, refusalOf(t, recorder).GetCode())
+	}
+	return fixture
+}
+
+// Runs the engine's Drain on a goroutine of its own. The channel closes once Drain has returned.
+func (self *pushFixture) startDrain() chan struct{} {
+	drained := make(chan struct{})
+	go func() {
+		defer close(drained)
+		self.engine.Drain()
+	}()
+	return drained
+}
+
+// Returns once the Drain startDrain began waits for step 8: its deadline is on the clock at now plus
+// StepEightDrainTimeout, which Drain sets only once no request is in flight and a step 8 or a hint is left, the clock
+// standing still meanwhile. Fails the test when Drain returns first.
+func (self *pushFixture) awaitStepEightWait(drained chan struct{}) {
+	self.t.Helper()
+	at := self.clock.Now().Add(self.settings.StepEightDrainTimeout)
+	for {
+		pending, added := self.clock.WatchTimers()
+		if slices.ContainsFunc(pending, func(pendingAt time.Time) bool { return pendingAt.Equal(at) }) {
+			return
+		}
+		select {
+		case <-added:
+		case <-drained:
+			self.t.Fatal("Drain returned with a step 8 or a hint still to come")
+		case <-self.ctx.Done():
+			self.t.Fatal(self.ctx.Err())
+		}
+	}
+}
+
+// Returns once the Drain startDrain began has returned.
+func (self *pushFixture) awaitDrained(drained chan struct{}) {
+	self.t.Helper()
+	select {
+	case <-drained:
+	case <-self.ctx.Done():
+		self.t.Fatal(self.ctx.Err())
+	}
+}
+
+// Whether push holds a hint for clientId of the fixture's ref at version, read now, with no wait for step 8.
+func (self *pushFixture) pushHolds(clientId sidecar.Id, version uint64) bool {
+	self.t.Helper()
+	topic := sidecar.PushTopicEvs(self.check.repoId)
+	for _, hint := range self.host.Push.Hints(connect.Id(clientId)) {
+		if hint.Topic != topic {
+			continue
+		}
+		delta := &protocol.EvsHeadChanged{}
+		if err := proto.Unmarshal(hint.Body, delta); err != nil {
+			self.t.Fatal(err)
+		}
+		if sidecar.Id(delta.GetRefId()) == self.check.refId && delta.GetVersion() == version {
+			return true
+		}
+	}
+	return false
+}
+
+// A commit answered during a drain keeps its step 8, its hint and its stored-byte delta (the e2e evs case's restart,
+// whose ledger ran 1287 B short in run 7): its push, in flight when the drain begins, held at the guard's rev/ read,
+// commits and is answered once released, and Drain, which no request holds any more, waits for the commit's step 8,
+// held where it begins, before it returns. Then push holds the hint, and the usage producer the delta, which its own
+// drain sends before Close, as server's evshost drains. Before, Drain returned with the request, and the host's Close
+// ended the step 8 under it.
+func TestEvsEngineDrainKeepsTheStepEightOfACommitAnsweredDuringIt(t *testing.T) {
+	fixture := newDrainFixture(t, 97*time.Second+13*time.Millisecond)
+	usage := fixture.engine.deps.Uploads.Usage
+	networkId := connect.Id(fixture.check.networkId)
+	if err := usage.Drain(fixture.ctx); err != nil {
+		t.Fatal(err)
+	}
+	storedBefore := fixture.host.Quota.StoredDelta(networkId)
+	notifier := holdCommitNotifier(fixture.engine)
+	requestHeld := make(chan struct{})
+	releaseRequest := make(chan struct{})
+	var holdOnce sync.Once
+	fixture.auth.holdRevocation(func() {
+		holdOnce.Do(func() {
+			close(requestHeld)
+			<-releaseRequest
+		})
+	})
+	plan := fixture.plan()
+	fixture.create(plan, "a")
+	bodyBytes, err := proto.Marshal(fixture.body(plan))
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := fixture.token(fixture.check.signerId)
+	answered := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		request := httptest.NewRequestWithContext(fixture.ctx, http.MethodPost, "/evs/v1/repos/"+sidecar.EvsKeyId(fixture.check.repoId)+"/push", bytes.NewReader(bodyBytes))
+		request.Header.Set("Authorization", "Bearer "+token)
+		recorder := httptest.NewRecorder()
+		fixture.engine.Handler().ServeHTTP(recorder, request)
+		answered <- recorder
+	}()
+	<-requestHeld
+	drained := fixture.startDrain()
+	// the drain has begun with the push in flight, which the guard let past its drain check
+	<-fixture.engine.draining
+	close(releaseRequest)
+	fixture.requireCommitted(<-answered, 1)
+	committed := <-notifier.arrived
+	fixture.awaitStepEightWait(drained)
+	if fixture.pushHolds(fixture.check.clientId, 1) {
+		t.Fatal("hinted before the commit's step 8 ran")
+	}
+	close(notifier.release)
+	fixture.awaitDrained(drained)
+	if !fixture.pushHolds(fixture.check.clientId, 1) {
+		t.Fatal("Drain returned before the commit's hint went to push")
+	}
+	window, err := EvsHeadWindow(fixture.head().Head)
+	if err != nil || len(window) != 1 {
+		t.Fatalf("window %v %v", window, err)
+	}
+	// the host's drain goes on: the usage producer sends its window, then Close
+	if err := usage.Drain(fixture.ctx); err != nil {
+		t.Fatal(err)
+	}
+	fixture.engine.Close()
+	if recordByteCount := int64(window[0].Place.GetLength()); committed.RecordByteCount != recordByteCount {
+		t.Fatalf("step 8 counts %d record bytes, and the record holds %d", committed.RecordByteCount, recordByteCount)
+	}
+	if stored := fixture.host.Quota.StoredDelta(networkId) - storedBefore; stored != committed.RecordByteCount {
+		t.Fatalf("the usage producer sent %d stored bytes for the commit, not its record's %d", stored, committed.RecordByteCount)
+	}
+}
+
+// A hint waiting out its repo's interval when the drain begins goes to push before Drain returns (§11.10's hint row):
+// the second of two commits inside one interval has finished its step 8 with its hint waiting, so the notifier's
+// unsent hint alone holds Drain, until the clock passes the interval's end and the hint goes. Before, Drain returned
+// at once, and the host's Close ended the engine's ctx under the waiting hint.
+func TestEvsEngineDrainHandsAWaitingHintToPush(t *testing.T) {
+	fixture := newDrainFixture(t, 97*time.Second+13*time.Millisecond)
+	first := fixture.plan()
+	fixture.create(first, "a")
+	fixture.requireCommitted(fixture.push(first), 1)
+	fixture.awaitStepEights()
+	second := fixture.plan()
+	fixture.create(second, "b")
+	fixture.requireCommitted(fixture.push(second), 2)
+	fixture.awaitStepEights()
+	notifier := fixture.engine.notifier.(*EvsHintNotifier)
+	unsent, _ := notifier.Unsent()
+	firstHinted, secondHinted := fixture.pushHolds(fixture.check.clientId, 1), fixture.pushHolds(fixture.check.clientId, 2)
+	if unsent != 1 || !firstHinted || secondHinted {
+		t.Fatalf("before the drain: %d hints unsent, the first commit hinted %t and the second %t", unsent, firstHinted, secondHinted)
+	}
+	drained := fixture.startDrain()
+	fixture.awaitStepEightWait(drained)
+	fixture.clock.Advance(notifier.settings.HintPerRepoInterval)
+	fixture.awaitDrained(drained)
+	if !fixture.pushHolds(fixture.check.clientId, 2) {
+		t.Fatal("Drain returned before the waiting hint went to push")
+	}
+	if unsent, _ := notifier.Unsent(); unsent != 0 {
+		t.Fatalf("%d hints unsent once Drain returned", unsent)
+	}
+}
+
+// Drain's wait for step 8 is bounded: a step 8 that does not finish holds it StepEightDrainTimeout on the engine's
+// clock and no longer, and Close then ends that step 8 with the engine's ctx.
+func TestEvsEngineDrainWaitsForAStepEightAtMostItsTimeout(t *testing.T) {
+	fixture := newDrainFixture(t, 97*time.Second+13*time.Millisecond)
+	notifier := holdCommitNotifier(fixture.engine)
+	plan := fixture.plan()
+	fixture.create(plan, "a")
+	fixture.requireCommitted(fixture.push(plan), 1)
+	<-notifier.arrived
+	drained := fixture.startDrain()
+	fixture.awaitStepEightWait(drained)
+	fixture.clock.Advance(fixture.settings.StepEightDrainTimeout)
+	fixture.awaitDrained(drained)
+	if started, finished, _ := fixture.engine.StepEights(); started != finished+1 {
+		t.Fatalf("%d step 8s started and %d finished once Drain returned, not the held one alone unfinished", started, finished)
+	}
+	fixture.engine.Close()
+	fixture.awaitStepEights()
+	if fixture.pushHolds(fixture.check.clientId, 1) {
+		t.Fatal("a step 8 that Close ended hinted all the same")
+	}
+}
+
+// A step-8 drain timeout that is not positive does not wait: Drain returns with a step 8 still running.
+func TestEvsEngineDrainDoesNotWaitForStepEightUnderANonPositiveTimeout(t *testing.T) {
+	fixture := newDrainFixture(t, 0)
+	notifier := holdCommitNotifier(fixture.engine)
+	t.Cleanup(func() { close(notifier.release) })
+	plan := fixture.plan()
+	fixture.create(plan, "a")
+	fixture.requireCommitted(fixture.push(plan), 1)
+	<-notifier.arrived
+	fixture.engine.Drain()
+	if started, finished, _ := fixture.engine.StepEights(); started != finished+1 {
+		t.Fatalf("%d step 8s started and %d finished once Drain returned, not the held one alone unfinished", started, finished)
+	}
 }
 
 func TestEvsEngineIsReadyOnceItsFirstClusterAnswers(t *testing.T) {
