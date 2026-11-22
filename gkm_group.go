@@ -1657,6 +1657,13 @@ func (self *GkmGroupClient) hintWork(ctx context.Context, kind string, repoId Id
 	}()
 }
 
+// The barriers of a late ask's follow-up, keyed by its repo: where an ask would start one, on the asking flow's
+// goroutine, a follow-up of the repo that already runs taking it in, and where one ends.
+const (
+	gkmBarrierLateAskFollow    = "gkm.late-ask.follow"
+	gkmBarrierLateAskFollowEnd = "gkm.late-ask.follow.end"
+)
+
 // After a late ask (askLate), the repo is synced again each LateAskInterval while its newest generation is still held
 // without its key, which asks again, so the next ask goes as soon as the interval lets it (DESIGN-DETAILS 6.2.4's
 // asker row: with since its first ask, at most once a LateAskInterval, which gkm reads to widen its hint to other
@@ -1666,23 +1673,28 @@ func (self *GkmGroupClient) hintWork(ctx context.Context, kind string, repoId Id
 // there, and a resync delivers to the holders that joined since a claim (answerLateInFlow), not to one the claim held
 // whose rotator passed it for want of a ReaderKey, as a re-former's rotation passes a device that published its key
 // late: that holder's asks alone bring its delivery. One follow-up runs a repo at a time, an ask made meanwhile
-// following on in it; after its first sync it ends once since is a ResyncInterval old, from when the resyncs ask.
-// None runs without hints attached, where the caller's syncs ask.
+// following on in it. The follow-ups of an ask end once its first is a ResyncInterval old, from when the resyncs ask,
+// or a LateAskInterval old where that is longer, so a lost hint is asked again once at least: neither the follow-up
+// nor an ask its last sync makes starts another past that age. None runs without hints attached, where the caller's
+// syncs ask.
 func (self *GkmGroupClient) followLateAsk(repoId Id, since time.Time) {
 	ctx := func() context.Context {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		return self.hintsCtx
 	}()
-	if ctx == nil || self.settings.LateAskInterval <= 0 {
+	followAge := max(self.settings.ResyncInterval, self.settings.LateAskInterval)
+	if ctx == nil || self.settings.LateAskInterval <= 0 || followAge <= self.clock.Now().Sub(since) {
 		return
 	}
+	testHookBarrier(gkmBarrierLateAskFollow, gkmPathId(repoId))
 	self.hintWork(ctx, "late-ask", repoId, func() {
-		for synced := false; ; synced = true {
-			if synced && self.settings.ResyncInterval <= self.clock.Now().Sub(since) {
+		defer testHookBarrier(gkmBarrierLateAskFollowEnd, gkmPathId(repoId))
+		for {
+			if self.wait(ctx, self.settings.LateAskInterval) != nil {
 				return
 			}
-			if self.wait(ctx, self.settings.LateAskInterval) != nil {
+			if followAge < self.clock.Now().Sub(since) {
 				return
 			}
 			if top, err := self.newestHeldGeneration(repoId); err != nil || top.key != nil || top.poisoned {

@@ -5,11 +5,14 @@ package gkmschedule
 // network's state, which asks nothing, stands at gkm for the next rotation because its upkeep tries the upload again
 // within seconds; and a late ask whose wrap-pending hint no holder took, as a holder's push batch drops the bytes of
 // every gkm hint but its last, is asked again a LateAskInterval on, which a holder answers, where the holders'
-// resyncs answer nothing for a device the claim's state held.
+// resyncs answer nothing for a device the claim's state held, and its asks follow on no longer than a ResyncInterval.
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -21,6 +24,7 @@ import (
 	"github.com/urnetwork/sidecar/gkmservice"
 	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
+	"github.com/urnetwork/sidecar/sidecartest"
 )
 
 // Starts device's ReaderKey upkeep as StartUpkeep does, on settings and with no hint intake: a device that asks
@@ -93,6 +97,29 @@ func awaitUpkeepCounts(t *testing.T, world *FsKeysWorld, upkeep *sidecar.GkmUpke
 	}
 }
 
+// Has gkm probe its stores once, at its start, and waits for that probe. A probe in flight when a test moves the world's
+// clock past StoreProbeTimeout reads the stores as unreachable, and gkm then answers 503 until its next probe,
+// StoreProbeInterval on, on a clock the test moves only once a read it waits for has gone, while that read waits out
+// its Retry-After on the same clock: a test that moves the clock a minute at a time stalls there.
+func probeStoresOnce(t *testing.T, world *FsKeysWorld) {
+	t.Helper()
+	world.Reconfigure(func(settings *gkmservice.GkmServiceSettings) { settings.StoreProbeInterval = 0 })
+	for {
+		count, changed := world.Engine.Probes()
+		if 0 < count {
+			break
+		}
+		select {
+		case <-changed:
+		case <-world.Ctx.Done():
+			t.Fatal("gkm never probed its stores")
+		}
+	}
+	if !world.Engine.Ready() {
+		t.Fatal("gkm reads its stores as unreachable")
+	}
+}
+
 // A reader whose upkeep's first ReaderKey upload gkm refused, before it had loaded the network's state, and which asks
 // nothing: its upkeep tries the upload again ReaderKeyRetryWait later, so the writer's next rotation stages the reader
 // a delivery, which it opens, no late ask of its own made. With the retry off, the pre-fix upkeep's next try waits for
@@ -161,6 +188,7 @@ func wrapPendingFor(world *FsKeysWorld, device *FsKeysDevice, after uint64) func
 func TestLateAskWhoseHintIsLostIsAskedAgainAfterTheLateAskInterval(t *testing.T) {
 	pending := newPendingDeliveryWorld(t, false, false)
 	world := pending.world
+	probeStoresOnce(t, world)
 	reader := pending.reader
 	stopRefusing, asks := refuseReaderKeyUploads(reader)
 	stopRefusing()
@@ -240,4 +268,122 @@ func deliverySignerAt(t *testing.T, world *FsKeysWorld, device *FsKeysDevice, ge
 		return &delivery.SignerId
 	}
 	return nil
+}
+
+// The follow-ups of a late ask no holder answers end once its first ask is a ResyncInterval old: the reader asks again
+// each LateAskInterval for that hour, every ask but the hour's last taken into the one follow-up the first started,
+// and the follow-up ends at its next wake. Neither the ask its last sync makes nor one a sync makes after it starts
+// another, so from then on the reader asks only at the syncs other things bring. The reader's intake resyncs a day
+// apart here, so no resync of its own asks within the hour.
+func TestLateAskFollowUpsEndOnceTheFirstAskIsAResyncIntervalOld(t *testing.T) {
+	if !sidecartest.HooksLinked {
+		t.Skip("the follow-up's barriers need sidecar_testhooks")
+	}
+	pending := newPendingDeliveryWorld(t, false, false)
+	world := pending.world
+	probeStoresOnce(t, world)
+	reader := pending.reader
+	askLock := sync.Mutex{}
+	askCount := 0
+	asked := make(chan struct{}, 128)
+	// each ask told once gkm has answered it, so the clock moves under no request gkm is still serving, whose
+	// deadline the move would end
+	reader.Transport.Respond = func(request *http.Request) *http.Response {
+		recorder := httptest.NewRecorder()
+		world.Engine.Handler().ServeHTTP(recorder, request)
+		if request.Method == http.MethodGet && request.URL.Query().Get("want") != "" {
+			askLock.Lock()
+			askCount += 1
+			askLock.Unlock()
+			asked <- struct{}{}
+		}
+		return recorder.Result()
+	}
+	awaitAsk := func(label string) {
+		t.Helper()
+		select {
+		case <-asked:
+		case <-world.Ctx.Done():
+			t.Fatalf("the reader never asked %s", label)
+		}
+	}
+	key, err := pending.granter.Client.RotateRepo(world.Ctx, world.RepoId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader.PublishReaderKey()
+	followLock := sync.Mutex{}
+	followCount := 0
+	ended := make(chan struct{}, 8)
+	remove, err := sidecartest.InstallTestHooks(nil, func(name string, key string) {
+		switch name {
+		case "gkm.late-ask.follow":
+			followLock.Lock()
+			followCount += 1
+			followLock.Unlock()
+		case "gkm.late-ask.follow.end":
+			ended <- struct{}{}
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer remove()
+	hintsSettings := sidecar.DefaultGkmSettings()
+	hintsSettings.ResyncInterval = 24 * time.Hour
+	hints, err := sidecar.NewGkmHints(world.Ctx, &sidecar.GkmHintsArgs{Settings: hintsSettings, Clock: world.Clock})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(hints.Close)
+	reader.Client.AttachHints(world.Ctx, hints)
+
+	settings := sidecar.DefaultGkmSettings()
+	interval := settings.LateAskInterval
+	reAskCount := int(settings.ResyncInterval / interval)
+	askedAt := world.Clock.Now()
+	if err := reader.Client.SyncRepo(world.Ctx, world.RepoId); err == nil {
+		t.Fatal("the reader synced a key before any delivery")
+	}
+	awaitAsk("at its first sync")
+	for index := 1; index <= reAskCount; index += 1 {
+		awaitTimerAt(t, world, askedAt.Add(time.Duration(index)*interval))
+		world.Clock.Advance(interval)
+		awaitAsk(fmt.Sprintf("at follow-up %d", index))
+	}
+	awaitTimerAt(t, world, askedAt.Add(time.Duration(reAskCount+1)*interval))
+	world.Clock.Advance(interval)
+	select {
+	case <-ended:
+	case <-world.Ctx.Done():
+		t.Fatal("the follow-up never ended")
+	}
+	// a sync past the hour asks again, and taking the group's flow after the hour's last ask, finds its ask counted
+	if err := reader.Client.SyncRepo(world.Ctx, world.RepoId); err != nil && !errors.Is(err, sidecar.ErrGkmKeyMissing) {
+		t.Fatalf("the sync after the hour: %v", err)
+	}
+	awaitAsk("at the sync after the hour")
+	if held, _ := reader.Client.RepoKeyHeld(world.RepoId); held {
+		t.Fatal("the reader holds a key no holder delivered")
+	}
+	askLock.Lock()
+	asks := askCount
+	askLock.Unlock()
+	followLock.Lock()
+	follows := followCount
+	followLock.Unlock()
+	if asks != reAskCount+2 {
+		t.Errorf("%d asks, want the first, %d follow-ups' and the sync's after the hour", asks, reAskCount)
+	}
+	if follows != reAskCount {
+		t.Errorf("%d asks would start a follow-up, want the %d of the hour before its last", follows, reAskCount)
+	}
+	if world.WrapRecipients(key.Generation())[reader.SidecarId()] {
+		t.Error("a delivery stood with no holder told")
+	}
+	select {
+	case <-ended:
+		t.Error("a second follow-up ended")
+	default:
+	}
 }
