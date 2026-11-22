@@ -26,9 +26,10 @@
 // tables, and a sender's table an entry of each alias in force it may use, linked to the alias's host.
 //
 // Activated grants (bridge_compile_grants.go): a requested route grant's prefixes and ports ride its action's sealed
-// detail, which the compile opens under the config keys it holds, as the save's ip: tests do (owner decision 679), so
-// a grant gives a sender's entries and a host's route and exit rows by its detail, and one whose detail does not open
-// here gives none; a body whose generation is not held is waited for as a ledger body's is.
+// detail, which the compile opens under the config keys it holds and reads by the one reader the save's ip: tests and
+// AclEngine read it by (owner decision 679; acl_grant_route.go), so a grant gives a sender's entries and a host's
+// route and exit rows by its detail, and one whose detail does not open here gives none; a body whose generation is
+// not held is waited for as a ledger body's is.
 //
 // Deferred to the review phase, as BRIDGE-M4-23's ledger was drafted: the ledger is opened from rows decoded into
 // memory, so a compile holds the ledger rather than only 12.2.4's wanted rows (CompileBounded).
@@ -311,9 +312,11 @@ type bridgeCompiler struct {
 	// Each activated grant's action as stored, by grant id, those recovered from the authenticated head at this pin
 	// for a cold start included: the sealed details of dial grants' ports and route grants' prefixes and ports.
 	grantActions map[string][]byte
-	// Each activated route grant's opened detail, nil for one that did not open here, by grant id: read once a
-	// compile (bridge_compile_grants.go).
-	grantRoutes map[string]*AclLocalRule
+	// The opener of those actions' details in S's network under the view's keys, which route grants are read through
+	// (aclReadGrantRoute), and each activated route grant's opened detail, nil for one that did not open here, by grant
+	// id: read once a compile (bridge_compile_grants.go).
+	grantDetails *aclStateGrantDetails
+	grantRoutes  map[string]*AclLocalRule
 	// t, S(n)'s time, as ms and as a time
 	t   int64
 	now time.Time
@@ -377,6 +380,7 @@ func CompileBridgeState(view BridgeConfigView, local *BridgeCompileLocal, settin
 	if compiler.bindings == nil {
 		compiler.bindings = &bridgeBindingSnapshot{}
 	}
+	compiler.grantDetails = &aclStateGrantDetails{actions: compiler.grantActions, networkId: state.NetworkId(), repoKeyAt: view.RepoKeyAt}
 	compiler.hasDocument = compiler.acl.HasDocument()
 	if row := state.SidecarRow(compiler.self); row != nil {
 		compiler.selfTagged = 0 < len(row.GetTagIds())

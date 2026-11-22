@@ -3,8 +3,9 @@
 // QD-1164's ip: tests against a surviving activated route grant (acl_tests.go's activated grants row): a grant whose
 // sealed detail opens is judged by its prefixes and ports, one whose detail does not open establishes no accept and
 // fails a deny it may apply to as indeterminate, naming the grant by id and the test by index, and one whose action
-// seals no detail routes by its subjects. The details open through the writer's own state and config keys
-// (aclStateGrantDetails) and through PlanAclSave at the verified base a save stands on. Synthetic values only.
+// seals no detail reaches nothing, as the bridge compile and AclEngine read it. The details open through the writer's
+// own state and config keys (aclStateGrantDetails) and through PlanAclSave at the verified base a save stands on.
+// Synthetic values only.
 
 package sidecar
 
@@ -16,6 +17,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"google.golang.org/protobuf/proto"
@@ -23,23 +25,37 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 )
 
-// A test's opener: each grant's detail, or the error it answers, by grant id.
+// A test's opener: each grant's detail, or the error it answers, by grant id, an id it holds neither for answering as
+// a state holding no action for the grant does. Safe for concurrent use.
 type testAclGrantDetails struct {
 	details map[string]*protocol.CanonicalActionDetail
 	errs    map[string]error
-	opened  []string
+
+	stateLock sync.Mutex
+	opened    []string
 }
 
 func (self *testAclGrantDetails) GrantDetail(grantId []byte) (*protocol.CanonicalActionDetail, error) {
-	self.opened = append(self.opened, string(grantId))
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.opened = append(self.opened, string(grantId))
+	}()
 	if err := self.errs[string(grantId)]; err != nil {
 		return nil, err
 	}
 	detail, found := self.details[string(grantId)]
 	if !found {
-		return nil, fmt.Errorf("%w: no such grant", ErrAclGrantDetailUnread)
+		return nil, ErrAclGrantActionNotHeld
 	}
 	return proto.Clone(detail).(*protocol.CanonicalActionDetail), nil
+}
+
+// The grant ids asked so far, in the order asked.
+func (self *testAclGrantDetails) asked() []string {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return slices.Clone(self.opened)
 }
 
 // A world whose log activated a route grant for dana's laptop through amir's, its requests rule the document's
@@ -135,8 +151,8 @@ func TestAclPolicyTestRunJudgesAnActivatedRouteGrantByItsOpenedDetail(t *testing
 			t.Errorf("a definite failure carries an unread grant: %v", failure)
 		}
 	}
-	if len(details.opened) == 0 || slices.ContainsFunc(details.opened, func(opened string) bool { return opened != string(world.grantId) }) {
-		t.Errorf("the opener was asked for %d details", len(details.opened))
+	if asked := details.asked(); len(asked) == 0 || slices.ContainsFunc(asked, func(opened string) bool { return opened != string(world.grantId) }) {
+		t.Errorf("the opener was asked for %d details", len(asked))
 	}
 
 	// its ports, from its sidecar destinations, meet a check's first
@@ -191,12 +207,12 @@ func TestAclPolicyTestRunHoldsAnUnopenedActivatedGrantIndeterminate(t *testing.T
 	}{
 		{name: "a missing generation", why: "needs a config key generation this device does not hold",
 			details: &testAclGrantDetails{errs: map[string]error{string(world.grantId): fmt.Errorf("%w: generation 3", ErrConfigSealGenerationMissing)}}},
-		{name: "a detail not its action's", why: "did not open here",
+		{name: "a detail not its action's", why: "does not open here",
 			details: &testAclGrantDetails{errs: map[string]error{string(world.grantId): ErrCanonicalActionDetailInvalid}}},
-		{name: "an action the base does not hold", why: "did not open here", details: &testAclGrantDetails{}},
+		{name: "an action the base does not hold", why: "is not held here: the state keeps no action for it", details: &testAclGrantDetails{}},
 		{name: "a port with no protocol", why: "names a port with no protocol",
 			details: &testAclGrantDetails{details: map[string]*protocol.CanonicalActionDetail{string(world.grantId): {Cidrs: []string{"198.51.100.0/24"}, TargetPort: 22}}}},
-		{name: "no opener", why: "has no opener on this run", details: nil},
+		{name: "no opener", why: "has no opener here", details: nil},
 	} {
 		report := world.runWith(t, c.details)
 		want := []string{indeterminate(0, c.why), unaccepted(1, c.why), "tests[2].deny[1]: allowed by rule"}
@@ -216,27 +232,30 @@ func TestAclPolicyTestRunHoldsAnUnopenedActivatedGrantIndeterminate(t *testing.T
 	}
 }
 
-// A grant whose action seals no detail, its rule limiting no ports, names no prefix: it routes through amir's laptop to
-// amir's laptop, whose routes in force no save sees, so it fails every deny of dana's laptop naming the grant (owner
-// decision 615) and holds no accept, with no opener asked.
-func TestAclPolicyTestRunRoutesAnUnsealedActivatedGrantBySubject(t *testing.T) {
+// A grant whose action seals no detail, one from before version 4, its rule limiting no ports, names nothing any
+// reader can read: the bridge compile gives it no entry and no row and AclEngine reaches nothing by it (QD-003), so the
+// save reads it the same way, holding no accept and failing no deny of dana's laptop, through amir's laptop or any
+// other, with no opener asked. Before the readers were one, the save read it as routing by its subjects and failed the
+// deny, which no device served.
+func TestAclPolicyTestRunHoldsAnUnsealedActivatedGrantClosed(t *testing.T) {
 	dana, _ := aclTestsGrantLaptops()
 	world := newAclTestsGrantWorld(t, `{ `+aclTestsGrantRequests+`, "tests": [
-    { "src": "sidecar:`+dana.String()+`", "deny": ["ip:192.0.2.0/24#route"] },
+    { "src": "sidecar:`+dana.String()+`", "deny": ["ip:192.0.2.0/24#route", "ip:0.0.0.0/0#route"] },
     { "src": "sidecar:`+dana.String()+`", "accept": ["ip:192.0.2.0/24#route"] },
   ] }`, false)
 	details := &testAclGrantDetails{}
 	report := world.runWith(t, details)
-	want := []string{
-		"tests[0].deny[0]: allowed by " + world.grantName() + ", which names no prefix: a sidecar among both its via subjects and " +
-			"its destinations could serve any range by its routes in force",
-		"tests[1].accept[0]: refused: no_grant",
-	}
+	want := []string{"tests[1].accept[0]: refused: no_grant"}
 	if got := aclTestsFailureLines(report); !slices.Equal(got, want) {
 		t.Errorf("failures %q", got)
 	}
-	if len(details.opened) != 0 {
-		t.Errorf("a grant sealing no detail was opened %d times", len(details.opened))
+	for _, failure := range report.Failures {
+		if failure.GrantId != nil {
+			t.Errorf("an unsealed grant left a check indeterminate: %v", failure)
+		}
+	}
+	if asked := details.asked(); len(asked) != 0 {
+		t.Errorf("a grant sealing no detail was opened %d times", len(asked))
 	}
 }
 

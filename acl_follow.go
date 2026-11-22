@@ -7,7 +7,11 @@
 //
 //	install  the state's AclState and the AclLocalPolicy of the config head its base names; a newer head's local
 //	         policy is read and compiled off the callback. Until it lands the new rows carry no local detail, so
-//	         port-limited and prefix-socket rules cannot authorize destinations from their public rows alone
+//	         port-limited and prefix-socket rules cannot authorize destinations from their public rows alone. With
+//	         them, the opener of the state's activated route grants' sealed details (AclEngine.InstallWithGrants),
+//	         under the config keys this device already holds (HeldRepoKey), never a fetch, and from that head's
+//	         folds where a grant landed before the base: a grant is opened at the first install that holds it, and
+//	         one whose action or key is not here yet reaches nothing until an install that has them
 //	refuse   §7.9's BASE row owns the rows-hash check: a base whose rows do not compile from its head forks the client,
 //	         which raises head_alarm and applies nothing, so nothing reaches here; a state whose acl part does not
 //	         build raises refused, and a second A_n at the installed n head_alarm fork, each installing nothing and
@@ -62,6 +66,10 @@ type AclFollowerArgs struct {
 	// Reads the config head a base names, for its AclLocalPolicy. Nil installs none, so every port-limited rule opens
 	// no port, the closed direction.
 	Heads ConfigHeadReader
+	// The config repo's key of a generation this device already holds, read with no fetch and no group flow
+	// (Sidecar.GkmHeldKey), nil for one it does not: what activated route grants' sealed details open under at each
+	// install. Nil opens none, so every activated route grant reaches nothing at the engine, the closed direction.
+	HeldRepoKey func(repoId Id, generation uint64) *EvsRepoKey
 	// Raises refused and head_alarm. Nil drops them.
 	Emit     SidecarEventFunction
 	Settings *AclSettings
@@ -84,9 +92,11 @@ type aclAckPosition struct {
 	timeMs  int64
 }
 
-// A config head's local policy, compiled once per head.
+// A config head's local policy, compiled once per head, and the head, whose folds hold the actions of grants that
+// landed before its base.
 type aclFollowerLocal struct {
 	headSha256 [sha256.Size]byte
+	head       *ConfigHead
 	local      *AclLocalPolicy
 }
 
@@ -193,7 +203,7 @@ func (self *AclFollower) apply() {
 // One state's install, refusing what the file header says. Whether the engine now holds it.
 func (self *AclFollower) installWithLock(state *ConfigState) bool {
 	pin := state.Pin()
-	local := self.localForState(state)
+	local, head := self.localForState(state)
 	if current := self.args.Engine.State(); current != nil {
 		installedPin := current.Pin()
 		sameLocal := self.installedLocal() == local
@@ -212,7 +222,7 @@ func (self *AclFollower) installWithLock(state *ConfigState) bool {
 		self.emit(SidecarEvent{Kind: SidecarEventRefused})
 		return false
 	}
-	if err := self.args.Engine.Install(acl, local); err != nil {
+	if err := self.args.Engine.InstallWithGrants(acl, local, self.grantDetails(state, head)); err != nil {
 		self.refusalCount.Add(1)
 		self.log.Errorf("[acl]%s the engine refused the state at %d: %v", state.NetworkId(), pin.GetVersion(), err)
 		if errors.Is(err, ErrAclEngineFork) {
@@ -243,14 +253,29 @@ func (self *AclFollower) installedLocal() *AclLocalPolicy {
 	return nil
 }
 
-// Only detail compiled from the head this base authenticated can refine its rows.
-// A new base becomes effective immediately even while its detail is being read.
-func (self *AclFollower) localForState(state *ConfigState) *AclLocalPolicy {
+// Only detail compiled from the head this base authenticated can refine its rows, and only that head's folds supply a
+// grant's action the state does not hold. A new base becomes effective immediately even while its detail is being read.
+func (self *AclFollower) localForState(state *ConfigState) (*AclLocalPolicy, *ConfigHead) {
 	local := self.local.Load()
 	if local != nil && bytes.Equal(local.headSha256[:], state.Base().GetConfigHeadSha256()) {
-		return local.local
+		return local.local, local.head
 	}
-	return nil
+	return nil, nil
+}
+
+// The opener of state's activated grants' sealed details, at head where it is the base's, under the config keys this
+// device already holds; nil with no key source, or for a state whose genesis names no config repo.
+func (self *AclFollower) grantDetails(state *ConfigState, head *ConfigHead) AclGrantDetails {
+	if self.args.HeldRepoKey == nil {
+		return nil
+	}
+	configRepoId, err := IdFromBytes(state.Genesis().GetConfigRepoId())
+	if err != nil {
+		return nil
+	}
+	return newAclStateGrantDetails(state, head, func(generation uint64) *EvsRepoKey {
+		return self.args.HeldRepoKey(configRepoId, generation)
+	})
 }
 
 // Raises an event, when the host takes them.
@@ -315,10 +340,10 @@ func (self *AclFollower) readHeads() {
 		wanted, changed := self.wantedHead.Get()
 		if wanted != read && wanted != ([sha256.Size]byte{}) {
 			read = wanted
-			if local, err := self.compileLocal(wanted); err != nil {
+			if local, head, err := self.compileLocal(wanted); err != nil {
 				self.log.Warningf("[acl]a config head's local policy did not compile, ports stay closed for its new rules: %v", err)
 			} else {
-				self.local.Store(&aclFollowerLocal{headSha256: wanted, local: local})
+				self.local.Store(&aclFollowerLocal{headSha256: wanted, head: head, local: local})
 				self.apply()
 			}
 			continue
@@ -331,11 +356,12 @@ func (self *AclFollower) readHeads() {
 	}
 }
 
-// The local policy of the config head the source's newest base names, when that base still names headSha256.
-func (self *AclFollower) compileLocal(headSha256 [sha256.Size]byte) (*AclLocalPolicy, error) {
+// The local policy of the config head the source's newest base names, when that base still names headSha256, and the
+// head.
+func (self *AclFollower) compileLocal(headSha256 [sha256.Size]byte) (*AclLocalPolicy, *ConfigHead, error) {
 	state := self.args.Source.State()
 	if state == nil || state.Base() == nil || !bytes.Equal(state.Base().GetConfigHeadSha256(), headSha256[:]) {
-		return nil, errors.New("the base moved on before its head was read")
+		return nil, nil, errors.New("the base moved on before its head was read")
 	}
 	ctx := self.ctx
 	if 0 < self.settings.AckTimeout {
@@ -345,13 +371,17 @@ func (self *AclFollower) compileLocal(headSha256 [sha256.Size]byte) (*AclLocalPo
 	}
 	head, err := self.args.Heads.ReadConfigHead(ctx, state.Base().GetConfigVersion(), headSha256[:])
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	input, err := NewAclCompileInput(head, ConfigCompileRowsOf(state))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return CompileAclLocal(input)
+	local, err := CompileAclLocal(input)
+	if err != nil {
+		return nil, nil, err
+	}
+	return local, head, nil
 }
 
 // ur://acl/grants's data: the installed state as ids, nil before the first install. The caller must not change it.
