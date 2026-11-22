@@ -60,6 +60,8 @@ const (
 const sidecarConnectIdentityTlsName = "urnetwork-sequence"
 
 // The serial's bytes from the seed, under a leading 0x01 so the serial is positive and 17 bytes, within RFC 5280's 20.
+// Part of the derivation, as the labels and the template are, and no tunable: a change is a new certificate for every
+// generation's client.
 const sidecarConnectIdentityTlsSerialByteCount = 16
 
 // No connect identity came with a generation on a leg that keeps one: its client does not open (identity_connect.go).

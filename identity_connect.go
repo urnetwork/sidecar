@@ -16,9 +16,10 @@
 // A record of another generation's, as a new generation finds its predecessor's, gives way to a new seed, so a new
 // client never presents an earlier client's material. A record that fails decoding is §5.9's Failed, never absent, and
 // nothing here overwrites it (D-CORE-15). The seed never leaves the keychain: it reaches testHookSecret where it is drawn
-// or read and is never logged (I-7). Of what derives from it only the provide keys leave the device, to the platform, as
-// every client's do, since the platform signs contracts to the client with them. Only a leg whose generations run a
-// connect client keeps one (sidecarLeg.keepsConnectIdentity).
+// or read and is never logged (I-7). Of what derives from it, the certificate is public, as every client's is, the
+// certificate's key never leaves the device, and the provide keys go to the platform, as every client's do, since the
+// platform signs contracts to the client with them. Only a leg whose generations run a connect client keeps one
+// (sidecarLeg.keepsConnectIdentity).
 //
 // Nothing here names a connect type, so it builds on every leg the core's identity does.
 

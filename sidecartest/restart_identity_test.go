@@ -10,6 +10,12 @@
 // The issuer commits each contract to its destination's certificate (Net.CommitSequenceCertificates), so the peer
 // checks the certificate the restarted daemon presents, as it does on a platform. Real connect clients keep real
 // timers, so the bounds are real time, each one a broken run's, never a sleep.
+//
+// The restarted daemon opens the stream, as the restarted edge does in the edge's test, so its own first sends start
+// the pair's new TLS session. A restarted daemon that waits, its peer opening first over its stale session, is reached
+// only after about two minutes here, kept identity or not: the peer's re-handshake with the restarted responder fails
+// with a bad record MAC until connect's timeouts end the session. That is connect's per-peer session, not the contracts,
+// and question daemon-restart-identity-passive-restart-handshake raises it.
 
 package sidecartest
 
