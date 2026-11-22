@@ -274,13 +274,15 @@ func (self *GkmEngine) serveGenerationsRead(request *GkmRequest) {
 //	signer  admitted, not read_only, and not revoked, parked or suspended in gkm's newest state
 //	leaf    a leaf wrap's epoch exists
 //	rate    60 an hour per uploader per group
-//	fence   no closing marker of a re-form stands in the group, read after the create (QD-1186; reform_fence.go)
+//	fence   no closing marker of a re-form stands in the group, read before the create and after it (QD-1186;
+//	        reform_fence.go)
 //
 // The first claim wins: a 412 carries the winner, which the rotator judges (§10.5's Rotate, step 4), and the same
 // bytes again answer 201, so a lost answer's retry succeeds once. A claim in a group a re-form closed answers 409 with
 // the closing marker, the re-form's GroupForm, naming the new group, whatever its create left: the forms check above
-// reads the forms and then the create comes, which nothing conditions on a form landing between, so the marker is
-// what decides, and the rotator follows the form. A success hints commit on gkm:<group_id> at the newest epoch and g,
+// reads the forms and then the create comes, which nothing conditions on a form landing between, so the marker, read
+// after the create, is what decides, and the rotator follows the form. The read before the create only spares a claim
+// that starts once the marker stands its write. A success hints commit on gkm:<group_id> at the newest epoch and g,
 // so a rotation with no commit is seen (D-KEYS-19).
 func (self *GkmEngine) serveGenerationClaim(request *GkmRequest) {
 	groupId := *request.GroupId
@@ -396,6 +398,12 @@ func (self *GkmEngine) serveGenerationClaim(request *GkmRequest) {
 	// gen/<g-1>'s pin and time, whatever cause the claim states (§10.6's checks row, budget.go)
 	writeCtx, ok := request.SpendWrites(request.Cluster, self.rotationWriteKind(request, parent), self.settings.Prices.create(len(raw)))
 	if !ok || !request.CheckRepoWritable() {
+		return
+	}
+	// the fence's read before the create: a claim that starts once a re-form's marker stands writes nothing, so it
+	// leaves no generation past the closing form's that the re-form, settling its closing, would have to count as one
+	// a member may hold; the read after the create decides for a claim that started before the marker
+	if !self.checkGroupOpen(request, groupId) {
 		return
 	}
 	barrierKey := gkmBarrierNumberKey(groupId, generation)

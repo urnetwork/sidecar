@@ -421,12 +421,12 @@ func TestGkmReformClosesTheGroupItReformsBeforeItsForm(t *testing.T) {
 	}
 }
 
-// QD-1186's fence at the claim route, with a re-form's closing marker standing before its form is filed, so the
-// repo's newest form still names the group, as for a claim checked just before a re-form lands: a commit is refused
-// before its PUT; a claim is refused 409 with the marker, naming the new group, though its create landed, and neither
-// GET gen nor the drop key serves what it wrote; a rival claim of that generation is no 412 with a winner the fence
-// refused; a claim on top of it, the same claim sent again and a staged delivery are refused too; and once a void
-// closing empties the marker, the group serves and takes them again.
+// QD-1186's fence, with a re-form's closing marker standing before its form is filed, so the repo's newest form still
+// names the group and the guard and the claim's forms check pass: a commit is refused before its PUT; a claim is
+// refused 409 with the marker, naming the new group, writing nothing; a generation a claim that started before the
+// marker wrote past the closing form's is served by neither GET gen nor the drop key, and no claim of or on it is
+// answered 412 or 201; a staged delivery is refused too; and once a void closing empties the marker, the group serves
+// that generation as its own and takes claims again.
 func TestGkmClosedGroupTakesNoClaimWrapOrCommitAndServesNothingPastItsForm(t *testing.T) {
 	world := newGkmCommitWorld(t)
 	fixture := world.fixture
@@ -448,9 +448,11 @@ func TestGkmClosedGroupTakesNoClaimWrapOrCommitAndServesNothingPastItsForm(t *te
 	if recorder.Code != http.StatusConflict || !bytes.Equal(recorder.Body.Bytes(), marker) {
 		t.Fatalf("a claim of the closed group: %d", recorder.Code)
 	}
-	if fixture.object("meta-2", GkmGenerationKey(oldGroupId, 2)) == nil {
-		t.Fatalf("the refused claim's create did not land, so the fence was never read past a write")
+	if fixture.object("meta-2", GkmGenerationKey(oldGroupId, 2)) != nil {
+		t.Fatalf("a claim that started once the marker stood wrote gen/2")
 	}
+	// what a claim checked before the marker and created after it leaves, refused by the read after its create
+	fixture.put("meta-2", GkmGenerationKey(oldGroupId, 2), fixture.marshal(claim2))
 	if served := world.servedGenerations(oldGroupId, 0, false); !slices.Equal(served, []uint64{1}) {
 		t.Errorf("GET gen of the closed group serves %v", served)
 	}
@@ -475,16 +477,20 @@ func TestGkmClosedGroupTakesNoClaimWrapOrCommitAndServesNothingPastItsForm(t *te
 		t.Errorf("a staged delivery to the closed group: %d", code)
 	}
 
-	// a void closing opens the group again: what the refused claims wrote is the group's, and a claim on it lands
+	if fixture.object("meta-2", GkmGenerationKey(oldGroupId, 3)) != nil {
+		t.Errorf("a claim on top of the refused generation wrote gen/3")
+	}
+
+	// a void closing opens the group again: what the refused claim wrote is the group's, its claimer's same bytes are
+	// answered as won, and a claim on it lands
 	world.emptyClosingMarker(oldGroupId)
-	if served := world.servedGenerations(oldGroupId, 0, false); !slices.Equal(served, []uint64{1, 2, 3}) {
+	if served := world.servedGenerations(oldGroupId, 0, false); !slices.Equal(served, []uint64{1, 2}) {
 		t.Errorf("GET gen of the group opened again serves %v", served)
 	}
 	if recorder := world.postClaim(world.adminToken, 2, claim2); recorder.Code != http.StatusCreated {
 		t.Errorf("the claim of generation 2 sent again once the group is open: %d", recorder.Code)
 	}
-	_, claim4 := world.nextGeneration(world.admin, key3, nil)
-	if recorder := world.postClaim(world.adminToken, 4, claim4); recorder.Code != http.StatusCreated {
+	if recorder := world.postClaim(world.adminToken, 3, claim3); recorder.Code != http.StatusCreated {
 		t.Errorf("a claim of the group opened again: %d", recorder.Code)
 	}
 }
@@ -578,9 +584,7 @@ func TestGkmSecondReformAnswersAClosingUnderWayAndTakesOneThatCameToNothing(t *t
 	staleForm := staleWorld.reformBytes(testId("group-first"), staleWorld.groupId, 1)
 	staleFixture.put("meta-2", GkmGroupClosedKey(staleWorld.groupId), staleForm)
 	_, claim2 := staleWorld.nextGeneration(staleWorld.admin, staleWorld.key1, nil)
-	if recorder := staleWorld.postClaim(staleWorld.adminToken, 2, claim2); recorder.Code != http.StatusConflict {
-		t.Fatalf("a claim beside the closing under way: %d", recorder.Code)
-	}
+	staleFixture.put("meta-2", GkmGenerationKey(staleWorld.groupId, 2), staleFixture.marshal(claim2))
 	reformedGroupId := testId("group-reformed")
 	if recorder := staleWorld.postReform(reformedGroupId, staleWorld.groupId, 2); recorder.Code != http.StatusOK {
 		t.Fatalf("a re-form at generation 2 beside a closing at generation 1: %d", recorder.Code)

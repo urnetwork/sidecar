@@ -17,9 +17,11 @@
 //     at its next rotation from its draft;
 //   - a claim, a wrap batch and a recovery-wrap batch in the old group write as they did and then read the marker,
 //     since the store cannot condition a create on another object: a marker that stands answers 409 with its bytes,
-//     naming the new group, whatever the write left, and the rotator follows the form. An epoch commit reads it before
-//     its PUT instead, since a commit answered 409 is a loser its committer discards (KF6), and one whose epoch stands
-//     must not be;
+//     naming the new group, whatever the write left, and the rotator follows the form. A claim reads it before its
+//     create too, so one that starts once the marker stands writes nothing: a generation a refused claim wrote past
+//     the form's makes the re-form's own read find the group moved past it, and void it, so only a claim already past
+//     that read when the marker landed can cost a re-form its closing. An epoch commit reads it before its PUT alone,
+//     since a commit answered 409 is a loser its committer discards (KF6), and one whose epoch stands must not be;
 //   - GET gen and the drop-key route read the marker after their LIST and serve no generation past the closing form's,
 //     so what a claim wrote after the marker stood reaches no member;
 //   - another re-form finding a marker that closes the group answers 409 with it, which its client reads as another

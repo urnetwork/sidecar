@@ -278,3 +278,39 @@ func TestGkmTwoTriesOfOneReformFollowTheVoidVerdict(t *testing.T) {
 		t.Errorf("GET gen of the group opened again serves %v", served)
 	}
 }
+
+// In KeyDelivery mode after a rebind, a claim that won, sent again for its lost answer, reaches the recovery check's
+// reading of what won, its generation lacking a RecoveryWrap to the member's current binding; a re-form's marker lands
+// after the claim's first read of it, held there: that reading answers 409 with the marker, not its old 201.
+func TestGkmKeyDeliveryClaimSentAgainIsRefusedByAMarkerLandingAfterItsFirstRead(t *testing.T) {
+	world := newGkmGroupWorld(t)
+	world.createAndActivate()
+	fixture := world.fixture
+	fixture.settings = DefaultGkmServiceSettings()
+	fixture.start()
+	oldGroupId := world.groupId
+	_, claim2 := world.nextGeneration(world.admin, world.key1, nil)
+	if recorder := world.postClaim(world.adminToken, 2, claim2); recorder.Code != http.StatusCreated {
+		t.Fatalf("the claim of generation 2: %d", recorder.Code)
+	}
+	fixture.auth.recovery[world.memberId] = &RecoveryWrapCoverage{Current: sha256Of([]byte("the member's rebound recovery key")), RepoIds: []sidecar.Id{world.repoId}}
+	marker := world.reformBytes(testId("group-new"), oldGroupId, 2)
+	held := 0
+	sidecar.SetTestHooks(&sidecar.TestHooks{Barrier: func(name string, key string) {
+		if name != BarrierGenClaimBefore || key != gkmBarrierNumberKey(oldGroupId, 2) {
+			return
+		}
+		held += 1
+		if held == 1 {
+			fixture.put("meta-2", GkmGroupClosedKey(oldGroupId), marker)
+		}
+	}})
+	recorder := world.postClaim(world.adminToken, 2, claim2)
+	sidecar.SetTestHooks(nil)
+	if held != 1 {
+		t.Fatalf("the claim was held %d times", held)
+	}
+	if recorder.Code != http.StatusConflict || !bytes.Equal(recorder.Body.Bytes(), marker) {
+		t.Errorf("the won claim sent again after a rebind, the marker landing after its first read: %d", recorder.Code)
+	}
+}

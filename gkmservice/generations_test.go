@@ -268,8 +268,9 @@ func TestGkmDepositScopeReachesTheDropKeyRouteAlone(t *testing.T) {
 
 // QD-1186's fence in KeyDelivery mode, gkm's v0: a claim that won before a re-form carrying its generation closed the
 // group, sent again for its lost answer, answers 409 with the closing marker, naming the new group, and not its old
-// 201, whether it reaches the create or the recovery check's own reading of what won, as after a rebind; its claimer
-// follows the form, whose ladder carries the generation.
+// 201, before and after a rebind, and its claimer follows the form, whose ladder carries the generation; once a void
+// closing opens the group, the recovery check's own reading of what won answers it 201 again. The marker landing
+// after that check's first read is reform_fence_race_test.go's.
 func TestGkmKeyDeliveryClaimSentAgainInAClosedGroupFollowsTheForm(t *testing.T) {
 	world := newGkmGroupWorld(t)
 	world.createAndActivate()
