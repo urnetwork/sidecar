@@ -26,6 +26,12 @@
 // If-None-Match makes that safe. PUTs run WrapPutConcurrency at once. A malformed delivery is refused as one whose
 // signature does not verify, 403, since gkm cannot tell the two apart without trusting it.
 //
+// In KeyDelivery mode a ReaderWrap that stands (201, or 412 whatever its winner) and that its recipient can take now
+// wakes the recipient with pending on its per-client topic: a LATE one, which comes with no new generation, and a
+// STAGED one of a generation already claimed, KF1's generation 1, whose recipient follows no topic of a group it has
+// not seen and synced the repo, if at all, at its RepoCreate, before the group was formed. A rotation's STAGED ones
+// wake no one: their generation is claimed after them, and the claim's commit hint is the wake.
+//
 // Reads return only the caller's own objects: its s: deliveries, its covering Delegation's d: ones, and its own
 // forwarding Delegations' d: ones, which its VPN component reads through its forwarding client, acting as the
 // sidecar (DESIGN-DETAILS 4.2.5's compile, step 2). A read asking
@@ -53,12 +59,6 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
-
-// §10.14's bound on one batch (QD-066): a format value.
-const gkmWrapBatchMaxCount = 256
-
-// The most bytes of one stored delivery a read takes: ~1.42 KB late (§10.6's sizes).
-const gkmDeliveryMaxByteCount = 8 * 1024
 
 // The STAGED and LATE kinds of KeyDelivery.delivery_kind (§10.9).
 const (
@@ -266,9 +266,11 @@ func (self *GkmEngine) judgeDelivery(batch *gkmWrapBatchContext, deliveryBytes [
 		return nil, 403, true
 	}
 	write = &gkmWrapWrite{key: key, body: raw, late: body.GetDeliveryKind() == gkmDeliveryKindLate}
-	if write.late && delivery.Type == sidecar.GkmWrapTypeReader && !self.settings.DraftMls {
-		recipient, _ := sidecar.IdFromBytes(body.GetRecipient()) // judgeLateDelivery checked this id
-		write.wakeReader = &recipient
+	// a LATE ReaderWrap, or a STAGED one of a generation gen/ already holds, KF1's (the file header)
+	if delivery.Type == sidecar.GkmWrapTypeReader && !self.settings.DraftMls && (write.late || batch.generationFacts != nil) {
+		if recipient, err := sidecar.IdFromBytes(body.GetRecipient()); err == nil {
+			write.wakeReader = &recipient
+		}
 	}
 	return write, 0, true
 }
@@ -375,7 +377,7 @@ func (self *GkmEngine) serveWrapBatch(request *GkmRequest) {
 		return
 	}
 	deliveries := batchRequest.GetDeliveries()
-	if len(deliveries) == 0 || gkmWrapBatchMaxCount < len(deliveries) {
+	if len(deliveries) == 0 || self.settings.WrapBatchMaxCount < len(deliveries) {
 		request.BadRequest()
 		return
 	}
@@ -494,7 +496,7 @@ func (self *GkmEngine) putWraps(ctx context.Context, request *GkmRequest, writes
 			if write.beforePut != nil && !write.beforePut() {
 				return
 			}
-			winner, err := createGkmObject(ctx, request.Cluster, write.key, write.body, gkmDeliveryMaxByteCount)
+			winner, err := createGkmObject(ctx, request.Cluster, write.key, write.body, self.settings.DeliveryMaxByteCount)
 			testHookBarrier(BarrierWrapPutAfter, barrierKey)
 			switch {
 			case err != nil:
@@ -576,7 +578,7 @@ func (self *GkmEngine) serveWrapsRead(request *GkmRequest) {
 	prefix := GkmWrapRecipientPrefix(groupId, generation, c8, recipient)
 	reply := &protocol.GkmWrapsReply{}
 	read := func(key string) bool {
-		held, _, err := readGkmObject(request.Ctx, request.Cluster, key, gkmDeliveryMaxByteCount)
+		held, _, err := readGkmObject(request.Ctx, request.Cluster, key, self.settings.DeliveryMaxByteCount)
 		if errors.Is(err, sidecar.ErrBlobNotFound) {
 			return true
 		}
