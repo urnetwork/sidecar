@@ -2,8 +2,8 @@
 
 // The one reader of an activated route grant's sealed detail (acl_grant_route.go): a detail's prefixes masked and each
 // once across its cidrs and ip: destinations, its sidecar destinations' ports each once and none meaning every port,
-// and each way a grant gives nothing, the opener never asked for one whose action seals no detail. Synthetic values
-// only.
+// and each way a grant gives nothing, the opener never asked for one whose action seals no detail; and the save's ip:
+// tests and AclEngine, given one opener, answering a grant's every address at every port alike. Synthetic values only.
 
 package sidecar
 
@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/netip"
 	"slices"
 	"strings"
 	"testing"
@@ -97,5 +98,84 @@ func TestAclReadGrantRouteReadsADetailOneWay(t *testing.T) {
 		if text := unread.String(); text == "" || text == "does not read" || strings.ContainsAny(text, "0123456789") {
 			t.Errorf("reason %d reads %q", unread, text)
 		}
+	}
+}
+
+// The save's ip: tests and AclEngine read dana's activated route grant through amir's laptop one way: for each address
+// at each protocol and port, a save's accept of that address passes exactly where the engine's preview allows it
+// through amir's laptop and acl_check's Check takes it, and a deny of it passes exactly where they refuse it.
+func TestAclSaveAndEngineReadAnActivatedRouteGrantAlike(t *testing.T) {
+	type flow struct {
+		address    string
+		ipProtocol uint32
+		protocol   string
+		port       uint32
+	}
+	flows := []flow{}
+	for _, address := range []string{"198.51.100.1", "198.51.100.127", "198.51.100.128", "203.0.113.1", "203.0.113.15", "203.0.113.16", "192.0.2.1"} {
+		for _, port := range []struct {
+			ipProtocol uint32
+			protocol   string
+			port       uint32
+		}{{ipProtocol: aclIpProtocolTcp, protocol: "tcp", port: 22}, {ipProtocol: aclIpProtocolTcp, protocol: "tcp", port: 23}, {ipProtocol: aclIpProtocolUdp, protocol: "udp", port: 22}} {
+			flows = append(flows, flow{address: address, ipProtocol: port.ipProtocol, protocol: port.protocol, port: port.port})
+		}
+	}
+	dana, amir := aclTestsGrantLaptops()
+	checks := []string{}
+	for _, f := range flows {
+		checks = append(checks, fmt.Sprintf(`"ip:%s/32#route:%s:%d"`, f.address, f.protocol, f.port))
+	}
+	list := strings.Join(checks, ", ")
+	world := newAclTestsGrantWorld(t, `{ `+aclTestsGrantRequests+`, "tests": [
+    { "src": "sidecar:`+dana.String()+`", "accept": [`+list+`] },
+    { "src": "sidecar:`+dana.String()+`", "deny": [`+list+`] },
+  ] }`, true)
+	details := &testAclGrantDetails{details: map[string]*protocol.CanonicalActionDetail{
+		string(world.grantId): {Cidrs: []string{"198.51.100.0/25"}, GrantDst: []string{"ip:203.0.113.0/28", "sidecar:" + hex.EncodeToString(amir.Bytes()) + ":tcp:22"}},
+	}}
+	report := world.runWith(t, details)
+	failed := map[string]bool{}
+	for _, failure := range report.Failures {
+		failed[fmt.Sprintf("%s %d", failure.List, failure.Check)] = true
+	}
+
+	view := world.world.view()
+	view.pin = aclTestEnginePin(1, "save and engine")
+	state, err := NewAclState(world.world.compile(t), view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	local, err := CompileAclLocal(world.world.input())
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := NewAclEngine(dana, nil, nil, &AclEngineSettings{ClockSkew: 0})
+	if err := engine.InstallWithGrants(state, local, details); err != nil {
+		t.Fatal(err)
+	}
+	allowedCount := 0
+	for i, f := range flows {
+		address := netip.MustParseAddr(f.address)
+		routed := engine.AllowRoute(AclSidecarSubject(dana), address, f.ipProtocol, f.port, AclSidecarSubject(amir), aclTestNow)
+		if routed.Allowed {
+			allowedCount += 1
+		}
+		if accepted := !failed[fmt.Sprintf("accept %d", i)]; accepted != routed.Allowed {
+			t.Errorf("%s %s:%d: the save accepts %t, the engine allows %t", f.address, f.protocol, f.port, accepted, routed.Allowed)
+		}
+		if denied := !failed[fmt.Sprintf("deny %d", i)]; denied == routed.Allowed {
+			t.Errorf("%s %s:%d: the save denies %t, the engine allows %t", f.address, f.protocol, f.port, denied, routed.Allowed)
+		}
+		if f.ipProtocol == aclIpProtocolTcp && f.port == 22 {
+			checked := engine.Check(AclSidecarSubject(dana), protocol.AclAction_ACL_ACTION_ROUTE,
+				AclResource{Kind: AclResourceIp, Cidr: netip.PrefixFrom(address, 32)}, aclTestNow)
+			if checked.Allowed != routed.Allowed {
+				t.Errorf("%s: Check takes %t, the preview %t", f.address, checked.Allowed, routed.Allowed)
+			}
+		}
+	}
+	if allowedCount == 0 || allowedCount == len(flows) {
+		t.Errorf("the engine allowed %d of %d flows: they tell nothing apart", allowedCount, len(flows))
 	}
 }
