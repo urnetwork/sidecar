@@ -12,7 +12,9 @@
 //	          what it reads of evs is the config repo, which holds no versionless version
 //	refused   versioning past 2; 1 or 2 in a config or mailcfg repo, on a git-mode ref or on a creates-only ref (a
 //	          record-class stream, a deposit ref, the erasure ref); 1 in a push whose auth pin includes the repo's
-//	          lock (§8.8): the version is refused and alarms version_rule, naming its signer
+//	          lock (§8.8): the version is refused and alarms version_rule, naming its signer; a pin the reader no
+//	          longer retains leaves the lock unjudged (QD-1178), the lock rows here and under ignored taking the
+//	          version either way
 //	ignored   2 anywhere but under an index root, .ur-index/ on a file-mode ref or the ur/index ref; under an index
 //	          root, any file version that is not 2 but the root's settings file, and any path that is none of
 //	          §11.14's; on ur/lfs, an object that is not 1, or 0 in a locked repo, its settings file aside
@@ -72,6 +74,9 @@ type EvsVersioningContext struct {
 	Reserved EvsReservedRef
 	// The repo's lock stands in the authorization state at the push's auth pin (§8.8; AclState.RepoLocked there).
 	Locked bool
+	// The push's auth pin lies before what the reader retains, so whether the lock stood there is not judged
+	// (QD-1178): neither row that turns on the lock refuses or ignores the version.
+	LockUnjudged bool
 }
 
 // Format 2's reader, which EnableFormat2Reader installs.
@@ -171,7 +176,8 @@ func EvsCheckVersioning(context *EvsVersioningContext, names [][]byte, entry *pr
 		}
 		// in a locked repo the store writes 0, and a version written before the lock keeps its 1, which the lock
 		// row above refuses only in a push whose auth pin includes it
-		if versioning != want && !(versioning == protocol.EvsVersioning_EVS_VERSIONING_KEPT && !lfsSettings && context.Locked) {
+		locked := context.Locked || context.LockUnjudged
+		if versioning != want && !(versioning == protocol.EvsVersioning_EVS_VERSIONING_KEPT && !lfsSettings && locked) {
 			return fmt.Errorf("%w: versioning %d on ur/lfs", ErrEvsVersionIgnored, versioning)
 		}
 	}
@@ -197,7 +203,8 @@ func EvsCheckVersionShapeFormat2(entry *protocol.EvsEntryVersion) error {
 }
 
 // The context of a version statement wrote in repoId, at the statement's own auth pin: the repo's kind and whether its
-// lock stands there. reserved is the ref's, as the reader knows it.
+// lock stands there. reserved is the ref's, as the reader knows it. A pin before what the reader retains is not judged
+// (QD-1178): the repo's kind is the newest state's, which its creation fixed, and its lock at the pin is left unjudged.
 func (self *EvsVerifier) versioningContext(statement *EvsStatement, repoId Id, reserved EvsReservedRef) (*EvsVersioningContext, error) {
 	push := statement.Push
 	newest, err := self.config()
@@ -205,7 +212,11 @@ func (self *EvsVerifier) versioningContext(statement *EvsStatement, repoId Id, r
 		return nil, err
 	}
 	state, err := newest.At(push.GetAuth())
-	if err != nil {
+	unjudged := errors.Is(err, ErrGkmAuthNotRetained)
+	switch {
+	case unjudged:
+		state = newest
+	case err != nil:
 		return nil, fmt.Errorf("%w: its authorization pin: %w", ErrEvsStatementRefused, err)
 	}
 	repo := state.Repo(repoId)
@@ -213,11 +224,12 @@ func (self *EvsVerifier) versioningContext(statement *EvsStatement, repoId Id, r
 		return nil, fmt.Errorf("%w: a repo the state does not hold", ErrEvsStatementRefused)
 	}
 	return &EvsVersioningContext{
-		RepoKind: repo.GetKind(),
-		RefKind:  protocol.EvsRefKind(push.GetRefKind()),
-		RefMode:  protocol.EvsRefMode(push.GetRefMode()),
-		Reserved: reserved,
-		Locked:   repo.GetLock() == protocol.RepoVersioningLock_REPO_VERSIONING_LOCK_LOCKED,
+		RepoKind:     repo.GetKind(),
+		RefKind:      protocol.EvsRefKind(push.GetRefKind()),
+		RefMode:      protocol.EvsRefMode(push.GetRefMode()),
+		Reserved:     reserved,
+		Locked:       !unjudged && repo.GetLock() == protocol.RepoVersioningLock_REPO_VERSIONING_LOCK_LOCKED,
+		LockUnjudged: unjudged,
 	}, nil
 }
 
