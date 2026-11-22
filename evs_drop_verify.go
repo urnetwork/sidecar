@@ -338,7 +338,9 @@ func (self *evsFormat2Rules) dropOf(verifier *EvsVerifier, head *EvsVerifiedHead
 
 // Whether the DROP's signer may sign it at the statement's own auth pin: a repo admin; in an owner-bound repo a
 // consented device of its owner; for a drop, no lock standing there (AclState.MayDrop and RepoLockAllowsDrop over that
-// state's rows). An error refuses the statement.
+// state's rows). An error refuses the statement. A pin before what the reader retains is not judged (QD-1178): the
+// statement, which VerifyStatement took on its signature, still may not drop in a config or mailcfg repo, the kind its
+// creation fixed, and nothing else of its signer is judged.
 func evsDropSignedBy(verifier *EvsVerifier, statement *EvsStatement, repoId Id, cancel bool) error {
 	newest, err := verifier.config()
 	if err != nil {
@@ -346,7 +348,11 @@ func evsDropSignedBy(verifier *EvsVerifier, statement *EvsStatement, repoId Id, 
 	}
 	push := statement.Push
 	state, err := newest.At(push.GetAuth())
-	if err != nil {
+	unjudged := errors.Is(err, ErrGkmAuthNotRetained)
+	switch {
+	case unjudged:
+		state = newest
+	case err != nil:
 		return fmt.Errorf("%w: its authorization pin: %w", ErrEvsStatementRefused, err)
 	}
 	repo := state.Repo(repoId)
@@ -356,6 +362,8 @@ func evsDropSignedBy(verifier *EvsVerifier, statement *EvsStatement, repoId Id, 
 		return fmt.Errorf("%w: a DROP of a repo the state does not hold", ErrEvsStatementRefused)
 	case repo.GetKind() == protocol.RepoKind_REPO_KIND_CONFIG || repo.GetKind() == protocol.RepoKind_REPO_KIND_MAILCFG:
 		return fmt.Errorf("%w: a DROP in a config or mailcfg repo", ErrEvsStatementRefused)
+	case unjudged:
+		return nil
 	case !evsRepoAdmin(state, repo, signerId):
 		return fmt.Errorf("%w: a DROP by a non-admin", ErrEvsStatementRefused)
 	case aclRepoKindOwnerBound(repo.GetKind()) && !evsDropOwnerDevice(state, repo, signerId):
