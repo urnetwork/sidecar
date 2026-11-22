@@ -194,6 +194,9 @@ type GkmApi struct {
 	// each repo's batch, and the role its scope there carries
 	repoIdBatches map[Id]int
 	repoIdRoles   map[Id]string
+	// whether batchScopes hold an r, rw or admin scope, which a call on no repo presents: what the ReaderKey upkeep
+	// waits on after an upload that found none (accessScopes); set under stateLock with batchScopes
+	accessScopesHeld *MonitorValue[bool]
 }
 
 // A client of the gkm at args.GkmUrl.
@@ -212,13 +215,14 @@ func NewGkmApi(args *GkmApiArgs) (*GkmApi, error) {
 		settings = DefaultGkmSettings()
 	}
 	return &GkmApi{
-		baseUrl:       args.GkmUrl,
-		transport:     args.Transport,
-		serviceToken:  args.ServiceToken,
-		settings:      settings,
-		clock:         clockOrReal(args.Clock),
-		repoIdBatches: map[Id]int{},
-		repoIdRoles:   map[Id]string{},
+		baseUrl:          args.GkmUrl,
+		transport:        args.Transport,
+		serviceToken:     args.ServiceToken,
+		settings:         settings,
+		clock:            clockOrReal(args.Clock),
+		repoIdBatches:    map[Id]int{},
+		repoIdRoles:      map[Id]string{},
+		accessScopesHeld: NewMonitorValue(false),
 	}, nil
 }
 
@@ -247,11 +251,22 @@ func (self *GkmApi) SetRepoScopes(scopes []GkmRepoScope) {
 		repoIdBatches[scope.RepoId] = batch
 		repoIdRoles[scope.RepoId] = scope.Role
 	}
+	accessScopesHeld := slices.ContainsFunc(sorted, func(scope GkmRepoScope) bool { return scope.Role != GkmScopeRoleDeposit })
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	self.batchScopes = batchScopes
 	self.repoIdBatches = repoIdBatches
 	self.repoIdRoles = repoIdRoles
+	// a leaf lock, taken under stateLock so two calls leave it as their batches stand
+	self.accessScopesHeld.Set(accessScopesHeld)
+}
+
+// Whether the scopes the client's state gives it hold one a call on no repo can present, an r, rw or admin scope, as
+// a ReaderKey's upload needs (scopesFor), and a channel closed once that changes, armed at the same instant: what the
+// ReaderKey upkeep waits on after an upload that found none to present (ErrGkmNoScope), so it publishes the key as
+// soon as a state gives it one.
+func (self *GkmApi) accessScopes() (held bool, changed <-chan struct{}) {
+	return self.accessScopesHeld.Get()
 }
 
 // What one call presents: its token's scopes, and those of the one retry a 403 to them takes.
@@ -1003,7 +1018,7 @@ func (self *GkmApi) Welcomes(ctx context.Context) ([]*protocol.GkmWelcomeEntry, 
 	for _, scopes := range batches {
 		reply := &protocol.GkmWelcomesReply{}
 		// no narrowed retry: gkm leaves out a group whose repo's scope its state does not honor, refusing nothing
-		call :=&gkmCall{route: "GET /gkm/welcomes", method: http.MethodGet, path: "/gkm/welcomes", scopes: gkmCallScopes{scopes: scopes}, retry: true}
+		call := &gkmCall{route: "GET /gkm/welcomes", method: http.MethodGet, path: "/gkm/welcomes", scopes: gkmCallScopes{scopes: scopes}, retry: true}
 		if err := self.callMessage(ctx, call, reply); err != nil {
 			return nil, err
 		}

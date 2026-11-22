@@ -17,9 +17,19 @@
 //     reads (§10.6's ack row).
 //
 // One pass does each of these that is due, at start, every UpkeepInterval, at every resync of the hint intake and
-// at each refill a hint asks for. A step that fails waits for the next pass, and no step blocks another.
+// at each refill a hint asks for. A step that fails waits for the next pass, and no step blocks another, but for the
+// ReaderKey's upload, which is tried again between passes: no holder seals a delivery to a sidecar gkm serves no
+// ReaderKey for, so until it stands rotations stage nothing to this device and an admission's first wrap passes it
+// by. A network's first device makes its first upload before its state gives it a scope to present, or while the
+// token exchange and gkm are still loading its network's state, and its next pass is an hour off. So an upload that
+// failed is tried again ReaderKeyRetryWait later, each failed try in a row ReaderKeyRetryFactor times later up to
+// ReaderKeyRetryMaxWait, a 429's Retry-After at least, until a try or a pass uploads it; the backoff goes on across
+// passes, which a late ask may ask for once a LateAskInterval, and starts over only after an upload went up. One
+// that found no scope to present is tried again as soon as the api's scopes give it one (GkmApi's accessScopes),
+// where the api can tell. gkm's 400 and 401, which no try of the same bytes and token mends, wait for the next pass.
 //
-// Safe for concurrent use. Passes run one at a time, on the upkeep's own goroutine or a test's.
+// Safe for concurrent use. Passes and the ReaderKey's tries between them run one at a time, under passLock, so one
+// upload is in flight at most: on the upkeep's own goroutine, or a test's.
 
 package sidecar
 
@@ -87,6 +97,24 @@ type GkmUpkeepApi interface {
 	ReaderKey(ctx context.Context, sidecarId Id) (*bridge.Signed, error)
 	UploadKeyPackages(ctx context.Context, keyPackages [][]byte) error
 	Ack(ctx context.Context, repoId Id, groupId Id, epoch uint64) error
+}
+
+// What upkeep watches of an api that can tell (GkmApi): whether the client's scopes hold one a ReaderKey's upload can
+// present, and a channel closed once that changes, armed at the read. An api that cannot tell leaves an upload that
+// found no scope to the backoff.
+type gkmUpkeepScopes interface {
+	accessScopes() (held bool, changed <-chan struct{})
+}
+
+var _ gkmUpkeepScopes = (*GkmApi)(nil)
+
+// The ReaderKey upload's retry between passes (the file header): the backoff's wait as it stands, a 429's
+// Retry-After, which the next try waits out at least, and whether the last try found no scope to present. Never
+// changed once set: noteReaderKeyUpload replaces it.
+type gkmReaderKeyRetry struct {
+	backoff    time.Duration
+	retryAfter time.Duration
+	noScope    bool
 }
 
 // What NewGkmUpkeep takes.
@@ -216,7 +244,8 @@ type GkmUpkeep struct {
 	log      Logger
 	done     chan struct{}
 
-	// held across a pass, so passes run one at a time; never taken under stateLock
+	// held across a pass and across a ReaderKey try between passes, so they run one at a time; never taken under
+	// stateLock
 	passLock sync.Mutex
 
 	stateLock sync.Mutex
@@ -227,8 +256,12 @@ type GkmUpkeep struct {
 	// when the self-check last read gkm's copy, and each group's last ack
 	selfCheckedAt  time.Time
 	groupIdAckedAt map[Id]time.Time
+	// the ReaderKey upload's retry between passes, nil while none is due
+	readerKeyRetry *gkmReaderKeyRetry
 	// passes finished
 	passCount *MonitorValue[int]
+	// ReaderKey tries between passes finished
+	readerKeyRetryCount *MonitorValue[int]
 }
 
 // A running upkeep: a pass now, then every UpkeepInterval, at each resync and at each refill a hint asks for. It
@@ -256,16 +289,17 @@ func newGkmUpkeep(ctx context.Context, args *GkmUpkeepArgs) (*GkmUpkeep, error) 
 	}
 	cancelCtx, cancel := context.WithCancel(ctx)
 	self := &GkmUpkeep{
-		ctx:            cancelCtx,
-		cancel:         cancel,
-		args:           args,
-		settings:       settings,
-		clock:          clockOrReal(args.Clock),
-		log:            loggerOrDefault(args.Log),
-		done:           make(chan struct{}),
-		passAsked:      NewMonitorValue(0),
-		groupIdAckedAt: map[Id]time.Time{},
-		passCount:      NewMonitorValue(0),
+		ctx:                 cancelCtx,
+		cancel:              cancel,
+		args:                args,
+		settings:            settings,
+		clock:               clockOrReal(args.Clock),
+		log:                 loggerOrDefault(args.Log),
+		done:                make(chan struct{}),
+		passAsked:           NewMonitorValue(0),
+		groupIdAckedAt:      map[Id]time.Time{},
+		passCount:           NewMonitorValue(0),
+		readerKeyRetryCount: NewMonitorValue(0),
 	}
 	if args.Hints != nil {
 		args.Hints.SetHandler(protocol.GkmHintKind_GKM_HINT_KEY_PACKAGES_LOW, func(ctx context.Context, wake *GkmHintWake) {
@@ -293,24 +327,117 @@ func (self *GkmUpkeep) RefillKeyPackages() {
 	self.Refresh()
 }
 
-// The loop: a pass, then wait for UpkeepInterval or an ask.
+// The loop: a pass, then wait for UpkeepInterval or an ask, trying a ReaderKey upload that failed again meanwhile as
+// its retry comes due.
 func (self *GkmUpkeep) run() {
 	defer close(self.done)
 	for {
 		_, asked := self.passAsked.Get()
 		self.pass(self.ctx)
-		select {
-		case <-self.ctx.Done():
-			return
-		case <-asked:
-		case <-self.clock.After(self.settings.UpkeepInterval):
+		passDue := self.clock.After(self.settings.UpkeepInterval)
+		for waiting := true; waiting; {
+			retryDue, scopesChanged := self.readerKeyRetryWait()
+			select {
+			case <-self.ctx.Done():
+				return
+			case <-asked:
+				waiting = false
+			case <-passDue:
+				waiting = false
+			case <-retryDue:
+				self.retryReaderKey(self.ctx)
+			case <-scopesChanged:
+				self.retryReaderKey(self.ctx)
+			}
 		}
 	}
+}
+
+// What the loop waits on for the ReaderKey's next try between passes: retryDue fires once it is due, at the backoff's
+// wait or a 429's Retry-After, whichever is longer. A try that found no scope to present, where the api can tell,
+// waits on scopesChanged instead, which closes once the api's scopes change, and goes at once where a state gave it
+// one since. Both nil while no try is due.
+func (self *GkmUpkeep) readerKeyRetryWait() (retryDue <-chan time.Time, scopesChanged <-chan struct{}) {
+	retry := func() *gkmReaderKeyRetry {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		return self.readerKeyRetry
+	}()
+	if retry == nil {
+		return nil, nil
+	}
+	if scopes, ok := self.args.Api.(gkmUpkeepScopes); ok && retry.noScope {
+		held, changed := scopes.accessScopes()
+		if !held {
+			return nil, changed
+		}
+		return self.clock.After(0), nil
+	}
+	return self.clock.After(max(retry.backoff, retry.retryAfter)), nil
+}
+
+// One try of the ReaderKey step between passes, under passLock as a pass is, so one upload is in flight at most.
+func (self *GkmUpkeep) retryReaderKey(ctx context.Context) {
+	func() {
+		self.passLock.Lock()
+		defer self.passLock.Unlock()
+		err := self.keepReaderKey(ctx, self.clock.Now())
+		self.noteReaderKeyUpload(ctx, err)
+		if err != nil && self.log.V(1).Enabled() {
+			self.log.Infof("[gkm] ReaderKey upkeep, tried again: %v", err)
+		}
+	}()
+	self.readerKeyRetryCount.Update(func(count int) int { return count + 1 })
+}
+
+// Sets the ReaderKey's retry from how its step ended (the file header). None once it ended well, once ctx ended, for
+// gkm's 400 or 401, which no try of the same bytes and token mends, and with ReaderKeyRetryWait non-positive; else
+// the backoff's next wait: ReaderKeyRetryWait after a step that ended well, ReaderKeyRetryFactor times the last wait
+// after one that failed, up to ReaderKeyRetryMaxWait, so a pass does not start it over. A step that found no scope to
+// present waits for the api's scopes only while the api holds none, so an api that holds one by now is tried again
+// on the backoff and never in a loop with no wait.
+func (self *GkmUpkeep) noteReaderKeyUpload(ctx context.Context, err error) {
+	settings := self.settings
+	retries := err != nil && ctx.Err() == nil && 0 < settings.ReaderKeyRetryWait &&
+		!errors.Is(err, ErrGkmTokenRefused) && !IsGkmStatus(err, http.StatusBadRequest)
+	retryAfter := time.Duration(0)
+	if gkmError, ok := GkmErrorOf(err); ok && gkmError.Status == http.StatusTooManyRequests {
+		retryAfter = gkmError.RetryAfter
+	}
+	noScope := errors.Is(err, ErrGkmNoScope)
+	if scopes, ok := self.args.Api.(gkmUpkeepScopes); ok && noScope {
+		if held, _ := scopes.accessScopes(); held {
+			noScope = false
+		}
+	}
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if !retries {
+		self.readerKeyRetry = nil
+		return
+	}
+	backoff := settings.ReaderKeyRetryWait
+	if previous := self.readerKeyRetry; previous != nil {
+		maxWait := max(settings.ReaderKeyRetryMaxWait, settings.ReaderKeyRetryWait)
+		// grown in floating point and held under the cap before it is a Duration again, so no factor overflows it
+		grown := float64(previous.backoff) * max(1, settings.ReaderKeyRetryFactor)
+		backoff = maxWait
+		if grown < float64(maxWait) {
+			backoff = time.Duration(grown)
+		}
+	}
+	self.readerKeyRetry = &gkmReaderKeyRetry{backoff: backoff, retryAfter: retryAfter, noScope: noScope}
 }
 
 // How many passes have finished, and a channel that closes at the next: what a test waits on instead of sleeping.
 func (self *GkmUpkeep) Passes() (count int, changed chan struct{}) {
 	return self.passCount.Get()
+}
+
+// How many ReaderKey tries between passes have finished, and a channel that closes at the next: what a test waits on
+// instead of sleeping, as with Passes.
+func (self *GkmUpkeep) ReaderKeyRetries() (count int, changed chan struct{}) {
+	return self.readerKeyRetryCount.Get()
 }
 
 // Ends the loop and waits for it.
@@ -325,7 +452,9 @@ func (self *GkmUpkeep) pass(ctx context.Context) {
 	defer self.passLock.Unlock()
 	defer self.passCount.Update(func(count int) int { return count + 1 })
 	now := self.clock.Now()
-	if err := self.keepReaderKey(ctx, now); err != nil && self.log.V(1).Enabled() {
+	err := self.keepReaderKey(ctx, now)
+	self.noteReaderKeyUpload(ctx, err)
+	if err != nil && self.log.V(1).Enabled() {
 		self.log.Infof("[gkm] ReaderKey upkeep: %v", err)
 	}
 	if err := self.selfCheck(ctx, now); err != nil && self.log.V(1).Enabled() {
@@ -420,7 +549,9 @@ func (self *GkmUpkeep) keepReaderKey(ctx context.Context, now time.Time) error {
 		return err
 	}
 	if err := self.args.Api.UploadReaderKey(ctx, signed); err != nil {
-		// a parked device's waits for its lift, and a second within 24 h for its day: the next pass sends it
+		// tried again between passes (noteReaderKeyUpload): a parked device's until its lift, a second within 24 h
+		// after its day, and one that went before gkm loaded the network's state, or before a state gave this device a
+		// scope, within seconds
 		return err
 	}
 	current.uploaded = true

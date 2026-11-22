@@ -10,6 +10,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"maps"
 	"net/http"
 	"slices"
@@ -73,9 +74,16 @@ func (self *gkmTestSecrets) List(prefix string) ([]string, error) {
 
 // gkm as upkeep sees it: what it was sent, and answers a test sets.
 type gkmTestUpkeepApi struct {
-	stateLock          sync.Mutex
-	readerKeys         []*bridge.Signed
-	readerKeyErr       error
+	stateLock    sync.Mutex
+	readerKeys   []*bridge.Signed
+	readerKeyErr error
+	// what the next ReaderKey uploads answer, in order, before readerKeyErr does
+	readerKeyRefusals []error
+	// every ReaderKey upload, refused or not
+	readerKeyTries int
+	// when set, each ReaderKey upload tells entered and waits for release, outside the lock
+	readerKeyEntered   chan struct{}
+	readerKeyRelease   chan struct{}
 	served             *bridge.Signed
 	servedSet          bool
 	keyPackageUploads  [][][]byte
@@ -85,13 +93,35 @@ type gkmTestUpkeepApi struct {
 }
 
 func (self *gkmTestUpkeepApi) UploadReaderKey(ctx context.Context, readerKey *bridge.Signed) error {
+	entered, release := func() (chan struct{}, chan struct{}) {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		return self.readerKeyEntered, self.readerKeyRelease
+	}()
+	if entered != nil {
+		entered <- struct{}{}
+		<-release
+	}
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
+	self.readerKeyTries += 1
+	if 0 < len(self.readerKeyRefusals) {
+		err := self.readerKeyRefusals[0]
+		self.readerKeyRefusals = self.readerKeyRefusals[1:]
+		return err
+	}
 	if self.readerKeyErr != nil {
 		return self.readerKeyErr
 	}
 	self.readerKeys = append(self.readerKeys, readerKey)
 	return nil
+}
+
+// The ReaderKey uploads gkm took and the uploads tried, refused ones included.
+func (self *gkmTestUpkeepApi) readerKeyCounts() (taken int, tried int) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return len(self.readerKeys), self.readerKeyTries
 }
 
 // What gkm serves: what a test set, else the newest upload.
@@ -513,8 +543,301 @@ func TestGkmUpkeepRefillsAtAKeyPackagesLowHint(t *testing.T) {
 	}
 }
 
+// Waits until upkeep has finished more than after ReaderKey tries between passes.
+func awaitGkmUpkeepRetries(upkeep *GkmUpkeep, after int) {
+	for {
+		count, changed := upkeep.ReaderKeyRetries()
+		if after < count {
+			return
+		}
+		<-changed
+	}
+}
+
+// Waits until clock arms a wait of timeout, passing over the waits armed before it.
+func awaitGkmTestArmed(clock *gkmTestClock, timeout time.Duration) {
+	for armed := range clock.armed {
+		if armed == timeout {
+			return
+		}
+	}
+}
+
+// The fixture's upkeep with its loop running until the test ends.
+func (self *gkmUpkeepFixture) run() {
+	go self.upkeep.run()
+	self.t.Cleanup(self.upkeep.Close)
+}
+
+// The upkeep's ReaderKey retry as it stands, nil for none.
+func (self *gkmUpkeepFixture) readerKeyRetry() *gkmReaderKeyRetry {
+	self.upkeep.stateLock.Lock()
+	defer self.upkeep.stateLock.Unlock()
+	return self.upkeep.readerKeyRetry
+}
+
+// A network's first device makes its first ReaderKey upload while gkm is still loading the network's state, which gkm
+// refuses with 503 and then the token exchange with its own temporary refusal: the upkeep tries again a second later
+// and two seconds after that, and the key stands at gkm 3 s after the first try on the upkeep's clock, with no pass
+// between, the same key the keychain kept before the first try. Then no try is due and none is made, and the next
+// pass, an UpkeepInterval on, uploads nothing more.
+func TestGkmUpkeepTriesARefusedReaderKeyUploadAgainWithinSeconds(t *testing.T) {
+	fixture := newGkmUpkeepFixture(t, GkmUpkeepRole{})
+	fixture.api.readerKeyRefusals = []error{
+		&GkmError{Status: http.StatusServiceUnavailable},
+		errors.New("gkm POST /gkm/reader-key: no service token: sidecar api POST /oauth/token refused: 503 temporarily_unavailable"),
+	}
+	start := fixture.clock.Now()
+	fixture.run()
+	awaitGkmUpkeepPasses(fixture.upkeep, 0)
+	if taken, tried := fixture.api.readerKeyCounts(); taken != 0 || tried != 1 {
+		t.Fatalf("the first pass: %d ReaderKeys taken of %d tried", taken, tried)
+	}
+	digests := fixture.heldDigests()
+	if len(digests) != 1 || fixture.upkeep.CurrentReaderKeySha256() != nil {
+		t.Fatalf("after the refused upload: %d keys held", len(digests))
+	}
+	if retry := fixture.readerKeyRetry(); retry == nil || retry.backoff != time.Second {
+		t.Fatalf("the retry after the refused upload: %+v", retry)
+	}
+	awaitGkmTestArmed(fixture.clock, time.Second)
+	fixture.clock.Advance(time.Second)
+	awaitGkmUpkeepRetries(fixture.upkeep, 0)
+	if taken, tried := fixture.api.readerKeyCounts(); taken != 0 || tried != 2 {
+		t.Fatalf("the first try again: %d ReaderKeys taken of %d tried", taken, tried)
+	}
+	awaitGkmTestArmed(fixture.clock, 2*time.Second)
+	fixture.clock.Advance(2 * time.Second)
+	awaitGkmUpkeepRetries(fixture.upkeep, 1)
+	if taken, tried := fixture.api.readerKeyCounts(); taken != 1 || tried != 3 {
+		t.Fatalf("the second try again: %d ReaderKeys taken of %d tried", taken, tried)
+	}
+	if elapsed := fixture.clock.Now().Sub(start); elapsed != 3*time.Second {
+		t.Errorf("the ReaderKey stood %s after the first try", elapsed)
+	}
+	if count, _ := fixture.upkeep.Passes(); count != 1 {
+		t.Errorf("%d passes before the ReaderKey stood", count)
+	}
+	uploaded, _ := gkmTestReaderKeyOf(t, fixture.api.readerKeys[0])
+	if !bytes.Equal(uploaded, digests[0]) || !bytes.Equal(fixture.upkeep.CurrentReaderKeySha256(), uploaded) {
+		t.Error("the key that stood is not the one kept before the first try")
+	}
+	if retry := fixture.readerKeyRetry(); retry != nil {
+		t.Errorf("a retry is still due after the upload stood: %+v", retry)
+	}
+	fixture.clock.Advance(DefaultGkmSettings().UpkeepInterval - 3*time.Second)
+	awaitGkmUpkeepPasses(fixture.upkeep, 1)
+	if taken, tried := fixture.api.readerKeyCounts(); taken != 1 || tried != 3 {
+		t.Errorf("after the next pass: %d ReaderKeys taken of %d tried", taken, tried)
+	}
+	if count, _ := fixture.upkeep.ReaderKeyRetries(); count != 2 {
+		t.Errorf("%d tries between passes, want 2", count)
+	}
+}
+
+// The retry's wait: ReaderKeyRetryWait, twice as long each failed try in a row up to ReaderKeyRetryMaxWait, across a
+// pass too; a 429's Retry-After at least; none after gkm's 401 or 400 or an upload that stood, a later failure starting
+// over at ReaderKeyRetryWait; none with ReaderKeyRetryWait zero. An upload that found no scope to present, on an api
+// that cannot tell its scopes, waits the backoff too.
+func TestGkmUpkeepReaderKeyRetryBacksOffToItsCap(t *testing.T) {
+	fixture := newGkmUpkeepFixture(t, GkmUpkeepRole{})
+	ctx := context.Background()
+	backoff := func() time.Duration {
+		t.Helper()
+		retry := fixture.readerKeyRetry()
+		if retry == nil {
+			t.Fatal("no retry is due")
+		}
+		return retry.backoff
+	}
+	fixture.api.readerKeyErr = &GkmError{Status: http.StatusServiceUnavailable}
+	fixture.pass()
+	waits := []time.Duration{backoff()}
+	for i := 0; i < 6; i += 1 {
+		fixture.upkeep.retryReaderKey(ctx)
+		waits = append(waits, backoff())
+	}
+	fixture.pass()
+	waits = append(waits, backoff())
+	want := []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second, 32 * time.Second, time.Minute, time.Minute}
+	if !slices.Equal(waits, want) {
+		t.Fatalf("the waits %v, want %v", waits, want)
+	}
+
+	fixture.api.readerKeyErr = &GkmError{Status: http.StatusTooManyRequests, RetryAfter: 10 * time.Minute}
+	fixture.upkeep.retryReaderKey(ctx)
+	if retry := fixture.readerKeyRetry(); retry.backoff != time.Minute || retry.retryAfter != 10*time.Minute {
+		t.Fatalf("after a 429: %+v", retry)
+	}
+	retryDue, _ := fixture.upkeep.readerKeyRetryWait()
+	if retryDue == nil {
+		t.Fatal("no wait after a 429")
+	}
+	awaitGkmTestArmed(fixture.clock, 10*time.Minute)
+
+	for _, definite := range []error{
+		fmt.Errorf("%w: POST /gkm/reader-key", ErrGkmTokenRefused),
+		&GkmError{Status: http.StatusBadRequest},
+		nil,
+	} {
+		fixture.api.readerKeyErr = &GkmError{Status: http.StatusServiceUnavailable}
+		fixture.upkeep.retryReaderKey(ctx)
+		fixture.api.readerKeyErr = definite
+		fixture.upkeep.retryReaderKey(ctx)
+		if retry := fixture.readerKeyRetry(); retry != nil {
+			t.Errorf("a retry after %v: %+v", definite, retry)
+		}
+		if definite == nil {
+			break
+		}
+		fixture.api.readerKeyErr = &GkmError{Status: http.StatusServiceUnavailable}
+		fixture.upkeep.retryReaderKey(ctx)
+		if wait := backoff(); wait != time.Second {
+			t.Errorf("after %v the backoff starts at %s", definite, wait)
+		}
+	}
+
+	// a fresh key whose upload finds no scope to present, on an api that cannot tell its scopes
+	noScope := newGkmUpkeepFixture(t, GkmUpkeepRole{})
+	noScope.api.readerKeyErr = ErrGkmNoScope
+	noScope.pass()
+	if retry := noScope.readerKeyRetry(); retry == nil || !retry.noScope || retry.backoff != time.Second {
+		t.Fatalf("after no scope: %+v", retry)
+	}
+	if retryDue, scopesChanged := noScope.upkeep.readerKeyRetryWait(); retryDue == nil || scopesChanged != nil {
+		t.Error("an api that cannot tell its scopes waits on something else than the backoff")
+	}
+	// an api that says it holds a scope its uploads do not find is tried again on the backoff, never at once
+	inconsistent := newGkmUpkeepFixture(t, GkmUpkeepRole{})
+	inconsistent.upkeep.args.Api = &gkmTestHeldScopesApi{gkmTestUpkeepApi: inconsistent.api}
+	inconsistent.api.readerKeyErr = ErrGkmNoScope
+	inconsistent.pass()
+	if retry := inconsistent.readerKeyRetry(); retry == nil || retry.noScope || retry.backoff != time.Second {
+		t.Fatalf("after no scope with one held: %+v", retry)
+	}
+	if retryDue, scopesChanged := inconsistent.upkeep.readerKeyRetryWait(); retryDue == nil || scopesChanged != nil {
+		t.Error("an api that holds a scope its upload found none of is not tried on the backoff")
+	}
+	awaitGkmTestArmed(inconsistent.clock, time.Second)
+
+	settings := DefaultGkmSettings()
+	settings.ReaderKeyRetryWait = 0
+	off := newGkmUpkeepFixture(t, GkmUpkeepRole{})
+	off.upkeep.settings = settings
+	off.api.readerKeyErr = &GkmError{Status: http.StatusServiceUnavailable}
+	off.pass()
+	if retry := off.readerKeyRetry(); retry != nil {
+		t.Errorf("a retry with ReaderKeyRetryWait 0: %+v", retry)
+	}
+}
+
+// An api that says it holds a scope a ReaderKey's upload can present, though its uploads find none.
+type gkmTestHeldScopesApi struct {
+	*gkmTestUpkeepApi
+}
+
+func (self *gkmTestHeldScopesApi) accessScopes() (bool, <-chan struct{}) {
+	return true, make(chan struct{})
+}
+
+// The POSTs to /gkm/reader-key a fake gkm took.
+func gkmTestReaderKeyPosts(transport *gkmTestTransport) []*gkmTestRequest {
+	posts := []*gkmTestRequest{}
+	for _, request := range transport.taken() {
+		if request.method == http.MethodPost && request.path == "/gkm/reader-key" {
+			posts = append(posts, request)
+		}
+	}
+	return posts
+}
+
+// A network's first device starts its upkeep before any state gives it a repo scope, so its first upload finds no
+// scope to present ("gkm: no repo scope to present") and reaches no gkm. A deposit scope alone presents nothing for a
+// call on no repo and tries nothing; the state that first gives it an r scope has the key up at once, by the scope's
+// change and no clock moved, under a token carrying that scope.
+func TestGkmUpkeepPublishesTheReaderKeyWhenItFirstHasAScopeToPresent(t *testing.T) {
+	fixture := newGkmUpkeepFixture(t, GkmUpkeepRole{})
+	transport := &gkmTestTransport{}
+	tokens := newGkmTestTokens()
+	api := newGkmTestApi(t, transport, tokens, fixture.clock)
+	fixture.upkeep.args.Api = api
+	start := fixture.clock.Now()
+	fixture.run()
+	awaitGkmUpkeepPasses(fixture.upkeep, 0)
+	if posts := gkmTestReaderKeyPosts(transport); len(posts) != 0 {
+		t.Fatalf("%d uploads with no scope to present", len(posts))
+	}
+	if retry := fixture.readerKeyRetry(); retry == nil || !retry.noScope {
+		t.Fatalf("the retry after no scope: %+v", retry)
+	}
+	api.SetRepoScopes([]GkmRepoScope{{RepoId: NewId(), Role: GkmScopeRoleDeposit}})
+	repoId := NewId()
+	api.SetRepoScopes([]GkmRepoScope{{RepoId: NewId(), Role: GkmScopeRoleDeposit}, {RepoId: repoId, Role: GkmScopeRoleRead}})
+	awaitGkmUpkeepRetries(fixture.upkeep, 0)
+	if count, _ := fixture.upkeep.ReaderKeyRetries(); count != 1 {
+		t.Errorf("%d tries, the deposit scope's among them", count)
+	}
+	posts := gkmTestReaderKeyPosts(transport)
+	if len(posts) != 1 {
+		t.Fatalf("%d uploads once a scope stands", len(posts))
+	}
+	if !slices.Contains(tokens.scopesOf(posts[0].token), GkmRepoScope{RepoId: repoId, Role: GkmScopeRoleRead}.scope()) {
+		t.Errorf("the upload's token holds %v", tokens.scopesOf(posts[0].token))
+	}
+	signed := &bridge.Signed{}
+	if err := proto.Unmarshal(posts[0].body, signed); err != nil {
+		t.Fatal(err)
+	}
+	digests := fixture.heldDigests()
+	if uploaded, _ := gkmTestReaderKeyOf(t, signed); len(digests) != 1 || !bytes.Equal(uploaded, digests[0]) || !bytes.Equal(fixture.upkeep.CurrentReaderKeySha256(), uploaded) {
+		t.Error("the key that went up is not the one kept before the first pass")
+	}
+	if retry := fixture.readerKeyRetry(); retry != nil {
+		t.Errorf("a retry is still due after the upload stood: %+v", retry)
+	}
+	if now := fixture.clock.Now(); !now.Equal(start) {
+		t.Errorf("the clock moved to %s", now)
+	}
+}
+
+// One ReaderKey upload is in flight at most: a try between passes holds passLock across its upload, which every pass
+// takes, so a pass a test or the loop asks for meanwhile waits for it and then finds the key up.
+func TestGkmUpkeepKeepsOneReaderKeyUploadInFlight(t *testing.T) {
+	fixture := newGkmUpkeepFixture(t, GkmUpkeepRole{})
+	fixture.api.readerKeyRefusals = []error{&GkmError{Status: http.StatusServiceUnavailable}}
+	fixture.run()
+	awaitGkmUpkeepPasses(fixture.upkeep, 0)
+	awaitGkmTestArmed(fixture.clock, time.Second)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	func() {
+		fixture.api.stateLock.Lock()
+		defer fixture.api.stateLock.Unlock()
+		fixture.api.readerKeyEntered, fixture.api.readerKeyRelease = entered, release
+	}()
+	fixture.clock.Advance(time.Second)
+	<-entered
+	if fixture.upkeep.passLock.TryLock() {
+		fixture.upkeep.passLock.Unlock()
+		t.Fatal("a try between passes uploads without passLock")
+	}
+	func() {
+		fixture.api.stateLock.Lock()
+		defer fixture.api.stateLock.Unlock()
+		fixture.api.readerKeyEntered, fixture.api.readerKeyRelease = nil, nil
+	}()
+	close(release)
+	awaitGkmUpkeepRetries(fixture.upkeep, 0)
+	fixture.upkeep.Refresh()
+	awaitGkmUpkeepPasses(fixture.upkeep, 1)
+	if taken, tried := fixture.api.readerKeyCounts(); taken != 1 || tried != 2 {
+		t.Errorf("%d ReaderKeys taken of %d tried", taken, tried)
+	}
+}
+
 // GkmSettings refuses a ReaderKey valid past §10.5's 7 days or not past its replacement, a refill point past the
-// count, and a last-resort renewed no sooner than the set.
+// count, a last-resort renewed no sooner than the set, and a ReaderKey retry whose wait shrinks or stops below where
+// it starts.
 func TestGkmSettingsRefuseWhatTheDesignCannotTake(t *testing.T) {
 	if err := DefaultGkmSettings().validate(); err != nil {
 		t.Fatalf("the defaults: %v", err)
@@ -524,6 +847,8 @@ func TestGkmSettingsRefuseWhatTheDesignCannotTake(t *testing.T) {
 		func(settings *GkmSettings) { settings.ReaderKeyReplaceAge = settings.ReaderKeyLifetime },
 		func(settings *GkmSettings) { settings.KeyPackageLowCount = settings.KeyPackageCount + 1 },
 		func(settings *GkmSettings) { settings.KeyPackageLastResortRenewAge = settings.KeyPackageRenewAge },
+		func(settings *GkmSettings) { settings.ReaderKeyRetryFactor = 0.5 },
+		func(settings *GkmSettings) { settings.ReaderKeyRetryMaxWait = settings.ReaderKeyRetryWait / 2 },
 	} {
 		settings := DefaultGkmSettings()
 		edit(settings)

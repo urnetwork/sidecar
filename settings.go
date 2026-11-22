@@ -663,6 +663,21 @@ type GkmSettings struct {
 	// How often a sidecar reads its own ReaderKey back from gkm to compare it with those it signed: 24 h
 	// (g0-recheck-0-readerkey-forgery #2).
 	ReaderKeySelfCheckInterval time.Duration
+	// A ReaderKey upload that failed is tried again this long after, between passes, so a device whose upload went
+	// before its state gave it a scope to present, or while the token exchange or gkm was still loading its network's
+	// state, publishes its key within seconds and not at the next pass an hour on: no holder seals a delivery to a
+	// sidecar gkm serves no ReaderKey for, so until then rotations skip it and an admission's first wrap passes it by.
+	// 1 s, a reading, about what gkm takes to load a network it has not served yet. Each failed try in a row waits
+	// ReaderKeyRetryFactor times longer, up to ReaderKeyRetryMaxWait and at least a 429's Retry-After, until a try or
+	// a pass uploads it; gkm's 400 and 401, which no try of the same bytes and token mends, wait for the next pass.
+	// Non-positive tries again only at the next pass.
+	ReaderKeyRetryWait time.Duration
+	// What each failed try in a row multiplies the retry's wait by: 2. 1 keeps the wait; below 1 is refused.
+	ReaderKeyRetryFactor float64
+	// Where the retry's wait stops growing: 1 min, a reading, LateAskInterval's, so a device whose late ask waits on
+	// its ReaderKey is not held past the pace it asks at, and a device gkm keeps refusing, a parked one, makes about
+	// one more call a minute until a try or a pass lands. At least ReaderKeyRetryWait.
+	ReaderKeyRetryMaxWait time.Duration
 	// §10.6's KeyPackages row: the one-time KeyPackages a full set holds at gkm, 128.
 	KeyPackageCount int
 	// The same row's refill point: 32, below which gkm hints key-packages-low and a refill brings the set back to
@@ -793,6 +808,9 @@ func DefaultGkmSettings() *GkmSettings {
 		ReaderKeyLifetime:            7 * 24 * time.Hour,
 		ReaderKeyKeepAfterNotAfter:   30 * 24 * time.Hour,
 		ReaderKeySelfCheckInterval:   24 * time.Hour,
+		ReaderKeyRetryWait:           1 * time.Second,
+		ReaderKeyRetryFactor:         2,
+		ReaderKeyRetryMaxWait:        1 * time.Minute,
 		KeyPackageCount:              128,
 		KeyPackageLowCount:           32,
 		KeyPackageRenewAge:           90 * 24 * time.Hour,
@@ -836,12 +854,15 @@ func DefaultGkmSettings() *GkmSettings {
 }
 
 // What the walk of numbers cannot hold: a ReaderKey valid at most GkmReaderKeyLifetime and replaced before it lapses
-// (D-KEYS-25), a refill point inside the full count, a last-resort renewed before the set's renewal, and a rotation
-// draft drawn afresh before gkm's claim check would refuse its time.
+// (D-KEYS-25), a ReaderKey retry whose wait grows and stops where it starts or later, a refill point inside the full
+// count, a last-resort renewed before the set's renewal, and a rotation draft drawn afresh before gkm's claim check
+// would refuse its time.
 func (self *GkmSettings) validate() error {
 	switch {
 	case GkmReaderKeyLifetime < self.ReaderKeyLifetime || self.ReaderKeyLifetime <= self.ReaderKeyReplaceAge:
 		return fmt.Errorf("%w: Gkm.ReaderKeyLifetime past §10.5's bound or not past its replacement", errInvalidSettings)
+	case 0 < self.ReaderKeyRetryWait && (self.ReaderKeyRetryFactor < 1 || self.ReaderKeyRetryMaxWait < self.ReaderKeyRetryWait):
+		return fmt.Errorf("%w: Gkm.ReaderKeyRetryFactor below 1 or ReaderKeyRetryMaxWait below its first wait", errInvalidSettings)
 	case self.KeyPackageCount < self.KeyPackageLowCount:
 		return fmt.Errorf("%w: Gkm.KeyPackageLowCount past the full count", errInvalidSettings)
 	case self.KeyPackageRenewAge <= self.KeyPackageLastResortRenewAge:
