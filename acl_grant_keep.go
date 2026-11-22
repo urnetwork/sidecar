@@ -151,10 +151,10 @@ func (self *AclGrantFiler) priorGrant(action *StoredCanonicalAction, detail *Sid
 	if state == nil {
 		return nil, false
 	}
-	payloadSha256 := action.PayloadSha256()
 	var ended []byte
 	for _, candidate := range gate.inbox.candidates(action, detail, runId, agentId) {
-		grantId := AclGrantId(candidate.request.ApprovalId(), payloadSha256)
+		// the grant component fixes the grant_id from the request's action as stored, the spend's (aclGrantEffect)
+		grantId := AclGrantId(candidate.request.ApprovalId(), candidate.request.Action.PayloadSha256())
 		rule := state.grantRule(grantId[:])
 		if rule != nil && rule.activeAt(now.UnixMilli()) {
 			return bytes.Clone(grantId[:]), true
