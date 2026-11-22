@@ -18,7 +18,11 @@
 // longer holds. Connect does this when it replays this side's earlier Hello to a peer restarted under its kept
 // generation, after its report of the lost session ended this side's own. The peer's opens to this side would
 // otherwise meet INVALID under the Hello its gate holds, which QD-1185 reads as the listener's own, until
-// HelloCacheTimeout. A peer can prompt a Hello this way at most one in flight at a time, as it can by sending one.
+// HelloCacheTimeout. Finding no Hello standing or in flight and starting one are one step, under the state lock
+// EnsureHello takes its flight under, so such HelloResults arriving before the fresh Hello's answer verifies, as
+// the replay's answer and a late one from before the restart can, start one Hello between them, and one that finds
+// a Hello in flight starts nothing. A peer can prompt a Hello this way at most one in flight at a time, as it can
+// by sending one.
 
 package sidecar
 
@@ -136,36 +140,12 @@ func (self *Subprotocol) ensurePeerVerifiedWithin(ctx context.Context, clientId 
 	}
 	// a standing Hello whose peer the state has since revoked or parked is closed first (rpc_admission.go)
 	self.peerAdmissionStands(clientId)
-	var flight *helloFlight
-	owner := false
-	now := self.clock.Now()
-	func() {
-		self.stateLock.Lock()
-		defer self.stateLock.Unlock()
-		if identity, ok := self.sourceIdIdentities[clientId]; ok && now.Before(identity.expireTime) {
-			return
-		}
-		flight = self.helloFlights[clientId]
-		if flight == nil {
-			flight = &helloFlight{done: make(chan struct{})}
-			self.helloFlights[clientId] = flight
-			owner = true
-		}
-	}()
+	flight, owner := self.takeHelloFlight(clientId)
 	if flight == nil {
 		return nil
 	}
 	if owner {
-		func() {
-			defer func() {
-				self.stateLock.Lock()
-				defer self.stateLock.Unlock()
-				delete(self.helloFlights, clientId)
-				close(flight.done)
-			}()
-			flight.err = self.runHello(ctx, clientId, min(timeout, self.settings.DefaultCallTimeout))
-		}()
-		return flight.err
+		return self.runHelloFlight(ctx, clientId, flight, min(timeout, self.settings.DefaultCallTimeout))
 	}
 	select {
 	case <-flight.done:
@@ -175,6 +155,37 @@ func (self *Subprotocol) ensurePeerVerifiedWithin(ctx context.Context, clientId 
 	case <-self.ctx.Done():
 		return errSubprotocolClosed
 	}
+}
+
+// The Hello toward clientId a caller waits on, found or registered in one step under the state lock: nil while a
+// verified Hello stands, else the one in flight, which the caller joins, or a new one the caller owns and must run
+// with runHelloFlight. So one Hello at a time goes to a peer, however many callers and unasked HelloResults ask.
+func (self *Subprotocol) takeHelloFlight(clientId connect.Id) (flight *helloFlight, owner bool) {
+	now := self.clock.Now()
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if identity, ok := self.sourceIdIdentities[clientId]; ok && now.Before(identity.expireTime) {
+		return nil, false
+	}
+	if flight = self.helloFlights[clientId]; flight != nil {
+		return flight, false
+	}
+	flight = &helloFlight{done: make(chan struct{})}
+	self.helloFlights[clientId] = flight
+	return flight, true
+}
+
+// Runs the Hello of a flight takeHelloFlight gave its caller to own, waiting at most timeout, then ends the flight
+// for every caller that joined it.
+func (self *Subprotocol) runHelloFlight(ctx context.Context, clientId connect.Id, flight *helloFlight, timeout time.Duration) error {
+	defer func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		delete(self.helloFlights, clientId)
+		close(flight.done)
+	}()
+	flight.err = self.runHello(ctx, clientId, timeout)
+	return flight.err
 }
 
 // Sends one Hello and checks its answer, waiting at most timeout, and opens the gate on a HelloResult
@@ -239,13 +250,20 @@ func (self *Subprotocol) runHello(ctx context.Context, clientId connect.Id, time
 }
 
 // A HelloResult no Hello of this side's awaits came from peerId, on its source's worker: with no Hello standing toward a
-// sidecar, one fresh Hello runs on a goroutine of its own, joining any in flight (see the file header). An edge's
-// dispatcher, and a peer it knows as an edge, run none.
+// sidecar and none in flight, one fresh Hello runs on a goroutine of its own (see the file header). The worker takes
+// the flight itself, so the next unasked HelloResult it takes from the peer finds the Hello in flight and starts
+// nothing, and no goroutine waits on a Hello another started. An edge's dispatcher, and a peer it knows as an edge,
+// run none.
 func (self *Subprotocol) helloAnsweredUnasked(peerId connect.Id) {
-	if self.role != SubprotocolRoleSidecar || peerId == connect.ControlId || self.peerVerified(peerId) {
+	if self.role != SubprotocolRoleSidecar || peerId == connect.ControlId || self.ctx.Err() != nil {
 		return
 	}
 	if known, edge := self.streamPeerKind(peerId); known && edge {
+		return
+	}
+	flight, owner := self.takeHelloFlight(peerId)
+	if !owner {
+		// a Hello stands, or one in flight opens this side's gate when its answer verifies
 		return
 	}
 	self.stats.helloUnaskedCount.Add(1)
@@ -253,7 +271,7 @@ func (self *Subprotocol) helloAnsweredUnasked(peerId connect.Id) {
 	self.handlers.Add(1)
 	go func() {
 		defer self.handlers.Done()
-		if err := self.ensurePeerVerified(self.ctx, peerId); err != nil && self.log.V(1).Enabled() {
+		if err := self.runHelloFlight(self.ctx, peerId, flight, self.settings.DefaultCallTimeout); err != nil && self.log.V(1).Enabled() {
 			self.log.Infof("[subprotocol]fresh Hello to %s on its unasked HelloResult: %s\n", peerId, err)
 		}
 	}()
