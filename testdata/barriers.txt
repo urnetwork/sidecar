@@ -398,6 +398,8 @@ barrier gkm.group_owner.after gkmservice/groups.go
 barrier gkm.group_owner.before gkmservice/groups.go
 barrier gkm.kp_claim.after gkmservice/keypackages.go
 barrier gkm.kp_claim.before gkmservice/keypackages.go
+barrier gkm.late-ask.follow gkm_group.go
+barrier gkm.late-ask.follow.end gkm_group.go
 barrier gkm.pointer_put.after gkmservice/groupinfo.go
 barrier gkm.pointer_put.after gkmservice/retention.go
 barrier gkm.pointer_put.before gkmservice/groupinfo.go
