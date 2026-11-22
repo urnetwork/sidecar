@@ -96,9 +96,10 @@ type ConfigHeadReader interface {
 }
 
 // What a reader starting at a base b judges b's config head by, its anchor (DESIGN-DETAILS 5.2.4's StartAtBase;
-// QD-814): the genesis it trusts and the identity keys b's own rows admit. Such a reader holds no state before b, so
-// none at the authorization pins of that head's pushes. *ConfigState is one: StartAtBase passes the state b's rows
-// give, before b's tail re-applies.
+// QD-814, QD-1192): the genesis it trusts and the identity keys b admits. Such a reader holds no state before b, so
+// none at the authorization pins of that head's pushes. *ConfigState is one: StartAtBase passes S(b-1) as it rebuilds
+// it, b's rows with b's tail re-applied, so a sidecar the tail admits is admitted too, b's own signer among them where
+// b keeps the fold below its admission.
 type ConfigHeadAnchor interface {
 	// The Genesis A_0 hashes, whose config_repo_id names the repo the head is read from.
 	Genesis() *bridge.Genesis
