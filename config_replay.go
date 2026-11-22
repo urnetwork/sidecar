@@ -2,13 +2,14 @@
 // kept, or one that fell behind the retention point (DESIGN-DETAILS 5.2.4's StartAtBase). It starts at the newest base
 // b it holds: checks the fold rule against the base before it and the tail cap, and verifies b's signature under a
 // config writer at S(b-1) as it rebuilds that state, b's rows with b's tail re-applied by b's verdicts, or the genesis
-// state when no base precedes b; for a full reader, checks b's config head as its anchor (the head's genesis is the
-// log's, its records equal every held entry through folded_through, and the chain recomputed from the genesis through
-// the head's records, bases included, reaches the first held entry, the head's pushes judged by descent under the
-// identity keys that rebuilt state admits, QD-814); then loads b's rows and re-applies the tail folded_through+1..b-1
-// by b's tail_verdicts, judging nothing, taking every verdict there from the base, and applies b+1 on as a long-running
-// reader does. So a new device reaches a long-running reader's S(b) without judging a tail it could only judge on b's
-// head (questions team-m2-02-new-device-tail-verdicts and the replay ring's, which DESIGN-DETAILS 5.1 answers).
+// state when no base precedes b (QD-1192); for a full reader, checks b's config head as its anchor (the head's genesis
+// is the log's, its records equal every held entry through folded_through, and the chain recomputed from the genesis
+// through the head's records, bases included, reaches the first held entry, the head's pushes judged by descent under
+// the identity keys that rebuilt state admits, QD-814 and QD-1192); then loads b's rows and re-applies the tail
+// folded_through+1..b-1 by b's tail_verdicts, judging nothing, taking every verdict there from the base, and applies
+// b+1 on as a long-running reader does. So a new device reaches a long-running reader's S(b) without judging a tail it
+// could only judge on b's head (questions team-m2-02-new-device-tail-verdicts and the replay ring's, which
+// DESIGN-DETAILS 5.1 answers).
 //
 // A long-running reader judges b's signer at S(b-1), and b's rows alone are S(folded_through)'s: a writer keeps the
 // fold below its own admission when it publishes a policy-only base, as a personal network's second owner device does
@@ -247,10 +248,10 @@ func (self *ConfigLog) startAtBase(entries []*bridge.AuthEntry, chains [][sha256
 		return fmt.Errorf("%w: base %d: %w", ErrConfigFork, baseN, err)
 	}
 
-	// b's signer, judged where a reader present at b-1 judges it (applyBase): a config writer at S(b-1), whose identity
-	// key there verifies b's signature. b's rows alone are S(folded_through)'s, and a writer may keep the fold below its
-	// own admission, as a policy-only base does, so the tail is what admits it; and the tail is what revokes a writer
-	// those rows still name standing, which a reader present at b-1 forks on
+	// b's signer, judged where a reader present at b-1 judges it (applyBase; QD-1192): a config writer at S(b-1), whose
+	// identity key there verifies b's signature. b's rows alone are S(folded_through)'s, and a writer may keep the fold
+	// below its own admission, as a policy-only base does, so the tail is what admits it; and the tail is what revokes a
+	// writer those rows still name standing, which a reader present at b-1 forks on
 	rebuilt, err := self.stateBeforeBase(genesisState, start, header, rowsBytes, next, previousBase, entries, chains, baseIndex, verdicts)
 	if err != nil {
 		return fmt.Errorf("%w: base %d: %w", ErrConfigFork, baseN, err)
@@ -280,8 +281,8 @@ func (self *ConfigLog) startAtBase(entries []*bridge.AuthEntry, chains [][sha256
 			FoldedFrom:     entries[0].GetN(),
 			FirstPrevChain: [sha256.Size]byte(entries[0].GetPrevChain()),
 			Floor:          floor,
-			// S(b-1) as rebuilt, whose identity keys judge the head's pushes (QD-814): those of b's rows and of the
-			// sidecars b's tail admits, b's own signer among them where it pushed the head b names; the head reader
+			// S(b-1) as rebuilt, whose identity keys judge the head's pushes (QD-814, QD-1192): those of b's rows and of
+			// the sidecars b's tail admits, b's own signer among them where it pushed the head b names; the head reader
 			// reads only the genesis and those keys
 			Anchor: rebuilt,
 		})
