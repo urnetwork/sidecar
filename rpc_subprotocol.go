@@ -137,6 +137,8 @@ type Subprotocol struct {
 	// sources with a queue, which is to say a worker
 	sourceIdPeers      map[connect.Id]*subprotocolPeer
 	sourceIdIdentities map[connect.Id]subprotocolPeerIdentity
+	// the last verified Hello's serial, one up per Hello this dispatcher verified (rpc_peer.go)
+	helloSerial uint64
 	// request types and their functions, as setMessageTypeDispatch registered them
 	messageTypeDispatches map[uint32]*subprotocolDispatch
 	responseDispatch      *subprotocolDispatch
@@ -585,6 +587,11 @@ func (self *Subprotocol) receive(source connect.TransferPath, envelope *protocol
 				self.offerReply(streamRejectReply(sourceId, peer.TransferKey, envelope.StreamId, protocol.StreamRejectCode_SR_INVALID))
 				return
 			}
+			if envelope.Flags&EnvelopeFlagResponse != 0 {
+				// an answer to a call that went under a Hello which ended while it was in flight: nothing answers a
+				// response, so the call hears of it here and meets it with a fresh Hello (rpc_call.go)
+				self.noteAnswerRefused(sourceId, envelope.RequestId)
+			}
 			refuse(protocol.ErrorCode_ERR_UNAUTHENTICATED)
 			return
 		}
@@ -667,6 +674,10 @@ func (self *Subprotocol) process(item *subprotocolInbound, barrierKey string) {
 		self.stats.identityRefusedCount.Add(1)
 		if message.answerable() {
 			self.offerReply(refusalReply(item.sourceId, item.transferKey, whole.RequestId, whole.StreamId, protocol.ErrorCode_ERR_UNAUTHENTICATED))
+		} else if whole.Flags&EnvelopeFlagResponse != 0 {
+			// an answer to a call this side made, which the gate just closed under: the call hears of it, as at the
+			// inline gate, and its fresh Hello meets the state's refusal (rpc_call.go)
+			self.noteAnswerRefused(item.sourceId, whole.RequestId)
 		}
 		return
 	}
