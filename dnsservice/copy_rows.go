@@ -1,14 +1,27 @@
-// Copy rows (DNS-M5-02; D-DNS-6, D-DNS-11, §12.7): an owner that exists only because a write gave it a
-// child is an empty non-terminal, and an empty non-terminal blocks the wildcard above it (RFC 4592
-// §2.2), so blog stops answering from * the moment _sip._tcp.blog is written. Each such owner holds one
-// copy row, which a ZoneView answers with the wildcard's current records and TTLs (answer.go), so a
-// write to * or a health drop reaches it with no further write. The copy is added in the write that
-// makes the empty non-terminal and dropped in the write that ends it, by a child's removal or by the
-// owner gaining records of its own. A replying burner's <blabel>, given a child by its first DKIM
-// selector, is one such owner (D-DNS-11), and M9's writers plan through this same function.
+// Copy rows (DNS-M5-02; D-DNS-6, D-DNS-11, §12.7; QD-1190): any owner that exists blocks the wildcard
+// above it (RFC 4592 §2.2), so a name stops answering from * the moment it holds a record of its own or
+// a child. blog stops when _sip._tcp.blog is written, and so does web, a published host whose addresses
+// come only from *, when a site-verification TXT is written at web itself, which would leave its
+// visitors and a weak-mode custom host's CNAME to it (§12.8) with no address. So each such owner whose
+// own rows hold no A, AAAA or CNAME holds one copy row, which a ZoneView answers with the wildcard's
+// current records and TTLs for every type the owner holds none of (answer.go), so a write to * or a
+// health drop reaches it with no further write. An owner with addresses of its own keeps only those, and
+// one with a CNAME takes no copy, since nothing stands beside a CNAME (RFC 2181 §10.1; LintZoneWrite).
 //
-// A copy also stands at an owner whose only rows are canaries: a strong-mode probe's CAA (§12.8) makes
-// its host exist, and the copy keeps the host's addresses answering from * while the probe runs.
+// The copy is added in the write that makes the owner need it and dropped in the write that ends the
+// need: the owner's last row and last child gone, or an address or CNAME of its own written. Empty
+// non-terminals, a replying burner's <blabel> and _domainkey.<blabel> (D-DNS-11), a strong-mode probe's
+// CAA canary at its host (§12.8), and a user's TXT, MX or SRV at a host are all such owners, and M9's
+// writers plan through this same function.
+//
+// Two kinds of owner keep what they hold:
+//   - A Team scope's apex, one label below the zone's apex (owner decisions 40, 58), is a zone apex of its
+//     own, whose set writes *.<scope>. Like the zone's apex it takes no copy, so its addresses are its
+//     own @'s, there while the scope's apex is published (owner decision 335), and its existing stops the
+//     network's wildcard there as zone_scope.go says.
+//   - A suspension's withheld owner, and every name at or below it, keeps the copy rows it holds, neither
+//     added nor removed, so no write lands under a suspension and Restore puts back exactly what stood
+//     (§12.9).
 
 package dnsservice
 
@@ -31,11 +44,20 @@ func dnsParentName(name string) string {
 	return parent
 }
 
+// Whether a row of rrType keeps its owner from taking a copy: an address of its own, which it answers
+// alone, or a CNAME, beside which nothing stands.
+func dnsCopyBlockingType(rrType uint16) bool {
+	return rrType == dns.TypeA || rrType == dns.TypeAAAA || rrType == dns.TypeCNAME
+}
+
 // The copy rows a write must add and delete so that, once it commits, every owner strictly below apex
-// that is an empty non-terminal, or holds nothing but canaries, and that a wildcard would answer were
-// it absent, holds one copy row, and no other owner below apex holds one. rows is what the write
-// leaves: the zone's rows with the write's own upserts and deletes applied, copy rows included. Rows
-// outside apex are neither read nor planned.
+// that exists, whose own rows hold no A, AAAA or CNAME, and that a wildcard would answer were it absent,
+// holds one copy row, and no other owner below apex holds one (see the file header): an owner exists
+// while it holds a row other than a copy or has such an owner below it, as an empty non-terminal does.
+// A Team scope's apex holds none, and at and below a withheld owner nothing is planned. rows is what the
+// write leaves as edges will serve it: the zone's rows with the write's own upserts and deletes applied,
+// copy rows included, and rows a suspension or a downgrade withholds left out. Rows outside apex are
+// neither read nor planned.
 //
 // Which wildcard would answer is answer.go's copySource, applied here to the rows: up from the owner,
 // past names that exist only for their children, to the first *.<ancestor> that holds rows, stopping
@@ -43,32 +65,44 @@ func dnsParentName(name string) string {
 // alike whatever * holds. Both lists are in owner order.
 func PlanCopyRows(apex string, rows []DnsRecordSet) (upserts []DnsRecordSet, deletes []DnsRecordKey) {
 	apex = dns.CanonicalName(apex)
-	// below apex: every owner that holds a row other than a copy, and whether all its rows are canaries
-	ownCanaryOnly := map[string]bool{}
+	// below apex: every owner that holds a row other than a copy, and whether one of its rows keeps it
+	// from a copy; at or below apex, every withheld owner; and the scope sets' wildcards
+	ownBlocked := map[string]bool{}
 	copyOwners := map[string]bool{}
+	withheldOwners := map[string]bool{}
+	systemWildcards := map[string]bool{}
 	for _, row := range rows {
 		owner := dns.CanonicalName(row.Owner)
-		if owner == apex || !dns.IsSubDomain(apex, owner) {
+		if !dns.IsSubDomain(apex, owner) {
+			continue
+		}
+		if row.Kind == DnsRecordKindWithheld {
+			withheldOwners[owner] = true
+		}
+		if owner == apex {
 			continue
 		}
 		if row.Kind == DnsRecordKindCopy {
 			copyOwners[owner] = true
 			continue
 		}
-		canaryOnly, held := ownCanaryOnly[owner]
-		ownCanaryOnly[owner] = (!held || canaryOnly) && row.Kind == DnsRecordKindCanary
-	}
-	// every name strictly between apex and an owner with rows of its own: the empty non-terminals
-	// unless they hold rows themselves
-	parentNames := map[string]bool{}
-	for owner := range ownCanaryOnly {
-		for name := dnsParentName(owner); name != apex && name != ""; name = dnsParentName(name) {
-			parentNames[name] = true
+		ownBlocked[owner] = ownBlocked[owner] || dnsCopyBlockingType(row.Type)
+		if row.Kind == DnsRecordKindSystem && strings.HasPrefix(owner, "*.") {
+			systemWildcards[owner] = true
 		}
 	}
 	holdsOwnRows := func(name string) bool {
-		_, held := ownCanaryOnly[name]
+		_, held := ownBlocked[name]
 		return held
+	}
+	// every name that exists: the owners with rows of their own and each name strictly between apex
+	// and one of them, an empty non-terminal unless it holds rows itself
+	names := map[string]bool{}
+	for owner := range ownBlocked {
+		names[owner] = true
+		for name := dnsParentName(owner); name != apex && name != ""; name = dnsParentName(name) {
+			names[name] = true
+		}
 	}
 	covered := func(name string) bool {
 		for ancestor := dnsParentName(name); ancestor != ""; ancestor = dnsParentName(ancestor) {
@@ -81,24 +115,35 @@ func PlanCopyRows(apex string, rows []DnsRecordSet) (upserts []DnsRecordSet, del
 		}
 		return false
 	}
+	// a Team scope's apex: directly below apex, with its set's system rows at its own wildcard
+	scopeApex := func(name string) bool {
+		return dnsParentName(name) == apex && systemWildcards["*."+name]
+	}
+	// at or below a withheld owner, apex's included: what a suspension holds
+	suspended := func(name string) bool {
+		for ancestor := name; ancestor != ""; ancestor = dnsParentName(ancestor) {
+			if withheldOwners[ancestor] {
+				return true
+			}
+			if ancestor == apex {
+				return false
+			}
+		}
+		return false
+	}
 	wantCopies := map[string]bool{}
-	for name := range parentNames {
-		if !holdsOwnRows(name) && covered(name) {
+	for name := range names {
+		if !ownBlocked[name] && !scopeApex(name) && covered(name) {
 			wantCopies[name] = true
 		}
 	}
-	for owner, canaryOnly := range ownCanaryOnly {
-		if canaryOnly && covered(owner) {
-			wantCopies[owner] = true
-		}
-	}
 	for owner := range wantCopies {
-		if !copyOwners[owner] {
+		if !copyOwners[owner] && !suspended(owner) {
 			upserts = append(upserts, DnsRecordSet{Owner: owner, Type: DnsCopyType, Kind: DnsRecordKindCopy})
 		}
 	}
 	for owner := range copyOwners {
-		if !wantCopies[owner] {
+		if !wantCopies[owner] && !suspended(owner) {
 			deletes = append(deletes, DnsRecordKey{Owner: owner, Type: DnsCopyType})
 		}
 	}
