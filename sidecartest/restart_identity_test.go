@@ -12,12 +12,14 @@
 // timers, so the bounds are real time, each one a broken run's, never a sleep.
 //
 // In the first test the restarted daemon opens the stream, as the restarted edge does in the edge's test, so its own
-// first sends start the pair's new TLS session. In the waiting test the restarted daemon only listens, and the peer opens
-// first over its stale session. That took about two minutes before QD-1176: the peer's re-handshake with the restarted
-// responder waited behind the records sealed under the epoch it demoted, and its earlier attempts' records met the
-// restarted responder's TLS state, until connect's timeouts ended the session. Connect's per-peer session now recovers
-// against a restarted responder at once, and the peer's open meets the restarted gate, which holds no Hello with it,
-// with one fresh Hello.
+// first sends start the pair's new TLS session. In the waiting test the restarted daemon only answers, and the peer
+// reaches it first over its stale session. That took about two minutes before QD-1176: the peer's re-handshake with the
+// restarted responder waited behind the records sealed under the epoch it demoted, and its earlier attempts' records met
+// the restarted responder's TLS state, until connect's timeouts ended the session. Connect's per-peer session now
+// recovers against a restarted responder at once. The peer reaches the waiting daemon with a call, which meets the
+// restarted gate's UNAUTHENTICATED with one fresh Hello. A stream open meets the gate's INVALID instead, while the peer's
+// Hello with the daemon still stands, and question connect-restarted-responder-stale-hello-open asks how an opener
+// should recover from that.
 
 package sidecartest
 
@@ -245,10 +247,10 @@ func TestRestartedSidecarIsReachedAtOnceUnderItsKeptGeneration(t *testing.T) {
 }
 
 // The restarted daemon waits, as a tls/ or smtp/ listener does, which edges reach and which never dials them: its new
-// dispatcher listens again and sends nothing, and the peer, which still holds its session to the daemon's client id and
-// the send sequence its held write keeps, opens the stream after the restart. The stream opens, and carries bytes both
-// ways, within RecoveryTimeout of the restart, which takes connect's per-peer session recovering against a restarted
-// responder (QD-1176): the peer's re-handshake reaches the restarted responder rather than waiting out its timeouts.
+// dispatcher answers a call and sends nothing, and the peer, which still holds its session to the daemon's client id
+// and the send sequence its held write keeps, calls it after the restart. The call is answered within RecoveryTimeout
+// of the restart, which takes connect's per-peer session recovering against a restarted responder (QD-1176): the peer's
+// re-handshake reaches the restarted responder rather than waiting out its timeouts.
 func TestWaitingRestartedSidecarIsReachedAtOnceUnderItsKeptGeneration(t *testing.T) {
 	settings := defaultRestartIdentitySettings()
 	net := newTestNet(t)
@@ -260,22 +262,21 @@ func TestWaitingRestartedSidecarIsReachedAtOnceUnderItsKeptGeneration(t *testing
 	daemon, peer := sidecars[0], sidecars[1]
 	daemonClientId := daemon.ClientId()
 	generation := daemon.Sidecar().Status().Generation
-	listen := func() <-chan *sidecar.StreamIncoming {
-		incomings := make(chan *sidecar.StreamIncoming, 8)
-		remove, err := daemon.Subprotocol().Listen(settings.Target, func(ctx context.Context, incoming *sidecar.StreamIncoming) error {
-			incomings <- incoming
-			return nil
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(remove)
-		return incomings
+	incomings := make(chan *sidecar.StreamIncoming, 8)
+	remove, err := daemon.Subprotocol().Listen(settings.Target, func(ctx context.Context, incoming *sidecar.StreamIncoming) error {
+		incomings <- incoming
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
+	t.Cleanup(remove)
 
+	// the peer's session with the daemon carries its stream both ways, so the peer holds an established epoch toward
+	// the daemon's client id, and a Hello with it
 	stepCtx, cancelStep := context.WithTimeout(t.Context(), settings.StepTimeout)
 	defer cancelStep()
-	stream, incoming := restartIdentityOpen(t, stepCtx, peer, daemonClientId, settings.Target, listen())
+	stream, incoming := restartIdentityOpen(t, stepCtx, peer, daemonClientId, settings.Target, incomings)
 	if _, err := incoming.Stream.Write([]byte("before")); err != nil {
 		t.Fatal(err)
 	}
@@ -294,19 +295,21 @@ func TestWaitingRestartedSidecarIsReachedAtOnceUnderItsKeptGeneration(t *testing
 	if daemon.ClientId() != daemonClientId || daemon.Sidecar().Status().Generation != generation {
 		t.Fatal("the restarted daemon runs another generation")
 	}
-	incomings := listen()
+	if _, err := daemon.Subprotocol().Handle(testSubprotocolCallType, func(ctx context.Context, request *sidecar.SubprotocolRequest) ([]byte, error) {
+		return append(bytes.Clone(request.Body), []byte(" answered")...), nil
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
 	recoveryCtx, cancelRecovery := context.WithDeadline(t.Context(), restartTime.Add(settings.RecoveryTimeout))
 	defer cancelRecovery()
-	restartedStream, restartedIncoming := restartIdentityOpen(t, recoveryCtx, peer, daemonClientId, settings.Target, incomings)
-	if _, err := restartedIncoming.Stream.Write([]byte("after")); err != nil {
-		t.Fatal(err)
+	answer, err := peer.Subprotocol().Call(recoveryCtx, sidecar.Id(daemonClientId), testSubprotocolCallType, []byte("after"), nil)
+	if err != nil {
+		t.Fatalf("the peer's call to the waiting restarted daemon: %v", err)
 	}
-	restartIdentityRead(t, restartedStream, restartTime.Add(settings.RecoveryTimeout), "after", "the peer after the restart")
-	if _, err := restartedStream.Write([]byte("peer")); err != nil {
-		t.Fatal(err)
+	if string(answer) != "after answered" {
+		t.Fatalf("the restarted daemon answered %q", answer)
 	}
-	restartIdentityRead(t, restartedIncoming.Stream, restartTime.Add(settings.RecoveryTimeout), "peer", "the restarted daemon")
-	t.Logf("the peer's stream to the waiting restarted daemon carried bytes both ways %s after its start", time.Since(restartTime))
+	t.Logf("the waiting restarted daemon answered the peer's call %s after its start", time.Since(restartTime))
 }
 
 // A refused refresh ends generation 1, and the person's re-enrollment binds generation 2, a new client: its connect
