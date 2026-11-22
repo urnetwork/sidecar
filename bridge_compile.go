@@ -25,11 +25,16 @@
 // Shares (bridge_compile_share.go): a host's rules carry the shares it serves from its grant files and their pinned
 // tables, and a sender's table an entry of each alias in force it may use, linked to the alias's host.
 //
+// Activated grants (bridge_compile_grants.go): a requested route grant's prefixes and ports ride its action's sealed
+// detail, which the compile opens under the config keys it holds, as the save's ip: tests do (owner decision 679), so
+// a grant gives a sender's entries and a host's route and exit rows by its detail, and one whose detail does not open
+// here gives none; a body whose generation is not held is waited for as a ledger body's is.
+//
 // Deferred to the review phase, as BRIDGE-M4-23's ledger was drafted: the ledger is opened from rows decoded into
 // memory, so a compile holds the ledger rather than only 12.2.4's wanted rows (CompileBounded).
 //
-// testHookSecret runs where a body's key derives, inside OpenConfigBody. On every leg, the ios_extension legs'
-// included (DESIGN-DETAILS 4.7), with no connect import.
+// testHookSecret runs where a body's or a grant detail's key derives, inside OpenConfigBody. On every leg, the
+// ios_extension legs' included (DESIGN-DETAILS 4.7), with no connect import.
 
 package sidecar
 
@@ -303,8 +308,12 @@ type bridgeCompiler struct {
 	state    *ConfigState
 	acl      *AclState
 	aclLocal *AclLocalPolicy
-	// Includes cold-start grants recovered from the authenticated head at this pin.
+	// Each activated grant's action as stored, by grant id, those recovered from the authenticated head at this pin
+	// for a cold start included: the sealed details of dial grants' ports and route grants' prefixes and ports.
 	grantActions map[string][]byte
+	// Each activated route grant's opened detail, nil for one that did not open here, by grant id: read once a
+	// compile (bridge_compile_grants.go).
+	grantRoutes map[string]*AclLocalRule
 	// t, S(n)'s time, as ms and as a time
 	t   int64
 	now time.Time
@@ -355,6 +364,7 @@ func CompileBridgeState(view BridgeConfigView, local *BridgeCompileLocal, settin
 		acl:          view.Acl(),
 		aclLocal:     view.AclLocal(),
 		grantActions: state.grantActionsAtHead(view.Head()),
+		grantRoutes:  map[string]*AclLocalRule{},
 		t:            state.TimeMs(),
 		now:          time.UnixMilli(state.TimeMs()),
 		self:         local.SidecarId,

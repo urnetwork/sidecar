@@ -45,6 +45,7 @@ api_token_source.go
 api_transport.go
 api_transport_connect.go
 bridge_compile.go
+bridge_compile_grants.go
 bridge_compile_local.go
 bridge_compile_rows.go
 bridge_compile_share.go
