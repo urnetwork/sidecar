@@ -12,6 +12,13 @@
 // this client (QD-1185, rpc_peer_session.go), and EnsureHello runs a new one when none stands, one at a time
 // per peer: a second caller joins the first's. Both sides may send Hello at once: each answers the other's,
 // so the pair converges.
+//
+// A HelloResult that no Hello of this side's awaits, from a sidecar this side holds no Hello with, runs a fresh
+// one at once (QD-1197). It is the peer's word that its gate just opened to this side under a Hello this side no
+// longer holds. Connect does this when it replays this side's earlier Hello to a peer restarted under its kept
+// generation, after its report of the lost session ended this side's own. The peer's opens to this side would
+// otherwise meet INVALID under the Hello its gate holds, which QD-1185 reads as the listener's own, until
+// HelloCacheTimeout. A peer can prompt a Hello this way at most one in flight at a time, as it can by sending one.
 
 package sidecar
 
@@ -229,6 +236,27 @@ func (self *Subprotocol) runHello(ctx context.Context, clientId connect.Id, time
 	}
 	self.forgetPeer(clientId)
 	return errHelloAnswer
+}
+
+// A HelloResult no Hello of this side's awaits came from peerId, on its source's worker: with no Hello standing toward a
+// sidecar, one fresh Hello runs on a goroutine of its own, joining any in flight (see the file header). An edge's
+// dispatcher, and a peer it knows as an edge, run none.
+func (self *Subprotocol) helloAnsweredUnasked(peerId connect.Id) {
+	if self.role != SubprotocolRoleSidecar || peerId == connect.ControlId || self.peerVerified(peerId) {
+		return
+	}
+	if known, edge := self.streamPeerKind(peerId); known && edge {
+		return
+	}
+	self.stats.helloUnaskedCount.Add(1)
+	// a worker adds its goroutine before Close joins the handlers, since the workers are joined first
+	self.handlers.Add(1)
+	go func() {
+		defer self.handlers.Done()
+		if err := self.ensurePeerVerified(self.ctx, peerId); err != nil && self.log.V(1).Enabled() {
+			self.log.Infof("[subprotocol]fresh Hello to %s on its unasked HelloResult: %s\n", peerId, err)
+		}
+	}()
 }
 
 // The responder's half, on the source's worker: checks the peer's Hello, and opens the gate and answers

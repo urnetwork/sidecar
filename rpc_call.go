@@ -180,6 +180,9 @@ func (self *Subprotocol) dispatchResponse(ctx context.Context, message *subproto
 	}()
 	if pending == nil {
 		self.stats.unroutedCount.Add(1)
+		if protocol.MessageType(message.envelope.Type) == protocol.MessageType_HELLO_RESULT && message.envelope.Flags&EnvelopeFlagError == 0 {
+			self.helloAnsweredUnasked(message.sourceId)
+		}
 		return
 	}
 	response := &rpcResponse{
