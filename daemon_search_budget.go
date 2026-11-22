@@ -8,13 +8,18 @@
 //
 //	rate       RemoteRequesterRate a requester: a token bucket a sidecar_id, kept in memory while it is not full
 //	cpu        RemoteCpuPerMinute over a sliding RemoteCpuWindow for all remote work, measured as the time requests
-//	           hold a compute slot on the budget's clock (serving reads nothing from evs, api or gkm, so that time is
-//	           compute), the slots still held counting what they have held so far
+//	           hold a compute slot on the budget's CPU meter (serving reads nothing from evs, api or gkm, so that time
+//	           is compute), the slots still held counting what they have held so far
 //	slots      RemoteSearchCount computing at once; past it at most RemoteQueueCount wait, each at most
 //	           RemoteQueueTimeout, first come first served; the next past that, or a wait that times out, is refused
-//	page       PageCpu and PageCandidateCount a page (SidecarRemotePage)
+//	page       PageCpu, on the CPU meter, and PageCandidateCount a page (SidecarRemotePage)
 //	memory     RemoteSearchMemoryByteCount a computing search (SidecarRemoteAdmission.Reserve)
 //	cursors    RemoteCursorCount open over every requester, the least recently used ended past it (AddCursor)
+//
+// The CPU meter is the budget's clock. The window, the rate and the queue's waits stay on the clock even where the
+// sidecar_testhooks build gives the meter apart (NewSearchTestRemoteBudget): a search world moves its fake clock for a
+// rate's refill or a timeout, and on the one clock a slot held across that move would count all of it as compute that
+// no handler spent.
 //
 // The server calls Admit at step 2, before it reads the body, in step 2's order: the rate, then the CPU, then a slot.
 // Every refusal is a *SidecarRemoteRefusal naming when to come back, which answers RESOURCE_EXHAUSTED with that
@@ -75,6 +80,8 @@ type SidecarRemoteBudget struct {
 type remoteBudgetPool struct {
 	settings *SidecarSearchSettings
 	clock    Clock
+	// the CPU meter: what a slot's compute time and a page's PageCpu are measured on
+	cpuClock Clock
 
 	stateLock sync.Mutex
 	// the admissions holding a slot
@@ -116,17 +123,27 @@ type remoteBudgetCursor struct {
 	end func()
 }
 
-// A budget under settings' Remote* fields, on clock (nil: real time): one a daemon.
+// A budget under settings' Remote* fields, on clock (nil: real time), which is its CPU meter too: one a daemon.
 func NewSidecarRemoteBudget(settings *SidecarSearchSettings, clock Clock) (*SidecarRemoteBudget, error) {
+	return newSidecarRemoteBudget(settings, clock, nil)
+}
+
+// A budget on clock whose CPU meter is cpuClock, nil for clock itself.
+func newSidecarRemoteBudget(settings *SidecarSearchSettings, clock Clock, cpuClock Clock) (*SidecarRemoteBudget, error) {
 	if settings == nil || settings.RemoteSearchCount <= 0 || settings.RemoteQueueCount < 0 || settings.RemoteQueueTimeout <= 0 ||
 		settings.RemoteCpuPerMinute <= 0 || settings.RemoteCpuWindow <= 0 || settings.RemoteCursorCount <= 0 ||
 		settings.RemoteRequesterRate.Count <= 0 || settings.RemoteRequesterRate.Burst <= 0 || settings.RemoteRequesterRate.Interval <= 0 ||
 		settings.RemoteSearchMemoryByteCount <= 0 || settings.PageCpu <= 0 || settings.PageCandidateCount <= 0 {
 		return nil, fmt.Errorf("%w: the remote search budget's settings", errInvalidSettings)
 	}
+	clock = clockOrReal(clock)
+	if cpuClock == nil {
+		cpuClock = clock
+	}
 	return &SidecarRemoteBudget{pool: &remoteBudgetPool{
 		settings:  settings,
-		clock:     clockOrReal(clock),
+		clock:     clock,
+		cpuClock:  cpuClock,
 		computing: map[*SidecarRemoteAdmission]bool{},
 		buckets:   map[Id]*remoteBudgetBucket{},
 		cursors:   list.New(),
@@ -164,8 +181,9 @@ func (self *remoteBudgetPool) pruneBucketsWithLock(now time.Time) {
 	}
 }
 
-// The compute time spent within the window ending now: what slots gave back, and what the slots still held have held.
-func (self *remoteBudgetPool) cpuSpentWithLock(now time.Time) time.Duration {
+// The compute time spent within the window ending now: what slots gave back, and what the slots still held have held
+// by cpuNow, the CPU meter's reading.
+func (self *remoteBudgetPool) cpuSpentWithLock(now time.Time, cpuNow time.Time) time.Duration {
 	since := now.Add(-self.settings.RemoteCpuWindow)
 	kept := self.charges[:0]
 	spent := time.Duration(0)
@@ -177,7 +195,7 @@ func (self *remoteBudgetPool) cpuSpentWithLock(now time.Time) time.Duration {
 	}
 	self.charges = kept
 	for admission := range self.computing {
-		spent += now.Sub(admission.admittedAt)
+		spent += cpuNow.Sub(admission.cpuFrom)
 	}
 	return spent
 }
@@ -200,7 +218,7 @@ func (self *remoteBudgetPool) cpuRetryWithLock(now time.Time, spent time.Duratio
 func (self *SidecarRemoteBudget) Admit(ctx context.Context, requesterId Id) (*SidecarRemoteAdmission, error) {
 	pool := self.pool
 	settings := pool.settings
-	now := pool.clock.Now()
+	now, cpuNow := pool.clock.Now(), pool.cpuClock.Now()
 	waiter, admission, refusal := func() (*remoteBudgetWaiter, *SidecarRemoteAdmission, *SidecarRemoteRefusal) {
 		pool.stateLock.Lock()
 		defer pool.stateLock.Unlock()
@@ -212,11 +230,11 @@ func (self *SidecarRemoteBudget) Admit(ctx context.Context, requesterId Id) (*Si
 		}
 		bucket.tokens -= 1
 		defer pool.pruneBucketsWithLock(now)
-		if spent := pool.cpuSpentWithLock(now); settings.RemoteCpuPerMinute <= spent {
+		if spent := pool.cpuSpentWithLock(now, cpuNow); settings.RemoteCpuPerMinute <= spent {
 			return nil, nil, &SidecarRemoteRefusal{Reason: SidecarRemoteRefusedCpu, RetryAfter: pool.cpuRetryWithLock(now, spent)}
 		}
 		if len(pool.computing) < settings.RemoteSearchCount && len(pool.waiters) == 0 {
-			admission := self.admitWithLock(now, 0)
+			admission := self.admitWithLock(cpuNow, 0)
 			return nil, admission, nil
 		}
 		if settings.RemoteQueueCount <= len(pool.waiters) {
@@ -270,9 +288,9 @@ func (self *SidecarRemoteBudget) Admit(ctx context.Context, requesterId Id) (*Si
 	return nil, waitErr
 }
 
-// A new admission holding a slot from now, which waited queueWait, with the pool's lock held.
-func (self *SidecarRemoteBudget) admitWithLock(now time.Time, queueWait time.Duration) *SidecarRemoteAdmission {
-	admission := &SidecarRemoteAdmission{budget: self, admittedAt: now, queueWait: queueWait}
+// A new admission holding a slot from cpuNow on the CPU meter, which waited queueWait, with the pool's lock held.
+func (self *SidecarRemoteBudget) admitWithLock(cpuNow time.Time, queueWait time.Duration) *SidecarRemoteAdmission {
+	admission := &SidecarRemoteAdmission{budget: self, cpuFrom: cpuNow, queueWait: queueWait}
 	self.pool.computing[admission] = true
 	if self.stats != nil && 0 < queueWait {
 		self.stats.remoteQueueWaitCount.Add(1)
@@ -281,24 +299,25 @@ func (self *SidecarRemoteBudget) admitWithLock(now time.Time, queueWait time.Dur
 	return admission
 }
 
-// Hands each freed slot to the oldest waiter, with the pool's lock held.
-func (self *remoteBudgetPool) grantWithLock(now time.Time) {
+// Hands each freed slot to the oldest waiter at now, cpuNow on the CPU meter, with the pool's lock held.
+func (self *remoteBudgetPool) grantWithLock(now time.Time, cpuNow time.Time) {
 	for 0 < len(self.waiters) && len(self.computing) < self.settings.RemoteSearchCount {
 		waiter := self.waiters[0]
 		self.waiters = self.waiters[1:]
 		if waiter.gone {
 			continue
 		}
-		waiter.granted = waiter.budget.admitWithLock(now, now.Sub(waiter.queuedAt))
+		waiter.granted = waiter.budget.admitWithLock(cpuNow, now.Sub(waiter.queuedAt))
 		close(waiter.ready)
 	}
 }
 
 // One request's hold on a compute slot, from Admit to Release. Safe for concurrent use.
 type SidecarRemoteAdmission struct {
-	budget     *SidecarRemoteBudget
-	admittedAt time.Time
-	queueWait  time.Duration
+	budget *SidecarRemoteBudget
+	// the CPU meter's reading when the slot was taken
+	cpuFrom   time.Time
+	queueWait time.Duration
 
 	stateLock sync.Mutex
 	released  bool
@@ -311,8 +330,8 @@ func (self *SidecarRemoteAdmission) QueueWait() time.Duration {
 	return self.queueWait
 }
 
-// Gives the slot back, charging the window with the time it was held, which it answers: at the end of the request, or
-// at step 4 for a repeat, which computes nothing. Safe to call again, which charges nothing.
+// Gives the slot back, charging the window with the time it was held on the CPU meter, which it answers: at the end of
+// the request, or at step 4 for a repeat, which computes nothing. Safe to call again, which charges nothing.
 func (self *SidecarRemoteAdmission) Release() time.Duration {
 	released := func() bool {
 		self.stateLock.Lock()
@@ -330,14 +349,14 @@ func (self *SidecarRemoteAdmission) Release() time.Duration {
 	pool := self.budget.pool
 	pool.stateLock.Lock()
 	defer pool.stateLock.Unlock()
-	now := pool.clock.Now()
-	held := now.Sub(self.admittedAt)
+	now, cpuNow := pool.clock.Now(), pool.cpuClock.Now()
+	held := cpuNow.Sub(self.cpuFrom)
 	delete(pool.computing, self)
 	pool.charges = append(pool.charges, remoteBudgetCharge{at: now, cpu: held})
 	if stats := self.budget.stats; stats != nil {
 		stats.remoteCpuNanos.Add(int64(held))
 	}
-	pool.grantWithLock(now)
+	pool.grantWithLock(now, cpuNow)
 	return held
 }
 
@@ -362,21 +381,23 @@ func (self *SidecarRemoteAdmission) Free(byteCount int64) {
 
 // A page's meter, started now: PageCpu and PageCandidateCount (§16.10, DESIGN-DETAILS 7.2.5's step 7).
 func (self *SidecarRemoteAdmission) Page() *SidecarRemotePage {
-	return &SidecarRemotePage{admission: self, startedAt: self.budget.pool.clock.Now()}
+	return &SidecarRemotePage{admission: self, startedAt: self.budget.pool.cpuClock.Now()}
 }
 
 // One page's spend: its verifications and its compute time. Not safe for concurrent use: a page is one goroutine's.
 type SidecarRemotePage struct {
 	admission *SidecarRemoteAdmission
+	// the CPU meter's reading when the page started
 	startedAt time.Time
 	verified  int
 }
 
-// Whether the page has spent its PageCpu or its PageCandidateCount verifications, when it stops PARTIAL.
+// Whether the page has spent its PageCpu, on the CPU meter, or its PageCandidateCount verifications, when it stops
+// PARTIAL.
 func (self *SidecarRemotePage) Spent() bool {
 	settings := self.admission.budget.pool.settings
 	return settings.PageCandidateCount <= self.verified ||
-		settings.PageCpu <= self.admission.budget.pool.clock.Now().Sub(self.startedAt)
+		settings.PageCpu <= self.admission.budget.pool.cpuClock.Now().Sub(self.startedAt)
 }
 
 // Counts one verification about to run: false, counting nothing, once the page has spent its budget.

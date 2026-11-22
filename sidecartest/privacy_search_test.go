@@ -17,8 +17,15 @@ package sidecartest
 // CC2: on T3 and the surrogates, CC2's frames are the relays' own TransferFrames, which this does not reach. Nothing
 // here captures a device's logs, metrics, traces or crash reports, which these devices write none of (their loggers
 // are the no-op logger); that clause waits on a composition that logs through the Net's capture.
+//
+// The indexers' budgets spend compute on a meter of the test's own (SearchRemoteTeamArgs.CpuClock), not the Net's
+// clock, which moves a minute for the phone's rate. A search's first page needs one own indexer's answer, so the other
+// leg may still hold one of its indexer's slots when the clock moves, longer the busier the host; on the one clock that
+// minute counted as compute past RemoteCpuPerMinute's 30 s, and the failures were refused for CPU. One slot is held
+// across the move here every time, as such a leg's would be.
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -65,8 +72,9 @@ func TestPrivacySearchQueryCanaries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	cpuClock := NewFakeClock(DefaultClockStart())
 	team, err := NewSearchRemoteTeam(ctx, &SearchRemoteTeamArgs{
-		Tier: tier, Documents: documents,
+		Tier: tier, Documents: documents, CpuClock: cpuClock,
 		StateDirectory: func(device string) string { return directories[device] },
 		Text: func(indexer string, repo string) sidecar.SearchTextSource {
 			return &searchRemoteDocumentText{documents: documents(repo)}
@@ -124,9 +132,15 @@ func TestPrivacySearchQueryCanaries(t *testing.T) {
 		}
 	}
 	// every post-parse failure answers in its step's one size: the phone's rate refilled first, since its twenty legs
-	// spent its burst
-	team.Net.Clock().Advance(sidecar.DefaultSidecarSettings().Search.RemoteRequesterRate.Interval)
+	// spent its burst, while one of the desktop's slots is held across the clock's move as a leg the phone stopped
+	// waiting for may hold one (the file header)
+	searchSettings := sidecar.DefaultSidecarSettings().Search
 	indexer := team.Indexers["m desktop"]
+	straggler, err := indexer.Budget.Admit(ctx, team.Net.Id("a leg the phone stopped waiting for"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	team.Net.Clock().Advance(searchSettings.RemoteRequesterRate.Interval)
 	wire := sidecar.DefaultSearchWireSettings()
 	vault := &protocol.SearchRepo{RepoId: team.RepoId("m vault").Bytes()}
 	// UNSUPPORTED_VERSION; CURSOR_EXPIRED for a page of no cursor; and INVALID for a page past a live cursor's next,
@@ -154,6 +168,23 @@ func TestPrivacySearchQueryCanaries(t *testing.T) {
 			t.Errorf("request %d answered %v: %v", index, protocol.SearchStatus(parsed.GetStatus()), err)
 		}
 		traces = append(traces, &FrameSizeTrace{Label: fmt.Sprintf("failure %d", index), Kind: "1 step", Requests: []int{len(body)}, Replies: []int{len(reply)}})
+	}
+	// the budget still spends what its meter measures: past RemoteCpuPerMinute there, the phone's next request is
+	// refused before parsing, and the held slot counted the meter's time and none of the clock's minute
+	cpuClock.Advance(searchSettings.RemoteCpuPerMinute)
+	body, err := sidecar.SearchTestRemoteRequestBody(wire, failures[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = indexer.Server.Handle(ctx, &sidecar.SubprotocolRequest{
+		SourceId: phoneId, Peer: &sidecar.SubprotocolPeerIdentity{SidecarId: phoneId}, MessageType: protocol.MessageType_SEARCH, Body: body,
+	})
+	var refusal *sidecar.SidecarRemoteRefusal
+	if !errors.As(err, &refusal) || refusal.Reason != sidecar.SidecarRemoteRefusedCpu {
+		t.Errorf("past RemoteCpuPerMinute on the meter the desktop answered %v", err)
+	}
+	if held := straggler.Release(); held != searchSettings.RemoteCpuPerMinute {
+		t.Errorf("the held slot counted %s of compute, not the meter's %s", held, searchSettings.RemoteCpuPerMinute)
 	}
 	if err := FrameSizesEqual(traces...); err != nil {
 		t.Error(err)
