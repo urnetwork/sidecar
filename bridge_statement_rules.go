@@ -1651,8 +1651,9 @@ func (self *BridgeLedger) DrainingAliases() []*BridgeLedgerAlias {
 // bridge_ledger.go), so every reader at one pin reaches one verdict:
 //
 //	action    this use's stored CanonicalAction parses, is a single bridge_expose and names the statement's signer as
-//	          its target; a route's prefixes each lie inside one of its cidrs, and a map's target_port and expires are
-//	          the action's where it sets them
+//	          its target; its shape fixes the statement's type, a route only under one that names no target_port or
+//	          expiry and a map only under one that names no cidrs (QD-1184); a route's prefixes each lie inside one of
+//	          its cidrs, and a map's target_port and expires are the action's where it sets them
 //	template  with template_action set, a multi-use decision's template (owner decision 218): it parses as a stored
 //	          action too, and the use matches it (ActionMatchesTemplate); every decision then hashes the template and
 //	          has uses above 1, and the spend check is the template's
@@ -1742,12 +1743,18 @@ func (self *ConfigState) CheckBridgeApproval(statement *BridgeLogStatement, body
 	return facts, nil
 }
 
-// Whether a bridge_expose action covers the rule a statement filed under it: a route's prefixes each inside one of
-// the action's cidrs, and none where it lists none but for an exit; a map's target_port the action's where it names
-// one, and its expires set and no later than the action's where it has one.
+// Whether a bridge_expose action covers the rule a statement filed under it, the action's shape fixing the statement's
+// type (QD-1184), so a decision a person signed for one kind of exposure files no other: a route only under an action
+// that names no target_port and no expiry, as bridgeRouteAction builds one, its prefixes each inside one of the
+// action's cidrs, and none where it lists none but for an exit; a map only under an action that names no cidrs, as
+// bridgeMapAction builds one, its target_port the action's where it names one, and its expires set and no later than
+// the action's where it has one.
 func bridgeApprovalCovers(action *protocol.CanonicalAction, statement *BridgeLogStatement, body proto.Message) error {
 	switch typed := body.(type) {
 	case *bridge.BridgeRouteBody:
+		if action.GetTargetPort() != 0 || action.GetExpiresMillis() != 0 {
+			return errors.New("a route under an approved action that names a map's target_port or expiry")
+		}
 		cidrs := []netip.Prefix{}
 		for _, cidr := range action.GetCidrs() {
 			prefix, err := netip.ParsePrefix(cidr)
@@ -1778,6 +1785,9 @@ func bridgeApprovalCovers(action *protocol.CanonicalAction, statement *BridgeLog
 			}
 		}
 	case *bridge.BridgeMapBody:
+		if len(action.GetCidrs()) != 0 {
+			return errors.New("a map under an approved action that names a route's cidrs")
+		}
 		if action.GetTargetPort() != 0 && action.GetTargetPort() != typed.GetTargetPort() {
 			return errors.New("the approved action names another target_port")
 		}

@@ -10,10 +10,11 @@
 // rule filed with no approval in force by (ApprovalStandingRules; AclEngine's is AclLocalPolicy.StandingCovers):
 //
 //	held      the rule is the action's, as every reader holds a rule to the action a decision approved: the spender
-//	          its owner and the action's target, a single exposure no template, its body carrying no approval, a
-//	          route's prefixes inside the action's cidrs and an exit only where it lists 0.0.0.0/0, a map's target_port
-//	          and expiry the action's where it sets them (bridgeApprovalCovers), and a map only for an action that names
-//	          no cidrs, a map's as bridgeMapAction builds it; a rule its action does not describe stands for nothing
+//	          its owner and the action's target, a single exposure no template, its body carrying no approval, and by
+//	          bridgeApprovalCovers a route only for an action naming no target_port or expiry and a map only for one
+//	          naming no cidrs (QD-1184), a route's prefixes inside the action's cidrs and an exit only where it lists
+//	          0.0.0.0/0, a map's target_port and expiry the action's where it sets them; a rule its action does not
+//	          describe stands for nothing
 //	covered   the source answers for the spender at now; a source that judges no rule, an effect that names none, or
 //	          no source at all passes no exposure, which then takes a decision as before
 //
@@ -84,10 +85,7 @@ func (self *ApprovalGate) standingCovers(action *SidecarAction, stored *StoredCa
 	switch {
 	case rule.SignedType == bridge.SignedType_SIGNED_BRIDGE_ROUTE && rule.Route != nil && rule.Map == nil && rule.Route.GetApproval() == nil:
 		body = rule.Route
-	case rule.SignedType == bridge.SignedType_SIGNED_BRIDGE_MAP && rule.Map != nil && rule.Route == nil && rule.Map.GetApproval() == nil &&
-		len(exposure.GetCidrs()) == 0:
-		// a route's action names no target_port or expiry, which is all bridgeApprovalCovers holds a map to, so a map
-		// stands only for an action that names no cidrs, as bridgeMapAction builds one
+	case rule.SignedType == bridge.SignedType_SIGNED_BRIDGE_MAP && rule.Map != nil && rule.Route == nil && rule.Map.GetApproval() == nil:
 		body = rule.Map
 	default:
 		return false
