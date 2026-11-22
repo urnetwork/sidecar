@@ -46,6 +46,14 @@ type evsTestCacheRead struct {
 // Caches world's head as it stands now, and serves it from now on.
 func (self *evsTestStaleCache) cache(t *testing.T, world *evsTestWorld) {
 	fork := evsTestForkWorld(t, world)
+	func() {
+		// the head's fields beside the history, which a fork leaves as a new world's: a git-mode ref's among them
+		world.stateLock.Lock()
+		defer world.stateLock.Unlock()
+		fork.mode, fork.currentEpoch, fork.sourceEpochs = world.mode, world.currentEpoch, slices.Clone(world.sourceEpochs)
+		fork.sealedRefName, fork.base, fork.deleted, fork.immutable = world.sealedRefName, world.base, world.deleted, world.immutable
+		fork.indexEpoch, fork.owned = world.indexEpoch, world.owned
+	}()
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	self.cached = fork
