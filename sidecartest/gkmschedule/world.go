@@ -162,6 +162,8 @@ type FsKeysDevice struct {
 	// the newest state it took, which its engine's credential check reads
 	state  sidecar.GkmAuthView
 	Alarms []*sidecar.GkmAlarm
+	// its ReaderKey upkeep once StartUpkeep started one, which then keeps its ReaderKeys in place of PublishReaderKey's
+	upkeep *sidecar.GkmUpkeep
 }
 
 // The device's sidecar.
@@ -205,7 +207,9 @@ type FsKeysWorld struct {
 	admins     []sidecar.Id
 	depositors []sidecar.Id
 	// an owner-bound repo's consented devices, nil while the repo is not owner-bound (Consent)
-	consented      []sidecar.Id
+	consented []sidecar.Id
+	// the RepoGrant rows GrantBy filed, each naming its signer, which the repo's row carries from the next position
+	grantRows      []*protocol.AclRepoGrantRow
 	readerExpiries map[sidecar.Id]time.Time
 	suspended      map[sidecar.Id]bool
 	// the sidecars a rev/ object voids every token of (§7.8), which gkm reads before each request
@@ -743,6 +747,12 @@ func (self *FsKeysDevice) Restart() {
 			return nil, sidecar.ErrGkmKeyMissing
 		}
 	}
+	if self.upkeep != nil {
+		// the device's ReaderKeys are its upkeep's, as ur daemon's composition takes them
+		args.ReaderPrivateKey = self.upkeep.ReaderPrivateKey
+		args.ReaderKeySha256 = self.upkeep.CurrentReaderKeySha256
+		args.PublishReaderKey = self.upkeep.Refresh
+	}
 	client, err := sidecar.NewGkmGroupClient(args)
 	if err != nil {
 		world.t.Fatal(err)
@@ -751,6 +761,30 @@ func (self *FsKeysDevice) Restart() {
 	if self.state != nil {
 		client.AuthAdvanced(self.state)
 	}
+}
+
+// Starts the device's ReaderKey upkeep (sidecar.GkmUpkeep) over its keychain and api, hints its intake, and restarts its
+// client over it, as ur daemon composes them: the upkeep's first pass runs at once, and from then on the client's
+// ReaderKeys are the upkeep's, a late ask with none asking it for a pass. The upkeep ends with the test; the new
+// client takes no hints until AttachHints.
+func (self *FsKeysDevice) StartUpkeep(hints *sidecar.GkmHints) *sidecar.GkmUpkeep {
+	world := self.world
+	world.t.Helper()
+	upkeep, err := sidecar.NewGkmUpkeep(world.Ctx, &sidecar.GkmUpkeepArgs{
+		SidecarId: self.SidecarId(),
+		Api:       self.Api,
+		Sign:      self.signer.Sign,
+		Secrets:   self.secrets,
+		Hints:     hints,
+		Clock:     world.Clock,
+	})
+	if err != nil {
+		world.t.Fatal(err)
+	}
+	world.t.Cleanup(upkeep.Close)
+	self.upkeep = upkeep
+	self.Restart()
+	return upkeep
 }
 
 // The device's jittered wait: Jitter's draw, none without it.
@@ -819,6 +853,22 @@ func (self *FsKeysWorld) Grant(write bool, devices ...*FsKeysDevice) {
 			self.writers = append(self.writers, device.SidecarId())
 		}
 		device.rescope()
+	}
+}
+
+// Grant by a RepoGrant signer signed: each device's row in the repo's access log, from the next position, names the
+// device as its subject and signer as its signer, which KF3's granting device is told by (§8.8's rows; gkm_deliver.go's
+// gkmGrantingSigner).
+func (self *FsKeysWorld) GrantBy(signer *FsKeysDevice, write bool, devices ...*FsKeysDevice) {
+	self.Grant(write, devices...)
+	role := protocol.RepoGrantRole_REPO_GRANT_ROLE_READER
+	if write {
+		role = protocol.RepoGrantRole_REPO_GRANT_ROLE_WRITER
+	}
+	for _, device := range devices {
+		self.grantRows = append(self.grantRows, &protocol.AclRepoGrantRow{
+			Subject: device.SidecarId().Bytes(), Role: role, Signer: signer.SidecarId().Bytes(), At: self.nextPosition(),
+		})
 	}
 }
 
@@ -1058,6 +1108,9 @@ func (self *FsKeysWorld) Advance() *sidecartest.FakeGkmAuthView {
 		}
 	}
 	repo := &protocol.AclRepo{RepoId: self.RepoId.Bytes(), Kind: self.Kind, Admins: admins, HoldersShrunkAt: self.shrunkAt[self.RepoId]}
+	for _, grant := range self.grantRows {
+		repo.Grants = append(repo.Grants, proto.Clone(grant).(*protocol.AclRepoGrantRow))
+	}
 	if owner := self.owner(); owner != nil {
 		repo.OwnerMemberId = owner.Bytes()
 		for _, sidecarId := range self.consented {
