@@ -1,4 +1,4 @@
-# metadata_list.yml v66; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
+# metadata_list.yml v67; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
 # §7.9, §10, §11). v6 adds to v5 (2026-11-04) connect-1's ShareCert, api-6's push-token slot sentinels, api-7's
 # {acl_}q, cascade signers, recovery bindings, restored bindings' recovery windows and orphaned networks, api-13's
 # per-eraser closure counters, evs-1's secret kind and orphans, evs-3's creation block, fence time, deleted flag
@@ -237,6 +237,11 @@
 # lookup of sidecars' current clients is POST /internal/gate/sidecar-identity-clients, on api's internal gate
 # prefix, which the lb refuses from outside, for the gkm and mxedge classes' bearers; what it sees and logs is
 # unchanged, and no column, family or proto field changes.
+# v67, updated 2026-11-22 for the owner's answer QD-1186 (e2e-gkm-concurrency-reform-old-group-claim), adds to
+# gkm-1 a re-formed group's closing marker, gkm/<group_id>/closed, the re-form's GroupForm byte for byte, written
+# before that form, and each closing's verdict, gkm/<group_id>/closing/<h>, that form's bytes again or none, both
+# kept until the repo's shred; they show nothing the GroupForm chain does not, and no column, Redis family or
+# proto field changes.
 # Each row gives service, store (tables, Redis families, object families, logs or memory),
 # sees, why, ttl, and owner: the section that designs the value and states its ttl. Withdrawn rows keep
 # their ids so citations resolve. Public: this list ships in DESIGN.md on the public sidecar repo (owner
@@ -641,10 +646,10 @@ evs-30:
   owner: §19.6
 gkm-1:
   service: gkm
-  store: gkm/repo/<repo_id>/<seq>; gkm/<group_id>/owner and gkm/<group_id>/epoch/0 (metadata cluster); gkm/dkey/<network_id>/<delegation_id>
-  sees: GroupForm chain (repo_id, group_id, previous group, generation, signer, and the signer's auth pin when it signs (owner decision 368)); epoch 0 (network_id, cipher suite 0x0010 (owner decision 44), creator); each group's owner marker (repo_id, network_id), written first at a creation or re-form, through which alone gkm resolves the group (owner decision 201); and each forwarding Delegation's reader public key, by delegation_id, which gkm and every rotator check against its row's digest (owner decision 202)
-  why: one accepted commit per epoch; re-forming; one repo to a group; sealing to forwarding Delegations (§10.5)
-  ttl: life of the repo, epoch 0 while epoch/0 exists; an owner marker until the repo's shred, a re-seed's form writing it again; a forwarding Delegation's reader key until 24 h after the Delegation ends or is superseded
+  store: gkm/repo/<repo_id>/<seq>; gkm/<group_id>/owner, gkm/<group_id>/closed, gkm/<group_id>/closing/<h> and gkm/<group_id>/epoch/0 (metadata cluster); gkm/dkey/<network_id>/<delegation_id>
+  sees: GroupForm chain (repo_id, group_id, previous group, generation, signer, and the signer's auth pin when it signs (owner decision 368)); epoch 0 (network_id, cipher suite 0x0010 (owner decision 44), creator); each group's owner marker (repo_id, network_id), written first at a creation or re-form, through which alone gkm resolves the group (owner decision 201); each re-formed group's closing marker, the GroupForm that re-formed it byte for byte, and each closing's verdict, that form's bytes again or none (QD-1186); and each forwarding Delegation's reader public key, by delegation_id, which gkm and every rotator check against its row's digest (owner decision 202)
+  why: one accepted commit per epoch; re-forming; no claim, wrap or commit in a group a re-form closed (QD-1186); one repo to a group; sealing to forwarding Delegations (§10.5)
+  ttl: life of the repo, epoch 0 while epoch/0 exists; an owner marker until the repo's shred, a re-seed's form writing it again; a closing marker and its verdicts until the repo's shred; a forwarding Delegation's reader key until 24 h after the Delegation ends or is superseded
   owner: §10.6
 gkm-2:
   service: gkm

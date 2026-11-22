@@ -20,11 +20,13 @@
 //	bound   one object per (recipient, key), by If-None-Match; an uploader's STAGED objects in a group within
 //	        StagedRate's count per hour per reader of R
 //
-// A wrong kind, generation, commitment or key answers 409, a key another delivery holds 412 with the winner, a check
-// refused 403, the STAGED bound 429, and a delivery gkm did not reach a definite answer for, because its PUT was not
-// started by WrapBatchStartDeadline into the request or its store did not answer, 0: the client sends it again, and
-// If-None-Match makes that safe. PUTs run WrapPutConcurrency at once. A malformed delivery is refused as one whose
-// signature does not verify, 403, since gkm cannot tell the two apart without trusting it.
+// A wrong kind, generation, commitment or key answers 409, and so does every delivery to a group a re-form closed,
+// whatever its PUT left, the fence reading the group's closing marker after the batch's PUTs (QD-1186;
+// reform_fence.go); a key another delivery holds answers 412 with the winner, a check refused 403, the STAGED bound
+// 429, and a delivery gkm did not reach a definite answer for, because its PUT was not started by
+// WrapBatchStartDeadline into the request or its store did not answer, 0: the client sends it again, and If-None-Match
+// makes that safe. PUTs run WrapPutConcurrency at once. A malformed delivery is refused as one whose signature does
+// not verify, 403, since gkm cannot tell the two apart without trusting it.
 //
 // In KeyDelivery mode a ReaderWrap that stands (201, or 412 whatever its winner) and that its recipient can take now
 // wakes the recipient with pending on its per-client topic: a LATE one, which comes with no new generation, and a
@@ -418,7 +420,8 @@ func (self *GkmEngine) serveWrapBatch(request *GkmRequest) {
 }
 
 // Writes a batch's judged items, WrapPutConcurrency at once, each If-None-Match, starting none past
-// WrapBatchStartDeadline into the request: 201, 412 with the winner, or 0 where no definite answer came. repo/ is
+// WrapBatchStartDeadline into the request: 201, 412 with the winner, or 0 where no definite answer came, and 409 for
+// each that stands in a group a re-form closed (fenceWrapBatch). repo/ is
 // reread first, so a write in flight at a shred lands before its repeat. The items spend the write budget by class
 // (budget.go): STAGED ones as their rotation's, P0 while gkm's newest state shows a drop since gen/<g-1>'s pin and
 // time, at once, and LATE ones and the rest as P1, which the budget may shed, answering those items 429. false once
@@ -474,7 +477,40 @@ func (self *GkmEngine) writeWrapBatch(request *GkmRequest, groupId sidecar.Id, g
 		}
 		self.putWraps(writeCtx, request, group.writes, barrierKey, deadline)
 	}
+	self.fenceWrapBatch(request, groupId, writes)
 	return true
+}
+
+// The fence (QD-1186; reform_fence.go) on a batch's items that stand, 201 or 412: read after their PUTs, a closing
+// marker of a re-form in the group answers each of them 409, the group taking no delivery, so a rotation stops before
+// its claim and its rotator follows the form; a read that fails answers them 0, sent again.
+func (self *GkmEngine) fenceWrapBatch(request *GkmRequest, groupId sidecar.Id, writes []*gkmWrapWrite) {
+	standing := []*gkmWrapWrite{}
+	for _, write := range writes {
+		if status := write.result.GetStatus(); status == http.StatusCreated || status == http.StatusPreconditionFailed {
+			standing = append(standing, write)
+		}
+	}
+	if len(standing) == 0 {
+		return
+	}
+	closing, err := self.readGroupClosing(request.Ctx, request.Cluster, groupId)
+	status := uint32(0)
+	switch {
+	case err != nil:
+		if errors.Is(err, errGkmStoreFault) {
+			self.alarm("store_fault", err)
+		}
+		status = gkmWrapStatusNotTried
+	case closing.closes():
+		status = http.StatusConflict
+	default:
+		return
+	}
+	for _, write := range standing {
+		write.result.Status = status
+		write.result.Winner = nil
+	}
 }
 
 // PUTs writes under ctx, WrapPutConcurrency at once, starting none past deadline, and sets each one's answer.
