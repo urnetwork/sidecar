@@ -12,8 +12,9 @@
 //	           listener, or one the device role would refuse, is void here and alarms map_refused
 //	served     S's routes in force, an exposed prefix read into the block, a withdrawn one until its drain's end
 //	subjects   each sidecar that reaches S, its member, tag, client ids and dial, route and exit rows, one a rule and
-//	           port range, ports and prefixes from AclLocalPolicy or an activated dial grant's sealed detail; a
-//	           port-limited rule whose ports the device cannot open gives no row
+//	           port range, ports and prefixes from AclLocalPolicy or an activated grant's sealed detail (a dial
+//	           grant's ports at S, a route grant's prefixes and ports: bridge_compile_grants.go); a port-limited rule
+//	           whose ports the device cannot open gives no row
 //	egress     S's mode from the rows' BridgeRows, and under exits the exits of S's own spec, else of the first atom S
 //	           holds that has one, each a link, and whether that spec requires default egress on (QD-1053)
 //	untagged   autogroup:untagged's rows at S, what an sdk provider gives a sealed subject no row binds (QD-733)
@@ -23,8 +24,10 @@
 // route rule that names no ip: destination and no autogroup:internet holds no CIDR: where its subject destinations
 // name S for the source it gives a row for each prefix of S's subnet routes in force, whole, its exposed prefix
 // included, and elsewhere none (§8.4's readings; owner decision 575, QD-1019). It gives no exit row, which only an
-// internet or /0 rule does, and an activated grant, whose detail the device does not hold, gives no route row (QD-003).
-// On every leg, with no connect import.
+// internet or /0 rule does. An activated route grant's prefixes and ports are its sealed detail's, opened where this
+// device holds its key (owner decision 679; bridge_compile_grants.go), so it gives entries and rows as a rule of that
+// detail would, and one whose detail does not open here gives none, QD-003's closed direction. On every leg, with no
+// connect import.
 
 package sidecar
 
@@ -104,9 +107,9 @@ func (self *bridgeCompiler) reachPass() {
 	}
 	other := AclClientSubject(Id{}, Id{}, nil, "")
 	untagged := &bridge.BridgeRuleSubject{}
-	untagged.Dial = self.reachRows(self.acl.DialRules(other, self.selfSubject, self.now), false)
-	untagged.Route = self.reachRows(self.acl.RouteRules(other, self.selfSubject, self.now), true)
-	untagged.Exit = self.reachRows(self.exitRules(self.acl.ExitRules(other, self.selfSubject, self.now)), false)
+	untagged.Dial = self.reachRows(self.acl.DialRules(other, self.selfSubject, self.now), bridgeCompileRowDial)
+	untagged.Route = self.reachRows(self.acl.RouteRules(other, self.selfSubject, self.now), bridgeCompileRowRoute)
+	untagged.Exit = self.reachRows(self.exitRules(self.acl.ExitRules(other, self.selfSubject, self.now)), bridgeCompileRowExit)
 	if 0 < len(untagged.Dial)+len(untagged.Route)+len(untagged.Exit) {
 		self.untagged = untagged
 	}
@@ -115,8 +118,9 @@ func (self *bridgeCompiler) reachPass() {
 // The rules of an exit's rows: those that reach public destinations, an autogroup:internet one or one whose prefixes
 // hold IPv4's 0.0.0.0/0, as a standing exit's cover reads them (StandingCovers). Rows hold no prefix, so ExitRules
 // answers every route rule through its vias, a rule of 10.0.0.0/8 among them, whose via an advertiser of a no-via rule
-// is too (QD-764): its rows here are route rows alone. A rule whose prefixes the device does not hold, an activated
-// grant's (QD-003), reaches no public destination here, the closed direction.
+// is too (QD-764): its rows here are route rows alone. An activated grant's prefixes are its sealed detail's
+// (grantRoute), and one whose detail does not open here, or whose prefixes the device does not hold, reaches no public
+// destination here, the closed direction.
 func (self *bridgeCompiler) exitRules(rules []AclReachRule) []AclReachRule {
 	exits := []AclReachRule{}
 	for _, rule := range rules {
@@ -125,7 +129,10 @@ func (self *bridgeCompiler) exitRules(rules []AclReachRule) []AclReachRule {
 			continue
 		}
 		local := self.aclLocal.Rule(rule.RuleId)
-		if local == nil && !self.hasDocument {
+		switch {
+		case len(rule.GrantId) != 0:
+			local = self.grantRoute(rule)
+		case local == nil && !self.hasDocument:
 			local = aclImplicitLocalPolicy().Rule(rule.RuleId)
 		}
 		if local != nil && slices.ContainsFunc(local.Cidrs, func(cidr netip.Prefix) bool { return cidr.Bits() == 0 && cidr.Addr().Is4() }) {
@@ -419,14 +426,18 @@ func (self *bridgeCompiler) routeEntries(rule *BridgeLedgerRule, find func(prefi
 
 // Whether S may use a subnet route of an advertiser: a rule of via[it] whose CIDRs meet one of its prefixes; one that
 // names no ip: destination and no autogroup:internet and whose subject destinations name the advertiser for S, which
-// reaches every subnet route of the advertiser's in force whole (owner decision 575); or no document and S untagged. A
-// rule whose detail the device does not hold, an activated grant's, opens none (QD-003).
+// reaches every subnet route of the advertiser's in force whole (owner decision 575); or no document and S untagged. An
+// activated grant is read by its sealed detail (grantRoute), and one whose detail does not open here opens none, the
+// closed direction (QD-003).
 func (self *bridgeCompiler) mayUseRoute(reach *bridgeCompileReach, prefixes []bridgePrefix) bool {
 	if !self.hasDocument && !self.selfTagged {
 		return true
 	}
 	for _, rule := range reach.viaRoute {
 		local := self.aclLocal.Rule(rule.RuleId)
+		if len(rule.GrantId) != 0 {
+			local = self.grantRoute(rule)
+		}
 		if local == nil {
 			continue
 		}
@@ -642,25 +653,41 @@ func (self *bridgeCompiler) subjects() []*bridge.BridgeRuleSubject {
 			}
 			subject.ClientIds = append(subject.ClientIds, clientId.Bytes())
 		}
-		subject.Dial = self.reachRows(reach.dial, false)
-		subject.Route = self.reachRows(reach.route, true)
-		subject.Exit = self.reachRows(reach.exit, false)
+		subject.Dial = self.reachRows(reach.dial, bridgeCompileRowDial)
+		subject.Route = self.reachRows(reach.route, bridgeCompileRowRoute)
+		subject.Exit = self.reachRows(reach.exit, bridgeCompileRowExit)
 		subjects = append(subjects, subject)
 	}
 	return subjects
 }
 
+// Which of a subject's lists of rows reachRows builds.
+type bridgeCompileRowKind int
+
+const (
+	bridgeCompileRowDial bridgeCompileRowKind = iota
+	bridgeCompileRowRoute
+	bridgeCompileRowExit
+)
+
 // The rows of a list of reach rules, by grant id, prefix, protocol and first port: each rule's protocols and port
 // ranges, and on route rows its CIDRs' parts of what S serves, or for a rule with no CIDR that names S a destination
-// what S serves whole (routeRowPrefixes). A rule expired at t gives none.
-func (self *bridgeCompiler) reachRows(rules []AclReachRule, routeRows bool) []*bridge.BridgeRuleReach {
+// what S serves whole (routeRowPrefixes). An activated grant's ports and prefixes are its sealed detail's: a dial
+// grant's the ports it names at S (grantPortRule), and a route or exit grant's its prefixes and ports
+// (grantRouteRule). A rule expired at t gives none.
+func (self *bridgeCompiler) reachRows(rules []AclReachRule, kind bridgeCompileRowKind) []*bridge.BridgeRuleReach {
 	rows := []*bridge.BridgeRuleReach{}
 	for _, rule := range rules {
 		if rule.ExpiresMs != 0 && rule.ExpiresMs <= self.t {
 			continue
 		}
 		local := self.aclLocal.Rule(rule.RuleId)
-		if !routeRows && rule.PortsLimited && len(rule.GrantId) != 0 {
+		switch {
+		case len(rule.GrantId) == 0:
+			// a rule of the head, whose detail is the local policy's
+		case kind != bridgeCompileRowDial:
+			rule, local = self.grantRouteRule(rule)
+		case rule.PortsLimited:
 			local = self.state.grantPortRule(self.grantActions[string(rule.GrantId)], self.self, self.view.RepoKeyAt)
 		}
 		ports, ok := bridgeCompilePortRows(rule, local)
@@ -668,7 +695,7 @@ func (self *bridgeCompiler) reachRows(rules []AclReachRule, routeRows bool) []*b
 			continue
 		}
 		prefixes := []*bridge.BridgeIpv4Prefix{nil}
-		if routeRows {
+		if kind == bridgeCompileRowRoute {
 			prefixes = self.routeRowPrefixes(rule, local)
 		}
 		for _, prefix := range prefixes {
