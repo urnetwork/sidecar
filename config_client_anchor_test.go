@@ -1,7 +1,7 @@
 // QD-814's anchor at a ConfigClient's start, on the test network: the head the base a new device starts at names is
-// read through ConfigHeadAnchorReader under that base's own rows, the state they give before the base's tail
-// re-applies, and every base after it through ReadConfigHead, judged in full; an anchor read that withholds leaves no
-// state. The judgment itself, over evs, is sidecartest's (evs_config_anchor_world_test.go).
+// read through ConfigHeadAnchorReader under S(b-1) as that base gives it, its rows with its tail re-applied, and every
+// base after it through ReadConfigHead, judged in full; an anchor read that withholds leaves no state. The judgment
+// itself, over evs, is sidecartest's (evs_config_anchor_world_test.go).
 
 package sidecar
 
@@ -78,7 +78,7 @@ func testConfigIdentityKey(device testConfigDevice) []byte {
 	return []byte(device.key.Public().(ed25519.PublicKey))
 }
 
-func TestConfigClientReadsAnAnchorsHeadUnderItsBaseRows(t *testing.T) {
+func TestConfigClientReadsAnAnchorsHeadUnderItsRowsAndTail(t *testing.T) {
 	world := newTestConfigClientWorld(t)
 	net := world.net
 	member, first := net.consentedMember("m")
@@ -144,15 +144,19 @@ func TestConfigClientReadsAnAnchorsHeadUnderItsBaseRows(t *testing.T) {
 			t.Fatalf("an anchor read at config version %d, not the newest base's 3", read.configVersion)
 		}
 	}
-	// the anchor admits what the base's own rows do: the owner's and the first device's keys, and neither the device
-	// the tail admits nor one never admitted
+	// the anchor admits what S(b-1) as the base gives it does: the owner's and the first device's keys, which its rows
+	// hold, and the device its tail admits, which may have pushed the head b names; never one no row or tail entry
+	// admits
 	read := anchorReads[len(anchorReads)-1]
 	if !bytes.Equal(read.identityKeys[net.owner.sidecarId], testConfigIdentityKey(net.owner)) ||
 		!bytes.Equal(read.identityKeys[first.sidecarId], testConfigIdentityKey(first)) {
 		t.Fatal("the anchor does not admit the keys the base's rows hold")
 	}
-	if read.identityKeys[second.sidecarId] != nil || read.identityKeys[stranger.sidecarId] != nil {
-		t.Fatal("the anchor admits a key the base's rows do not hold")
+	if !bytes.Equal(read.identityKeys[second.sidecarId], testConfigIdentityKey(second)) {
+		t.Fatal("the anchor does not admit the device the base's tail admits")
+	}
+	if read.identityKeys[stranger.sidecarId] != nil {
+		t.Fatal("the anchor admits a key no row or tail entry admits")
 	}
 	if state.SidecarRow(second.sidecarId) == nil {
 		t.Fatal("the tail's admission did not re-apply after the anchor")
