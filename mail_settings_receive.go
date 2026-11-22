@@ -18,6 +18,11 @@ type MailReceiveSettings struct {
 	Auth     *MailAuthSettings
 	// The receiver's MTA-STS system publish (mail_mta_sts.go).
 	MtaSts *MailMtaStsSettings
+	// Builds each receiver's resolver, which that receiver owns and closes once it has ended (mail_receiver_resolver.go).
+	// Nil, the default and every host's: a DohCache of the receiver's own over connect's default resolvers, under the
+	// DNS root's keys (§2.8 ext-3). A receiver in a test binary refuses that default, so a test names a DNS of its own
+	// here. An error, or a resolver without its Doh, leaves the receiver unbuilt.
+	ResolverFactory func() (*MailReceiverResolver, error)
 }
 
 // The receiver's defaults: on, as a daemon runs.
