@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 	"testing"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -638,5 +639,51 @@ func TestGkmReformTryFollowsItsSealedClosingPastAClaimTheFenceRefused(t *testing
 	}
 	if !bytes.Equal(sealedFixture.object("meta-2", GkmFormKey(sealedWorld.repoId, 2)), sealedForm) {
 		t.Errorf("the sealed closing's form was not filed")
+	}
+}
+
+// QD-1188: a closing with no verdict whose marker is older than ReformClosingStallAge, its re-former having stopped
+// between its marker and its verdict, gives way to a re-form at an equal or higher generation, which voids it and
+// takes the marker; under the bound, or to a re-form at a lower generation, it does not. The stalled re-former's
+// request sent again is then refused with the form that took over.
+func TestGkmReformTakesOverAClosingStalledPastItsBound(t *testing.T) {
+	world := newGkmGroupWorld(t)
+	world.createAndActivate()
+	fixture := world.fixture
+	oldGroupId := world.groupId
+	world.putGeneration(world.admin, world.key1)
+	stalledGroupId := testId("group-stalled")
+	stalledForm := world.reformBytes(stalledGroupId, oldGroupId, 2)
+	fixture.put("meta-2", GkmGroupClosedKey(oldGroupId), stalledForm)
+	stalledVerdictKey := GkmGroupClosingKey(oldGroupId, sha256Of(stalledForm))
+	takerGroupId := testId("group-taker")
+
+	fixture.clock.Advance(fixture.settings.ReformClosingStallAge - time.Second)
+	if recorder := world.postReform(takerGroupId, oldGroupId, 2); recorder.Code != http.StatusConflict || !bytes.Equal(recorder.Body.Bytes(), stalledForm) {
+		t.Errorf("a re-form beside a closing under its bound: %d", recorder.Code)
+	}
+	fixture.clock.Advance(time.Second)
+	if recorder := world.postReform(testId("group-lower"), oldGroupId, 1); recorder.Code != http.StatusConflict || !bytes.Equal(recorder.Body.Bytes(), stalledForm) {
+		t.Errorf("a re-form at a lower generation beside a stalled closing: %d", recorder.Code)
+	}
+	if _, found := world.stored(stalledVerdictKey); found {
+		t.Fatalf("a re-form that may not take over the stalled closing decided it")
+	}
+
+	if recorder := world.postReform(takerGroupId, oldGroupId, 2); recorder.Code != http.StatusOK {
+		t.Fatalf("a re-form at the stalled closing's generation past its bound: %d", recorder.Code)
+	}
+	takerForm := world.reformBytes(takerGroupId, oldGroupId, 2)
+	if verdict, found := world.stored(stalledVerdictKey); !found || len(verdict) != 0 {
+		t.Errorf("the stalled closing is not void")
+	}
+	if marker, _ := world.stored(GkmGroupClosedKey(oldGroupId)); !bytes.Equal(marker, takerForm) {
+		t.Errorf("the re-form that took over does not hold the marker")
+	}
+	if !bytes.Equal(fixture.object("meta-2", GkmFormKey(world.repoId, 2)), takerForm) {
+		t.Errorf("the re-form that took over was not filed")
+	}
+	if recorder := world.postReform(stalledGroupId, oldGroupId, 2); recorder.Code != http.StatusConflict || !bytes.Equal(recorder.Body.Bytes(), takerForm) {
+		t.Errorf("the stalled re-form sent again: %d", recorder.Code)
 	}
 }
