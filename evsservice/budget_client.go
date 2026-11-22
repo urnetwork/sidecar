@@ -16,6 +16,10 @@
 // Its own goroutine, every Interval, reads each cluster's allowance, takes the next interval's shares
 // (budget_fallback.go when none came fresh), and writes the process's report (budget_redis.go), with the
 // shares of the last interval lapsing; another keeps the store_weight of the networks it admitted fresh.
+// Close writes each report once more, as of the close, so what the process spent since its last interval
+// reaches the governor: only a process killed before its report loses that (§11.13's wallet row). Every
+// report carries totals since the start, which the governor counts the rise of since the report it last
+// saw, so a report written again counts nothing twice.
 // Segment clusters spend no NVMe budget and have no account.
 //
 // Safe for concurrent use.
@@ -77,6 +81,9 @@ type WriteBudgetClient struct {
 	weights   *writeBudgetWeights
 	// fixed at construction
 	clusterIdAccounts map[string]*writeBudgetAccount
+	// closed as the goroutine that ticks the accounts returns; nil when none was started (a test's)
+	accountsDone chan struct{}
+	closeOnce    sync.Once
 	// a test's: called as an AdmitP1 or AcquireP2 starts to wait, so a test knows a waiter is queued
 	// without a sleep. Set before the first call, nil otherwise.
 	waitHook func()
@@ -91,7 +98,11 @@ func NewWriteBudget(ctx context.Context, host *sidecar.ServiceHost, clusterIds [
 	if err != nil {
 		return nil, err
 	}
-	go client.runAccounts()
+	client.accountsDone = make(chan struct{})
+	go func() {
+		defer close(client.accountsDone)
+		client.runAccounts()
+	}()
 	go client.runWeights()
 	return client, nil
 }
@@ -149,12 +160,48 @@ func newWriteBudgetClient(ctx context.Context, host *sidecar.ServiceHost, cluste
 	return client, nil
 }
 
-// Ends the goroutines, refuses every P1 waiting and fails every P2 waiting. Safe more than once.
+// Ends the goroutines, refuses every P1 waiting and fails every P2 waiting, then writes and exports each
+// account's report as of now, its waiters gone (the file header). It writes once the goroutine that ticks
+// has returned, so no interval's report lands after the last, and the wait and the writes together take at
+// most CloseReportTimeout on the host's clock, a Redis that never answers included: when the bound passes
+// with the goroutine still running, nothing more is written, and the governor loses the last interval as
+// it would a killed process's. Safe more than once: only the first call reports, and a call meanwhile
+// returns once it has.
 func (self *WriteBudgetClient) Close() {
-	self.cancel()
-	for _, account := range self.clusterIdAccounts {
-		account.close()
-	}
+	self.closeOnce.Do(func() {
+		self.cancel()
+		for _, account := range self.clusterIdAccounts {
+			account.close()
+		}
+		if self.settings.CloseReportTimeout <= 0 {
+			return
+		}
+		// the last reports outlive the budget's ctx, ended above, and its parent's, which a host may end before
+		// it closes the budget, keeping their values
+		reportCtx, reportCancel := context.WithCancel(context.WithoutCancel(self.ctx))
+		defer reportCancel()
+		stop := self.clock.AfterFunc(self.settings.CloseReportTimeout, reportCancel)
+		defer stop()
+		if self.accountsDone != nil {
+			select {
+			case <-self.accountsDone:
+			case <-reportCtx.Done():
+				// a tick still running may yet write its own report, which a last one must not precede
+				return
+			}
+		}
+		for _, clusterId := range slices.Sorted(maps.Keys(self.clusterIdAccounts)) {
+			account := self.clusterIdAccounts[clusterId]
+			now := self.clock.Now()
+			report := func() *WriteBudgetReport {
+				account.stateLock.Lock()
+				defer account.stateLock.Unlock()
+				return account.reportWithLock(now)
+			}()
+			writeWriteBudgetReport(reportCtx, self.redis, self.settings, clusterId, report)
+			account.export(report)
+		}
+	})
 }
 
 // Ticks each account at once, then every Interval.
@@ -407,6 +454,7 @@ type writeBudgetAccount struct {
 	// the pending shed check, and when it fires
 	shedStop func() bool
 	shedAt   time.Time
+	// export's alone, with no lock: the ticking goroutine's, then Close's once that goroutine has returned
 	exported writeBudgetExported
 }
 

@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -964,6 +967,382 @@ func TestWriteBudgetCloseEndsTheWaits(t *testing.T) {
 	}
 	if _, err := fixture.client.AdmitP1(t.Context(), "meta-1", connect.NewId(), sidecar.WriteCost{ImmediateByteCount: 1}); !errors.Is(err, ErrWriteBudgetClosed) {
 		t.Errorf("after close: %v", err)
+	}
+}
+
+// Returns once a timer is pending on clock at exactly at: how a test knows a goroutine has reached the wait it
+// arms that timer for, with no sleep. Fails at once when returned closes first, the call that should arm the
+// timer having ended without it; returned may be nil.
+func awaitBudgetTimerAt(t *testing.T, clock *sidecartest.FakeClock, at time.Time, returned <-chan struct{}) {
+	t.Helper()
+	for {
+		pending, added := clock.WatchTimers()
+		if slices.ContainsFunc(pending, at.Equal) {
+			return
+		}
+		select {
+		case <-added:
+		case <-returned:
+			t.Fatalf("returned with no timer at %s", at)
+		case <-t.Context().Done():
+			t.Fatalf("no timer at %s", at)
+		}
+	}
+}
+
+// The end-to-end case's run (e2e-evs-concurrency, run 7: 66 commits, 0 B reported): a process that spends and
+// closes within its first interval, before its next report, still reports what it spent, though its host's ctx
+// ended first, and the governor's next step counts it. Without Close's report the only one is the first, all
+// zeros, and the step counts nothing.
+func TestWriteBudgetCloseReportsWhatTheIntervalSpent(t *testing.T) {
+	settings := governorTestSettings()
+	// weights reread once an hour, so the interval's timer is the only one at its time
+	settings.WeightRefreshInterval = time.Hour
+	clock := sidecartest.NewFakeClock(sidecartest.DefaultClockStart())
+	host := sidecartest.NewFakeHost(t.Context(), clock, nil, nil, nil)
+	start := clock.Now()
+	governor := NewGovernor("meta-1", settings, &GovernorState{
+		Seq:             1,
+		TimeMs:          start.Add(-settings.Interval).UnixMilli(),
+		BucketByteCount: 720000,
+		Calibration:     1,
+	})
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	client, err := NewWriteBudget(ctx, host.ServiceHost(), nil, settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(client.Close)
+	// the first tick is done once the goroutine waits for the next
+	awaitBudgetTimerAt(t, clock, start.Add(settings.Interval), nil)
+	reports, err := ReadWriteBudgetReports(t.Context(), host.Redis, "meta-1")
+	if err != nil || len(reports) != 1 {
+		t.Fatalf("the first reports %v, %v", reports, err)
+	}
+	governor.Step(clock.Now(), 0, reports)
+
+	// within the first interval's shares: P1 300 and A_U 200, the refill over twice one process
+	client.IssueP0(t.Context(), "meta-1", sidecar.WriteP0KindRemove, 1000)
+	networkId := connect.NewId()
+	for range 2 {
+		grant, err := client.AdmitP1(t.Context(), "meta-1", networkId, sidecar.WriteCost{ImmediateByteCount: 63, DeferredByteCount: 37})
+		if err != nil {
+			t.Fatal(err)
+		}
+		grant.Close()
+	}
+	grant, ok, err := client.TryAcquireP2(t.Context(), "meta-1", &sidecar.WriteP2Work{Rank: sidecar.WriteP2RankGc, ByteCount: 50})
+	if err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	grant.Close()
+	// the host's ctx ends, as taskworker's does before it closes the budget, all within the interval
+	cancel()
+	client.Close()
+
+	reports, err = ReadWriteBudgetReports(t.Context(), host.Redis, "meta-1")
+	if err != nil || len(reports) != 1 || reports[0].ProcessId != client.ProcessId() {
+		t.Fatalf("the reports after the close %v, %v", reports, err)
+	}
+	report := reports[0]
+	if report.P0ByteCounts[sidecar.WriteP0KindRemove] != 1000 || report.P1ByteCount != 126 || report.CreditByteCount != 74 || report.UnfundedByteCount != 50 || report.InFlightByteCount != 0 || report.TimeMs != start.UnixMilli() {
+		t.Errorf("the last report %+v", report)
+	}
+	clock.Advance(settings.Interval)
+	// measured as priced, so k stays 1
+	allowance := governor.Step(clock.Now(), 1176, reports)
+	if allowance.P1IssuedByteCount != 200 || allowance.UnfundedIssuedByteCount != 50 || allowance.P0MeasuredByteCount != 1000 {
+		t.Errorf("the step after the close counted P1 %d, unfunded P2 %d and P0 %d", allowance.P1IssuedByteCount, allowance.UnfundedIssuedByteCount, allowance.P0MeasuredByteCount)
+	}
+}
+
+// A close just after a report counts nothing twice: the last report carries the totals since the start, as every
+// report does, so the governor's step after the close counts only what was spent since the report it saw, a step
+// reading the last report again counts nothing, the issued metric gains each byte once, and a second Close writes
+// nothing. The push Close refused waits in no report's queue.
+func TestWriteBudgetCloseAfterAReportCountsNothingTwice(t *testing.T) {
+	fixture := newBudgetFixture(t)
+	fixture.setPools(&WriteBudgetShare{P1ByteCount: 1000, UnfundedByteCount: 1000, FundedByteCount: 1000})
+	networkId := connect.NewId()
+	fixture.client.IssueP0(t.Context(), "meta-1", sidecar.WriteP0KindRotation, 300)
+	grant, err := fixture.client.AdmitP1(t.Context(), "meta-1", networkId, sidecar.WriteCost{ImmediateByteCount: 63, DeferredByteCount: 37})
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant.Close()
+	for _, work := range []*sidecar.WriteP2Work{
+		{Rank: sidecar.WriteP2RankGc, ByteCount: 20},
+		{Rank: sidecar.WriteP2RankFold, ByteCount: 30, Funded: true},
+	} {
+		grant, err := fixture.client.AcquireP2(t.Context(), "meta-1", work)
+		if err != nil {
+			t.Fatal(err)
+		}
+		grant.Close()
+	}
+	// the interval's report, which the next step counts: measured as priced, so k stays 1
+	fixture.account.tick(t.Context())
+	fixture.clock.Advance(fixture.settings.Interval)
+	if allowance := fixture.publish(413); allowance.P1IssuedByteCount != 100 || allowance.UnfundedIssuedByteCount != 20 || allowance.FundedIssuedByteCount != 30 || allowance.P0MeasuredByteCount != 300 {
+		t.Fatalf("the step after the report counted P1 %d, P2 %d unfunded and %d funded, P0 %d", allowance.P1IssuedByteCount, allowance.UnfundedIssuedByteCount, allowance.FundedIssuedByteCount, allowance.P0MeasuredByteCount)
+	}
+
+	// spent after the report, within the tick's share of 300
+	grant, err = fixture.client.AdmitP1(t.Context(), "meta-1", networkId, sidecar.WriteCost{ImmediateByteCount: 20, DeferredByteCount: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant.Close()
+	fixture.client.IssueP0(t.Context(), "meta-1", sidecar.WriteP0KindRemove, 50)
+	waiting, isWaiting := fixture.admitSettled(t.Context(), networkId, sidecar.WriteCost{ImmediateByteCount: 1000})
+	if !isWaiting {
+		t.Fatalf("a push past the share was decided: %v", waiting.err)
+	}
+	fixture.client.Close()
+	waiting.wait(t)
+	if !errors.Is(waiting.err, ErrWriteBudgetClosed) {
+		t.Errorf("the waiting push: %v", waiting.err)
+	}
+	reports, err := ReadWriteBudgetReports(t.Context(), fixture.host.Redis, "meta-1")
+	if err != nil || len(reports) != 1 {
+		t.Fatalf("the reports after the close %v, %v", reports, err)
+	}
+	report := reports[0]
+	if report.P0ByteCounts[sidecar.WriteP0KindRotation] != 300 || report.P0ByteCounts[sidecar.WriteP0KindRemove] != 50 || report.P1ByteCount != 83 || report.CreditByteCount != 47 || report.UnfundedByteCount != 20 || report.FundedByteCount != 30 || report.P1QueuedByteCount != 0 || report.InFlightByteCount != 0 {
+		t.Errorf("the last report %+v", report)
+	}
+	fixture.host.Redis.ResetOpCounts()
+	fixture.client.Close()
+	if counts := fixture.host.Redis.OpCounts(); len(counts) != 0 {
+		t.Errorf("a second Close made Redis ops: %v", counts)
+	}
+
+	fixture.clock.Advance(fixture.settings.Interval)
+	if allowance := fixture.publish(0); allowance.P1IssuedByteCount != 30 || allowance.UnfundedIssuedByteCount != 0 || allowance.FundedIssuedByteCount != 0 || allowance.P0MeasuredByteCount != 50 || allowance.P1QueuedByteCount != 0 {
+		t.Errorf("the step after the close counted P1 %d, P2 %d unfunded and %d funded, P0 %d, queued %d", allowance.P1IssuedByteCount, allowance.UnfundedIssuedByteCount, allowance.FundedIssuedByteCount, allowance.P0MeasuredByteCount, allowance.P1QueuedByteCount)
+	}
+	// the last report again, within its ttl
+	fixture.clock.Advance(fixture.settings.Interval)
+	if allowance := fixture.publish(0); allowance.P1IssuedByteCount != 0 || allowance.UnfundedIssuedByteCount != 0 || allowance.FundedIssuedByteCount != 0 || allowance.P0MeasuredByteCount != 0 {
+		t.Errorf("a step reading the last report again counted P1 %d, P2 %d unfunded and %d funded, P0 %d", allowance.P1IssuedByteCount, allowance.UnfundedIssuedByteCount, allowance.FundedIssuedByteCount, allowance.P0MeasuredByteCount)
+	}
+	metrics := fixture.host.Metrics
+	for _, c := range []struct {
+		class string
+		kind  string
+		want  float64
+	}{
+		{class: "p0", kind: string(sidecar.WriteP0KindRotation), want: 300},
+		{class: "p0", kind: string(sidecar.WriteP0KindRemove), want: 50},
+		{class: "p1", kind: "", want: 83},
+		{class: "p2_unfunded", kind: "", want: 20},
+		{class: "p2_funded", kind: "", want: 30},
+	} {
+		if got := metrics.Value(writeBudgetIssuedMetricName, "meta-1", c.class, c.kind); got != c.want {
+			t.Errorf("%s %s: %v, want %v", c.class, c.kind, got, c.want)
+		}
+	}
+}
+
+// Close's report is bounded: with Redis taking its write and never answering, Close returns once
+// CloseReportTimeout passes on the host's clock, having written nothing, and the issued metric still gains what
+// the process spent.
+func TestWriteBudgetCloseReportIsBounded(t *testing.T) {
+	fixture := newBudgetFixture(t)
+	// shorter than the fake's own request timeout, so the bound that ends the write is Close's
+	if sidecartest.DefaultFakeRedisSettings().RequestTimeout <= fixture.settings.CloseReportTimeout {
+		t.Fatalf("a close bound of %s", fixture.settings.CloseReportTimeout)
+	}
+	fixture.setPools(&WriteBudgetShare{P1ByteCount: 1000})
+	grant, err := fixture.client.AdmitP1(t.Context(), "meta-1", connect.NewId(), sidecar.WriteCost{ImmediateByteCount: 63, DeferredByteCount: 37})
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant.Close()
+	fired, err := fixture.host.Redis.Faults().Add(&sidecartest.FaultPlan{
+		Op:         sidecartest.FaultOpRedis,
+		KeyPrefix:  writeBudgetKey("meta-1"),
+		Result:     sidecartest.Delay,
+		Delay:      sidecartest.DelayNeverLands,
+		WritesOnly: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed := make(chan struct{})
+	go func() {
+		defer close(closed)
+		fixture.client.Close()
+	}()
+	// the write parks before Close can return, which it cannot until the clock moves
+	select {
+	case <-fired:
+	case <-closed:
+		t.Fatal("Close returned without writing a report")
+	case <-t.Context().Done():
+		t.Fatal("Close wrote no report")
+	}
+	select {
+	case <-closed:
+		t.Fatal("Close returned while its report went unanswered")
+	default:
+	}
+	fixture.clock.Advance(fixture.settings.CloseReportTimeout)
+	select {
+	case <-closed:
+	case <-t.Context().Done():
+		t.Fatal("Close outlived its bound")
+	}
+	if fieldValues, err := fixture.host.Redis.HashGetAll(t.Context(), writeBudgetKey("meta-1")); err != nil || len(fieldValues) != 0 {
+		t.Errorf("Redis holds %v, %v", fieldValues, err)
+	}
+	if got := fixture.host.Metrics.Value(writeBudgetIssuedMetricName, "meta-1", "p1", ""); got != 63 {
+		t.Errorf("p1 issued %v, want 63", got)
+	}
+}
+
+// The fake Redis with its next allowance read held once armed, as a call that outlives its ctx is: the read says
+// it has begun, and goes on only once released.
+type budgetHeldReadRedis struct {
+	sidecar.Redis
+	armed       atomic.Bool
+	entered     chan struct{}
+	release     chan struct{}
+	releaseOnce sync.Once
+}
+
+func (self *budgetHeldReadRedis) HashGet(ctx context.Context, key string, field string) ([]byte, bool, error) {
+	if field == writeBudgetAllowanceField && self.armed.CompareAndSwap(true, false) {
+		close(self.entered)
+		<-self.release
+	}
+	return self.Redis.HashGet(ctx, key, field)
+}
+
+func (self *budgetHeldReadRedis) releaseRead() {
+	self.releaseOnce.Do(func() {
+		close(self.release)
+	})
+}
+
+// A process's budget with its goroutines, its interval's tick held in its allowance read, as one stuck in Redis is,
+// and Close running beside it, its bound on the clock.
+type budgetHeldTickFixture struct {
+	t        *testing.T
+	settings *WriteBudgetSettings
+	clock    *sidecartest.FakeClock
+	host     *sidecartest.FakeHost
+	redis    *budgetHeldReadRedis
+	client   *WriteBudgetClient
+	// closed as Close returns
+	closed chan struct{}
+}
+
+// The budget's first tick done and a P1 admission within its first share, then the next tick held and Close
+// waiting, neither the tick nor the bound let go.
+func newBudgetHeldTickFixture(t *testing.T) *budgetHeldTickFixture {
+	settings := governorTestSettings()
+	settings.WeightRefreshInterval = time.Hour
+	clock := sidecartest.NewFakeClock(sidecartest.DefaultClockStart())
+	host := sidecartest.NewFakeHost(t.Context(), clock, nil, nil, nil)
+	redis := &budgetHeldReadRedis{Redis: host.Redis, entered: make(chan struct{}), release: make(chan struct{})}
+	serviceHost := host.ServiceHost()
+	serviceHost.Redis = redis
+	start := clock.Now()
+	client, err := NewWriteBudget(t.Context(), serviceHost, nil, settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(client.Close)
+	// first at cleanup: a test that stopped early lets the tick go, so neither Close waits on it
+	t.Cleanup(redis.releaseRead)
+	awaitBudgetTimerAt(t, clock, start.Add(settings.Interval), nil)
+	grant, err := client.AdmitP1(t.Context(), "meta-1", connect.NewId(), sidecar.WriteCost{ImmediateByteCount: 63, DeferredByteCount: 37})
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant.Close()
+	redis.armed.Store(true)
+	clock.Advance(settings.Interval)
+	select {
+	case <-redis.entered:
+	case <-t.Context().Done():
+		t.Fatal("the interval's tick read no allowance")
+	}
+	fixture := &budgetHeldTickFixture{
+		t:        t,
+		settings: settings,
+		clock:    clock,
+		host:     host,
+		redis:    redis,
+		client:   client,
+		closed:   make(chan struct{}),
+	}
+	go func() {
+		defer close(fixture.closed)
+		client.Close()
+	}()
+	// Close has armed its bound, so it waits for the tick or the bound from here; it cannot return before it arms it
+	awaitBudgetTimerAt(t, clock, clock.Now().Add(settings.CloseReportTimeout), fixture.closed)
+	select {
+	case <-fixture.closed:
+		t.Fatal("Close returned beside a tick still running")
+	default:
+	}
+	if p1ByteCount := fixture.reportedP1ByteCount(); p1ByteCount != 0 {
+		t.Fatalf("Close reported %d B while the tick ran", p1ByteCount)
+	}
+	return fixture
+}
+
+// The P1 the process's report in Redis holds.
+func (self *budgetHeldTickFixture) reportedP1ByteCount() int64 {
+	self.t.Helper()
+	reports, err := ReadWriteBudgetReports(self.t.Context(), self.host.Redis, "meta-1")
+	if err != nil || len(reports) != 1 || reports[0].ProcessId != self.client.ProcessId() {
+		self.t.Fatalf("reports %v, %v", reports, err)
+	}
+	return reports[0].P1ByteCount
+}
+
+// Returns once ch closes.
+func (self *budgetHeldTickFixture) await(ch chan struct{}, what string) {
+	self.t.Helper()
+	select {
+	case <-ch:
+	case <-self.t.Context().Done():
+		self.t.Fatalf("%s never ended", what)
+	}
+}
+
+// Close writes its report only once the goroutine that ticks has returned, so no interval's report, computed
+// before the close, lands after the last: while the tick runs Close writes nothing, and once it ends Close's report
+// holds what the process spent.
+func TestWriteBudgetCloseReportsOnceTheTickHasEnded(t *testing.T) {
+	fixture := newBudgetHeldTickFixture(t)
+	fixture.redis.releaseRead()
+	fixture.await(fixture.closed, "Close")
+	fixture.await(fixture.client.accountsDone, "the ticking goroutine")
+	if p1ByteCount := fixture.reportedP1ByteCount(); p1ByteCount != 63 {
+		t.Errorf("the last report holds P1 %d, want 63", p1ByteCount)
+	}
+}
+
+// A tick that outlives Close's bound leaves Close writing nothing: Close returns at its bound, and the tick, let go
+// after it, finds the account closed and writes nothing either. The process's last interval is lost, as a killed
+// process's is, and nothing stale lands after a last report.
+func TestWriteBudgetCloseWritesNothingPastItsBoundBesideATick(t *testing.T) {
+	fixture := newBudgetHeldTickFixture(t)
+	fixture.clock.Advance(fixture.settings.CloseReportTimeout)
+	fixture.await(fixture.closed, "Close")
+	if p1ByteCount := fixture.reportedP1ByteCount(); p1ByteCount != 0 {
+		t.Errorf("Close past its bound reported P1 %d", p1ByteCount)
+	}
+	fixture.redis.releaseRead()
+	fixture.await(fixture.client.accountsDone, "the ticking goroutine")
+	if p1ByteCount := fixture.reportedP1ByteCount(); p1ByteCount != 0 {
+		t.Errorf("the tick past the close reported P1 %d", p1ByteCount)
 	}
 }
 
