@@ -12,11 +12,21 @@
 // ?push=P; the statement built on the head the plan read and sent, retried under that one push id until evs answers
 // (evs_push.go), and re-tokenized on 412 PATH_EPOCH with what it sealed kept (DESIGN-DETAILS 9.2.5). A refusal asking
 // for a rebuild runs the attempt again under a new push id from a fresh read; rebuilds and retokens together at most
-// PushRebuildCount times; a creation refused 409 is planned once more, since the removal a fresh read shows sets its
-// version (§11.7's versions row), unless the path now stands, whose 409 then goes back; a creation a mapper's block
-// holds, 412 PATH_EPOCH_DUE (§11.6's block row), is planned again after its wait or at the ref's next verified head,
-// at most PushRetryCount times, then ErrEvsPathEpochDue (DESIGN-DETAILS 9.2.5); no due holds a creation, every due
-// being batched (QD-1046); every other refusal, a file-mode 409 with paths among them, goes back to the caller.
+// PushRebuildCount times; a creation a mapper's block holds, 412 PATH_EPOCH_DUE (§11.6's block row), is planned again
+// after its wait or at the ref's next verified head, at most PushRetryCount times, then ErrEvsPathEpochDue
+// (DESIGN-DETAILS 9.2.5); no due holds a creation, every due being batched (QD-1046); every other refusal, a
+// file-mode 409 with paths among them, goes back to the caller, but for a creation's.
+//
+// A creation refused 409 (§11.7's versions row: a client refused creating reads the removal and retries) is planned
+// once more from a fresh read, which shows the removal the first read did not, and the parent directories other
+// writers created meanwhile: a directory's creation is a CAS like a file's (§11.8's 5g), so of N writers creating
+// their own files under one new directory one creates it and the others' pushes are refused, and each one's plan
+// made again takes a delta on it, which merges with no path-level CAS (§11.7's directory row), every file landing in
+// its own path. The 409 goes back only when a path the write itself created now stands, another writer's creation of
+// the same path, whose content the write would replace: never a directory the plan created for those paths, the
+// root's among them, nor a file the index writer's hook added, which the hook rebases at every plan (§11.14's
+// conflict row). That plan, and every one after it, is an attempt like the first, rebuilt, retokened or waited out
+// alike and held to the same check; a second creation's 409 goes back.
 //
 // A write held to the version its caller read (EvsPathWrite.IfVersion; QD-721) is checked by every plan, the first
 // and each made again, so a rebuild or a creation's second plan never puts a caller's older bytes over a version
@@ -160,14 +170,21 @@ func (self *EvsRepo) writePathsPlanned(ctx context.Context, args *EvsWritePathsA
 	if err != nil {
 		return nil, nil, err
 	}
+	// after a creation's 409: the paths the write itself created, which no later plan may find standing, and the 409
+	// that goes back if one does, with the plan its push was made of
 	var creations map[string]bool
+	var creationErr error
+	var creationPlan *EvsWritePlan
 	rebuilds := 0
 	dueWaits := 0
 	for attempt := 0; ; attempt += 1 {
-		result, plan, err := self.writeOnce(ctx, args, refName, refId, 0 < attempt, &rebuilds, extras)
+		result, plan, err := self.writeOnce(ctx, args, refName, refId, 0 < attempt, &rebuilds, extras, creations)
 		switch {
 		case err == nil:
 			return result, plan, nil
+		case errors.Is(err, errEvsCreationStands):
+			// another writer created a path this write created: the write's content would replace theirs
+			return nil, creationPlan, creationErr
 		case errors.Is(err, errEvsWriteSplits):
 			// its new slots' bodies pass one push's (QD-819): its halves, each its own write (evs_write_split.go)
 			return self.writeSplit(ctx, args)
@@ -189,36 +206,39 @@ func (self *EvsRepo) writePathsPlanned(ctx context.Context, args *EvsWritePathsA
 			rebuilds += 1
 			continue
 		case evsCreationConflict(err) && creations == nil && plan != nil:
+			// the write's own creations: the paths its writes name that the plan created, never a parent directory
+			// the plan created for them, nor an index file the hook added (the file header)
+			written := map[string]bool{}
+			for _, write := range args.Writes {
+				if !write.Remove {
+					written[write.Path] = true
+				}
+			}
 			creations = map[string]bool{}
 			for _, planned := range plan.Paths {
-				if planned.BaseEntryVersion == 0 && !planned.Remove {
+				if written[planned.Path] && planned.creates() {
 					creations[planned.Path] = true
 				}
 			}
 			if len(creations) == 0 {
 				return nil, plan, err
 			}
-			// read the removal the first read did not show, and plan once more, unless a creation now stands
-			retried, retriedPlan, retryErr := self.writeOnce(ctx, args, refName, refId, true, &rebuilds, extras, creations)
-			if retryErr == nil {
-				return retried, retriedPlan, nil
-			}
-			if errors.Is(retryErr, errEvsCreationStands) {
-				return nil, plan, err
-			}
-			return nil, retriedPlan, retryErr
+			// planned once more from a fresh read: the removal the first read did not show sets a creation's version,
+			// and a parent another writer created takes this push's delta
+			creationErr, creationPlan = err, plan
 		default:
 			return nil, plan, err
 		}
 	}
 }
 
-// A creation refused 409 now stands: the refusal goes back to the caller.
+// A path the write created, which a creation's 409 refused, now stands: that 409 goes back to the caller.
 var errEvsCreationStands = errors.New("evs: a path created concurrently")
 
-// One attempt: see the file header. creations, when given, are paths the last plan created, refused with
-// errEvsCreationStands if this plan finds one standing. rebuilds counts the write's rebuilds and retokens.
-func (self *EvsRepo) writeOnce(ctx context.Context, args *EvsWritePathsArgs, refName []byte, refId Id, fresh bool, rebuilds *int, extras *evsPushExtras, creations ...map[string]bool) (*EvsWritePathsResult, *EvsWritePlan, error) {
+// One attempt: see the file header. creations, nil before a creation's 409, are the paths the write itself created,
+// refused with errEvsCreationStands if this plan finds one standing. rebuilds counts the write's rebuilds and
+// retokens.
+func (self *EvsRepo) writeOnce(ctx context.Context, args *EvsWritePathsArgs, refName []byte, refId Id, fresh bool, rebuilds *int, extras *evsPushExtras, creations map[string]bool) (*EvsWritePathsResult, *EvsWritePlan, error) {
 	writes := args.Writes
 	repoKey, err := self.client.args.Gkm.EnsureWritable(ctx, self.repoId)
 	if err != nil {
@@ -245,11 +265,9 @@ func (self *EvsRepo) writeOnce(ctx context.Context, args *EvsWritePathsArgs, ref
 	if err != nil {
 		return nil, nil, err
 	}
-	for _, created := range creations {
-		for _, planned := range plan.Paths {
-			if created[planned.Path] && planned.BaseEntryVersion != 0 {
-				return nil, plan, errEvsCreationStands
-			}
+	for _, planned := range plan.Paths {
+		if creations[planned.Path] && planned.BaseEntryVersion != 0 {
+			return nil, plan, errEvsCreationStands
 		}
 	}
 	if extras != nil {
