@@ -1657,6 +1657,43 @@ func (self *GkmGroupClient) hintWork(ctx context.Context, kind string, repoId Id
 	}()
 }
 
+// After a late ask (askLate), the repo is synced again each LateAskInterval while its newest generation is still held
+// without its key, which asks again, so the next ask goes as soon as the interval lets it (DESIGN-DETAILS 6.2.4's
+// asker row: with since its first ask, at most once a LateAskInterval, which gkm reads to widen its hint to other
+// holders after its LateAskWidenAge) and not at whatever next syncs the repo, which may be the hourly resync. An ask's
+// wrap-pending hint is lossy: a holder's push batch carries one hint of the per-client gkm topic with its bytes, the
+// batch's last, so asks that reach a holder together, two repos' asks at one sync, leave the earlier ones a resync
+// there, and a resync delivers to the holders that joined since a claim (answerLateInFlow), not to one the claim held
+// whose rotator passed it for want of a ReaderKey, as a re-former's rotation passes a device that published its key
+// late: that holder's asks alone bring its delivery. One follow-up runs a repo at a time, an ask made meanwhile
+// following on in it; after its first sync it ends once since is a ResyncInterval old, from when the resyncs ask.
+// None runs without hints attached, where the caller's syncs ask.
+func (self *GkmGroupClient) followLateAsk(repoId Id, since time.Time) {
+	ctx := func() context.Context {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		return self.hintsCtx
+	}()
+	if ctx == nil || self.settings.LateAskInterval <= 0 {
+		return
+	}
+	self.hintWork(ctx, "late-ask", repoId, func() {
+		for synced := false; ; synced = true {
+			if synced && self.settings.ResyncInterval <= self.clock.Now().Sub(since) {
+				return
+			}
+			if self.wait(ctx, self.settings.LateAskInterval) != nil {
+				return
+			}
+			if top, err := self.newestHeldGeneration(repoId); err != nil || top.key != nil || top.poisoned {
+				// a delivery opened it, or nothing this device holds is to be asked for
+				return
+			}
+			self.hintWork(ctx, "sync", repoId, func() { self.logFlowError("late ask", self.SyncRepo(ctx, repoId)) })
+		}
+	})
+}
+
 // Logs what a hint's flow ended with. A wait is the expected end of a flow whose turn has not come.
 func (self *GkmGroupClient) logFlowError(flow string, err error) {
 	if err != nil && self.log.V(1).Enabled() {

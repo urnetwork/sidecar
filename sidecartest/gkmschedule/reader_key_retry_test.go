@@ -1,16 +1,26 @@
 package gkmschedule
 
-// What a device's ReaderKey upkeep does when gkm refuses what it sends (v0, owner decision 610), on T2's KeyDelivery
-// world: a device whose first upload gkm refused while it loaded the network's state, which asks nothing, stands at
-// gkm for the next rotation because its upkeep tries the upload again within seconds.
+// What a device's ReaderKey upkeep and late asks do when gkm, or the push between it and the holders, loses what they
+// sent (v0, owner decision 610), on T2's KeyDelivery world: a device whose first upload gkm refused while it loaded the
+// network's state, which asks nothing, stands at gkm for the next rotation because its upkeep tries the upload again
+// within seconds; and a late ask whose wrap-pending hint no holder took, as a holder's push batch drops the bytes of
+// every gkm hint but its last, is asked again a LateAskInterval on, which a holder answers, where the holders'
+// resyncs answer nothing for a device the claim's state held.
 
 import (
 	"bytes"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
+	"time"
+
+	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/sidecar"
+	"github.com/urnetwork/sidecar/gkmservice"
+	"github.com/urnetwork/sidecar/protocol"
+	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
 // Starts device's ReaderKey upkeep as StartUpkeep does, on settings and with no hint intake: a device that asks
@@ -131,4 +141,103 @@ func TestDeviceThatAsksNothingIsInTheNextRotationOnceItsRefusedReaderKeyIsTriedA
 			t.Errorf("the reader asked %d times", count)
 		}
 	}
+}
+
+// Whether hint is a wrap-pending naming device's late ask in the world's group, sent after version.
+func wrapPendingFor(world *FsKeysWorld, device *FsKeysDevice, after uint64) func(hint *FsKeysHint) bool {
+	return func(hint *FsKeysHint) bool {
+		return hint.Topic == sidecar.PushTopicGkm && hint.Hint.GetKind() == protocol.GkmHintKind_GKM_HINT_WRAP_PENDING &&
+			bytes.Equal(hint.Hint.GetGroupId(), world.GroupId.Bytes()) && string(hint.Hint.GetRecipient()) == fsKeysRecipient(device.SidecarId()) &&
+			after < hint.Version
+	}
+}
+
+// A reader the writer's rotation passed for want of a ReaderKey, as a re-former's rotation passes a device that
+// published its key late, publishes one and asks for its delivery; the ask's wrap-pending hint is lost, as at a holder
+// whose push batch carried another gkm hint after it, so no holder answers, and the granter's resync, which delivers
+// to holders that joined since a claim, delivers nothing to one the claim held. A LateAskInterval after the ask, and
+// not before, the reader's repo is synced again and asks again; the granter takes that hint and delivers, and the
+// reader holds the rotation.
+func TestLateAskWhoseHintIsLostIsAskedAgainAfterTheLateAskInterval(t *testing.T) {
+	pending := newPendingDeliveryWorld(t, false, false)
+	world := pending.world
+	reader := pending.reader
+	stopRefusing, asks := refuseReaderKeyUploads(reader)
+	stopRefusing()
+	key, err := pending.granter.Client.RotateRepo(world.Ctx, world.RepoId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if world.WrapRecipients(key.Generation())[reader.SidecarId()] {
+		t.Fatal("the rotation staged a delivery to a reader with no ReaderKey")
+	}
+	reader.PublishReaderKey()
+	granterHints := attachPendingHints(t, world, pending.granter)
+	readerHints := attachPendingHints(t, world, reader)
+	askedAt := world.Clock.Now()
+	if err := reader.Client.SyncRepo(world.Ctx, world.RepoId); err == nil {
+		t.Fatal("the reader synced a key before any delivery")
+	}
+	first := world.AwaitHint(pending.granter, wrapPendingFor(world, reader, 0))
+	if count := asks(); count != 1 {
+		t.Fatalf("%d asks at the first sync", count)
+	}
+	// the hint is lost, never relayed; the granter's resync delivers to the holders that joined since the claim
+	if err := pending.granter.Client.SyncRepo(world.Ctx, world.RepoId); err != nil {
+		t.Fatal(err)
+	}
+	if world.WrapRecipients(key.Generation())[reader.SidecarId()] {
+		t.Fatal("the granter's resync delivered to a holder the claim held")
+	}
+	interval := sidecar.DefaultGkmSettings().LateAskInterval
+	awaitTimerAt(t, world, askedAt.Add(interval))
+	world.Clock.Advance(interval - time.Millisecond)
+	if count := asks(); count != 1 {
+		t.Fatalf("%d asks within the LateAskInterval", count)
+	}
+	world.Clock.Advance(time.Millisecond)
+	again := world.AwaitHint(pending.granter, wrapPendingFor(world, reader, first.Version))
+	if count := asks(); count != 2 {
+		t.Errorf("%d asks a LateAskInterval on", count)
+	}
+	relayLateDeliveryHint(t, granterHints, again)
+	relayLateDeliveryHint(t, readerHints, world.AwaitHint(reader, world.pendingHint))
+	for {
+		held, changed := reader.Client.RepoKeyHeld(world.RepoId)
+		if held {
+			break
+		}
+		select {
+		case <-changed:
+		case <-world.Ctx.Done():
+			t.Fatal("the reader never held the rotation")
+		}
+	}
+	if held, err := reader.Client.CurrentRepoKey(world.Ctx, world.RepoId); err != nil || held.Generation() != key.Generation() || !bytes.Equal(held.Commitment(), key.Commitment()) {
+		t.Fatalf("the reader's key of the rotation: %v", err)
+	}
+	if signer := deliverySignerAt(t, world, reader, key.Generation()); signer == nil || *signer != pending.granter.SidecarId() {
+		t.Error("the reader's delivery is not the granter's")
+	}
+}
+
+// The signer of the delivery gkm holds of generation to device, nil for none.
+func deliverySignerAt(t *testing.T, world *FsKeysWorld, device *FsKeysDevice, generation uint64) *sidecar.Id {
+	t.Helper()
+	recipient := "/" + fsKeysRecipient(device.SidecarId()) + "/"
+	for key, body := range world.objects(gkmservice.GkmWrapGenerationPrefix(world.GroupId, generation)) {
+		if !strings.Contains(key, recipient) {
+			continue
+		}
+		signed := &bridge.Signed{}
+		if err := proto.Unmarshal(body, signed); err != nil {
+			t.Fatalf("a stored delivery: %v", err)
+		}
+		delivery, err := sidecar.ParseGkmDelivery(signed, sidecar.GkmWrapTypeReader, sidecar.GkmIdentityKeys(world.Log.Tip()))
+		if err != nil {
+			t.Fatalf("a stored delivery: %v", err)
+		}
+		return &delivery.SignerId
+	}
+	return nil
 }

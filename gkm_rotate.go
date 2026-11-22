@@ -693,8 +693,10 @@ func (self *gkmGroupManager) ownDeliveries(ctx context.Context, state GkmAuthVie
 }
 
 // §10.6's late ask of one generation, to this sidecar's current ReaderKey, at most once a LateAskInterval. A lost
-// ask costs latency alone, so its error is dropped. With no current ReaderKey there is nothing a holder could seal
-// to, so the ask waits for one: the upkeep is asked to publish it (askReaderKey), and its upload's resync asks.
+// ask costs latency alone, so its error is dropped, and the repo is synced again each LateAskInterval while the
+// generation stays unopened, which asks again (followLateAsk). With no current ReaderKey there is nothing a holder
+// could seal to, so the ask waits for one: the upkeep is asked to publish it (askReaderKey), and its upload's resync
+// asks.
 func (self *gkmGroupManager) askLate(ctx context.Context, groupId Id, generation uint64, now time.Time) {
 	client := self.client
 	if client.args.ReaderKeySha256 == nil {
@@ -714,6 +716,7 @@ func (self *gkmGroupManager) askLate(ctx context.Context, groupId Id, generation
 	if _, err := client.args.Api.Wraps(ctx, self.repoId, groupId, generation, query); err != nil && client.log.V(1).Enabled() {
 		client.log.Infof("[gkm]late ask of generation %d failed: %v", generation, err)
 	}
+	client.followLateAsk(self.repoId, since)
 }
 
 // A late ask that found no current ReaderKey (DESIGN-DETAILS 6.2.4's asker row: a device none of whose keys opens
