@@ -268,16 +268,22 @@ func TestCertsAriRenewalSkipsTheNameBackoff(t *testing.T) {
 	}
 }
 
-// Two orders for one set admitted to LE in one pass, sent one at a time: the first fails there, and the
-// second, not yet sent, waits out the backoff the first set, queued again with LE never asked; the next
-// pass takes both to GTS.
+// Two orders sharing names admitted to LE in one pass, sent one at a time: one for the network's pair
+// alone and one whose set holds a live alias's pair beside it, as a network's devices order around an
+// alias's start. They are two sets, so both are admitted (one set's second order waits for its first,
+// QD-1189). The first fails there, and the second, not yet sent, waits out the backoff the first set on
+// their shared names, queued again with LE never asked; the next pass takes both to GTS.
 func TestCertsOrderAdmittedBeforeAFailureWaitsOutTheBackoff(t *testing.T) {
 	settings := testSettings()
 	settings.OrderConcurrency = 1
 	run := newTestRun(t, settings)
 	first := run.device("k9backoff08")
+	aliasSet, err := sidecar.TlsIdentifierSet(testRoot, "k9backoff08", "", []string{"k9backoff08-alias"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	firstId := run.accept(first)
-	secondId := run.accept(newTestDeviceOf(t, first.networkId, first.identifierSet))
+	secondId := run.accept(newTestDeviceOf(t, first.networkId, aliasSet))
 	run.acme.script(testAuthorizationRefused(first.identifierSet))
 	report := run.runOrders()
 	both := []sidecar.Id{firstId, secondId}
