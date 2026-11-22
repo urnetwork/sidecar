@@ -21,7 +21,8 @@ import (
 	"sync"
 )
 
-// The dns component. Attach and Close come from the Sidecar's run loop (SidecarComponent), never at once.
+// The dns component. Close comes after its last generation is detached (SidecarComponent), so no Attach races it; the
+// lock only keeps the client Close reads whole.
 type dnsComponent struct {
 	sidecar *Sidecar
 
