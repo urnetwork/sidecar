@@ -7,10 +7,11 @@
 // Error{UNAUTHENTICATED} or Error{VERSION}, which carries this side's range of wire majors
 // (plan-PROTO-version-error-range), and a refused Hello closes any gate that stood.
 //
-// A verified Hello stands for HelloCacheTimeout, until a frame under another C15 key, or until a send's
-// ack error (plan-PROTO-small-readings reading 1), and EnsureHello runs a new one when none stands, one
-// at a time per peer: a second caller joins the first's. Both sides may send Hello at once: each answers
-// the other's, so the pair converges.
+// A verified Hello stands for HelloCacheTimeout, until a frame under another C15 key, until a send's ack
+// error (plan-PROTO-small-readings reading 1), or until connect reports that the peer lost its session with
+// this client (QD-1185, rpc_peer_session.go), and EnsureHello runs a new one when none stands, one at a time
+// per peer: a second caller joins the first's. Both sides may send Hello at once: each answers the other's,
+// so the pair converges.
 
 package sidecar
 

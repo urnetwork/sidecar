@@ -191,6 +191,9 @@ type testRpcSide struct {
 	edge bool
 	// set before the side runs: hears each send before it is delivered or dropped
 	onSend func(envelope *protocol.Envelope, destinationId connect.Id)
+	// what the dispatcher subscribed to connect's notice that a peer lost its session with this client, which a test
+	// calls as connect would (rpc_peer_session.go)
+	peerSessionLost func(peerId connect.Id)
 }
 
 // The side's identity for a new side: fresh seeds and ids.
@@ -285,7 +288,7 @@ func (self *testRpcPair) addClient(clientId connect.Id, identity *testRpcIdentit
 			side.events <- event
 		},
 		Admissions: self.admissionsFor(identity.sidecarId, clock),
-	}, &subprotocolSeams{clientPublicKeyOf: testRpcClientPublicKeyOf, send: side.send, clientId: clientId})
+	}, &subprotocolSeams{clientPublicKeyOf: testRpcClientPublicKeyOf, send: side.send, clientId: clientId, peerSessionLost: side.subscribePeerSessionLost})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,6 +301,29 @@ func (self *testRpcPair) addClient(clientId connect.Id, identity *testRpcIdentit
 	defer self.stateLock.Unlock()
 	self.sides[clientId] = side
 	return side
+}
+
+// The dispatcher's subscription to connect's notice that a peer lost its session with this client, kept for a test
+// to call.
+func (self *testRpcSide) subscribePeerSessionLost(lost func(peerId connect.Id)) func() {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.peerSessionLost = lost
+	return func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.peerSessionLost = nil
+	}
+}
+
+// Tells this side's dispatcher, as connect would, that peerId lost its session with this client.
+func (self *testRpcSide) losePeerSession(peerId connect.Id) {
+	self.stateLock.Lock()
+	lost := self.peerSessionLost
+	self.stateLock.Unlock()
+	if lost != nil {
+		lost(peerId)
+	}
 }
 
 // Adds an edge's side (stream_edge.go): a dispatcher in SubprotocolRoleEdge with no binding, store or

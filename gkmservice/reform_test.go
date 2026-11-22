@@ -2,9 +2,14 @@ package gkmservice
 
 import (
 	"bytes"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"strconv"
 	"testing"
+
+	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
@@ -170,7 +175,7 @@ func TestGkmLadderRefusesWhatItsChecksDoNotPass(t *testing.T) {
 		t.Errorf("an empty ladder: %d", recorder.Code)
 	}
 	many := []*bridge.Signed{}
-	for count := 0; count <= gkmLadderMaxCount; count += 1 {
+	for count := 0; count <= fixture.settings.LadderMaxCount; count += 1 {
 		many = append(many, world.rotate1)
 	}
 	if recorder := world.postLadder(world.adminToken, many...); recorder.Code != http.StatusBadRequest {
@@ -335,5 +340,303 @@ func TestGkmDeletedRepoTakesOnlyAReseedsFormAndLadder(t *testing.T) {
 	fixture.setRepoState(world.repoId, "meta-2", protocol.EvsRepoState_EVS_REPO_ACTIVE)
 	if recorder := world.postEpoch(world.adminToken, 1, gkmTestEpochRequest(staged.Message(), 2, true)); recorder.Code != http.StatusOK {
 		t.Errorf("a commit once the repo is restored: %d", recorder.Code)
+	}
+}
+
+// The bytes of the admin's GroupForm re-forming previousGroupId into groupId at generation, as postReform posts them
+// and the old group's closing marker holds them.
+func (self *gkmGroupWorld) reformBytes(groupId sidecar.Id, previousGroupId sidecar.Id, generation uint64) []byte {
+	self.t.Helper()
+	return self.fixture.marshal(self.form(self.admin, groupId, &previousGroupId, generation))
+}
+
+// What a key of the world's cluster holds, and whether it stands at all: an empty object stands.
+func (self *gkmGroupWorld) stored(key string) ([]byte, bool) {
+	self.t.Helper()
+	objectBytes, _, err := readGkmObject(self.fixture.ctx, self.fixture.cluster("meta-2"), key, self.fixture.settings.StatementMaxByteCount)
+	if errors.Is(err, sidecar.ErrBlobNotFound) {
+		return nil, false
+	}
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	return objectBytes, true
+}
+
+// Empties groupId's closing marker by If-Match, as a void closing does.
+func (self *gkmGroupWorld) emptyClosingMarker(groupId sidecar.Id) {
+	self.t.Helper()
+	cluster := self.fixture.cluster("meta-2")
+	info, err := cluster.Head(self.fixture.ctx, GkmGroupClosedKey(groupId))
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	if _, err := cluster.PutIfMatch(self.fixture.ctx, GkmGroupClosedKey(groupId), info.Etag, []byte{}, nil); err != nil {
+		self.t.Fatal(err)
+	}
+}
+
+// The numbers of the generations a route serves of groupId after since: GET gen, or with dropKey the repo's drop-key
+// route, which serves the newest form's group.
+func (self *gkmGroupWorld) servedGenerations(groupId sidecar.Id, since uint64, dropKey bool) []uint64 {
+	self.t.Helper()
+	path := "/gkm/groups/" + sidecar.EvsKeyId(groupId) + "/gen?since=" + strconv.FormatUint(since, 10)
+	if dropKey {
+		path = "/gkm/repos/" + sidecar.EvsKeyId(self.repoId) + "/drop-key?since=" + strconv.FormatUint(since, 10)
+	}
+	recorder := self.fixture.serve(http.MethodGet, path, self.adminToken, nil)
+	reply := &protocol.GkmGenerationsReply{}
+	if recorder.Code != http.StatusOK || proto.Unmarshal(recorder.Body.Bytes(), reply) != nil {
+		self.t.Fatalf("%s: %d", path, recorder.Code)
+	}
+	numbers := []uint64{}
+	for _, signed := range reply.GetGenerations() {
+		rotate := &protocol.GenRotate{}
+		if err := proto.Unmarshal(signed.GetBody(), rotate); err != nil {
+			self.t.Fatal(err)
+		}
+		numbers = append(numbers, rotate.GetGeneration())
+	}
+	return numbers
+}
+
+// QD-1186: a re-form closes the group it re-forms before its form is filed. The old group's closing marker holds the
+// form byte for byte, naming the new group, and the closing's verdict is sealed, the form's bytes again; the new
+// group stands open.
+func TestGkmReformClosesTheGroupItReformsBeforeItsForm(t *testing.T) {
+	world := newGkmReformWorld(t, 10)
+	form := world.reformBytes(world.groupId, world.oldGroupId, 2)
+	if marker, found := world.stored(GkmGroupClosedKey(world.oldGroupId)); !found || !bytes.Equal(marker, form) {
+		t.Fatalf("the old group's closing marker is not the re-form's GroupForm")
+	}
+	closing, err := parseGkmGroupClosing(world.oldGroupId, form, "")
+	if err != nil || closing.newGroupId != world.groupId || closing.generation != 2 {
+		t.Fatalf("the closing marker names group %s at generation %d: %v", closing.newGroupId, closing.generation, err)
+	}
+	if verdict, found := world.stored(GkmGroupClosingKey(world.oldGroupId, sha256Of(form))); !found || !bytes.Equal(verdict, form) {
+		t.Errorf("the closing's verdict is not sealed")
+	}
+	if _, found := world.stored(GkmGroupClosedKey(world.groupId)); found {
+		t.Errorf("the new group stands closed")
+	}
+}
+
+// QD-1186's fence, with a re-form's closing marker standing before its form is filed, so the repo's newest form still
+// names the group and the guard and the claim's forms check pass: a commit is refused before its PUT; a claim is
+// refused 409 with the marker, naming the new group, writing nothing; a generation a claim that started before the
+// marker wrote past the closing form's is served by neither GET gen nor the drop key, and no claim of or on it is
+// answered 412 or 201; a staged delivery is refused too; and once a void closing empties the marker, the group serves
+// that generation as its own and takes claims again.
+func TestGkmClosedGroupTakesNoClaimWrapOrCommitAndServesNothingPastItsForm(t *testing.T) {
+	world := newGkmCommitWorld(t)
+	fixture := world.fixture
+	oldGroupId := world.groupId
+	marker := world.reformBytes(testId("group-new"), oldGroupId, 1)
+	fixture.put("meta-2", GkmGroupClosedKey(oldGroupId), marker)
+
+	staged := world.stageSelfUpdate(1, fakeGkmPin(10))
+	if recorder := world.postEpoch(world.adminToken, 1, gkmTestEpochRequest(staged.Message(), 1, false)); recorder.Code != http.StatusConflict || !bytes.Equal(recorder.Body.Bytes(), marker) {
+		t.Errorf("a commit to the closed group: %d", recorder.Code)
+	}
+	staged.Discard()
+	if world.storedEpoch(1) != nil {
+		t.Errorf("a commit refused by the fence wrote epoch/1")
+	}
+
+	key2, claim2 := world.nextGeneration(world.admin, world.key1, nil)
+	recorder := world.postClaim(world.adminToken, 2, claim2)
+	if recorder.Code != http.StatusConflict || !bytes.Equal(recorder.Body.Bytes(), marker) {
+		t.Fatalf("a claim of the closed group: %d", recorder.Code)
+	}
+	if fixture.object("meta-2", GkmGenerationKey(oldGroupId, 2)) != nil {
+		t.Fatalf("a claim that started once the marker stood wrote gen/2")
+	}
+	// what a claim checked before the marker and created after it leaves, refused by the read after its create
+	fixture.put("meta-2", GkmGenerationKey(oldGroupId, 2), fixture.marshal(claim2))
+	if served := world.servedGenerations(oldGroupId, 0, false); !slices.Equal(served, []uint64{1}) {
+		t.Errorf("GET gen of the closed group serves %v", served)
+	}
+	if served := world.servedGenerations(oldGroupId, 0, true); !slices.Equal(served, []uint64{1}) {
+		t.Errorf("the drop key of the closed group serves %v", served)
+	}
+	_, rival2 := world.nextGeneration(world.admin, world.key1, nil)
+	if recorder := world.postClaim(world.adminToken, 2, rival2); recorder.Code != http.StatusConflict {
+		t.Errorf("a rival claim of generation 2 in the closed group: %d", recorder.Code)
+	}
+	if recorder := world.postClaim(world.adminToken, 2, claim2); recorder.Code != http.StatusConflict {
+		t.Errorf("the refused claim sent again: %d", recorder.Code)
+	}
+	key3, claim3 := world.nextGeneration(world.admin, key2, nil)
+	if recorder := world.postClaim(world.adminToken, 3, claim3); recorder.Code != http.StatusConflict {
+		t.Errorf("a claim on top of the refused one: %d", recorder.Code)
+	}
+	reader := world.newReader("sc-reader")
+	key4, _ := world.nextGeneration(world.admin, key3, nil)
+	delivery := world.readerWrap(world.admin, key4, reader.sidecarId, reader.xwingPublicKey, sidecar.GkmDeliveryStaged, fakeGkmPin(10), fixture.clock.Now())
+	if code := world.postWrap(world.adminToken, 4, gkmTestC8(key4), delivery); code != http.StatusConflict {
+		t.Errorf("a staged delivery to the closed group: %d", code)
+	}
+
+	if fixture.object("meta-2", GkmGenerationKey(oldGroupId, 3)) != nil {
+		t.Errorf("a claim on top of the refused generation wrote gen/3")
+	}
+
+	// a void closing opens the group again: what the refused claim wrote is the group's, its claimer's same bytes are
+	// answered as won, and a claim on it lands
+	world.emptyClosingMarker(oldGroupId)
+	if served := world.servedGenerations(oldGroupId, 0, false); !slices.Equal(served, []uint64{1, 2}) {
+		t.Errorf("GET gen of the group opened again serves %v", served)
+	}
+	if recorder := world.postClaim(world.adminToken, 2, claim2); recorder.Code != http.StatusCreated {
+		t.Errorf("the claim of generation 2 sent again once the group is open: %d", recorder.Code)
+	}
+	if recorder := world.postClaim(world.adminToken, 3, claim3); recorder.Code != http.StatusCreated {
+		t.Errorf("a claim of the group opened again: %d", recorder.Code)
+	}
+}
+
+// QD-1186: a re-form drafted before a claim of the group it re-forms landed carries a generation behind the group's.
+// It is refused 409 with the generation it does not carry, its closing comes to void, which empties the marker, and
+// the group takes claims again; the same request sent again answers the same. A re-form at the group's newest
+// generation then stands, its ladder carrying every generation the old group took byte for byte, so the two groups
+// never hold two generations of one number.
+func TestGkmReformTheGroupMovedPastIsRefusedAndOpensItAgain(t *testing.T) {
+	world := newGkmGroupWorld(t)
+	world.createAndActivate()
+	fixture := world.fixture
+	oldGroupId := world.groupId
+	key2, claim2 := world.nextGeneration(world.admin, world.key1, nil)
+	if recorder := world.postClaim(world.adminToken, 2, claim2); recorder.Code != http.StatusCreated {
+		t.Fatalf("the claim of generation 2: %d", recorder.Code)
+	}
+	staleGroupId := testId("group-stale")
+	staleForm := world.reformBytes(staleGroupId, oldGroupId, 1)
+	for range 2 {
+		recorder := world.postReform(staleGroupId, oldGroupId, 1)
+		if recorder.Code != http.StatusConflict || !bytes.Equal(recorder.Body.Bytes(), fixture.marshal(claim2)) {
+			t.Fatalf("a re-form at generation 1 of a group at generation 2: %d", recorder.Code)
+		}
+		if marker, found := world.stored(GkmGroupClosedKey(oldGroupId)); !found || len(marker) != 0 {
+			t.Errorf("the void closing left the marker %x", marker)
+		}
+		if verdict, found := world.stored(GkmGroupClosingKey(oldGroupId, sha256Of(staleForm))); !found || len(verdict) != 0 {
+			t.Errorf("the stale form's closing is not void")
+		}
+	}
+	if fixture.object("meta-2", GkmFormKey(world.repoId, 2)) != nil {
+		t.Fatalf("the stale form was filed")
+	}
+	key3, claim3 := world.nextGeneration(world.admin, key2, nil)
+	if recorder := world.postClaim(world.adminToken, 3, claim3); recorder.Code != http.StatusCreated {
+		t.Fatalf("a claim of the group opened again: %d", recorder.Code)
+	}
+
+	newGroupId := testId("group-reformed")
+	if recorder := world.postReform(newGroupId, oldGroupId, 3); recorder.Code != http.StatusOK {
+		t.Fatalf("a re-form at the group's newest generation: %d", recorder.Code)
+	}
+	if marker, _ := world.stored(GkmGroupClosedKey(oldGroupId)); !bytes.Equal(marker, world.reformBytes(newGroupId, oldGroupId, 3)) {
+		t.Errorf("the standing re-form did not take the marker the void closing left")
+	}
+	world.groupId = newGroupId
+	if recorder := world.postLadder(world.adminToken, world.rotate1, claim2, claim3); recorder.Code != http.StatusOK {
+		t.Fatalf("the ladder of generations 1 to 3: %d", recorder.Code)
+	}
+	for generation := uint64(1); generation <= 3; generation += 1 {
+		carried := fixture.object("meta-2", GkmGenerationKey(newGroupId, generation))
+		if carried == nil || !bytes.Equal(carried, fixture.object("meta-2", GkmGenerationKey(oldGroupId, generation))) {
+			t.Errorf("the new group does not carry the old group's generation %d byte for byte", generation)
+		}
+	}
+	_, claim4 := world.nextGenerationIn(newGroupId, key3)
+	if recorder := world.postClaim(world.adminToken, 4, claim4); recorder.Code != http.StatusCreated {
+		t.Errorf("the new group's first claim past its ladder: %d", recorder.Code)
+	}
+}
+
+// QD-1186: another re-form finding the group's closing marker under way, or sealed, answers 409 with that closing's
+// form, which its client reads as another re-form standing (ErrGkmWait); a closing that came to nothing gives way, and
+// so does one with no verdict yet whose form the group has moved past, which the second re-form voids, as that
+// closing's own request would, before it takes the marker.
+func TestGkmSecondReformAnswersAClosingUnderWayAndTakesOneThatCameToNothing(t *testing.T) {
+	world := newGkmCommitWorld(t)
+	fixture := world.fixture
+	oldGroupId := world.groupId
+	firstForm := world.reformBytes(testId("group-first"), oldGroupId, 1)
+	fixture.put("meta-2", GkmGroupClosedKey(oldGroupId), firstForm)
+	secondGroupId := testId("group-second")
+	if recorder := world.postReform(secondGroupId, oldGroupId, 1); recorder.Code != http.StatusConflict || !bytes.Equal(recorder.Body.Bytes(), firstForm) {
+		t.Errorf("a re-form beside a closing under way: %d", recorder.Code)
+	}
+	firstVerdictKey := GkmGroupClosingKey(oldGroupId, sha256Of(firstForm))
+	if _, found := world.stored(firstVerdictKey); found {
+		t.Errorf("the second re-form decided the first's closing, whose form the group has not moved past")
+	}
+	fixture.put("meta-2", firstVerdictKey, firstForm)
+	if recorder := world.postReform(secondGroupId, oldGroupId, 1); recorder.Code != http.StatusConflict || !bytes.Equal(recorder.Body.Bytes(), firstForm) {
+		t.Errorf("a re-form beside a sealed closing: %d", recorder.Code)
+	}
+
+	// a claim the fence refused left generation 2 in the group; a re-form under way at generation 1 then cannot be
+	// sealed, so a re-form at generation 2 voids it and stands
+	staleWorld := newGkmCommitWorld(t)
+	staleFixture := staleWorld.fixture
+	staleForm := staleWorld.reformBytes(testId("group-first"), staleWorld.groupId, 1)
+	staleFixture.put("meta-2", GkmGroupClosedKey(staleWorld.groupId), staleForm)
+	_, claim2 := staleWorld.nextGeneration(staleWorld.admin, staleWorld.key1, nil)
+	staleFixture.put("meta-2", GkmGenerationKey(staleWorld.groupId, 2), staleFixture.marshal(claim2))
+	reformedGroupId := testId("group-reformed")
+	if recorder := staleWorld.postReform(reformedGroupId, staleWorld.groupId, 2); recorder.Code != http.StatusOK {
+		t.Fatalf("a re-form at generation 2 beside a closing at generation 1: %d", recorder.Code)
+	}
+	if verdict, found := staleWorld.stored(GkmGroupClosingKey(staleWorld.groupId, sha256Of(staleForm))); !found || len(verdict) != 0 {
+		t.Errorf("the closing at generation 1 was not voided")
+	}
+	if marker, _ := staleWorld.stored(GkmGroupClosedKey(staleWorld.groupId)); !bytes.Equal(marker, staleWorld.reformBytes(reformedGroupId, staleWorld.groupId, 2)) {
+		t.Errorf("the re-form at generation 2 does not hold the marker")
+	}
+
+	// a closing that came to nothing gives way at once
+	voidWorld := newGkmCommitWorld(t)
+	voidForm := voidWorld.reformBytes(testId("group-first"), voidWorld.groupId, 1)
+	voidWorld.fixture.put("meta-2", GkmGroupClosedKey(voidWorld.groupId), voidForm)
+	voidWorld.fixture.put("meta-2", GkmGroupClosingKey(voidWorld.groupId, sha256Of(voidForm)), []byte{})
+	if recorder := voidWorld.postReform(secondGroupId, voidWorld.groupId, 1); recorder.Code != http.StatusOK {
+		t.Errorf("a re-form beside a void closing: %d", recorder.Code)
+	}
+}
+
+// A re-form request sent again after its form stood is the same answer, whatever the old group holds past it: the
+// fence ran before the form, and voids no closing whose form is filed. A try that finds its closing sealed but its form
+// not yet filed files it, though a claim the fence refused stands past its generation.
+func TestGkmReformTryFollowsItsSealedClosingPastAClaimTheFenceRefused(t *testing.T) {
+	world := newGkmReformWorld(t, 10)
+	fixture := world.fixture
+	form := world.reformBytes(world.groupId, world.oldGroupId, 2)
+	_, orphan := world.nextGeneration(world.admin, world.key2, nil)
+	fixture.put("meta-2", GkmGenerationKey(world.oldGroupId, 3), fixture.marshal(orphan))
+	if recorder := world.postReform(world.groupId, world.oldGroupId, 2); recorder.Code != http.StatusOK {
+		t.Errorf("the re-form sent again after its form stood: %d", recorder.Code)
+	}
+	if marker, _ := world.stored(GkmGroupClosedKey(world.oldGroupId)); !bytes.Equal(marker, form) {
+		t.Errorf("the re-form sent again moved the marker of its filed form")
+	}
+	if served := world.servedGenerations(world.oldGroupId, 0, false); !slices.Equal(served, []uint64{1, 2}) {
+		t.Errorf("GET gen of the re-formed group serves %v", served)
+	}
+
+	sealedWorld := newGkmCommitWorld(t)
+	sealedFixture := sealedWorld.fixture
+	sealedGroupId := testId("group-sealed")
+	sealedForm := sealedWorld.reformBytes(sealedGroupId, sealedWorld.groupId, 1)
+	sealedFixture.put("meta-2", GkmGroupClosedKey(sealedWorld.groupId), sealedForm)
+	sealedFixture.put("meta-2", GkmGroupClosingKey(sealedWorld.groupId, sha256Of(sealedForm)), sealedForm)
+	_, claim2 := sealedWorld.nextGeneration(sealedWorld.admin, sealedWorld.key1, nil)
+	sealedFixture.put("meta-2", GkmGenerationKey(sealedWorld.groupId, 2), sealedFixture.marshal(claim2))
+	if recorder := sealedWorld.postReform(sealedGroupId, sealedWorld.groupId, 1); recorder.Code != http.StatusOK {
+		t.Fatalf("a try whose closing is sealed: %d", recorder.Code)
+	}
+	if !bytes.Equal(sealedFixture.object("meta-2", GkmFormKey(sealedWorld.repoId, 2)), sealedForm) {
+		t.Errorf("the sealed closing's form was not filed")
 	}
 }

@@ -119,6 +119,8 @@ type Subprotocol struct {
 	reassembler *reassembler
 	// what RegisterSubprotocol returned
 	unregister func()
+	// ends the subscription to connect's notice that a peer lost its session with this client (rpc_peer_session.go)
+	removePeerSessionLost func()
 	// the C15 key a frame carries: connect.Peer.VerifiedClientPublicKey outside internal tests
 	clientPublicKeyOf func(peer connect.Peer) ([ed25519.PublicKeySize]byte, bool)
 	send              subprotocolSendFunction
@@ -346,6 +348,9 @@ type subprotocolSeams struct {
 	pins              identityPinSource
 	clientId          connect.Id
 	streamPressure    func() bool
+	// subscribes lost to the client's notice that a peer holds no session with it, answering the
+	// unsubscribe: connect's EncryptionEventPeerSessionLost outside internal tests (rpc_peer_session.go)
+	peerSessionLost func(lost func(peerId connect.Id)) (remove func())
 }
 
 // A running dispatcher, registered on env.Client's id 21842 with C3's opt-in for ControlId's frames
@@ -470,6 +475,13 @@ func newSubprotocol(ctx context.Context, env *SubprotocolEnv, seams *subprotocol
 		}
 	}
 	go self.runSender()
+	if env.Role == SubprotocolRoleSidecar {
+		subscribe := seams.peerSessionLost
+		if subscribe == nil {
+			subscribe = connectPeerSessionLost(env.Client)
+		}
+		self.removePeerSessionLost = subscribe(self.peerSessionLost)
+	}
 
 	// last, so connect calls the handler only on a dispatcher that is whole
 	unregister, err := connect.RegisterSubprotocol(
@@ -509,6 +521,9 @@ func (self *Subprotocol) Close() {
 // what the idempotency cache held. closed is set first, or nothing was ever registered, so no worker
 // starts after the join begins.
 func (self *Subprotocol) stop() {
+	if self.removePeerSessionLost != nil {
+		self.removePeerSessionLost()
+	}
 	self.cancel()
 	self.workers.Wait()
 	self.handlers.Wait()

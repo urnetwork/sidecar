@@ -388,6 +388,10 @@ barrier gkm.gen_claim.after gkmservice/generations.go
 barrier gkm.gen_claim.after gkmservice/reform.go
 barrier gkm.gen_claim.before gkmservice/generations.go
 barrier gkm.gen_claim.before gkmservice/reform.go
+barrier gkm.group_close.after gkmservice/reform_fence.go
+barrier gkm.group_close.before gkmservice/reform_fence.go
+barrier gkm.group_closing.after gkmservice/reform_fence.go
+barrier gkm.group_closing.before gkmservice/reform_fence.go
 barrier gkm.group_create.after gkmservice/groups.go
 barrier gkm.group_create.before gkmservice/groups.go
 barrier gkm.group_owner.after gkmservice/groups.go

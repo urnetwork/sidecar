@@ -331,6 +331,7 @@ rpc_idempotency.go
 rpc_identity.go
 rpc_inbound.go
 rpc_peer.go
+rpc_peer_session.go
 rpc_pins.go
 rpc_search_leg.go
 rpc_send.go

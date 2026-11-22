@@ -3,7 +3,8 @@
 // a field too, its default the design's value (QD-702), and a ceiling Validate holds the settings under it to, so a
 // deployment shortens those and raising the bound itself changes the design's argument. Format limits move here as
 // their files are touched, the protocol's value their default: one POST /gkm/delegation-keys' 256 ids, repo/'s
-// 4 KiB, a wrap batch's 256 and a stored delivery's 8 KiB so far. The rest still stand beside their formats until
+// 4 KiB, a wrap batch's 256, a stored delivery's 8 KiB, a Signed GroupForm's or GenRotate's 16 KiB, a ladder call's 64
+// and a listing of gen/'s 65,536 keys so far. The rest still stand beside their formats until
 // QD-706's sweep: a ReaderKey's 7 days and gkm's 10 minutes of clock skew (gkm_delivery.go), a token's 64 repo scopes
 // (§7.8), reader-keys' 256 and the drop-key route's 64 (§10.14), and store.go's two sends of one create, whose callers
 // include wraps.go.
@@ -85,6 +86,10 @@ type GkmServiceSettings struct {
 	RequestBodyMaxByteCount int64
 	// The most bytes of one stored object a route reads: 4 MiB, the same bound.
 	ObjectMaxByteCount int64
+	// The most bytes of a Signed GroupForm or GenRotate a route reads or a gen/ object holds: 16 KiB, past a GenRotate
+	// with a drop key, about 1.7 KB (§10.6's sizes). A closing marker and a closing's verdict hold a GroupForm's
+	// bytes, so they are read within it too (reform.go).
+	StatementMaxByteCount int64
 	// How many keys one LIST page asks for.
 	ListPageCount int
 
@@ -175,6 +180,16 @@ type GkmServiceSettings struct {
 
 	// The most GenRotates one GET .../gen answers; the client asks again after its last (QD-526 row 7).
 	GenerationsReplyMaxCount int
+	// The most generation keys one listing of a group's gen/ reads before it alarms: 65,536, far past what years of
+	// monthly and REMOVE rotations leave.
+	GenerationListMaxCount int
+	// §10.8's ladder route takes at most this many Signed GenRotates a call (QD-074 rule 4): 64, a format value whose
+	// default is the client's (sidecar.GkmSettings.LadderBatchCount), so the two sides keep one.
+	LadderMaxCount int
+	// How many writes a re-form's closing of the group it re-forms makes to the group's closing marker before it
+	// answers 503 (QD-1186; reform.go): a write past the first follows one that another request's write to the marker,
+	// between this one's read of it and its own, refused.
+	ReformCloseWriteCount int
 	// The generations whose commitment and auth pin one process remembers: gen/ is create-only, so an entry never
 	// goes stale, and an evicted one costs a GET.
 	GenerationCacheCount int
@@ -231,6 +246,7 @@ func DefaultGkmServiceSettings() *GkmServiceSettings {
 
 		RequestBodyMaxByteCount: 4 * 1024 * 1024,
 		ObjectMaxByteCount:      4 * 1024 * 1024,
+		StatementMaxByteCount:   16 * 1024,
 		ListPageCount:           1000,
 
 		DrainTimeout:          30 * time.Second,
@@ -274,6 +290,9 @@ func DefaultGkmServiceSettings() *GkmServiceSettings {
 		AckTtl:                     31 * 24 * time.Hour,
 
 		GenerationsReplyMaxCount:   1024,
+		GenerationListMaxCount:     64 * 1024,
+		LadderMaxCount:             sidecar.DefaultGkmSettings().LadderBatchCount,
+		ReformCloseWriteCount:      4,
 		GenerationCacheCount:       256 * 1024,
 		WrapBatchMaxCount:          sidecar.DefaultGkmSettings().WrapBatchMaxCount,
 		DeliveryMaxByteCount:       8 * 1024,
@@ -327,6 +346,7 @@ func (self *GkmServiceSettings) Validate() error {
 		{name: "GroupResolveRepoMaxCount", value: int64(self.GroupResolveRepoMaxCount)},
 		{name: "RequestBodyMaxByteCount", value: self.RequestBodyMaxByteCount},
 		{name: "ObjectMaxByteCount", value: self.ObjectMaxByteCount},
+		{name: "StatementMaxByteCount", value: self.StatementMaxByteCount},
 		{name: "ListPageCount", value: int64(self.ListPageCount)},
 		{name: "StoreProbeTimeout", value: int64(self.StoreProbeTimeout)},
 		{name: "HintQueueCount", value: int64(self.HintQueueCount)},
@@ -349,6 +369,9 @@ func (self *GkmServiceSettings) Validate() error {
 		{name: "AckInterval", value: int64(self.AckInterval)},
 		{name: "AckTtl", value: int64(self.AckTtl)},
 		{name: "GenerationsReplyMaxCount", value: int64(self.GenerationsReplyMaxCount)},
+		{name: "GenerationListMaxCount", value: int64(self.GenerationListMaxCount)},
+		{name: "LadderMaxCount", value: int64(self.LadderMaxCount)},
+		{name: "ReformCloseWriteCount", value: int64(self.ReformCloseWriteCount)},
 		{name: "WrapBatchMaxCount", value: int64(self.WrapBatchMaxCount)},
 		{name: "DeliveryMaxByteCount", value: self.DeliveryMaxByteCount},
 		{name: "WrapPutConcurrency", value: int64(self.WrapPutConcurrency)},

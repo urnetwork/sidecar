@@ -304,13 +304,15 @@ func (self *GkmEngine) checkClaimRecoveryWraps(request *GkmRequest, groupId side
 			self.answerStoreError(request, err)
 			return false
 		}
-		// A retry of an earlier win must still see its original result, including after rebind.
-		winner, err := readGkmGeneration(request.Ctx, request.Cluster, groupId, generation)
+		// A retry of an earlier win must still see its original result, including after rebind, unless a re-form has
+		// closed the group since (reform_fence.go): no claim there is answered as won, nor its winner judged.
+		winner, err := readGkmGeneration(request.Ctx, request.Cluster, groupId, generation, self.settings.StatementMaxByteCount)
 		switch {
 		case errors.Is(err, sidecar.ErrBlobNotFound):
 			request.Conflict(nil)
 		case err != nil:
 			self.answerStoreError(request, err)
+		case !self.checkGroupOpen(request, groupId):
 		case bytes.Equal(winner, raw):
 			request.Created()
 		default:
