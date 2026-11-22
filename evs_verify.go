@@ -8,6 +8,14 @@
 // the reader's chain (§7.9); then the chain C from the pin through every statement to the head's C_v (§11.6), so no
 // version is skipped, reordered or replaced. Only then does it pin (ref, v, C_v), durably, before the read is shown.
 //
+// A pin before what the reader's config retains, its previous base, is not judged and counts against no one
+// (QD-1178, beside §10.9's judged row): bases land with every confirmed ACL save and each fold, so a path untouched for
+// a day or two would otherwise read on no device. Such a statement is taken on its signature, which the key the oldest
+// retained rows that admit its signer give must verify (VerifyStatement), and the chain does the rest: one at or below
+// the ref's pin is what this device verified when it was new, and one above it, a new device's or a long-offline
+// reader's, stands only on a walk whose chain reaches the head the reader verifies and pins. I-16 is unchanged: no pin
+// falls, and the walk's authorization pins only rise (evsCheckWalkRules).
+//
 // A head below the pin is refused and raises head_alarm's fork with both RefHeads as evidence, unless a verified
 // EvsReseed covers it (§11.13, §19.10), which lowers the pin and is kept as a loss. A head at the pin's version with
 // another chain is the same fork. The pin a head is judged against is the one its read asked at (EvsHeadRead.ask):
@@ -279,6 +287,14 @@ func evsRepoAdmin(state GkmAuthView, repo *protocol.AclRepo, sidecarId Id) bool 
 // and format 2's own rules (evs_verify_format2.go; EVS2-M10-17), and answers ErrEvsFormatUnsupported to a reader of
 // format 1 alone (EvsClient.format2Reader), which is never a fork and never tampering; one out of shape or unsigned
 // refuses as a format-1 statement does (EVS1-M2-39).
+//
+// An auth pin before what the reader's config retains is not judged and counts against no one (QD-1178, as §10.9's
+// judged row has it for gkm): the statement is taken on its signature alone, checked against the key the oldest
+// retained rows that admit its signer give it (evsUnjudgedSignerKey), and refused where none admits the signer at its
+// pin. Where it sits is the caller's, as for any statement: one at or below the ref's pin is what this device verified
+// when it was new, the walk holding it to the pin's chain where it walks it, and one above the pin stands only on a
+// walk whose chain reaches the head the reader verifies and pins. Only a pin off the chain, one ahead of the state,
+// and a signature that does not verify refuse.
 func (self *EvsVerifier) VerifyStatement(statementBytes []byte, repoId Id, refId Id) (*EvsStatement, error) {
 	statement, err := ParseEvsStatement(statementBytes)
 	var unsupported error
@@ -300,7 +316,10 @@ func (self *EvsVerifier) VerifyStatement(statementBytes []byte, repoId Id, refId
 		return nil, err
 	}
 	state, err := newest.At(push.GetAuth())
-	if err != nil {
+	switch {
+	case errors.Is(err, ErrGkmAuthNotRetained):
+		return self.takeUnjudged(newest, statement, unsupported)
+	case err != nil:
 		return nil, fmt.Errorf("%w: its authorization pin: %w", ErrEvsStatementRefused, err)
 	}
 	signerId, err := IdFromBytes(push.GetSignerSidecarId())
@@ -331,10 +350,59 @@ func (self *EvsVerifier) VerifyStatement(statementBytes []byte, repoId Id, refId
 	return statement, nil
 }
 
+// A statement whose auth pin newest no longer retains, taken unjudged (QD-1178; VerifyStatement's header): its
+// signature checked against the key newest's oldest retained rows give its signer, with no refs table and no format-2
+// rule, which judge at the pin's state. A format-2 statement still answers ErrEvsFormatUnsupported to a reader of
+// format 1 alone, once its signature verifies.
+func (self *EvsVerifier) takeUnjudged(newest GkmAuthView, statement *EvsStatement, unsupported error) (*EvsStatement, error) {
+	push := statement.Push
+	signerId, err := IdFromBytes(push.GetSignerSidecarId())
+	if err != nil {
+		return nil, fmt.Errorf("%w: its signer", ErrEvsStatementRefused)
+	}
+	identityKey, err := evsUnjudgedSignerKey(newest, signerId, push.GetAuth())
+	if err != nil {
+		return nil, err
+	}
+	if err := statement.Verify(identityKey); err != nil {
+		return nil, fmt.Errorf("%w: its signature: %w", ErrEvsStatementRefused, err)
+	}
+	if unsupported != nil && self.client.format2Reader() == nil {
+		return nil, unsupported
+	}
+	return statement, nil
+}
+
+// A state that gives, for a pin before what it retains, the identity key its oldest retained rows that admit a signer
+// give it: *ConfigState (config_state_at.go).
+type evsRetainedSignerState interface {
+	retainedIdentityKey(sidecarId Id, pin *bridge.AuthPin) ([]byte, error)
+}
+
+// The identity key that checks what signerId signed at pin, a pin newest no longer retains, which is not judged and
+// counts against no one (QD-1178): the key newest's oldest retained rows that admit the signer give it, and a refusal
+// where none admits it at pin, never admitted, admitted after it or revoked at or before it (ErrConfigSignerNotAdmitted
+// under ErrEvsStatementRefused). A state that keeps no window, a stand-in's, answers from its own rows.
+func evsUnjudgedSignerKey(newest GkmAuthView, signerId Id, pin *bridge.AuthPin) ([]byte, error) {
+	var identityKey []byte
+	var err error
+	if retained, ok := newest.(evsRetainedSignerState); ok {
+		identityKey, err = retained.retainedIdentityKey(signerId, pin)
+	} else {
+		identityKey, err = configSignerKeyAt(newest.SidecarRow(signerId), newest.IdentityKey(signerId), pin)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrEvsStatementRefused, err)
+	}
+	return identityKey, nil
+}
+
 // §11.8's refs table again over a verified statement's payload, as a replaying reader holds it: changes are the push's
 // own, each with its entry version, and pathOf gives each change's path as the reader's replay holds it, nil for a path
 // it holds none of. What VerifyStatement leaves a statement read alone to, a write on a base of a record-class stream,
-// is judged here: a directory's add-only delta passes, and any other change is ErrEvsStatementRefused (QD-722).
+// is judged here: a directory's add-only delta passes, and any other change is ErrEvsStatementRefused (QD-722). A
+// statement whose auth pin the reader no longer retains is not judged here either (QD-1178): VerifyStatement took it on
+// its signature.
 func (self *EvsVerifier) VerifyPayloadRefRules(statement *EvsStatement, repoId Id, refId Id, changes []*EvsCheckedChange, pathOf func(change *EvsCheckedChange) *EvsCreatesOnlyPath) error {
 	push := statement.Push
 	newest, err := self.config()
@@ -342,7 +410,10 @@ func (self *EvsVerifier) VerifyPayloadRefRules(statement *EvsStatement, repoId I
 		return err
 	}
 	state, err := newest.At(push.GetAuth())
-	if err != nil {
+	switch {
+	case errors.Is(err, ErrGkmAuthNotRetained):
+		return nil
+	case err != nil:
 		return fmt.Errorf("%w: its authorization pin: %w", ErrEvsStatementRefused, err)
 	}
 	signerId, err := IdFromBytes(push.GetSignerSidecarId())
@@ -591,7 +662,9 @@ func (self *EvsVerifier) alarmHeadAgainst(verified *EvsVerifiedHead, mine *EvsPi
 // A head re-pinned past the catch-up budget (§11.9's budget row): its version and chain are evs's word, and the
 // statements the reply carried, contiguous up to the head, are each checked alone, signature and ref rules, so a
 // path's entry still answers to a writer's statement and the window's later changes still count against it. Their
-// chain to the head is not checked, since C before the first of them is not known here.
+// chain to the head is not checked, since C before the first of them is not known here. One pinned before what the
+// reader retains is checked on its signature alone (QD-1178), as evs's word the gap already is: a reply carrying none
+// of them would be taken as the head alone.
 func (self *EvsVerifier) gapHead(verified *EvsVerifiedHead, read *EvsHeadRead) (*EvsVerifiedHead, error) {
 	verified.Gap = true
 	verified.Statements = nil
@@ -671,8 +744,9 @@ func (self *EvsVerifier) walk(repoId Id, refId Id, fromVersion uint64, fromChain
 		}
 		statement, err := self.VerifyStatement(read.GetStatement(), repoId, refId)
 		if err != nil {
-			// a format-2 construct, no config, and a pin this device's state is behind or no longer retains prove
-			// nothing against the signer: only a failed signature, shape or rule alarms
+			// a format-2 construct, no config, and a pin this device's state is behind prove nothing against the
+			// signer: only a failed signature, shape or rule alarms, a signer no retained row admits at a pin before the
+			// window among them; such a pin is otherwise taken unjudged (QD-1178) and refuses nothing here
 			quiet := errors.Is(err, ErrEvsFormatUnsupported) || errors.Is(err, ErrEvsNoConfig) ||
 				errors.Is(err, ErrGkmAuthAhead) || errors.Is(err, ErrGkmAuthNotRetained)
 			if !quiet {

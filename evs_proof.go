@@ -36,7 +36,10 @@
 // What a statement at or below the read's pin says is checked against that statement, signed by a writer, but nothing
 // shows it was the version current at the pin: for a path this device never read, or no longer remembers, that is
 // evs's word (Q-EVS-6, §2.8, g0-recheck-0-head-reader-read-paths#2). A read record moves the pin back to the path's
-// last read, so a recorded path's later statements are all checked.
+// last read, so a recorded path's later statements are all checked. Such a statement whose auth pin lies before what
+// this device's config retains, as every path's newest does once two bases pass it, is what this device verified when
+// it was new: taken on its signature, its authority not judged again (QD-1178; VerifyStatement), and the same holds
+// for VerifyPayloadRefRules over its change.
 //
 // Path epochs (DESIGN-DETAILS 9.2.4's reader). A statement names its changes by token paths in the epoch it declares,
 // so every statement is checked under the path's token path in that statement's own epoch, tp(X, e), which the

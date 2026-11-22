@@ -239,6 +239,8 @@ type evsTestWorld struct {
 	// the auth version the world's pushes pin, 0 for 1, and the next push's index_epoch, which builds it as format 2
 	authVersion    uint64
 	nextIndexEpoch uint64
+	// the auth chain value the world's pushes pin, nil for the stand-in config's one value: a real log's A_n
+	authChain []byte
 	// the head's index_epoch, which a CUT the push stand-in commits moves to its version (evsTestPushServer.indexEpochs)
 	indexEpoch uint64
 	// each slot a push the stand-in committed introduced, by its 16-byte id, until an ERASE names it: what a read
@@ -617,6 +619,9 @@ func (self *evsTestWorld) push(changes ...*evsTestChange) uint64 {
 	}
 	if self.authVersion != 0 {
 		plan.Auth.Version = self.authVersion
+	}
+	if self.authChain != nil {
+		plan.Auth.Chain = bytes.Clone(self.authChain)
 	}
 	plan.IndexEpoch, self.nextIndexEpoch = self.nextIndexEpoch, 0
 	format2 := plan.IndexEpoch != 0 || plan.Flags&uint32(protocol.EvsPushFlag_EVS_PUSH_DROP|protocol.EvsPushFlag_EVS_PUSH_CUT) != 0
