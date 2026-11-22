@@ -3,9 +3,10 @@
 package sidecar
 
 // CORE-M10-05: D-CORE-17's budget on a clock the test moves, 4 computing, 16 waiting at most 1 s each, 30 s of CPU a
-// minute, the requester's rate, a page's 2 s and 1,000 verifications, 8 MiB a search and 64 cursors; and serving's
-// registration, which follows the designation, taints no run, keeps local searches to their own slots, counts with no
-// label and persists no query.
+// minute, the requester's rate, a page's 2 s and 1,000 verifications, 8 MiB a search and 64 cursors; its CPU and a
+// page's spent on a meter the test moves apart from the clock, as a search world's are; and serving's registration,
+// which follows the designation, taints no run, keeps local searches to their own slots, counts with no label and
+// persists no query.
 
 import (
 	"bytes"
@@ -31,6 +32,19 @@ func newSearchTestBudget(t *testing.T) (*SidecarRemoteBudget, *SidecarSearchSett
 		t.Fatal(err)
 	}
 	return budget, settings, clock
+}
+
+// A budget under the default settings on a clock the test moves, its CPU meter another the test moves apart, as
+// NewSearchTestRemoteBudget gives a search world.
+func newSearchTestMeteredBudget(t *testing.T) (*SidecarRemoteBudget, *SidecarSearchSettings, *searchTestClock, *searchTestClock) {
+	t.Helper()
+	settings := DefaultSidecarSettings().Search
+	clock, cpuClock := newSearchTestClock(), newSearchTestClock()
+	budget, err := newSidecarRemoteBudget(settings, clock, cpuClock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return budget, settings, clock, cpuClock
 }
 
 // Admits count requests of fresh requesters at once, failing on a wait or a refusal.
@@ -200,6 +214,94 @@ func TestCpuPerMinuteCap(t *testing.T) {
 		t.Errorf("a held slot's time was not counted: %v", err)
 	}
 	held.Release()
+}
+
+// With its CPU meter apart from its clock, the budget spends what the meter measures: a slot held while the clock
+// alone moves a whole window, as a search world's rate refill moves it, counts nothing; once the meter moves
+// RemoteCpuPerMinute the next request is refused, the held slot alone a queue's wait from now; and the charge it gives
+// back leaves the window as the clock moves, never the meter.
+func TestCpuSpentOnItsMeter(t *testing.T) {
+	budget, settings, clock, cpuClock := newSearchTestMeteredBudget(t)
+	world := newSearchTestSidecar(t, nil)
+	network := budget.For(world.sidecar)
+	held := admitNow(t, network, 1)[0]
+	clock.advance(settings.RemoteCpuWindow)
+	// every other slot at once, each given back having spent nothing
+	for _, admission := range admitNow(t, network, settings.RemoteSearchCount-1) {
+		if spent := admission.Release(); spent != 0 {
+			t.Errorf("a slot counted %s with the meter still", spent)
+		}
+	}
+	cpuClock.advance(settings.RemoteCpuPerMinute)
+	_, err := network.Admit(t.Context(), NewId())
+	if refusal := refusalOf(t, err); refusal.Reason != SidecarRemoteRefusedCpu || refusal.RetryAfter != settings.RemoteQueueTimeout {
+		t.Errorf("past the cap on the meter: %+v", refusal)
+	}
+	if spent := held.Release(); spent != settings.RemoteCpuPerMinute {
+		t.Errorf("the held slot counted %s, not the meter's %s", spent, settings.RemoteCpuPerMinute)
+	}
+	if cpu := world.sidecar.Stats().RemoteSearch.Cpu; cpu != settings.RemoteCpuPerMinute {
+		t.Errorf("stats cpu %s", cpu)
+	}
+	// given back at the clock's now, the charge leaves the window a whole window on
+	_, err = network.Admit(t.Context(), NewId())
+	refusal := refusalOf(t, err)
+	if refusal.Reason != SidecarRemoteRefusedCpu || refusal.RetryAfter != settings.RemoteCpuWindow {
+		t.Errorf("after the release: %+v", refusal)
+	}
+	cpuClock.advance(settings.RemoteCpuWindow)
+	if _, err := network.Admit(t.Context(), NewId()); refusalOf(t, err).Reason != SidecarRemoteRefusedCpu {
+		t.Errorf("the meter moved a charge out of the window: %v", err)
+	}
+	clock.advance(refusal.RetryAfter)
+	if _, err := network.Admit(t.Context(), NewId()); err != nil {
+		t.Errorf("past the window on the clock: %v", err)
+	}
+}
+
+// A page's PageCpu is spent on the meter: the clock moving past it leaves the page verifying, the meter moving to it
+// stops the page.
+func TestPageCpuSpentOnItsMeter(t *testing.T) {
+	budget, settings, clock, cpuClock := newSearchTestMeteredBudget(t)
+	admission := admitNow(t, budget, 1)[0]
+	page := admission.Page()
+	clock.advance(settings.PageCpu)
+	if !page.Verify() {
+		t.Error("the clock spent the page's CPU")
+	}
+	cpuClock.advance(settings.PageCpu - time.Millisecond)
+	if !page.Verify() {
+		t.Error("stopped before its CPU")
+	}
+	cpuClock.advance(time.Millisecond)
+	if page.Verify() || !page.Spent() {
+		t.Error("a page went past its CPU on the meter")
+	}
+	admission.Release()
+}
+
+// A request that waited for its slot is metered from the slot's grant: what the meter moved while it waited is the
+// holders' compute, not its own, and its wait is the clock's.
+func TestQueuedSlotMeteredFromGrant(t *testing.T) {
+	budget, settings, clock, cpuClock := newSearchTestMeteredBudget(t)
+	admissions := admitNow(t, budget, settings.RemoteSearchCount)
+	waiting := admitLater(t.Context(), budget, NewId())
+	awaitWaiting(t, budget, clock, 1)
+	clock.advance(400 * time.Millisecond)
+	cpuClock.advance(time.Second)
+	if spent := admissions[0].Release(); spent != time.Second {
+		t.Errorf("a holder counted %s", spent)
+	}
+	answer := <-waiting
+	if answer.err != nil {
+		t.Fatal(answer.err)
+	}
+	if wait := answer.admission.QueueWait(); wait != 400*time.Millisecond {
+		t.Errorf("waited %s", wait)
+	}
+	if spent := answer.admission.Release(); spent != 0 {
+		t.Errorf("the granted request counted %s of its wait as compute", spent)
+	}
 }
 
 // 64 cursors over every requester: the 65th ends the least recently used.
