@@ -249,10 +249,9 @@ func configAdvanceShrinks(before *ConfigState, next *configStateBuilder, effects
 	if !touched {
 		return
 	}
-	configAdvanceConsents(next)
-	retirements := configCompromisesOf(effects)
 	// the state the entry made, an immutable view with an acl part of its own
-	after := configCopyState(next.state)
+	after := configAdvanceConsents(next)
+	retirements := configCompromisesOf(effects)
 	at := time.UnixMilli(next.state.timeMs)
 	shrunk := map[Id]bool{}
 	for _, repoId := range configShrinkRepoIds(after) {
@@ -275,23 +274,27 @@ func configAdvanceShrinks(before *ConfigState, next *configStateBuilder, effects
 // OwnerConfirm's (acl_access_log.go's consented row). Without it such a device read none of its owner's vault, mailbox
 // or secrets anywhere, though every reader, gate and the exchange took it for consented. Rows a state cannot index
 // list nothing more, their readers already refusing what they would open.
-func configAdvanceConsents(next *configStateBuilder) {
+//
+// Returns the state the entry made with the listing, an immutable view with an acl part of its own, which the shrink
+// step reads: the view this step judged consent on where it listed nothing, so an entry builds one acl state here.
+func configAdvanceConsents(next *configStateBuilder) *ConfigState {
+	after := configCopyState(next.state)
 	repos := next.state.aclRows.GetRepos()
 	if !slices.ContainsFunc(repos, aclRepoRowOwnerBound) {
-		return
+		return after
 	}
-	// the state the entry made, an immutable view with an acl part of its own, as configAdvanceShrinks reads it
-	acl, err := configCopyState(next.state).Acl()
+	acl, err := after.Acl()
 	if err != nil {
-		return
+		return after
 	}
 	listed, changed := acl.listConsentedOwnerDevices(repos)
 	if !changed {
-		return
+		return after
 	}
 	rows := aclRowsCopy(next.state.aclRows)
 	rows.Repos = listed
 	next.setAclRows(rows)
+	return configCopyState(next.state)
 }
 
 // Sets holders_shrunk_at to the builder's position and holders_shrunk_time_ms to its time, the repo's next t_s
