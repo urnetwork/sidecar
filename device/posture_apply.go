@@ -5,8 +5,16 @@
 // generation no committed manifest names, then the manifest, and only then publishes and raises the floor. So a call
 // that fails, or a kill at any step, leaves the posture and its store as they were, and nothing is in force that a
 // restart would not restore. A restart verifies what it restores: the base by §7.9's keyless rule under a config
-// writer in its own rows, the rows by their hash, the entries since by their chain to the pin, the state's pin on that
-// chain and its has_document against the rows, the pin against the floor, before any packet.
+// writer in its own rows, or under the key its manifest kept where those rows do not name the signer that verified it
+// (QD-1193), the rows by their hash, the entries since by their chain to the pin, the state's pin on that chain and its
+// has_document against the rows, the pin against the floor, before any packet.
+//
+// Whose signature a base needs (QD-1193). Between states, a config writer's in the rows the posture holds, S(n-1) as it
+// knows it; a base whose signer those rows do not name at all, as a writer admitted after them, is followed by its
+// chain alone and waits for a compile, as a base of another config head does, while the denials after it apply under
+// the rows held. Under a state, whose compile judged its run, the signer's identity key may also come from the base's
+// own rows or from the identities the state names, and the signature, prev_chain, rows_sha256 and versions are checked
+// as ever; a state at or past a base the posture followed takes that base.
 //
 // Called only with the posture's operationLock held, which is what every *WithLock and postureOperation method
 // assumes.
@@ -44,6 +52,10 @@ type postureBase struct {
 	hasDocument      bool
 	adminMemberRoles map[[postureIdByteCount]byte]bridge.MemberRole
 	writers          map[[postureIdByteCount]byte]*postureSidecarRow
+	// the identity key the base's signature verified under, where its own rows do not name its signer a standing
+	// config writer under that key: one the previous base's rows or a state vouched for (QD-1193), which the manifest
+	// keeps for a restart to verify it under; nil where its own rows name it
+	signerPublicKey []byte
 }
 
 // What a posture holds once its store holds anything. Each call that changes it builds a new one: nothing here is
@@ -73,6 +85,10 @@ type postureHeld struct {
 	bridgeState   *bridge.BridgeState
 	overlay       []PostureOverlayEntry
 	waiting       []PostureWaitingEntry
+	// the oldest base among the entries since base that the posture followed by its chain and did not take, its signer
+	// unnamed by base's rows (QD-1193): it waits for a state to vouch for its signer, and nothing past it latches
+	// documentSeenAt; 0 for none. Not in the manifest: a restart finds it among the entries
+	untakenBaseN uint64
 }
 
 // A copy whose slices may be replaced, or written into once cloned here.
@@ -153,6 +169,7 @@ func (self *postureHeld) manifest() *postureManifest {
 		manifest.baseEntry = self.base.entryBytes
 		manifest.rowsRecord = self.base.rowsRecord
 		manifest.rowsSha256 = self.base.rowsSha256[:]
+		manifest.baseSignerPublicKey = self.base.signerPublicKey
 		manifest.entriesRecord = self.entriesRecord
 		manifest.entriesSha256 = self.entriesSha256
 		manifest.entriesCount = self.entriesCount
@@ -516,7 +533,10 @@ func (self *Posture) verifyStored(manifest *postureManifest) (*postureHeld, erro
 	if parsed.entry.GetKind() != bridge.AuthEntryKindBase {
 		return nil, failed("a base of kind %d", parsed.entry.GetKind())
 	}
-	base, err := self.readBase(parsed, manifest.rowsRecord, nil, manifest.anchor)
+	if len(manifest.baseSignerPublicKey) != 0 && len(manifest.baseSignerPublicKey) != ed25519.PublicKeySize {
+		return nil, failed("a base signer key that is no Ed25519 key")
+	}
+	base, err := self.readBase(parsed, manifest.rowsRecord, nil, manifest.anchor, &postureBaseVouch{storedPublicKey: manifest.baseSignerPublicKey})
 	if err != nil {
 		return nil, err
 	}
@@ -572,7 +592,16 @@ func (self *Posture) verifyStored(manifest *postureManifest) (*postureHeld, erro
 				return failed("entries that do not chain from the base")
 			}
 			if parsed.entry.GetKind() == bridge.AuthEntryKindBase {
-				return failed("a second base among the entries since the base")
+				// only a base the posture followed and did not take, which waits until a state takes it (QD-1193)
+				waits := slices.ContainsFunc(manifest.waiting, func(entry PostureWaitingEntry) bool {
+					return entry.N <= parsed.entry.GetN() && parsed.entry.GetN() <= entry.ThroughN
+				})
+				if !waits {
+					return failed("a second base among the entries since the base that does not wait")
+				}
+				if held.untakenBaseN == 0 {
+					held.untakenBaseN = parsed.entry.GetN()
+				}
 			}
 			count += 1
 			held.pinN, held.pinChain = parsed.entry.GetN(), parsed.chain
@@ -661,12 +690,23 @@ func (self *Posture) readEntries(name string, visit func(entryBytes []byte) erro
 	return [postureDigestByteCount]byte(hash.Sum(nil)), nil
 }
 
+// What vouches for a base's signer beyond the config writers in the rows that judge it (QD-1193).
+type postureBaseVouch struct {
+	// A state whose run holds the base, which its compile judged: the base's own rows' config writers vouch for its
+	// signer's key, and past them the identity key the state names for the signer.
+	state *bridge.BridgeState
+	// The key a committed manifest kept for the base, which its signature verified under when it was taken.
+	storedPublicKey []byte
+}
+
 // Reads a stored base's rows twice, hashing, then for the config writers, and checks the base under its signer. With
 // previous nil, the first base a posture takes or restores, its signer must be a config writer in its own rows, as a
-// new device's start reads it (§7.9's retention row); otherwise previous's writers judge it, a writer at S(n-1).
-// anchor is A_0, which base 1's prev_chain must be.
-func (self *Posture) readBase(parsed *postureEntry, rowsRecord string, previous *postureBase, anchor []byte) (*postureBase, error) {
-	_, header, signerId, err := parsePostureBase(parsed.entry)
+// new device's start reads it (§7.9's retention row); otherwise previous's writers judge it, a writer at S(n-1). Where
+// they name no standing config writer that signed it, vouch may give its signer's key: each key it gives is tried in
+// turn, and the base passes under the first its signature verifies under. anchor is A_0, which base 1's prev_chain must
+// be.
+func (self *Posture) readBase(parsed *postureEntry, rowsRecord string, previous *postureBase, anchor []byte, vouch *postureBaseVouch) (*postureBase, error) {
+	signed, header, signerId, err := parsePostureBase(parsed.entry)
 	if err != nil {
 		return nil, err
 	}
@@ -700,14 +740,59 @@ func (self *Posture) readBase(parsed *postureEntry, rowsRecord string, previous 
 		judges = previous.writers
 		previousHeader = previous.header
 	}
-	writer := judges[signerId]
-	if writer == nil || !writer.standingAt(parsed.entry.GetTimeMs()) {
+	timeMs := parsed.entry.GetTimeMs()
+	standingKey := func(writers map[[postureIdByteCount]byte]*postureSidecarRow) []byte {
+		if writer := writers[signerId]; writer != nil && writer.standingAt(timeMs) {
+			return writer.identityPublicKey
+		}
+		return nil
+	}
+	// the keys that may be its signer's, in order: the judge's config writer, then what vouches for it
+	candidates := [][]byte{}
+	addCandidate := func(key []byte) {
+		if len(key) == ed25519.PublicKeySize && !slices.ContainsFunc(candidates, func(candidate []byte) bool { return bytes.Equal(candidate, key) }) {
+			candidates = append(candidates, key)
+		}
+	}
+	addCandidate(standingKey(judges))
+	if vouch != nil {
+		if vouch.state != nil {
+			addCandidate(standingKey(writers))
+			// the key the state's identities name for it, the subjects its rules let reach this host, each with its
+			// row's key; none where they name it twice under two keys
+			var stateKey []byte
+			for _, identity := range vouch.state.GetIdentities() {
+				if !bytes.Equal(identity.GetSidecarId(), signerId[:]) {
+					continue
+				}
+				if stateKey != nil && !bytes.Equal(stateKey, identity.GetIdentityPublicKey()) {
+					stateKey = nil
+					break
+				}
+				stateKey = identity.GetIdentityPublicKey()
+			}
+			addCandidate(stateKey)
+		}
+		addCandidate(vouch.storedPublicKey)
+	}
+	if len(candidates) == 0 {
 		return nil, fmt.Errorf("%w: a base by no config writer", ErrPostureRefused)
 	}
-	if _, err := bridge.VerifyBaseKeylessDigest(parsed.entry, writer.identityPublicKey, scan.sha256[:], scan.byteCount, previousHeader); err != nil {
+	signerPublicKey := candidates[0]
+	if 1 < len(candidates) {
+		// the first its signature verifies under; with none, the first, whose refusal says why
+		for _, candidate := range candidates {
+			if bridge.VerifySigned(signed, bridge.SignedPurposeAuthority, bridge.SignedType_SIGNED_PROJECTION_HEADER,
+				bridge.SignedKeyAlgEd25519, candidate) == nil {
+				signerPublicKey = candidate
+				break
+			}
+		}
+	}
+	if _, err := bridge.VerifyBaseKeylessDigest(parsed.entry, signerPublicKey, scan.sha256[:], scan.byteCount, previousHeader); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrPostureRefused, err)
 	}
-	return &postureBase{
+	base := &postureBase{
 		entryBytes:       bytes.Clone(parsed.bytes),
 		entry:            parsed.entry,
 		header:           header,
@@ -717,7 +802,11 @@ func (self *Posture) readBase(parsed *postureEntry, rowsRecord string, previous 
 		hasDocument:      scan.hasDocument,
 		adminMemberRoles: scan.adminMemberRoles,
 		writers:          writers,
-	}, nil
+	}
+	if !bytes.Equal(standingKey(writers), signerPublicKey) {
+		base.signerPublicKey = bytes.Clone(signerPublicKey)
+	}
+	return base, nil
 }
 
 // One call's work: what it started from, what it has verified onto a copy, and what it has written.
@@ -732,6 +821,12 @@ type postureOperation struct {
 	// entries after next's base verified by this call, to follow the stored ones, or alone once rebased
 	newEntries [][]byte
 	rebased    bool
+	// once rebased onto a base the posture had followed (takeFollowedBase), that base's position: the stored entries
+	// after it stay ahead of newEntries; 0 otherwise
+	keptAfterN uint64
+	// the state whose log this call verifies, nil between states: it vouches for the signer of each base its run holds
+	// (QD-1193)
+	vouching *bridge.BridgeState
 	// the state's bytes to write, nil when unchanged
 	stateBytes []byte
 	// records this call wrote that the next manifest may not name
@@ -832,14 +927,15 @@ func postureWaitingAbove(waiting []PostureWaitingEntry, pinN uint64) []PostureWa
 }
 
 // Streams a base's rows from openRows into a new record, hashing and reading has_document as they pass, then checks
-// the base against them: from previous's config writers, or with previous nil its own. Nothing of the rows stays in
-// memory but has_document and the writers' keys.
+// the base against them: from previous's config writers, or with previous nil its own; under a state, which vouches
+// for its signer (QD-1193), also from its own rows' writers and the key the state names for the signer. Nothing of the
+// rows stays in memory but has_document and the writers' keys.
 func (self *postureOperation) takeBase(parsed *postureEntry, openRows func(rowsSha256 []byte) (io.ReadCloser, error), previous *postureBase) (*postureBase, error) {
 	signed, header, signerId, err := parsePostureBase(parsed.entry)
 	if err != nil {
 		return nil, err
 	}
-	if previous != nil {
+	if previous != nil && self.vouching == nil {
 		// fail before 4 MiB stream when the signer is no writer at S(n-1) or its signature does not verify
 		writer := previous.writers[signerId]
 		if writer == nil || !writer.standingAt(parsed.entry.GetTimeMs()) || postureOverlayRevokes(self.next.overlay, writer) {
@@ -867,11 +963,108 @@ func (self *postureOperation) takeBase(parsed *postureEntry, openRows func(rowsS
 	if err != nil {
 		return nil, err
 	}
-	base, err := self.posture.readBase(parsed, rowsRecord, previous, self.next.anchor)
+	var vouch *postureBaseVouch
+	if self.vouching != nil {
+		vouch = &postureBaseVouch{state: self.vouching}
+	}
+	base, err := self.posture.readBase(parsed, rowsRecord, previous, self.next.anchor, vouch)
 	if err != nil {
 		return nil, err
 	}
 	return base, nil
+}
+
+// Whether a base between states waits for a compile rather than being refused (QD-1193): no config writer in the rows
+// next holds signed it, those rows name no sidecar of its signer's id at all, as a writer admitted after them would
+// be, and its header stands on every check but its signature and rows: its network, its position, its prev_chain, and
+// a fold and config version below none of the held base's. A base by a sidecar the rows name that is no standing
+// config writer there is refused, as it was, and so is one whose header does not stand.
+func (self *postureOperation) baseWaits(parsed *postureEntry) (bool, error) {
+	held := self.next.base
+	_, header, signerId, err := parsePostureBase(parsed.entry)
+	if err != nil || held.writers[signerId] != nil {
+		// takeBase refuses it, or judges it
+		return false, nil
+	}
+	entry := parsed.entry
+	if !bytes.Equal(header.GetNetworkId(), entry.GetNetworkId()) || header.GetVersion() != entry.GetN() ||
+		!bytes.Equal(header.GetPrevChain(), entry.GetPrevChain()) || entry.GetN() <= header.GetFoldedThrough() ||
+		header.GetConfigVersion() < held.header.GetConfigVersion() || header.GetFoldedThrough() < held.header.GetFoldedThrough() {
+		return false, nil
+	}
+	if !self.lookedUp[signerId] {
+		reader, err := self.posture.store.Open(held.rowsRecord)
+		if err != nil {
+			self.alarm(PostureAlarmStoreUnreadable, entry.GetN(), err)
+			return false, err
+		}
+		found, err := readPostureSidecars(reader, self.posture.settings, held.rowsSha256, map[[postureIdByteCount]byte]bool{signerId: true})
+		reader.Close()
+		if err != nil {
+			self.alarm(PostureAlarmStoreUnverified, entry.GetN(), err)
+			return false, err
+		}
+		self.lookedUp[signerId] = true
+		if row := found[signerId]; row != nil {
+			self.rowsFound[signerId] = row
+		}
+	}
+	return self.rowsFound[signerId] == nil, nil
+}
+
+// Takes the state's newest base where the posture followed it by its chain without taking it (QD-1193), the state
+// vouching for its signer: it must be on the chain the posture verified. The posture's own entries after it, which it
+// verified by their chain and applied, stay as the entries since it, and so does its pin. An error comes with the
+// alarm it raises.
+func (self *postureOperation) takeFollowedBase(log *PostureLog) (PostureAlarmKind, error) {
+	next := self.next
+	from := self.from
+	parsed, err := parsePostureEntry(log.Entries[0], next.networkId, self.posture.settings.EntryMaxByteCount)
+	if err != nil {
+		return PostureAlarmMalformed, err
+	}
+	n := parsed.entry.GetN()
+	chain, err := self.posture.chainAt(from, n)
+	if err != nil {
+		return PostureAlarmStoreUnverified, err
+	}
+	if chain != parsed.chain {
+		return PostureAlarmChainBreak, fmt.Errorf("%w: a state's base off the chain the deltas verified", ErrPostureRefused)
+	}
+	base, err := self.takeBase(parsed, log.OpenRows, next.base)
+	if err != nil {
+		return PostureAlarmBaseRefused, err
+	}
+	// the oldest base after it among the posture's entries, which it did not take either
+	untakenBaseN := uint64(0)
+	if _, err := self.posture.readEntries(from.entriesRecord, func(entryBytes []byte) error {
+		entry := &bridge.AuthEntry{}
+		if err := proto.Unmarshal(entryBytes, entry); err != nil {
+			return fmt.Errorf("%w: a stored entry that does not decode", ErrPostureStoreFailed)
+		}
+		if n < entry.GetN() && entry.GetKind() == bridge.AuthEntryKindBase && untakenBaseN == 0 {
+			untakenBaseN = entry.GetN()
+		}
+		return nil
+	}); err != nil {
+		return PostureAlarmStoreUnverified, err
+	}
+	next.base = base
+	next.untakenBaseN = untakenBaseN
+	self.rebased = true
+	self.keptAfterN = n
+	self.newEntries = nil
+	self.rowsFound = map[[postureIdByteCount]byte]*postureSidecarRow{}
+	self.lookedUp = map[[postureIdByteCount]byte]bool{}
+	if base.hasDocument {
+		// every entry it governs saw a document: those after it, up to a base past it the posture did not take
+		through := next.pinN
+		if untakenBaseN != 0 {
+			through = untakenBaseN - 1
+		}
+		next.documentSeenAt = max(next.documentSeenAt, through)
+	}
+	return "", nil
 }
 
 // How entries count: under a state, which vouches for its own entries, statements count by their chain alone;
@@ -934,13 +1127,30 @@ func (self *postureOperation) applyEntries(log *PostureLog, entries [][]byte, mo
 			self.alarm(kind, entry.GetN(), err)
 			return index, err
 		}
-		if uint64(settings.EntriesMaxCount) <= self.entriesCount() && entry.GetKind() != bridge.AuthEntryKindBase {
+		// a base whose signer the rows held do not name is followed by its chain, an entry since the base held
+		untaken := false
+		if mode == postureModeDeltas && entry.GetKind() == bridge.AuthEntryKindBase {
+			if untaken, err = self.baseWaits(parsed); err != nil {
+				return index, err
+			}
+		}
+		if uint64(settings.EntriesMaxCount) <= self.entriesCount() && (entry.GetKind() != bridge.AuthEntryKindBase || untaken) {
 			err := fmt.Errorf("%w: past the %d entries kept since a base", ErrPostureRefused, settings.EntriesMaxCount)
 			self.alarm(PostureAlarmMalformed, entry.GetN(), err)
 			return index, err
 		}
 		switch entry.GetKind() {
 		case bridge.AuthEntryKindBase:
+			if untaken {
+				// it waits for a compile, as a statement this role cannot check does, and the next state takes it
+				if next.untakenBaseN == 0 {
+					next.untakenBaseN = entry.GetN()
+				}
+				self.compileWanted = true
+				self.wait(entry.GetN())
+				self.newEntries = append(self.newEntries, bytes.Clone(entryBytes))
+				break
+			}
 			previous := next.base
 			base, err := self.takeBase(parsed, log.OpenRows, previous)
 			if err != nil {
@@ -948,7 +1158,9 @@ func (self *postureOperation) applyEntries(log *PostureLog, entries [][]byte, mo
 				return index, err
 			}
 			next.base = base
+			next.untakenBaseN = 0
 			self.rebased = true
+			self.keptAfterN = 0
 			self.newEntries = nil
 			self.rowsFound = map[[postureIdByteCount]byte]*postureSidecarRow{}
 			self.lookedUp = map[[postureIdByteCount]byte]bool{}
@@ -985,7 +1197,8 @@ func (self *postureOperation) applyEntries(log *PostureLog, entries [][]byte, mo
 			self.newEntries = append(self.newEntries, bytes.Clone(entryBytes))
 		}
 		next.pinN, next.pinChain = entry.GetN(), parsed.chain
-		if next.base.hasDocument {
+		// past a base the posture did not take, no base it holds says whether the entry saw a document
+		if next.base.hasDocument && next.untakenBaseN == 0 {
 			next.documentSeenAt = entry.GetN()
 		}
 	}
@@ -995,7 +1208,12 @@ func (self *postureOperation) applyEntries(log *PostureLog, entries [][]byte, mo
 // The entries since next's base, counting this call's.
 func (self *postureOperation) entriesCount() uint64 {
 	if self.rebased {
-		return uint64(len(self.newEntries))
+		kept := uint64(0)
+		if self.keptAfterN != 0 {
+			// the stored entries since the base held sit at consecutive positions through the pin
+			kept = self.from.pinN - self.keptAfterN
+		}
+		return kept + uint64(len(self.newEntries))
 	}
 	return self.next.entriesCount + uint64(len(self.newEntries))
 }
@@ -1108,7 +1326,8 @@ func (self *postureOperation) applyStatement(parsed *postureEntry, batchIds map[
 }
 
 // A_n at n in next as this call left it, and whether next shows it: its pin, its base, this call's entries and,
-// unless it rebased, the stored ones between. A position before next's base or past its pin is not shown.
+// unless it rebased, the stored ones between, or after a followed base it took (takeFollowedBase) the stored ones past
+// that base. A position before next's base or past its pin is not shown.
 func (self *postureOperation) chainAt(n uint64) ([postureDigestByteCount]byte, bool, error) {
 	next := self.next
 	switch {
@@ -1130,7 +1349,7 @@ func (self *postureOperation) chainAt(n uint64) ([postureDigestByteCount]byte, b
 		}
 		return chain, true, nil
 	}
-	if self.rebased || self.from == nil || self.from.stored != postureStoredEnforcing || self.from.pinN < n {
+	if (self.rebased && self.keptAfterN == 0) || self.from == nil || self.from.stored != postureStoredEnforcing || self.from.pinN < n {
 		return [postureDigestByteCount]byte{}, false, nil
 	}
 	chain, err := self.posture.chainAt(self.from, n)
@@ -1184,9 +1403,15 @@ func (self *postureOperation) commit() error {
 			hash := sha256.New()
 			err := store.Write(name, func(writer io.Writer) error {
 				hashed := io.MultiWriter(writer, hash)
-				if !self.rebased && self.from != nil && self.from.entriesRecord != "" {
-					// the stored entries, checked as they are copied, then this call's
+				if (!self.rebased || self.keptAfterN != 0) && self.from != nil && self.from.entriesRecord != "" {
+					// the stored entries, checked as they are copied, then this call's; after a followed base it took,
+					// only those past that base, at consecutive positions from the base held
+					position := self.from.base.entry.GetN()
 					storedSha256, err := self.posture.readEntries(self.from.entriesRecord, func(entryBytes []byte) error {
+						position += 1
+						if position <= self.keptAfterN {
+							return nil
+						}
 						return writePostureEntry(hashed, entryBytes)
 					})
 					if err != nil {
@@ -1376,15 +1601,21 @@ func (self *Posture) setStateWithLock(state *bridge.BridgeState, log *PostureLog
 	if log == nil {
 		log = &PostureLog{}
 	}
+	// its compile judged its run, so it vouches for the signer of each base the run holds (QD-1193)
+	operation.vouching = state
 
 	// a log that starts at a base re-anchors on it, as the first state does: the compile holds its state's newest
 	// base, and a state on it resyncs a posture whose deltas missed a fold or followed a chain the state's is not
-	logStartsAtBase := false
+	var logBase *bridge.AuthEntry
 	if 0 < len(log.Entries) {
 		entry := &bridge.AuthEntry{}
-		logStartsAtBase = proto.Unmarshal(log.Entries[0], entry) == nil && entry.GetKind() == bridge.AuthEntryKindBase
+		if proto.Unmarshal(log.Entries[0], entry) == nil && entry.GetKind() == bridge.AuthEntryKindBase {
+			logBase = entry
+		}
 	}
+	logStartsAtBase := logBase != nil
 	reanchor := !enforcing
+	followedBase := false
 	switch {
 	case enforcing && statePinN <= next.pinN:
 		// at or below the posture's pin: on the chain the posture verified, at or after the base whose rows say what
@@ -1408,13 +1639,22 @@ func (self *Posture) setStateWithLock(state *bridge.BridgeState, log *PostureLog
 			}
 			operation.alarm(PostureAlarmChainBreak, statePinN, err)
 			reanchor = true
+			break
 		}
+		// on that chain, a log from a base past the one held starts at a base the posture followed and did not take,
+		// its signer unnamed by the rows held: the state's newest base, which it now vouches for (QD-1193)
+		followedBase = logStartsAtBase && next.base.entry.GetN() < logBase.GetN() && logBase.GetN() <= statePinN
 	case enforcing && 0 < len(log.Entries) && postureEntryChainsFrom(log.Entries[0], next):
 		if _, err := operation.applyEntries(log, log.Entries, postureModeState); err != nil {
 			return refuse("", statePinN, err)
 		}
 	default:
 		reanchor = true
+	}
+	if followedBase {
+		if kind, err := operation.takeFollowedBase(log); err != nil {
+			return refuse(kind, logBase.GetN(), err)
+		}
 	}
 	if reanchor {
 		// from pending, or a re-anchor on the state's newest base
@@ -1435,9 +1675,13 @@ func (self *Posture) setStateWithLock(state *bridge.BridgeState, log *PostureLog
 		}
 		next.stored = postureStoredEnforcing
 		next.base = base
+		next.untakenBaseN = 0
 		next.pinN, next.pinChain = base.entry.GetN(), base.chain
 		operation.rebased = true
+		operation.keptAfterN = 0
 		operation.newEntries = nil
+		operation.rowsFound = map[[postureIdByteCount]byte]*postureSidecarRow{}
+		operation.lookedUp = map[[postureIdByteCount]byte]bool{}
 		if base.hasDocument {
 			next.documentSeenAt = max(next.documentSeenAt, base.entry.GetN())
 		}
@@ -1455,6 +1699,12 @@ func (self *Posture) setStateWithLock(state *bridge.BridgeState, log *PostureLog
 		if next.pinN != statePinN || !bytes.Equal(next.pinChain[:], state.GetAuth().GetChain()) {
 			return refuse(PostureAlarmChainBreak, statePinN, fmt.Errorf("%w: a state whose log does not end at its pin", ErrPostureRefused))
 		}
+	}
+	// a state at or past a base the posture followed rests on that base or a newer one, which only the run from the
+	// state's newest base vouches for: a log that does not start there leaves the base unjudged
+	if next.untakenBaseN != 0 && next.untakenBaseN <= statePinN {
+		return refuse(PostureAlarmBaseRefused, next.untakenBaseN,
+			fmt.Errorf("%w: a state past a base the posture followed, with no log from the state's newest base", ErrPostureRefused))
 	}
 	// an unsigned has_document changes nothing: the state must say what its verified rows say
 	if state.GetHasDocument() != next.base.hasDocument {

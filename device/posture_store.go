@@ -113,6 +113,7 @@ const (
 	postureFieldWaiting
 	postureFieldFork
 	postureFieldOverlayFullThroughN
+	postureFieldBaseSignerPublicKey
 )
 
 // A share certificate's field numbers inside its manifest field.
@@ -172,6 +173,9 @@ type postureManifest struct {
 	fork              bool
 	// 0 for none
 	overlayFullThroughN uint64
+	// the identity key the base verified under where its own rows do not name its signer a config writer under it
+	// (QD-1193), nil where they do
+	baseSignerPublicKey []byte
 }
 
 // The manifest's bytes, every field in number order and none that is zero.
@@ -241,6 +245,7 @@ func (self *postureManifest) encode() []byte {
 		appendUint(postureFieldFork, 1)
 	}
 	appendUint(postureFieldOverlayFullThroughN, self.overlayFullThroughN)
+	appendBytes(postureFieldBaseSignerPublicKey, self.baseSignerPublicKey)
 	return encoded
 }
 
@@ -445,7 +450,7 @@ func decodePostureManifest(encoded []byte) (*postureManifest, error) {
 		case postureFieldNetworkId, postureFieldAnchor, postureFieldSidecarId, postureFieldIdentityPublicKey,
 			postureFieldPinChain, postureFieldBaseEntry, postureFieldRowsRecord, postureFieldRowsSha256,
 			postureFieldEntriesRecord, postureFieldEntriesSha256, postureFieldStateRecord, postureFieldStateSha256,
-			postureFieldShareCert, postureFieldOverlay, postureFieldWaiting:
+			postureFieldShareCert, postureFieldOverlay, postureFieldWaiting, postureFieldBaseSignerPublicKey:
 			if wireType != protowire.BytesType {
 				return nil, failed("field %d of wire type %d", number, wireType)
 			}
@@ -480,6 +485,8 @@ func decodePostureManifest(encoded []byte) (*postureManifest, error) {
 				manifest.stateRecord = string(value)
 			case postureFieldStateSha256:
 				manifest.stateSha256 = value
+			case postureFieldBaseSignerPublicKey:
+				manifest.baseSignerPublicKey = value
 			case postureFieldShareCert:
 				shareCert, err := decodePostureShareCert(value)
 				if err != nil {
