@@ -207,6 +207,30 @@ func (self *Net) SetContractProvideMode(source connect.Id, destination connect.I
 	exchange.contractProvideModes[netLinkKey{source: source, destination: destination}] = provideMode
 }
 
+// Commits every contract the issuer creates from now on to its destination's sequence TLS certificate, the chain the
+// destination's EncryptedKey publishes and its client key's signature over it, as CreateContract seals them
+// (StoredContract.provide_tls_certificate), so a source checks the certificate its destination presents against the
+// contract it holds, as it does on a platform. Off by default, when contracts commit to no certificate and a source
+// checks none. A Net on a platform takes its contracts from the platform's controller, which commits them itself, so
+// this is kept as unapplied there (Net.Unapplied).
+func (self *Net) CommitSequenceCertificates() {
+	exchange := self.exchange
+	if self.OnPlatform() {
+		exchange.refuseOnPlatform("CommitSequenceCertificates: the platform's controller commits each contract to its destination's certificate itself")
+		return
+	}
+	exchange.stateLock.Lock()
+	defer exchange.stateLock.Unlock()
+	exchange.commitSequenceCertificates = true
+}
+
+// Whether the issuer commits contracts to their destination's sequence certificate.
+func (self *netExchange) commitsSequenceCertificates() bool {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.commitSequenceCertificates
+}
+
 // The provide mode the issuer gives a contract from source to destination.
 func (self *netExchange) contractProvideMode(source connect.Id, destination connect.Id) connectprotocol.ProvideMode {
 	self.stateLock.Lock()
