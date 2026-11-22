@@ -51,7 +51,8 @@ type StreamOpenRequest struct {
 // open's own failures answer *SubprotocolError: INVALID_ARGUMENT past §6.5's budget or the acceptor's
 // window, RESOURCE_EXHAUSTED when this side's credit cannot commit a window, Hello's refusal, UNAVAILABLE
 // when connect will not take it, and DEADLINE_EXCEEDED or CANCELLED with no answer, after which the stream
-// is reset CANCELLED so a late accept finds nothing.
+// is reset CANCELLED so a late accept finds nothing. A sidecar's INVALID, which its gate answers when it holds
+// no Hello with this side, is met once with a fresh Hello and the open again, within the same deadline.
 func (self *Subprotocol) OpenStream(ctx context.Context, clientId Id, request *StreamOpenRequest) (*SubprotocolStream, error) {
 	if request == nil {
 		request = &StreamOpenRequest{}
@@ -76,68 +77,81 @@ func (self *Subprotocol) OpenStream(ctx context.Context, clientId Id, request *S
 	if known, peerEdge := self.streamPeerKind(peerId); known && peerEdge != edge {
 		return nil, &SubprotocolError{Code: protocol.ErrorCode_ERR_FAILED_PRECONDITION, Message: errStreamPeerKind.Error()}
 	}
-	if !edge {
-		if err := self.ensurePeerVerifiedWithin(ctx, peerId, timeout); err != nil {
-			return nil, openFailure(err)
-		}
-	}
 	deadline := start.Add(timeout)
-	openCtx, cancelOpen := self.clockContext(ctx, deadline.Sub(self.clock.Now()))
-	stopOnClose := context.AfterFunc(self.ctx, cancelOpen)
-	stream, err := self.startStreamOpen(openCtx, peerId, edge, request, deadline)
-	stopOnClose()
-	cancelOpen()
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, openFailure(ctx.Err())
+	// One open: §6.4's Hello first toward a sidecar, then StreamOpen and its answer.
+	openOnce := func() (*SubprotocolStream, error) {
+		if !edge {
+			if err := self.ensurePeerVerifiedWithin(ctx, peerId, deadline.Sub(self.clock.Now())); err != nil {
+				return nil, openFailure(err)
+			}
 		}
-		if self.ctx.Err() != nil {
-			return nil, errSubprotocolClosed
-		}
-		if !self.clock.Now().Before(deadline) {
-			return nil, &SubprotocolError{Code: protocol.ErrorCode_ERR_DEADLINE_EXCEEDED}
-		}
-		return nil, err
-	}
-	if !edge {
-		// the first stream with a peer each HeadCheckInterval starts a HeadCheck beside it
-		self.headCheckOnExchange(peerId, protocol.MessageType_STREAM_OPEN)
-	}
-
-	for {
-		var phase streamPhase
-		var endErr error
-		var changed chan struct{}
-		func() {
-			stream.stateLock.Lock()
-			defer stream.stateLock.Unlock()
-			phase = stream.state.phase
-			endErr = stream.state.err
-			changed = stream.changed
-		}()
-		switch phase {
-		case streamPhaseOpen:
-			return stream, nil
-		case streamPhaseDone:
-			stream.removeIfDone()
-			return nil, streamEndError(endErr, false)
-		}
-		select {
-		case <-changed:
-			continue
-		case <-ctx.Done():
-			stream.resetLocal(protocol.StreamResetCode_RST_CANCELLED)
-			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		openCtx, cancelOpen := self.clockContext(ctx, deadline.Sub(self.clock.Now()))
+		stopOnClose := context.AfterFunc(self.ctx, cancelOpen)
+		stream, err := self.startStreamOpen(openCtx, peerId, edge, request, deadline)
+		stopOnClose()
+		cancelOpen()
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, openFailure(ctx.Err())
+			}
+			if self.ctx.Err() != nil {
+				return nil, errSubprotocolClosed
+			}
+			if !self.clock.Now().Before(deadline) {
 				return nil, &SubprotocolError{Code: protocol.ErrorCode_ERR_DEADLINE_EXCEEDED}
 			}
-			return nil, &SubprotocolError{Code: protocol.ErrorCode_ERR_CANCELLED}
-		case <-self.clock.After(deadline.Sub(self.clock.Now())):
-			stream.resetLocal(protocol.StreamResetCode_RST_CANCELLED)
-			return nil, &SubprotocolError{Code: protocol.ErrorCode_ERR_DEADLINE_EXCEEDED}
-		case <-self.ctx.Done():
-			return nil, errSubprotocolClosed
+			return nil, err
+		}
+		if !edge {
+			// the first stream with a peer each HeadCheckInterval starts a HeadCheck beside it
+			self.headCheckOnExchange(peerId, protocol.MessageType_STREAM_OPEN)
+		}
+
+		for {
+			var phase streamPhase
+			var endErr error
+			var changed chan struct{}
+			func() {
+				stream.stateLock.Lock()
+				defer stream.stateLock.Unlock()
+				phase = stream.state.phase
+				endErr = stream.state.err
+				changed = stream.changed
+			}()
+			switch phase {
+			case streamPhaseOpen:
+				return stream, nil
+			case streamPhaseDone:
+				stream.removeIfDone()
+				return nil, streamEndError(endErr, false)
+			}
+			select {
+			case <-changed:
+				continue
+			case <-ctx.Done():
+				stream.resetLocal(protocol.StreamResetCode_RST_CANCELLED)
+				if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+					return nil, &SubprotocolError{Code: protocol.ErrorCode_ERR_DEADLINE_EXCEEDED}
+				}
+				return nil, &SubprotocolError{Code: protocol.ErrorCode_ERR_CANCELLED}
+			case <-self.clock.After(deadline.Sub(self.clock.Now())):
+				stream.resetLocal(protocol.StreamResetCode_RST_CANCELLED)
+				return nil, &SubprotocolError{Code: protocol.ErrorCode_ERR_DEADLINE_EXCEEDED}
+			case <-self.ctx.Done():
+				return nil, errSubprotocolClosed
+			}
 		}
 	}
+	// A sidecar whose gate holds no Hello with this side any more rejects the open INVALID before any listener
+	// sees it, as a peer restarted under the same C15 key does: nothing else closes this side's Hello with it.
+	// One fresh Hello, then the open again, as a call answers the gate's UNAUTHENTICATED (rpc_call.go).
+	stream, err := openOnce()
+	var rejectErr *StreamRejectError
+	if !edge && errors.As(err, &rejectErr) && !rejectErr.Local && rejectErr.Code == protocol.StreamRejectCode_SR_INVALID {
+		self.forgetPeer(peerId)
+		stream, err = openOnce()
+	}
+	return stream, err
 }
 
 // Reserve an ID and submit this peer's open before letting another opener advance its watermark.

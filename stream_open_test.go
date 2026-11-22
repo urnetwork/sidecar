@@ -169,6 +169,57 @@ func testStreamOpenAfterRestart(t *testing.T, edge bool) {
 	accepted.Close()
 }
 
+// The listener restarts under its identity, as a daemon that keeps its generation's connect identity does, so the opener's
+// Hello with it still stands, under the same C15 key, while the restarted listener holds none and its gate rejects the open
+// INVALID. The opener answers with one fresh Hello and the same open again, as a call answers the gate's UNAUTHENTICATED,
+// rather than failing every open until HelloCacheTimeout ends its Hello.
+func TestStreamOpenAfterTheListenerRestartsUnderItsIdentity(t *testing.T) {
+	pair := newTestRpcPair(t)
+	listenerId, listenerIdentity := connect.NewId(), newTestRpcIdentity()
+	listener := pair.addClient(listenerId, listenerIdentity, nil)
+	opener := pair.add(nil, nil)
+	stream, accepted := testStreamOpen(t, opener, listener, testStreamAccepting(t, listener, testStreamTarget), nil)
+	if err := stream.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := accepted.Close(); err != nil {
+		t.Fatal(err)
+	}
+	countSent := func(side *testRpcSide, messageType protocol.MessageType) int {
+		count := 0
+		for _, sentType := range testSentTypes(side) {
+			if sentType == messageType {
+				count += 1
+			}
+		}
+		return count
+	}
+	hellos := countSent(opener, protocol.MessageType_HELLO)
+	listener.subprotocol.Close()
+	listener.cancel()
+
+	restarted := pair.addClient(listenerId, listenerIdentity, nil)
+	fresh, freshAccepted := testStreamOpen(t, opener, restarted, testStreamAccepting(t, restarted, testStreamTarget), nil)
+	if got := countSent(opener, protocol.MessageType_HELLO); got != hellos+1 {
+		t.Fatalf("the opener sent %d Hellos after the restart, want 1", got-hellos)
+	}
+	reject := testFirstSent(restarted.sent(), protocol.MessageType_STREAM_REJECT)
+	if reject == nil {
+		t.Fatal("the restarted listener's gate rejected no open: the opener's standing Hello was never tried")
+	}
+	if code := (&protocol.StreamReject{}); proto.Unmarshal(reject.Body, code) != nil || code.Code != uint32(protocol.StreamRejectCode_SR_INVALID) {
+		t.Fatalf("the restarted listener answered %v", code)
+	}
+	if _, err := fresh.Write([]byte("after")); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(testStreamReadFull(t, freshAccepted, 5)); got != "after" {
+		t.Fatalf("the restarted listener read %q", got)
+	}
+	fresh.Close()
+	freshAccepted.Close()
+}
+
 // An expired range reservation cannot publish an open to the listener.
 func TestStreamOpenDeadlineCoversRangeReservation(t *testing.T) {
 	pair := newTestRpcPair(t)
