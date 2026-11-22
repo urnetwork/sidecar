@@ -40,7 +40,8 @@ type pushReads struct {
 	// when step 4's reads were issued, by the engine's clock: step 7 issues within PushStepSevenWindow of it
 	readAt time.Time
 	repo   *EvsRepoRead
-	// gen/<g> of the push's group and generation; nil when gkm holds none
+	// gen/<g> of the push's group and generation, resolved through the repo's GroupForms (generation_resolve.go);
+	// nil when gkm holds none
 	generation          *protocol.GenRotate
 	overlayBaseVersions []uint64
 	// the head of the ref a creating push's section 16 names, nil for none (DESIGN-DETAILS 8.2.2)
@@ -120,7 +121,7 @@ func (self *pushAttempt) readStep4(cached bool) (*pushOutcome, bool) {
 			// a re-seed's 5d is its pins' fence alone, which reads no generation record (reseed.go)
 			return
 		}
-		reads.generation, generationErr = engine.generations.Read(self.ctx, self.cluster, groupId, push.GetGeneration(), self.gateView)
+		reads.generation, generationErr = engine.generations.Read(self.ctx, self.cluster, self.repoId, groupId, push.GetGeneration(), self.gateView)
 	}()
 	go func() {
 		defer waitGroup.Done()

@@ -159,10 +159,10 @@ func (self *ZoneView) match(name string) zoneMatch {
 	return zoneMatch{}
 }
 
-// The wildcard a copy row at name answers from: the one name would have matched were its children not
-// there. So the walk goes up past names that exist only because of what is below them, and an ancestor
-// with rows of its own ends it, since such a name would have blocked any wildcard above it. nil when
-// nothing covers name.
+// The wildcard a copy row at name answers from: the one name would have matched were neither it nor
+// its children there. So the walk goes up past names that exist only because of what is below them,
+// and an ancestor with rows of its own ends it, since such a name would have blocked any wildcard
+// above it. nil when nothing covers name.
 func (self *ZoneView) copySource(name string) *zoneNode {
 	for ancestor := name; ancestor != self.root && ancestor != ""; {
 		ancestor = zoneParent(ancestor)
