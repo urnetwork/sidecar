@@ -184,7 +184,8 @@ type EvsEngine struct {
 	probeCount *sidecar.MonitorValue[int]
 	// requests in flight, for Drain
 	inFlightCount *sidecar.MonitorValue[int]
-	// commits whose step 8 has started, and those whose step 8 has finished
+	// commits whose step 8 has started, and those whose step 8 has finished, for Drain and a test's wait; a step 8
+	// starts on its request's goroutine, before the handler returns
 	stepEightCount     *sidecar.MonitorValue[int]
 	stepEightDoneCount *sidecar.MonitorValue[int]
 	draining           chan struct{}
@@ -414,17 +415,51 @@ func (self *EvsEngine) run() {
 	}
 }
 
-// Takes no new request, answering each 503, and returns once none is in flight or DrainTimeout has passed.
+// Takes no new request, answering each 503; waits until none is in flight, at most DrainTimeout; then waits until
+// every step 8 they started has finished and the notifier has handed each hint it took to push, at most
+// StepEightDrainTimeout more. Step 8 runs off the reply path (§11.8), so a commit answered just before or during the
+// drain has its push sequence and hints, its stored-byte delta and its head cache entry still to come when its
+// request ends, and the host's Close, which follows, ends the engine's ctx under them: the stored-byte delta must be in
+// the usage producer before the host drains it. Nothing on the clock is set while nothing is left to wait for.
 func (self *EvsEngine) Drain() {
 	self.drainingOnce.Do(func() { close(self.draining) })
-	deadline := self.clock.After(self.settings.DrainTimeout)
+	// a request the guard took before the drain may still commit, and its step 8 starts before its handler returns,
+	// so once none is in flight every such step 8 is counted
+	var deadline <-chan time.Time
+requests:
 	for {
 		count, changed := self.inFlightCount.Get()
 		if count == 0 {
-			return
+			break
+		}
+		if deadline == nil {
+			deadline = self.clock.After(self.settings.DrainTimeout)
 		}
 		select {
 		case <-changed:
+		case <-deadline:
+			// what is still in flight is past the drain's bound; the step 8s already started still get theirs
+			break requests
+		case <-self.ctx.Done():
+			return
+		}
+	}
+	deadline = nil
+	for {
+		// finished before started: a step 8 that starts between the two reads makes started the greater, so it is
+		// never taken for finished
+		finished, finishedChanged := self.stepEightDoneCount.Get()
+		started := self.stepEightCount.Value()
+		unsent, unsentChanged := self.notifier.Unsent()
+		if finished == started && unsent == 0 {
+			return
+		}
+		if deadline == nil {
+			deadline = self.clock.After(self.settings.StepEightDrainTimeout)
+		}
+		select {
+		case <-finishedChanged:
+		case <-unsentChanged:
 		case <-deadline:
 			return
 		case <-self.ctx.Done():

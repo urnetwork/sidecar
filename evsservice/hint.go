@@ -18,6 +18,9 @@
 //	          a repo (10 a second): a commit inside the interval waits for its end, and the newest commit's hint goes
 //	          then to every client the coalesced commits matched; newest is by push sequence, since step 8s of
 //	          consecutive commits overlap and their hints can arrive here in another order than they raised it
+//	unsent    a hint counts as unsent from the moment send takes it until Push.Hint has returned for it or for the
+//	          waiting hint it joined, so the engine's Drain, which waits for the count to reach zero, never returns
+//	          with a hint still waiting out its interval
 //
 // Every family touched is soft state: a failure is logged and is a gap, which clients' hourly resync covers, never an
 // alarm. Each script touches one hash tag. Not built: the rev/ check of each holder (§11.10's "holders a rev/ object
@@ -90,6 +93,8 @@ type EvsHintNotifier struct {
 	repoHints   map[sidecar.Id]*evsRepoHintState
 	// hints sent, for a test to wait on
 	sentCount *sidecar.MonitorValue[int]
+	// hints taken and not yet handed to push (the file header's unsent row), for the engine's Drain
+	unsentCount *sidecar.MonitorValue[int]
 }
 
 // The notifier over a host's Redis and Push and the gate views, until ctx ends, with the default settings. A nil
@@ -114,12 +119,18 @@ func NewEvsHintNotifierWithSettings(ctx context.Context, clock sidecar.Clock, re
 		leaseCopies: map[sidecar.Id]*evsLeaseCopy{},
 		repoHints:   map[sidecar.Id]*evsRepoHintState{},
 		sentCount:   sidecar.NewMonitorValue(0),
+		unsentCount: sidecar.NewMonitorValue(0),
 	}
 }
 
 // Hints sent so far, and a channel that closes at the next.
 func (self *EvsHintNotifier) Sent() (int, chan struct{}) {
 	return self.sentCount.Get()
+}
+
+// See EvsCommitNotifier.
+func (self *EvsHintNotifier) Unsent() (int, chan struct{}) {
+	return self.unsentCount.Get()
 }
 
 // See EvsCommitNotifier.
@@ -264,10 +275,13 @@ func evsLeaseMatches(prefix sidecar.EvsTokenPath, changed []sidecar.EvsTokenPath
 // push sequence goes, to the clients of every hint that waited. Hints reach here in any order, since each commit's
 // step 8 runs on its own, so a hint that arrives after one with a higher sequence adds its clients and no more:
 // were it to take the waiting hint's place, the higher sequence would not be hinted before the repo's next push or
-// the clients' hourly resync.
+// the clients' hourly resync. The hint counts as unsent before the waiting hint can see it, and one that joins a
+// waiting hint stops counting only once it has joined, so the count never reads zero while either waits.
 func (self *EvsHintNotifier) send(repoId sidecar.Id, hint *sidecar.ClientHint, clientIds []sidecar.Id, seenAt time.Time) {
+	self.unsentCount.Update(func(count int) int { return count + 1 })
 	now := self.clock.Now()
 	sendNow := false
+	joined := false
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
@@ -292,6 +306,7 @@ func (self *EvsHintNotifier) send(repoId sidecar.Id, hint *sidecar.ClientHint, c
 		}
 		switch {
 		case state.pending != nil:
+			joined = true
 			state.pendingHeads = append(state.pendingHeads, seenAt)
 			// a hint already waits: the one of the higher push sequence stays, for the clients of both
 			if state.pending.Version < hint.Version {
@@ -308,6 +323,10 @@ func (self *EvsHintNotifier) send(repoId sidecar.Id, hint *sidecar.ClientHint, c
 			sendNow = true
 		}
 	}()
+	if joined {
+		// the waiting hint carries it to push, and counts until then
+		self.unsentCount.Update(func(count int) int { return count - 1 })
+	}
 	if sendNow {
 		self.deliver(hint, clientIds, []time.Time{seenAt})
 	}
@@ -340,7 +359,8 @@ func (self *EvsHintNotifier) flush(repoId sidecar.Id) {
 	}
 }
 
-// One Push.Hint, whose failure is a gap.
+// One Push.Hint, whose failure is a gap, for one hint send counted unsent: a hint sent at once, or a repo's waiting
+// hint with every hint that joined it.
 func (self *EvsHintNotifier) deliver(hint *sidecar.ClientHint, clientIds []sidecar.Id, heads []time.Time) {
 	connectClientIds := make([]connect.Id, len(clientIds))
 	for i, clientId := range clientIds {
@@ -366,4 +386,5 @@ func (self *EvsHintNotifier) deliver(hint *sidecar.ClientHint, clientIds []sidec
 		}
 	}
 	self.sentCount.Update(func(count int) int { return count + 1 })
+	self.unsentCount.Update(func(count int) int { return count - 1 })
 }

@@ -77,6 +77,9 @@ type EvsCommitted struct {
 // an alarm, since all of it is soft state.
 type EvsCommitNotifier interface {
 	Notify(ctx context.Context, committed *EvsCommitted) (pushSequence uint64, err error)
+	// The hints Notify took that push has not yet taken, such as one waiting out its repo's interval, and a channel
+	// that closes at the next change: what the engine's Drain waits for before Close ends them.
+	Unsent() (count int, changed chan struct{})
 }
 
 // Steps 6 and 7 with step 7's outcomes. again asks for steps 4 and 5 again: the 5 s window passed, or a reread sent
