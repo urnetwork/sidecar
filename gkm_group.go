@@ -131,6 +131,12 @@ type GkmGroupClientArgs struct {
 	ReaderPrivateKey func(keySha256 []byte) (hpke.PrivateKey, error)
 	// The digest of this sidecar's current ReaderKey, which a late ask wants a delivery to. Nil asks for none.
 	ReaderKeySha256 func() []byte
+	// Asks the ReaderKey upkeep for a pass now (GkmUpkeep.Refresh), which uploads the current ReaderKey where gkm does
+	// not hold it yet, and whose upload resyncs the hint intake: what a late ask that finds no current ReaderKey calls
+	// instead of asking, at most once a LateAskInterval, since no holder can seal a delivery to a sidecar gkm serves
+	// no ReaderKey for (DESIGN-DETAILS 6.2.4's asker row: such a device publishes one first). It must not block. Nil
+	// leaves the ask to the upkeep's own next pass.
+	PublishReaderKey func()
 	// A member's current RecoveryBind key, from the config repo's sealed RecoveryBindBody, which TEAM's ConfigClient
 	// opens (§7.9). Nil, or an answer of none for a member that holds a recovery identity, refuses the rotation
 	// rather than leave that member without its RecoveryWrap (D-KEYS-18).
@@ -191,6 +197,8 @@ type GkmGroupClient struct {
 	repoIdHeads map[Id]*gkmRepoHead
 	// when a late ask for a GroupInfo or a waiting leaf's want last went, by repo (H2)
 	repoIdWantAskedAt map[Id]time.Time
+	// when a late ask with no current ReaderKey last asked the upkeep to publish one (PublishReaderKey), zero for never
+	readerKeyAskedAt time.Time
 	// when this device last joined a group through its last-resort KeyPackage, read from the keychain at first use
 	lastResortJoinedAt     time.Time
 	lastResortJoinedLoaded bool
