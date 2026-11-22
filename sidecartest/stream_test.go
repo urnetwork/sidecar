@@ -13,7 +13,10 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"io"
+	"net"
+	"os"
 	"testing"
 	"time"
 
@@ -88,13 +91,119 @@ func testStreamWrite(writer *sidecar.SubprotocolStream, data []byte) chan error 
 	return done
 }
 
-// Reads reader to its end, bounded in real time by the stream's read deadline.
-func testStreamReadAll(t *testing.T, reader *sidecar.SubprotocolStream) ([]byte, error) {
+// Runs read, which reads stream, and answers its error, failing t should deadline pass first in real time: the stream is
+// then closed, which ends a read still waiting, t fails with what, and the answer is os.ErrDeadlineExceeded. A stream's
+// own read deadline runs on its dispatcher's clock, the Net's fake one, which moves only as a test steps it, so it
+// bounds no real wait: a read given a deadline a minute ahead waited twelve minutes in a landcheck once its bytes had
+// gone to another stream (QD-1195).
+func testStreamReadBy(t testing.TB, stream *sidecar.SubprotocolStream, deadline time.Time, what string, read func() error) error {
 	t.Helper()
-	if err := reader.SetReadDeadline(time.Now().Add(testStreamTimeout)); err != nil {
+	done := make(chan error, 1)
+	go func() {
+		done <- read()
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(time.Until(deadline)):
+		// Close wakes the read before it sends anything, so the read ends even while the close's own send waits
+		go stream.Close()
+		err := <-done
+		t.Errorf("%s: nothing by its deadline in real time, the read ending %v once the stream closed", what, err)
+		return os.ErrDeadlineExceeded
+	}
+}
+
+// Reads reader to its end within testStreamTimeout in real time.
+func testStreamReadAll(t testing.TB, reader *sidecar.SubprotocolStream) ([]byte, error) {
+	t.Helper()
+	var all []byte
+	err := testStreamReadBy(t, reader, time.Now().Add(testStreamTimeout), "the read to the stream's end", func() error {
+		var err error
+		all, err = io.ReadAll(reader)
+		return err
+	})
+	return all, err
+}
+
+// Fills read from reader within testStreamTimeout in real time.
+func testStreamReadFull(t testing.TB, reader *sidecar.SubprotocolStream, read []byte) error {
+	t.Helper()
+	return testStreamReadBy(t, reader, time.Now().Add(testStreamTimeout), "the read", func() error {
+		_, err := io.ReadFull(reader, read)
+		return err
+	})
+}
+
+// A TB that records what fails rather than failing the test.
+type testStreamReadRecorder struct {
+	testing.TB
+	failures []string
+}
+
+// See testing.TB.
+func (self *testStreamReadRecorder) Helper() {}
+
+// See testing.TB: the failure is kept, and the test goes on.
+func (self *testStreamReadRecorder) Errorf(format string, args ...any) {
+	self.failures = append(self.failures, fmt.Sprintf(format, args...))
+}
+
+// What written, a testStreamWrite's answer, ended with, within testStreamTimeout in real time.
+func testStreamWritten(t *testing.T, written chan error) error {
+	t.Helper()
+	select {
+	case err := <-written:
+		return err
+	case <-time.After(testStreamTimeout):
+		t.Fatal("the write never ended")
+		return nil
+	}
+}
+
+// Why a read here is bounded by testStreamReadBy's real timer: a stream's read deadline runs on its dispatcher's clock,
+// the Net's fake one, so a deadline a second past that clock, which is months before real time, ends a read only once
+// the Net's clock is stepped past it; and testStreamReadBy ends a read that nothing reaches when its real deadline
+// passes, closing the stream, and fails the test it was given.
+func TestStreamReadDeadlineRunsOnTheNetsClock(t *testing.T) {
+	testNet, a, b, accepted := newTestStreamPair(t)
+	_, stream := testOpenStream(t, a, b, accepted)
+	clock := testNet.Clock()
+	if !clock.Now().Add(time.Second).Before(time.Now()) {
+		t.Fatal("the Net's clock is not behind real time")
+	}
+	if err := stream.SetReadDeadline(clock.Now().Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	return io.ReadAll(reader)
+	read := make(chan error, 1)
+	go func() {
+		_, err := stream.Read(make([]byte, 1))
+		read <- err
+	}()
+	clock.Advance(time.Second)
+	select {
+	case err := <-read:
+		if !errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Fatalf("the read past its deadline on the Net's clock: %v", err)
+		}
+	case <-time.After(testStreamTimeout):
+		t.Fatal("a read deadline the Net's clock passed never ended the read")
+	}
+
+	if err := stream.SetReadDeadline(time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	// no bytes and no deadline of the stream's own: only the real deadline, passed at once, ends this read, failing the
+	// recorder in the test's place
+	recorder := &testStreamReadRecorder{TB: t}
+	var readErr error
+	err := testStreamReadBy(recorder, stream, time.Now(), "a read nothing reaches", func() error {
+		_, readErr = stream.Read(make([]byte, 1))
+		return readErr
+	})
+	if !errors.Is(err, os.ErrDeadlineExceeded) || !errors.Is(readErr, net.ErrClosed) || len(recorder.failures) != 1 {
+		t.Fatalf("a read nothing reaches, past its real deadline: %v, the read %v, failures %q", err, readErr, recorder.failures)
+	}
 }
 
 // Over a link that drops a fifth of its frames, a stream's bytes arrive whole and in order, connect resending what
@@ -141,10 +250,7 @@ func TestStreamLostPackStallsThenRecovers(t *testing.T) {
 		t.Fatal(err)
 	}
 	read := make([]byte, len(warm))
-	if err := stream.SetReadDeadline(time.Now().Add(testStreamTimeout)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := io.ReadFull(stream, read); err != nil || !bytes.Equal(read, warm) {
+	if err := testStreamReadFull(t, stream, read); err != nil || !bytes.Equal(read, warm) {
 		t.Fatalf("before the partition: %v", err)
 	}
 
@@ -157,7 +263,7 @@ func TestStreamLostPackStallsThenRecovers(t *testing.T) {
 	if err != nil || !bytes.Equal(all, data) {
 		t.Fatalf("after the partition: %d of %d bytes, %v", len(all), len(data), err)
 	}
-	if err := <-written; err != nil {
+	if err := testStreamWritten(t, written); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -176,7 +282,7 @@ func TestStreamSlowReaderHealthySibling(t *testing.T) {
 	if err != nil || !bytes.Equal(read, data) {
 		t.Fatalf("the healthy sibling: %d of %d bytes, %v", len(read), len(data), err)
 	}
-	if err := <-healthyWritten; err != nil {
+	if err := testStreamWritten(t, healthyWritten); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -185,11 +291,8 @@ func TestStreamSlowReaderHealthySibling(t *testing.T) {
 	default:
 	}
 	// the slow reader still gets what it was sent once it reads
-	if err := slowReader.SetReadDeadline(time.Now().Add(testStreamTimeout)); err != nil {
-		t.Fatal(err)
-	}
 	first := make([]byte, 1024)
-	if _, err := io.ReadFull(slowReader, first); err != nil {
+	if err := testStreamReadFull(t, slowReader, first); err != nil {
 		t.Fatalf("the slow reader: %v", err)
 	}
 }
