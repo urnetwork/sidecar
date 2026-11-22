@@ -156,7 +156,7 @@ func restartIdentityOpen(t *testing.T, ctx context.Context, opener *SubprotocolS
 func restartIdentityRead(t *testing.T, stream *sidecar.SubprotocolStream, deadline time.Time, want string, what string) {
 	t.Helper()
 	got := make([]byte, len(want))
-	err := testStreamReadBy(stream, deadline, func() error {
+	err := testStreamReadBy(t, stream, deadline, what, func() error {
 		_, err := io.ReadFull(stream, got)
 		return err
 	})

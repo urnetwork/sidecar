@@ -82,7 +82,7 @@ func TestP2pPairMovesAndBackUnderALiveRpcAndStream(t *testing.T) {
 			t.Fatal(err)
 		}
 		read := make([]byte, len(data))
-		if err := testStreamReadFull(accepted, read); err != nil || string(read) != data {
+		if err := testStreamReadFull(t, accepted, read); err != nil || string(read) != data {
 			t.Fatalf("the stream carried %q, %v", read, err)
 		}
 	}
