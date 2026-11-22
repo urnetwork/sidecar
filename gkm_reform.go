@@ -15,7 +15,10 @@
 //	              GroupInfo_0 under RK_g; keeps the whole request in the keychain before it posts it
 //	           2  POST /gkm/repos/<id>/forms: gkm writes the owner marker, the form and epoch/0, whose header holds
 //	              g and no pin; a marker another repo holds means the id is taken and another is drawn, and a form
-//	              that lost its place to another re-form is dropped, since the group that stands is adopted instead
+//	              that lost its place to another re-form is dropped, since the group that stands is adopted instead;
+//	              one refused 409 with a generation of the group it re-forms past g, which gkm's fence answers when
+//	              a claim landed first (QD-1187), is dropped too, and the re-former takes that generation and drafts
+//	              again at it, at most ReformRedraftCount times, then waits (ErrGkmWait)
 //	           3  POST ladder: gen/1 to gen/<g>, the old Signed GenRotates byte for byte, ascending,
 //	              LadderBatchCount (64) a call
 //	           4  moves its own pins to the new group, epoch 0, with epoch 1's floor at gen/<g>'s auth, its
@@ -73,10 +76,10 @@
 // depositor's pin takes a new group id at a generation past its pin, along a chain it verified, where rule 8 speaks
 // of an equal (g, C_g), which a depositor, holding no group, never meets.
 //
-// Not built here, each failing closed: evs's resolution of gen/<g> through the newest GroupForm (rule 8) is evs's; a
-// member two re-forms behind, whose middle form a second site loss took, refuses the chain and alarms, and returns by
-// a re-add or its recovery code; and a re-form keeps suite 0x0010, the one the subset speaks, until IANA's migration
-// has another.
+// evs resolves a statement's gen/<g> through the repo's GroupForms by GkmVerifyGroupForm (evsservice's
+// generation_resolve.go). Not built here, each failing closed: a member two re-forms behind, whose middle form a
+// second site loss took, refuses the chain and alarms, and returns by a re-add or its recovery code; and a re-form
+// keeps suite 0x0010, the one the subset speaks, until IANA's migration has another.
 //
 // Calls testHookSecret through the ladder's own functions at every key sealed.
 
@@ -244,6 +247,31 @@ func gkmParseGroupForm(state GkmAuthView, repoId Id, signed *bridge.Signed) (*gk
 		return nil, err
 	}
 	return form, nil
+}
+
+// What a server reads of a GroupForm to resolve a statement's gen/<g> through a repo's forms (plan-KEYS-reform-ladder
+// rule 8): the group the form makes, the group it re-forms, zero for a creation's, and the newest generation its
+// ladder carries.
+type GkmGroupFormFacts struct {
+	GroupId         Id
+	PreviousGroupId Id
+	Generation      uint64
+}
+
+// A Signed GroupForm of repoId, its stored bytes verified under its signer's admitted key in state and held to their
+// shape, as a member verifies one before it judges the signer (gkmParseGroupForm), for a server that resolves a
+// statement's gen/<g> through the repo's forms (rule 8). Who may sign one is GkmFormSignerAllowed's, which a server
+// does not judge: it may retain no state at the form's pin, and every member judges it before it adopts the group.
+func GkmVerifyGroupForm(state GkmAuthView, repoId Id, signedBytes []byte) (*GkmGroupFormFacts, error) {
+	signed := &bridge.Signed{}
+	if err := proto.Unmarshal(signedBytes, signed); err != nil {
+		return nil, fmt.Errorf("%w: a stored GroupForm: %w", ErrGkmMalformed, err)
+	}
+	form, err := gkmParseGroupForm(state, repoId, signed)
+	if err != nil {
+		return nil, err
+	}
+	return &GkmGroupFormFacts{GroupId: form.groupId, PreviousGroupId: form.previousGroupId, Generation: form.generation}, nil
 }
 
 // §10.6's GroupForm signer rule judged at the auth pin the form carries (QD-643; R1's judged row): at the state of
@@ -470,9 +498,9 @@ func (self *GkmGroupClient) reformApi() (GkmReformApi, error) {
 
 // Re-forms the repo's group from this device's keychain. See the file header. It returns the new group's id once
 // its steps are done, and resumes a re-form a kill or a wait cut short. ErrGkmNotWriter for a device §10.6's rule
-// does not let form the group, ErrGkmKeyMissing for one that does not hold the whole ladder, or asked with Resume
-// where no re-form stands, ErrGkmWait when another re-form of the repo stands, which this device adopts at its next
-// sync.
+// does not let form the group, ErrGkmKeyMissing for one that does not hold the whole ladder, a newer generation that
+// outran its form included, or asked with Resume where no re-form stands, ErrGkmWait when another re-form of the repo
+// stands, which this device adopts at its next sync, or when the group moved past its form at every draft.
 func (self *GkmGroupClient) ReformGroup(ctx context.Context, args *GkmReformArgs) (Id, error) {
 	if args == nil || args.RepoId == (Id{}) {
 		return Id{}, fmt.Errorf("%w: a re-form needs its repo", ErrGkmMalformed)
@@ -547,10 +575,8 @@ func (self *gkmGroupManager) reformInFlow(ctx context.Context, args *GkmReformAr
 			return Id{}, fmt.Errorf("%w: no re-form of the repo stands to resume", ErrGkmKeyMissing)
 		}
 	}
-	for drawCount := 0; record == nil || record.phase == gkmReformPhasePosting; drawCount += 1 {
-		if max(1, client.settings.CreateGroupDrawCount) <= drawCount {
-			return Id{}, fmt.Errorf("%w: every group id drawn was taken", ErrGkmWait)
-		}
+	drawCount, redraftCount := 0, 0
+	for record == nil || record.phase == gkmReformPhasePosting {
 		if record == nil {
 			record, err = self.draftReform(state)
 			if err != nil {
@@ -561,26 +587,40 @@ func (self *gkmGroupManager) reformInFlow(ctx context.Context, args *GkmReformAr
 				return Id{}, err
 			}
 		}
-		taken, err := self.postReform(ctx, api, record)
+		posted, outrun, err := self.postReform(ctx, api, record)
 		if err != nil {
 			return Id{}, err
 		}
-		if taken {
+		switch posted {
+		case gkmReformIdTaken:
 			// the id is another repo's: this draft goes, with its group's state, and another is drawn
-			if forgetter, ok := client.args.Mls.(MlsGroupForgetter); ok {
-				if err := forgetter.ForgetGroup(record.groupId); err != nil {
-					return Id{}, err
-				}
-			}
-			if err := self.putReformRecord(nil); err != nil {
+			if err := self.dropReformDraft(record); err != nil {
 				return Id{}, err
 			}
 			record = nil
-			continue
-		}
-		record.phase = gkmReformPhaseLadder
-		if err := self.putReformRecord(record); err != nil {
-			return Id{}, err
+			drawCount += 1
+			if max(1, client.settings.CreateGroupDrawCount) <= drawCount {
+				return Id{}, fmt.Errorf("%w: every group id drawn was taken", ErrGkmWait)
+			}
+		case gkmReformOutrun:
+			// postReform dropped the draft, whose form gkm never files: the group it re-forms holds gen/<outrun>, which
+			// the next draft's ladder carries
+			record = nil
+			if client.settings.ReformRedraftCount <= redraftCount {
+				return Id{}, fmt.Errorf("%w: the group it re-forms moved past its form at each of %d drafts", ErrGkmWait, redraftCount+1)
+			}
+			redraftCount += 1
+			if state, err = client.currentState(); err != nil {
+				return Id{}, err
+			}
+			if err := self.takeOutrunInFlow(ctx, state, outrun); err != nil {
+				return Id{}, err
+			}
+		default:
+			record.phase = gkmReformPhaseLadder
+			if err := self.putReformRecord(record); err != nil {
+				return Id{}, err
+			}
 		}
 	}
 	if record.phase == gkmReformPhaseLadder {
@@ -738,13 +778,28 @@ func (self *gkmGroupManager) draftReform(state GkmAuthView) (*gkmReformRecord, e
 	return &gkmReformRecord{phase: gkmReformPhasePosting, groupId: groupId, generation: generation, request: request}, nil
 }
 
-// Step 2: POST forms with the record's bytes, sent again while its answer is lost. taken says the owner marker holds
-// another repo. A form that lost its place to another re-form is dropped with its record, and answers ErrGkmWait.
-func (self *gkmGroupManager) postReform(ctx context.Context, api GkmReformApi, record *gkmReformRecord) (taken bool, err error) {
+// What a re-form's POST came to.
+type gkmReformPost int
+
+const (
+	// the owner marker, the form and epoch/0 stand
+	gkmReformPosted gkmReformPost = iota
+	// the owner marker holds another repo
+	gkmReformIdTaken
+	// the group the form re-forms holds a generation past the form's (QD-1187's void closing)
+	gkmReformOutrun
+)
+
+// Step 2: POST forms with the record's bytes, sent again while its answer is lost. A form that lost its place to
+// another re-form is dropped with its record, and answers ErrGkmWait. One refused because the group it re-forms holds
+// a generation past the form's is dropped with its record too, and answers gkmReformOutrun with that generation: gkm's
+// fence (QD-1186, QD-1187) voids a closing that finds one, a claim having landed first, or a refused claim having
+// written it between the closing marker and its verdict, and no try of these bytes files the form after that.
+func (self *gkmGroupManager) postReform(ctx context.Context, api GkmReformApi, record *gkmReformRecord) (posted gkmReformPost, outrun uint64, err error) {
 	client := self.client
 	request := &protocol.GkmGroupReformRequest{}
 	if err := proto.Unmarshal(record.request, request); err != nil {
-		return false, fmt.Errorf("%w: a re-form record's request", ErrGkmMalformed)
+		return gkmReformPosted, 0, fmt.Errorf("%w: a re-form record's request", ErrGkmMalformed)
 	}
 	if client.KeyDeliveryOnly() {
 		// An interrupted older draft can still file its original signed form and generation.
@@ -757,30 +812,93 @@ func (self *gkmGroupManager) postReform(ctx context.Context, api GkmReformApi, r
 		gkmError, refused := GkmErrorOf(err)
 		switch {
 		case err == nil:
-			return false, nil
+			return gkmReformPosted, 0, nil
 		case refused && gkmError.Status == http.StatusConflict && len(gkmError.Winner) == 0:
-			return true, nil
+			return gkmReformIdTaken, 0, nil
 		case refused && gkmError.Status == http.StatusConflict:
-			// the repo's newest form is another's: that group stands, and this device adopts it at its next sync
-			if forgetter, ok := client.args.Mls.(MlsGroupForgetter); ok {
-				if err := forgetter.ForgetGroup(record.groupId); err != nil {
-					return false, err
+			if generation := gkmReformOutrunBy(request, record.generation, gkmError.Winner); 0 < generation {
+				if err := self.dropReformDraft(record); err != nil {
+					return gkmReformPosted, 0, err
 				}
+				return gkmReformOutrun, generation, nil
 			}
-			if err := self.putReformRecord(nil); err != nil {
-				return false, err
+			// the repo's newest form is another's: that group stands, and this device adopts it at its next sync
+			if err := self.dropReformDraft(record); err != nil {
+				return gkmReformPosted, 0, err
 			}
-			return false, fmt.Errorf("%w: another re-form of the repo stands", ErrGkmWait)
+			return gkmReformPosted, 0, fmt.Errorf("%w: another re-form of the repo stands", ErrGkmWait)
 		case refused && gkmError.Status == http.StatusForbidden:
-			return false, fmt.Errorf("%w: gkm refused the GroupForm", ErrGkmNotWriter)
+			return gkmReformPosted, 0, fmt.Errorf("%w: gkm refused the GroupForm", ErrGkmNotWriter)
 		case refused:
-			return false, err
+			return gkmReformPosted, 0, err
 		case ctx.Err() != nil:
-			return false, err
+			return gkmReformPosted, 0, err
 		}
 		// unknown: every write of the request is an If-None-Match create that equal bytes resume, so it goes again
 	}
-	return false, fmt.Errorf("%w: the re-form got no answer", ErrGkmUnavailable)
+	return gkmReformPosted, 0, fmt.Errorf("%w: the re-form got no answer", ErrGkmUnavailable)
+}
+
+// The generation a 409's winner names past generation, a re-form's own, in the group request's form re-forms: a
+// Signed GenRotate of that group, as gkm's fence answers a voided closing with gen/<generation+1>; 0 for any other
+// winner, another re-form's form among them. The statement is only read here: the generation is taken from gen/ as a
+// sync takes it (takeOutrunInFlow), its signature and rotation checks with it.
+func gkmReformOutrunBy(request *protocol.GkmGroupReformRequest, generation uint64, winner []byte) uint64 {
+	form := &protocol.GroupForm{}
+	signed := &bridge.Signed{}
+	rotate := &protocol.GenRotate{}
+	if proto.Unmarshal(request.GetForm().GetBody(), form) != nil || proto.Unmarshal(winner, signed) != nil ||
+		signed.GetType() != uint32(bridge.SignedType_SIGNED_GEN_ROTATE) || proto.Unmarshal(signed.GetBody(), rotate) != nil {
+		return 0
+	}
+	if len(form.GetPreviousGroupId()) == 0 || !bytes.Equal(rotate.GetGroupId(), form.GetPreviousGroupId()) ||
+		!bytes.Equal(rotate.GetRepoId(), form.GetRepoId()) || rotate.GetGeneration() <= generation {
+		return 0
+	}
+	return rotate.GetGeneration()
+}
+
+// Drops a draft gkm will never file, with its group's state and the keychain's record.
+func (self *gkmGroupManager) dropReformDraft(record *gkmReformRecord) error {
+	if forgetter, ok := self.client.args.Mls.(MlsGroupForgetter); ok {
+		if err := forgetter.ForgetGroup(record.groupId); err != nil {
+			return err
+		}
+	}
+	return self.putReformRecord(nil)
+}
+
+// The generation outrun of the group this device pins, which a re-form's form did not carry, and any past it, taken as
+// a sync's refresh takes them (takeNewerGenerationsInFlow), so the next draft's form and ladder carry them. An error
+// is a wait: a generation that fails its checks, ErrGkmKeyMissing for one no delivery of which reached this device
+// yet, which it asked for late, or none past the form's served, as while another re-form's closing stands.
+func (self *gkmGroupManager) takeOutrunInFlow(ctx context.Context, state GkmAuthView, outrun uint64) error {
+	client := self.client
+	pins, err := client.repoPins(self.repoId)
+	if err != nil {
+		return err
+	}
+	top, err := client.newestHeldGeneration(self.repoId)
+	if err != nil {
+		return err
+	}
+	if top.generation.Rotate.GetGeneration() < outrun {
+		if _, err := self.takeNewerGenerationsInFlow(ctx, state, pins.groupId, top.generation.Rotate.GetGeneration()); err != nil {
+			return err
+		}
+		if top, err = client.newestHeldGeneration(self.repoId); err != nil {
+			return err
+		}
+	}
+	switch newest := top.generation.Rotate.GetGeneration(); {
+	case newest < outrun:
+		return fmt.Errorf("%w: gen/%d, past the re-form's generation, was not served", ErrGkmWait, outrun)
+	case top.poisoned:
+		return fmt.Errorf("%w: gen/%d failed its checks", ErrGkmWait, newest)
+	case top.key == nil:
+		return fmt.Errorf("%w: no delivery of gen/%d reached this device yet", ErrGkmKeyMissing, newest)
+	}
+	return nil
 }
 
 // Step 3: gen/1 to gen/<g> as this device holds them, ascending, LadderBatchCount a call. A call sent again finds

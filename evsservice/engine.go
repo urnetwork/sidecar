@@ -259,7 +259,7 @@ func NewEvsEngine(ctx context.Context, host *sidecar.ServiceHost, settings *EvsS
 	self.overlays = NewOverlayChains(self.heads, settings)
 	self.locator = NewRecordLocator(blobs, nil)
 	self.folder = NewFolder(cancelCtx, clock, host.ClockCheck, blobs, host.Budget, self.heads, self.records, self.locator, self.repos, priceTable, settings, log)
-	self.generations = NewGenerationRecords(settings)
+	self.generations = NewGenerationRecords(settings, clock)
 	self.segments = NewSegmentLocator(blobs)
 	if self.drops, err = NewDropTable(host, blobs, settings.Drop, log); err != nil {
 		cancel()
