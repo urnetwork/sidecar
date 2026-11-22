@@ -156,6 +156,10 @@ func (self *EvsClient) CatchUpRef(ctx context.Context, through *protocol.RefHead
 	if err := self.pins.Raise(raised); err != nil {
 		return HeadCheckCatchUpUnserved, err
 	}
+	// the statements walked pass the pin: the ref's subscriptions raise their changes (evs_subscribe.go's marks row)
+	self.subscriber.notePinned(&EvsVerifiedHead{
+		RepoId: repoId, RefId: refId, Version: raised.Version, Chain: raised.Chain, FromVersion: fromVersion, Statements: walked,
+	})
 	return HeadCheckCaughtUp, nil
 }
 

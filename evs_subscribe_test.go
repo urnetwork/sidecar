@@ -2,11 +2,14 @@ package sidecar
 
 // EvsRepo.Subscribe and catch-up (§11.10, FS-12, §22.5's prefix subscriptions, FS-4's closing case) on the stand-in
 // evs of evs_world_test.go, beside a stand-in of evs's lease routes that keeps leases as {evsl_<repo_id>} does and can
-// fail, crash after its write, or lose them all.
+// fail, crash after its write, or lose them all. The changes rows (the e2e blogger case's findings): every commit that
+// passes a client's pin raises its change once to each subscriber, whichever call of the client verified it.
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"slices"
@@ -23,6 +26,8 @@ import (
 // The stand-in of POST, GET and DELETE /evs/v1/subscriptions and GET .../refs, in front of a world.
 type evsTestLeases struct {
 	world *evsTestWorld
+	// where every other request goes, the world when nil: a push stand-in for a client that writes
+	next http.Handler
 
 	stateLock sync.Mutex
 	// ref|epoch|prefix: a lease, as the hash's field names one
@@ -116,6 +121,8 @@ func (self *evsTestLeases) ServeHTTP(writer http.ResponseWriter, request *http.R
 		body, _ := proto.Marshal(&protocol.EvsRefsReply{Format: 1, PushSequence: 1, Refs: []*protocol.EvsHeadSummary{{RefId: self.world.refId.Bytes()}}})
 		writer.WriteHeader(http.StatusOK)
 		writer.Write(body)
+	case self.next != nil:
+		self.next.ServeHTTP(writer, request)
 	default:
 		self.world.ServeHTTP(writer, request)
 	}
@@ -191,12 +198,56 @@ func newEvsSubscribeTest(t *testing.T, world *evsTestWorld, leases *evsTestLease
 type evsTestChanges struct {
 	stateLock sync.Mutex
 	changes   []*EvsRepoChange
+	// how many came, for await, made on first use
+	count *MonitorValue[int]
+}
+
+// The count's monitor.
+func (self *evsTestChanges) counter() *MonitorValue[int] {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.count == nil {
+		self.count = NewMonitorValue(len(self.changes))
+	}
+	return self.count
 }
 
 func (self *evsTestChanges) add(change *EvsRepoChange) {
+	counter := self.counter()
+	count := func() int {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.changes = append(self.changes, change)
+		return len(self.changes)
+	}()
+	counter.Set(count)
+}
+
+// Waits until a change at version or past it came, or ctx ends: a bound on a hang, never what a test proves by.
+func (self *evsTestChanges) await(ctx context.Context, version uint64) error {
+	counter := self.counter()
+	for {
+		_, changed := counter.Get()
+		if versions := self.versions(); 0 < len(versions) && version <= slices.Max(versions) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("no change at version %d came, only at %v: %w", version, self.versions(), ctx.Err())
+		case <-changed:
+		}
+	}
+}
+
+// Each change's signer, in order.
+func (self *evsTestChanges) signers() []Id {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
-	self.changes = append(self.changes, change)
+	signers := []Id{}
+	for _, change := range self.changes {
+		signers = append(signers, change.SignerSidecarId)
+	}
+	return signers
 }
 
 func (self *evsTestChanges) versions() []uint64 {
@@ -592,4 +643,417 @@ func TestEvsSubscriberRoundsRunOnTheirOwnGoroutine(t *testing.T) {
 		t.Errorf("the change %+v", change)
 	}
 	test.client.Close()
+}
+
+// A client of the world that subscribes, reads and writes as a writer of its own, through a lease stand-in of its own
+// in front of the push stand-in: what the blogger case's writers are. Its listener of the world's repo hears every
+// change, and its subscription's callback its own.
+type evsTestSubscriber struct {
+	test     *evsTestClient
+	signer   *evsTestSigner
+	server   *evsTestPushServer
+	listened *evsTestChanges
+	own      *evsTestChanges
+}
+
+// A subscriber of the world signing as label, a writer and reader the world's config holds, writing through server.
+func newEvsTestSubscriber(t *testing.T, world *evsTestWorld, server *evsTestPushServer, label string) *evsTestSubscriber {
+	t.Helper()
+	signer := newEvsTestSigner(label)
+	func() {
+		world.config.stateLock.Lock()
+		defer world.config.stateLock.Unlock()
+		world.config.identityKeys[signer.sidecarId] = signer.publicKey()
+		world.config.writers = append(world.config.writers, signer.sidecarId)
+		world.config.readers = append(world.config.readers, signer.sidecarId)
+	}()
+	leases := newEvsTestLeases(world)
+	leases.next = server
+	test := newEvsTestClient(t, leases, newEvsTestStore(t))
+	test.client.args.Gkm = newEvsTestWriteGkm()
+	test.client.args.Config = func() GkmAuthView { return world.config }
+	test.client.args.Sign = signer.sign
+	identity := &SidecarIdentity{NetworkId: testNetworkId, SidecarId: signer.sidecarId, ClientId: evsTestId(label + " client")}
+	test.client.args.Identity = func() *SidecarIdentity { return identity }
+	// the hourly resync half an hour on, out of the way of a clock no test advances that far
+	test.client.subscriber.random = func(limit time.Duration) time.Duration { return limit / 2 }
+	subscriber := &evsTestSubscriber{test: test, signer: signer, server: server, listened: &evsTestChanges{}, own: &evsTestChanges{}}
+	test.client.AddRepoChangeListener(&world.repoId, subscriber.listened.add)
+	return subscriber
+}
+
+// Subscribes to paths of the world's main ref, the subscription's changes its own.
+func (self *evsTestSubscriber) subscribe(t *testing.T, world *evsTestWorld, paths ...string) {
+	t.Helper()
+	args := &EvsSubscribeArgs{RefName: EvsMainRefName, Paths: paths, Changes: self.own.add}
+	if _, err := self.test.client.Repo(world.repoId).Subscribe(context.Background(), args); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Writes content to path, answering the version it committed at.
+func (self *evsTestSubscriber) write(world *evsTestWorld, path string, content []byte) (uint64, error) {
+	self.server.know(path)
+	result, err := self.test.client.Repo(world.repoId).Write(context.Background(), &EvsWriteArgs{
+		Path: path, Content: bytes.NewReader(content), Size: int64(len(content)),
+	})
+	if err != nil {
+		return 0, err
+	}
+	return result.Version, nil
+}
+
+// Reads path fresh, as a webserver's cache miss does.
+func (self *evsTestSubscriber) read(world *evsTestWorld, path string) error {
+	out := &bytes.Buffer{}
+	_, err := self.test.client.Repo(world.repoId).ReadHead(context.Background(), &EvsReadArgs{Path: path, Fresh: true}, out)
+	return err
+}
+
+// Raises client's pin of a ref as a reader that walks the ref's statements itself raises one, the sync engine's,
+// record streams' and a git-mode export's (evs_pin_walk.go): the head read fresh, held to the pin it asked at, the
+// log walked from that pin, and the head raised with the walk's chains alone, carrying no statement.
+func evsTestWalkRaise(ctx context.Context, client *EvsClient, repoId Id, refId Id) error {
+	done := client.pins.beginRead(repoId, refId)
+	defer done()
+	head, err := client.Repo(repoId).pinnedHead(ctx, refId)
+	if err != nil {
+		return err
+	}
+	version, chain := uint64(0), EvsChainStart(repoId, refId)
+	if head.ask.pin != nil {
+		version, chain = head.ask.pin.Version, head.ask.pin.Chain
+	}
+	trail := newEvsWalkTrail(head.ask)
+	trail.start(version, chain)
+	walked, err := client.verifier.Walk(ctx, repoId, refId, version, chain, head.Version)
+	if err != nil {
+		return err
+	}
+	trail.add(walked)
+	raised := trail.head(head)
+	if len(raised.Statements) != 0 {
+		return errors.New("a walk's raise that carries statements")
+	}
+	return client.verifier.Pin(raised)
+}
+
+// The blogger case's finding (e2e-blogger's TestE2eBloggerChangeAfterTheReadersOwnRead): another writer's commits
+// that the client's own calls verify first, a fresh read, its write's plan, a reader that walks the ref itself and so
+// raises with no statement, and the mapper's tick, each raise exactly one change per commit to each subscription whose
+// paths it touched and to the listener, in order, as does the commit the subscriber's own read verifies, and the
+// client's own write; a commit touching no subscribed path raises none, and a round with nothing new raises nothing.
+// The client's write also changes the root, whose listing the world's own pushes never write, and the root is on
+// every branch, so src's subscription hears that one too. Before the fix only what the subscriber's own read brought
+// past the pin was raised, so the commits the other calls verified were lost.
+func TestEvsSubscriberRaisesEachCommitOnceWhicheverCallOfItsClientVerifiedIt(t *testing.T) {
+	world := newEvsTestWorld(t)
+	server := newEvsTestPushServer(t, world)
+	world.push(&evsTestChange{path: "docs/a", content: []byte("a")})
+	subscriber := newEvsTestSubscriber(t, world, server, "subscriber")
+	client := subscriber.test.client
+	ctx := context.Background()
+	subscriber.subscribe(t, world, "docs")
+	other := &evsTestChanges{}
+	if _, err := client.Repo(world.repoId).Subscribe(ctx, &EvsSubscribeArgs{RefName: EvsMainRefName, Paths: []string{"src"}, Changes: other.add}); err != nil {
+		t.Fatal(err)
+	}
+	// the leases' rereads raise nothing: the first commit stood at the pin when the subscriptions began
+	subscriber.test.clock.advance(client.settings.SubscribeRereadDelay)
+	client.subscriber.runDue(ctx)
+	if versions := subscriber.listened.versions(); len(versions) != 0 {
+		t.Fatalf("changes before any commit past the pin: %v", versions)
+	}
+	sequence := uint64(100)
+	hinted := func() {
+		sequence += 1
+		world.hint(subscriber.test, sequence)
+		client.subscriber.runDue(ctx)
+	}
+	push := func(path string) uint64 {
+		return world.push(&evsTestChange{path: path, content: []byte(path)})
+	}
+	// verified first by the client's fresh read, as a webserver's miss does
+	readFirst := push("docs/b")
+	if err := subscriber.read(world, "docs/b"); err != nil {
+		t.Fatal(err)
+	}
+	hinted()
+	// crossed by the client's own write's plan, then the write's own commit
+	writeCrossed := push("docs/c")
+	written, err := subscriber.write(world, "docs/mine", []byte("mine"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hinted()
+	// walked by a reader that raises with chains alone: these changes come from the log
+	walkedDocs, walkedOther, walkedSrc := push("docs/d"), push("other/x"), push("src/main.go")
+	if err := evsTestWalkRaise(ctx, client, world.repoId, world.refId); err != nil {
+		t.Fatal(err)
+	}
+	hinted()
+	// verified first by the mapper's tick, which the component asks of a hint
+	ticked := push("docs/e")
+	client.Repo(world.repoId).TickMapper(ctx, world.refId)
+	hinted()
+	// the subscriber's own read alone
+	subscriberRead := push("docs/f")
+	hinted()
+	client.subscriber.runDue(ctx)
+	docs := []uint64{readFirst, writeCrossed, written, walkedDocs, ticked, subscriberRead}
+	if got := subscriber.own.versions(); !slices.Equal(got, docs) {
+		t.Errorf("docs' subscription heard %v, want %v (%d is the commit touching no subscribed path)", got, docs, walkedOther)
+	}
+	if got := other.versions(); !slices.Equal(got, []uint64{written, walkedSrc}) {
+		t.Errorf("src's subscription heard %v, want [%d %d]", got, written, walkedSrc)
+	}
+	all := []uint64{readFirst, writeCrossed, written, walkedDocs, walkedSrc, ticked, subscriberRead}
+	if got := subscriber.listened.versions(); !slices.Equal(got, all) {
+		t.Fatalf("the listener heard %v, want %v", got, all)
+	}
+	for i, signer := range subscriber.listened.signers() {
+		want := world.signer.sidecarId
+		if all[i] == written {
+			want = subscriber.signer.sidecarId
+		}
+		if signer != want {
+			t.Errorf("the change at %d names signer %s, want %s", all[i], signer, want)
+		}
+	}
+	for _, change := range subscriber.listened.changes {
+		paths := []string{"docs"}
+		switch change.Version {
+		case written:
+			paths = []string{"docs", "src"}
+		case walkedSrc:
+			paths = []string{"src"}
+		}
+		if change.Gap || change.WholeRef || !slices.Equal(change.Paths, paths) {
+			t.Errorf("the change at %d: %+v, want paths %v", change.Version, change, paths)
+		}
+	}
+	if alarms := subscriber.test.eventsOf(SidecarEventHeadAlarm); len(alarms) != 0 {
+		t.Errorf("alarms %v", alarms)
+	}
+}
+
+// The root cause of the blogger case's other finding, commits that reached no subscriber though no read or write of
+// the client crossed them: the evs component's hint, before its fix, ran the mapper's tick on the generation's queue
+// right after noting the hint, and the tick's fresh head read raised the pin before the subscriber's round read, so
+// the round's read brought nothing past it. This replays that order, the hint noted, the tick's read, then the round,
+// and the round raises the commit's change.
+func TestEvsSubscriberHearsACommitTheMappersTickPinnedFirst(t *testing.T) {
+	world := newEvsTestWorld(t)
+	leases := newEvsTestLeases(world)
+	test := newEvsSubscribeTest(t, world, leases, newEvsTestStore(t))
+	world.push(&evsTestChange{path: "docs/a", content: []byte("a")})
+	ctx := context.Background()
+	listened := &evsTestChanges{}
+	test.client.AddRepoChangeListener(&world.repoId, listened.add)
+	if _, err := test.client.Repo(world.repoId).Subscribe(ctx, &EvsSubscribeArgs{RefName: EvsMainRefName, Paths: []string{"docs"}}); err != nil {
+		t.Fatal(err)
+	}
+	test.clock.advance(test.client.settings.SubscribeRereadDelay)
+	test.client.subscriber.runDue(ctx)
+	commit := world.push(&evsTestChange{path: "docs/b", content: []byte("b")})
+	world.hint(test, 1)
+	test.client.Repo(world.repoId).TickMapper(ctx, world.refId)
+	if pin, _, _ := test.client.pins.Pin(world.repoId, world.refId); pin == nil || pin.Version != commit {
+		t.Fatalf("the tick left the pin at %+v, not %d", pin, commit)
+	}
+	test.client.subscriber.runDue(ctx)
+	if versions := listened.versions(); !slices.Equal(versions, []uint64{commit}) {
+		t.Fatalf("the round raised %v, want [%d]", versions, commit)
+	}
+}
+
+// §11.10's changes row under load (-count=20): three writers' commits, the world's and two of the subscribers' own,
+// reach every subscriber exactly once each and in order, while each subscriber's rounds run on their own goroutine,
+// woken by the hints and the raises, and its own fresh reads, on a goroutine of their own, raise its pin across every
+// other commit before any hint names it and race the rounds for the rest; the next write's plan crosses those too.
+// Before the fix the commits the reads raised first were lost.
+func TestEvsSubscribersHearEveryCommitOfSeveralWritersOnce(t *testing.T) {
+	commitCount := 24
+	world := newEvsTestWorld(t)
+	server := newEvsTestPushServer(t, world)
+	world.push(&evsTestChange{path: "docs/seed", content: []byte("seed")})
+	subscribers := []*evsTestSubscriber{
+		newEvsTestSubscriber(t, world, server, "writer two"),
+		newEvsTestSubscriber(t, world, server, "writer three"),
+		newEvsTestSubscriber(t, world, server, "reader"),
+	}
+	for _, subscriber := range subscribers {
+		subscriber.subscribe(t, world, "docs")
+		// the rounds' timers fire for no one: a round runs at a hint's or a raise's wake
+		subscriber.test.client.clock = &evsSubscribeLoopClock{evsTestClock: subscriber.test.clock, armed: make(chan time.Duration, 1024), fire: make(chan time.Time)}
+		if err := subscriber.test.client.StartSubscriptions(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// each subscriber's own fresh read of each commit's path, on a goroutine of its own
+	type evsTestReadAsk struct {
+		path string
+		done chan struct{}
+	}
+	readAsks := []chan *evsTestReadAsk{}
+	readErrors := make(chan error, len(subscribers)*commitCount)
+	reading := &sync.WaitGroup{}
+	for _, subscriber := range subscribers {
+		asks := make(chan *evsTestReadAsk, commitCount)
+		readAsks = append(readAsks, asks)
+		reading.Add(1)
+		go func() {
+			defer reading.Done()
+			for ask := range asks {
+				if err := subscriber.read(world, ask.path); err != nil && !errors.Is(err, ErrEvsReadStale) {
+					readErrors <- fmt.Errorf("%s's read of %s: %w", subscriber.signer.sidecarId, ask.path, err)
+				}
+				close(ask.done)
+			}
+		}()
+	}
+	versions := []uint64{}
+	sequence := uint64(0)
+	for i := range commitCount {
+		path := fmt.Sprintf("docs/commit-%d", i)
+		version := uint64(0)
+		if writer := i % 3; writer == 0 {
+			version = world.push(&evsTestChange{path: path, content: []byte(path)})
+		} else {
+			committed, err := subscribers[writer-1].write(world, path, []byte(path))
+			if err != nil {
+				t.Fatalf("commit %d: %v", i, err)
+			}
+			version = committed
+		}
+		versions = append(versions, version)
+		dones := []chan struct{}{}
+		for _, asks := range readAsks {
+			ask := &evsTestReadAsk{path: path, done: make(chan struct{})}
+			asks <- ask
+			dones = append(dones, ask.done)
+		}
+		if i%2 == 0 {
+			// the reads raise every subscriber's pin across this commit before any hint names it, and the next commit's
+			// hint, which covers both, finds nothing past the pin to read
+			for _, done := range dones {
+				<-done
+			}
+			continue
+		}
+		sequence += 1
+		for _, subscriber := range subscribers {
+			world.hint(subscriber.test, sequence)
+		}
+	}
+	for _, asks := range readAsks {
+		close(asks)
+	}
+	reading.Wait()
+	close(readErrors)
+	for err := range readErrors {
+		t.Error(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	for _, subscriber := range subscribers {
+		if err := subscriber.listened.await(ctx, versions[len(versions)-1]); err != nil {
+			t.Fatalf("%s: %v", subscriber.signer.sidecarId, err)
+		}
+	}
+	for _, subscriber := range subscribers {
+		subscriber.test.client.Close()
+	}
+	for _, subscriber := range subscribers {
+		if got := subscriber.listened.versions(); !slices.Equal(got, versions) {
+			t.Errorf("%s's listener heard %v, want %v", subscriber.signer.sidecarId, got, versions)
+		}
+		if got := subscriber.own.versions(); !slices.Equal(got, versions) {
+			t.Errorf("%s's subscription heard %v, want %v", subscriber.signer.sidecarId, got, versions)
+		}
+	}
+}
+
+// Past §11.9's catch-up budget a delivery reads no further: commits another call verified, raising with no statement,
+// whose log passes the budget from the mark raise one gap change at the pin naming every subscribed path; and a log
+// that fails its checks, a version missing from its pages, raises a gap change too, never a change it could not
+// verify. Each moves the mark to the pin, so nothing is raised twice.
+func TestEvsSubscriberRaisesAGapForWhatItCannotWalk(t *testing.T) {
+	world := newEvsTestWorld(t)
+	leases := newEvsTestLeases(world)
+	test := newEvsSubscribeTest(t, world, leases, newEvsTestStore(t))
+	world.push(&evsTestChange{path: "docs/a", content: []byte("a")})
+	ctx := context.Background()
+	listened := &evsTestChanges{}
+	test.client.AddRepoChangeListener(&world.repoId, listened.add)
+	if _, err := test.client.Repo(world.repoId).Subscribe(ctx, &EvsSubscribeArgs{RefName: EvsMainRefName, Paths: []string{"docs", "src"}}); err != nil {
+		t.Fatal(err)
+	}
+	test.clock.advance(test.client.settings.SubscribeRereadDelay)
+	test.client.subscriber.runDue(ctx)
+	statementByteCount := func(version uint64) int64 {
+		world.stateLock.Lock()
+		defer world.stateLock.Unlock()
+		return int64(len(world.commits[version-1].statement))
+	}
+	// four commits, a budget of two statements
+	for _, path := range []string{"docs/b", "docs/c", "docs/d", "docs/e"} {
+		world.push(&evsTestChange{path: path, content: []byte(path)})
+	}
+	test.client.settings.CatchUpByteCount = 2 * statementByteCount(2)
+	if err := evsTestWalkRaise(ctx, test.client, world.repoId, world.refId); err != nil {
+		t.Fatal(err)
+	}
+	test.client.subscriber.runDue(ctx)
+	change := listened.last()
+	if count := len(listened.versions()); count != 1 || !change.Gap || change.Version != 5 || !slices.Equal(change.Paths, []string{"docs", "src"}) {
+		t.Fatalf("past the budget: %d changes, the last %+v", count, change)
+	}
+	// a log missing a version of those another call verified
+	test.client.settings.CatchUpByteCount = DefaultEvsSettings().CatchUpByteCount
+	for _, path := range []string{"docs/f", "docs/g"} {
+		world.push(&evsTestChange{path: path, content: []byte(path)})
+	}
+	if err := evsTestWalkRaise(ctx, test.client, world.repoId, world.refId); err != nil {
+		t.Fatal(err)
+	}
+	world.stateLock.Lock()
+	world.omitVersion = 6
+	world.stateLock.Unlock()
+	test.client.subscriber.runDue(ctx)
+	change = listened.last()
+	if count := len(listened.versions()); count != 2 || !change.Gap || change.Version != 7 {
+		t.Fatalf("a log missing a version: %d changes, the last %+v", count, change)
+	}
+	test.client.subscriber.runDue(ctx)
+	if count := len(listened.versions()); count != 2 {
+		t.Errorf("a round after raised %d changes", count-2)
+	}
+}
+
+// The marks start at the pins after a restart: a restarted client's round raises the commit past its pin once, and
+// nothing below it again.
+func TestEvsSubscriberMarksStartAtThePinsAfterARestart(t *testing.T) {
+	world := newEvsTestWorld(t)
+	leases := newEvsTestLeases(world)
+	store := newEvsTestStore(t)
+	test := newEvsSubscribeTest(t, world, leases, store)
+	world.push(&evsTestChange{path: "docs/a", content: []byte("a")})
+	ctx := context.Background()
+	if _, err := test.client.Repo(world.repoId).Subscribe(ctx, &EvsSubscribeArgs{RefName: EvsMainRefName, Paths: []string{"docs"}}); err != nil {
+		t.Fatal(err)
+	}
+	world.push(&evsTestChange{path: "docs/b", content: []byte("b")})
+	world.hint(test, 1)
+	test.client.subscriber.runDue(ctx)
+	test.client.Close()
+	commit := world.push(&evsTestChange{path: "docs/c", content: []byte("c")})
+	restarted := newEvsSubscribeTest(t, world, leases, store)
+	listened := &evsTestChanges{}
+	restarted.client.AddRepoChangeListener(&world.repoId, listened.add)
+	world.hint(restarted, 2)
+	restarted.client.subscriber.runDue(ctx)
+	if versions := listened.versions(); !slices.Equal(versions, []uint64{commit}) {
+		t.Fatalf("after the restart: %v, want [%d]", versions, commit)
+	}
 }

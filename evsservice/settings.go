@@ -250,8 +250,9 @@ type EvsSettings struct {
 	// keys. Non-negative.
 	ReadStreamSlotEstimateByteCount int64
 
-	// §11.10's lease row (EVS1-M2-15): the token prefixes one lease request names, 16, the protocol's value, which
-	// the client's Subscribe holds its paths to as well (evs_subscribe.go). Positive.
+	// §11.10's lease row (EVS1-M2-15): the token prefixes one lease request names, 16, the format's value
+	// (sidecar.EvsFormatSettings.SubscriptionMaxPrefixCount), which the client's Subscribe holds its paths to as well.
+	// Positive.
 	LeaseMaxPrefixCount int
 	// A lease's life after its last write, which a renewal repeats, 7 d; and {evsl_<repo_id>}'s own ttl, past every
 	// lease's life so that a repo nobody renews leaves nothing, 8 d. Both positive, the hash's the longer.
@@ -432,7 +433,7 @@ func DefaultEvsSettings() *EvsSettings {
 		ReadStreamMaxByteCount:          sidecar.DefaultEvsFormatSettings().ReadStreamMaxByteCount,
 		ReadStreamSlotEstimateByteCount: 512,
 
-		LeaseMaxPrefixCount:             16,
+		LeaseMaxPrefixCount:             sidecar.DefaultEvsFormatSettings().SubscriptionMaxPrefixCount,
 		LeaseLife:                       7 * 24 * time.Hour,
 		LeaseKeyTtl:                     8 * 24 * time.Hour,
 		SubscriptionRequestMaxByteCount: 16 * 1024,
