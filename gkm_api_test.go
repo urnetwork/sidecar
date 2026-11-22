@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -669,5 +670,442 @@ func TestGkmApiKeepsAGkmRefusalWithItsBody(t *testing.T) {
 		if gkmError.Status != c.status || !bytes.Equal(gkmError.Winner, c.winner) || gkmError.RetryAfter != c.retryAfter || gkmError.RefusesNothing() != c.nothing {
 			t.Errorf("%d: the refusal: %+v", c.status, gkmError)
 		}
+	}
+}
+
+// A fake gkm guard over gkm's newest state, as gkmservice's AuthorizeRepo has it (§10.6's checks row; QD-975, owner
+// decision 563): a call on a repo asks the state for the strongest right its token holds there of those the route's
+// row takes, with each weaker right of its role that the row takes, and is honored only whole, else refused 403. A
+// group's repo is the one the test formed it in, and a group of no repo is refused. A route on no repo is answered
+// 200. Safe for concurrent use.
+type gkmTestGuard struct {
+	tokens *gkmTestTokens
+
+	stateLock sync.Mutex
+	// the role gkm's newest state gives the client on each repo: none refuses every call there
+	repoIdRoles    map[Id]string
+	groupIdRepoIds map[Id]Id
+	// the repo a group's creation names in its GroupForm, which the fake does not parse
+	createRepoId Id
+}
+
+func newGkmTestGuard(tokens *gkmTestTokens) *gkmTestGuard {
+	return &gkmTestGuard{tokens: tokens, repoIdRoles: map[Id]string{}, groupIdRepoIds: map[Id]Id{}}
+}
+
+// gkm's state now gives the client role on repoId, "" for none.
+func (self *gkmTestGuard) setRole(repoId Id, role string) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.repoIdRoles[repoId] = role
+}
+
+// A new group of repoId.
+func (self *gkmTestGuard) newGroup(repoId Id) Id {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	groupId := NewId()
+	self.groupIdRepoIds[groupId] = repoId
+	return groupId
+}
+
+// The rights a scope's role carries, and those gkm's state gives a holder of that role: admin write and read, write
+// read, and read or deposit nothing more (gkmservice's gkmScopeRoleRights; AclHonorScope).
+func gkmTestRoleRights(role string) AclEvsRights {
+	switch role {
+	case GkmScopeRoleDeposit:
+		return AclEvsDeposit
+	case GkmScopeRoleRead:
+		return AclEvsRead
+	case GkmScopeRoleWrite:
+		return AclEvsWrite | AclEvsRead
+	case GkmScopeRoleAdmin:
+		return AclEvsAdmin | AclEvsWrite | AclEvsRead
+	}
+	return 0
+}
+
+// An id as a path names it, or false.
+func gkmTestParseUrlId(text string) (Id, bool) {
+	idBytes, err := hex.DecodeString(text)
+	if err != nil {
+		return Id{}, false
+	}
+	id, err := IdFromBytes(idBytes)
+	return id, err == nil
+}
+
+// The rights the request's route row takes, any one of them (gkmservice's gkmScope.rights), and the repo it is on;
+// false for a route on no repo.
+func (self *gkmTestGuard) routeOf(request *gkmTestRequest) (AclEvsRights, Id, bool) {
+	accessRights := AclEvsRead | AclEvsWrite | AclEvsAdmin
+	writeRights := AclEvsWrite | AclEvsAdmin
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	groupRepoId := func(text string) Id {
+		groupId, _ := gkmTestParseUrlId(text)
+		return self.groupIdRepoIds[groupId]
+	}
+	segments := strings.Split(strings.TrimPrefix(request.path, "/gkm/"), "/")
+	switch {
+	case len(segments) == 1 && segments[0] == "groups" && request.method == http.MethodPost:
+		return AclEvsAdmin, self.createRepoId, true
+	case 2 <= len(segments) && segments[0] == "groups":
+		repoId := groupRepoId(segments[1])
+		rest := segments[2:]
+		switch {
+		case len(rest) == 1 && rest[0] == "ladder":
+			return AclEvsAdmin, repoId, true
+		case len(rest) == 2 && (rest[0] == "gen" || rest[0] == "welcome"):
+			return writeRights, repoId, true
+		}
+		return accessRights, repoId, true
+	case len(segments) == 3 && segments[0] == "repos":
+		repoId, _ := gkmTestParseUrlId(segments[1])
+		switch {
+		case segments[2] == "forms" && request.method == http.MethodPost:
+			return AclEvsAdmin, repoId, true
+		case segments[2] == "drop-key":
+			return AclEvsDeposit | accessRights, repoId, true
+		}
+		return accessRights, repoId, true
+	case request.path == "/gkm/key-packages/claim":
+		claim := &protocol.GkmKeyPackageClaimRequest{}
+		if err := proto.Unmarshal(request.body, claim); err != nil {
+			return writeRights, Id{}, true
+		}
+		groupId, _ := IdFromBytes(claim.GetGroupId())
+		return writeRights, self.groupIdRepoIds[groupId], true
+	}
+	return 0, Id{}, false
+}
+
+// gkm's answer to request: 200 with no body where its state honors the call whole, else 403.
+func (self *gkmTestGuard) serve(request *gkmTestRequest) (int, http.Header, []byte) {
+	rowRights, repoId, onRepo := self.routeOf(request)
+	if !onRepo {
+		return http.StatusOK, nil, nil
+	}
+	held := AclEvsRights(0)
+	for _, scope := range self.tokens.scopesOf(request.token) {
+		if role, found := strings.CutPrefix(scope, sidecarExchangeRepoScopePrefix+repoId.String()+":"); found {
+			held |= gkmTestRoleRights(role)
+		}
+	}
+	right := AclEvsRights(0)
+	for _, candidate := range []AclEvsRights{AclEvsAdmin, AclEvsWrite, AclEvsRead, AclEvsDeposit} {
+		if (held & rowRights).Has(candidate) {
+			right = candidate
+			break
+		}
+	}
+	if right == 0 {
+		return http.StatusForbidden, nil, nil
+	}
+	asked := right
+	switch right {
+	case AclEvsAdmin:
+		asked |= (AclEvsWrite | AclEvsRead) & rowRights
+	case AclEvsWrite:
+		asked |= AclEvsRead & rowRights
+	}
+	self.stateLock.Lock()
+	stateRights := gkmTestRoleRights(self.repoIdRoles[repoId])
+	self.stateLock.Unlock()
+	if !stateRights.Has(asked) {
+		return http.StatusForbidden, nil, nil
+	}
+	return http.StatusOK, nil, nil
+}
+
+// A GkmApi on a fake gkm guarding its state: its scopes those of others at their roles and repoId's at clientRole,
+// which gkm's state gives at gkmRole, and every other repo at its own role.
+func newGkmTestGuardedApi(t *testing.T, others []GkmRepoScope, repoId Id, clientRole string, gkmRole string, clock Clock) (*GkmApi, *gkmTestTransport, *gkmTestTokens, *gkmTestGuard) {
+	t.Helper()
+	transport := &gkmTestTransport{}
+	tokens := newGkmTestTokens()
+	guard := newGkmTestGuard(tokens)
+	transport.serve = guard.serve
+	api := newGkmTestApi(t, transport, tokens, clock)
+	for _, other := range others {
+		guard.setRole(other.RepoId, other.Role)
+	}
+	guard.setRole(repoId, gkmRole)
+	api.SetRepoScopes(append(slices.Clone(others), GkmRepoScope{RepoId: repoId, Role: clientRole}))
+	return api, transport, tokens, guard
+}
+
+// The scopes of the tokens requests bore, in order.
+func gkmTestTakenScopes(tokens *gkmTestTokens, requests []*gkmTestRequest) [][]string {
+	scopes := [][]string{}
+	for _, request := range requests {
+		scopes = append(scopes, tokens.scopesOf(request.token))
+	}
+	return scopes
+}
+
+// QD-1179: an ACL save just took the client's role on a repo from admin to rw at gkm, before the client's own state
+// applied it, so its batch still carries admin there and gkm refuses the batch whole. A read, as the GET of a group's
+// generations a write starts with, and an rw route go once more under the repo's one scope at the role each needs,
+// which gkm honors, the write with its same bytes. A call on another repo of the batch goes once, and once the
+// client's state takes the save its calls go once.
+func TestGkmApiRetriesARoleASaveNarrowedUnderTheCallsRole(t *testing.T) {
+	others := gkmTestScopes(3, GkmScopeRoleWrite)
+	repoId := NewId()
+	api, transport, tokens, guard := newGkmTestGuardedApi(t, others, repoId, GkmScopeRoleAdmin, GkmScopeRoleWrite, nil)
+	groupId := guard.newGroup(repoId)
+	ctx := context.Background()
+	batchAdmin := GkmRepoScope{RepoId: repoId, Role: GkmScopeRoleAdmin}.scope()
+
+	if _, err := api.Generations(ctx, repoId, groupId, 1); err != nil {
+		t.Fatalf("a read after the save: %v", err)
+	}
+	taken := transport.taken()
+	scopes := gkmTestTakenScopes(tokens, taken)
+	if len(taken) != 2 {
+		t.Fatalf("a read after the save went %d times, want 2", len(taken))
+	}
+	if len(scopes[0]) != 4 || !slices.Contains(scopes[0], batchAdmin) {
+		t.Errorf("the read's first token holds %v, not the batch", scopes[0])
+	}
+	if !slices.Equal(scopes[1], []string{GkmRepoScope{RepoId: repoId, Role: GkmScopeRoleRead}.scope()}) {
+		t.Errorf("the read's retry presented %v", scopes[1])
+	}
+	if taken[1].method != taken[0].method || taken[1].path != taken[0].path || taken[1].query != taken[0].query {
+		t.Errorf("the retry asked %s %s?%s, the call %s %s?%s", taken[1].method, taken[1].path, taken[1].query, taken[0].method, taken[0].path, taken[0].query)
+	}
+
+	rotate := &bridge.Signed{Body: []byte("the claim's GenRotate"), Signature: []byte("its signature")}
+	if err := api.ClaimGeneration(ctx, repoId, groupId, 2, rotate); err != nil {
+		t.Fatalf("an rw route after the save: %v", err)
+	}
+	taken = transport.taken()[2:]
+	scopes = gkmTestTakenScopes(tokens, taken)
+	if len(taken) != 2 {
+		t.Fatalf("an rw route after the save went %d times, want 2", len(taken))
+	}
+	if !slices.Contains(scopes[0], batchAdmin) || !slices.Equal(scopes[1], []string{GkmRepoScope{RepoId: repoId, Role: GkmScopeRoleWrite}.scope()}) {
+		t.Errorf("the claim presented %v, then %v", scopes[0], scopes[1])
+	}
+	if len(taken[0].body) == 0 || !bytes.Equal(taken[1].body, taken[0].body) {
+		t.Error("the claim's retry did not carry its same bytes")
+	}
+
+	// another repo of the batch, whose role gkm's state gives, goes once
+	before := len(transport.taken())
+	if _, err := api.Generations(ctx, others[0].RepoId, guard.newGroup(others[0].RepoId), 1); err != nil {
+		t.Fatalf("a read of another repo: %v", err)
+	}
+	if count := len(transport.taken()) - before; count != 1 {
+		t.Errorf("a read of another repo went %d times", count)
+	}
+
+	// the client's state takes the save, so its batch carries rw, which gkm honors at once
+	api.SetRepoScopes(append(slices.Clone(others), GkmRepoScope{RepoId: repoId, Role: GkmScopeRoleWrite}))
+	before = len(transport.taken())
+	if _, err := api.Generations(ctx, repoId, groupId, 1); err != nil {
+		t.Fatalf("a read once the client took the save: %v", err)
+	}
+	if err := api.ClaimGeneration(ctx, repoId, groupId, 3, rotate); err != nil {
+		t.Fatalf("an rw route once the client took the save: %v", err)
+	}
+	if count := len(transport.taken()) - before; count != 2 {
+		t.Errorf("two calls once the client took the save went %d times, want 2", count)
+	}
+}
+
+// QD-1179's other direction: the client's state already shows a role a save widened, and gkm's newest state does not
+// yet. A call needing less than the widened role is refused under the batch and goes once more at its own role,
+// which gkm honors. A call needing the widened role itself presents no stronger one, so it is refused once, as it
+// should be until gkm's state catches up, and goes once after.
+func TestGkmApiRetriesARoleWidenedAheadOfGkmUnderTheCallsRole(t *testing.T) {
+	for _, c := range []struct {
+		clientRole string
+		gkmRole    string
+		// whether an rw route passes after one retry, or is refused under its own role, which the batch carries
+		writePasses bool
+	}{
+		{clientRole: GkmScopeRoleWrite, gkmRole: GkmScopeRoleRead, writePasses: false},
+		{clientRole: GkmScopeRoleAdmin, gkmRole: GkmScopeRoleWrite, writePasses: true},
+	} {
+		repoId := NewId()
+		api, transport, tokens, guard := newGkmTestGuardedApi(t, gkmTestScopes(2, GkmScopeRoleRead), repoId, c.clientRole, c.gkmRole, nil)
+		groupId := guard.newGroup(repoId)
+		ctx := context.Background()
+
+		if _, err := api.Epochs(ctx, repoId, groupId, 4); err != nil {
+			t.Fatalf("%s ahead of %s: a read: %v", c.clientRole, c.gkmRole, err)
+		}
+		scopes := gkmTestTakenScopes(tokens, transport.taken())
+		if len(scopes) != 2 || !slices.Equal(scopes[1], []string{GkmRepoScope{RepoId: repoId, Role: GkmScopeRoleRead}.scope()}) {
+			t.Errorf("%s ahead of %s: a read presented %v", c.clientRole, c.gkmRole, scopes)
+		}
+
+		before := len(transport.taken())
+		err := api.ClaimGeneration(ctx, repoId, groupId, 2, &bridge.Signed{Body: []byte("a GenRotate")})
+		count := len(transport.taken()) - before
+		switch {
+		case c.writePasses && (err != nil || count != 2):
+			t.Errorf("%s ahead of %s: an rw route: %v after %d requests, want a pass after 2", c.clientRole, c.gkmRole, err, count)
+		case !c.writePasses && (!IsGkmStatus(err, http.StatusForbidden) || count != 1):
+			t.Errorf("%s ahead of %s: an rw route under its own role: %v after %d requests, want 403 after 1", c.clientRole, c.gkmRole, err, count)
+		}
+
+		// gkm's state catches up
+		guard.setRole(repoId, c.clientRole)
+		before = len(transport.taken())
+		if _, err := api.Epochs(ctx, repoId, groupId, 4); err != nil {
+			t.Fatalf("%s: a read once gkm caught up: %v", c.clientRole, err)
+		}
+		if err := api.ClaimGeneration(ctx, repoId, groupId, 3, &bridge.Signed{Body: []byte("a GenRotate")}); err != nil {
+			t.Fatalf("%s: an rw route once gkm caught up: %v", c.clientRole, err)
+		}
+		if count := len(transport.taken()) - before; count != 2 {
+			t.Errorf("%s: two calls once gkm caught up went %d times, want 2", c.clientRole, count)
+		}
+	}
+}
+
+// QD-1179: a call refused for a right the client lacks in gkm's state, under the batch's stronger role, is refused
+// again after its one retry at its own role, and goes no third time; no wait is armed for it. A call that presented
+// its repo's one scope already, needing a stronger role than the batch carries, and one whose batch carries its own
+// role, are refused once.
+func TestGkmApiRefusesARightTheClientLacksAfterOneRetry(t *testing.T) {
+	clock := newGkmTestClock()
+	repoId, readOnlyRepoId := NewId(), NewId()
+	api, transport, tokens, guard := newGkmTestGuardedApi(t, []GkmRepoScope{{RepoId: readOnlyRepoId, Role: GkmScopeRoleRead}}, repoId, GkmScopeRoleAdmin, "", clock)
+	groupId := guard.newGroup(repoId)
+	ctx := context.Background()
+	refusedOnce := func(name string, wantCount int, call func() error) {
+		t.Helper()
+		before := len(transport.taken())
+		err := call()
+		count := len(transport.taken()) - before
+		if !IsGkmStatus(err, http.StatusForbidden) || count != wantCount {
+			t.Errorf("%s: %v after %d requests, want 403 after %d", name, err, count, wantCount)
+		}
+	}
+
+	// gkm's state gives the client nothing on the repo, the client's admin
+	refusedOnce("a read", 2, func() error { _, err := api.Group(ctx, repoId, groupId); return err })
+	refusedOnce("an rw route", 2, func() error { return api.UploadWelcome(ctx, repoId, groupId, 3, &protocol.GkmWelcomeRequest{}) })
+	if scopes := gkmTestTakenScopes(tokens, transport.taken()); len(scopes) != 4 || !slices.Equal(scopes[3], []string{GkmRepoScope{RepoId: repoId, Role: GkmScopeRoleWrite}.scope()}) {
+		t.Errorf("the read and the rw route presented %v", scopes)
+	}
+	// gkm's state gives r, so a write needing rw is refused at its own role
+	guard.setRole(repoId, GkmScopeRoleRead)
+	refusedOnce("an rw route gkm gives r of", 2, func() error {
+		return api.ClaimGeneration(ctx, repoId, groupId, 2, &bridge.Signed{Body: []byte("a GenRotate")})
+	})
+	select {
+	case wait := <-clock.armed:
+		t.Errorf("a refusal waited %s to go again", wait)
+	default:
+	}
+
+	// the client reads and gkm's state gives nothing: an rw route presents the repo's one rw scope, a read the batch
+	// at its own role, and neither has a narrower one to try
+	readOnlyGroupId := guard.newGroup(readOnlyRepoId)
+	guard.setRole(readOnlyRepoId, "")
+	refusedOnce("an rw route under its one scope", 1, func() error {
+		return api.ClaimGeneration(ctx, readOnlyRepoId, readOnlyGroupId, 2, &bridge.Signed{Body: []byte("a GenRotate")})
+	})
+	refusedOnce("a read under the batch's own role", 1, func() error {
+		_, err := api.Generations(ctx, readOnlyRepoId, readOnlyGroupId, 1)
+		return err
+	})
+}
+
+// QD-1179 leaves the admin routes alone: no role outranks admin, so a group's creation, a re-form and a ladder are
+// refused once, under the batch where it carries admin and under the repo's one admin scope where it does not.
+func TestGkmApiDoesNotRetryAnAdminRoute(t *testing.T) {
+	for _, clientRole := range []string{GkmScopeRoleAdmin, GkmScopeRoleWrite} {
+		repoId := NewId()
+		api, transport, tokens, guard := newGkmTestGuardedApi(t, gkmTestScopes(2, GkmScopeRoleWrite), repoId, clientRole, GkmScopeRoleWrite, nil)
+		guard.createRepoId = repoId
+		groupId := guard.newGroup(repoId)
+		ctx := context.Background()
+		calls := []struct {
+			name string
+			call func() error
+		}{
+			{name: "a creation", call: func() error { return api.CreateGroup(ctx, repoId, &protocol.GkmGroupCreateRequest{}) }},
+			{name: "a re-form", call: func() error { return api.Reform(ctx, repoId, &protocol.GkmGroupReformRequest{}) }},
+			{name: "a ladder", call: func() error { return api.UploadLadder(ctx, repoId, groupId, &protocol.GkmLadderRequest{}) }},
+		}
+		for _, call := range calls {
+			before := len(transport.taken())
+			err := call.call()
+			taken := transport.taken()[before:]
+			if !IsGkmStatus(err, http.StatusForbidden) || len(taken) != 1 {
+				t.Errorf("%s under %s: %v after %d requests, want 403 after 1", call.name, clientRole, err, len(taken))
+				continue
+			}
+			scopes := tokens.scopesOf(taken[0].token)
+			if !slices.Contains(scopes, GkmRepoScope{RepoId: repoId, Role: GkmScopeRoleAdmin}.scope()) {
+				t.Errorf("%s under %s presented %v", call.name, clientRole, scopes)
+			}
+		}
+	}
+}
+
+// A read's narrowed retry holds for the rest of the call and is none of its ReadRetryCount: refused under the batch,
+// answered 503 under the repo's one r scope, it waits the Retry-After and goes again under that scope, though it may
+// retry a 503 once.
+func TestGkmApiKeepsTheNarrowedScopeThroughAReadsRetries(t *testing.T) {
+	clock := newGkmTestClock()
+	transport := &gkmTestTransport{}
+	tokens := newGkmTestTokens()
+	guard := newGkmTestGuard(tokens)
+	settings := DefaultGkmSettings()
+	settings.ReadRetryCount = 1
+	api, err := NewGkmApi(&GkmApiArgs{GkmUrl: "https://gkm.example", Transport: transport, ServiceToken: tokens.serviceToken, Settings: settings, Clock: clock})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repoId := NewId()
+	api.SetRepoScopes(append(gkmTestScopes(2, GkmScopeRoleRead), GkmRepoScope{RepoId: repoId, Role: GkmScopeRoleAdmin}))
+	guard.setRole(repoId, GkmScopeRoleRead)
+	groupId := guard.newGroup(repoId)
+	unavailableCount := 0
+	transport.serve = func(request *gkmTestRequest) (int, http.Header, []byte) {
+		status, header, body := guard.serve(request)
+		if status == http.StatusOK && unavailableCount < 1 {
+			unavailableCount += 1
+			return http.StatusServiceUnavailable, http.Header{"Retry-After": {"2"}}, nil
+		}
+		return status, header, body
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := api.Wraps(context.Background(), repoId, groupId, 2, &GkmWrapsQuery{Recipient: "s:" + gkmUrlId(NewId())})
+		done <- err
+	}()
+	if wait := <-clock.armed; wait != 2*time.Second {
+		t.Errorf("the narrowed read waits %s", wait)
+	}
+	clock.Advance(2 * time.Second)
+	if err := <-done; err != nil {
+		t.Fatalf("the narrowed read after its 503: %v", err)
+	}
+	scopes := gkmTestTakenScopes(tokens, transport.taken())
+	narrowed := []string{GkmRepoScope{RepoId: repoId, Role: GkmScopeRoleRead}.scope()}
+	if len(scopes) != 3 || len(scopes[0]) != 3 || !slices.Equal(scopes[1], narrowed) || !slices.Equal(scopes[2], narrowed) {
+		t.Errorf("the read presented %v", scopes)
+	}
+}
+
+// QD-1179 on the drop-key route, which deposit, r, rw and admin reach: a batch carrying r on a repo where gkm's state
+// gives the client deposit alone is refused, and the call goes once more under the repo's one deposit scope, its own.
+func TestGkmApiNarrowsADropKeyReadToDeposit(t *testing.T) {
+	repoId := NewId()
+	api, transport, tokens, _ := newGkmTestGuardedApi(t, gkmTestScopes(1, GkmScopeRoleWrite), repoId, GkmScopeRoleRead, GkmScopeRoleDeposit, nil)
+	if _, err := api.DropKeys(context.Background(), repoId, 0); err != nil {
+		t.Fatalf("a drop-key read: %v", err)
+	}
+	scopes := gkmTestTakenScopes(tokens, transport.taken())
+	if len(scopes) != 2 || len(scopes[0]) != 2 || !slices.Equal(scopes[1], []string{GkmRepoScope{RepoId: repoId, Role: GkmScopeRoleDeposit}.scope()}) {
+		t.Errorf("a drop-key read presented %v", scopes)
 	}
 }
