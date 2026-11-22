@@ -743,6 +743,7 @@ func TestPlatformDialSharesServiceWithAnSmtpListener(t *testing.T) {
 		// the listener's component on the sidecar's own dispatcher, as one generation carries both
 		listen := newTestListenFixture(t)
 		listen.generation.subprotocol = world.sidecar.subprotocol
+		listen.grantStandingListens(t, "smtp/25/mx")
 		listener := listen.listen(t, "smtp/25/mx", nil)
 		if world.serviceHoldCount() != 1 || !world.providesService() {
 			t.Fatalf("an smtp/ lease holds Service %d times, provided %t", world.serviceHoldCount(), world.providesService())

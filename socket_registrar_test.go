@@ -938,8 +938,8 @@ func TestSocketRegistrarDropsAnswersOfAnEndedGeneration(t *testing.T) {
 	}
 }
 
-// §9.5's and §9.6's numbers, and the readings beside them, as DefaultSidecarSettings gives them; validate refuses
-// what would make a wait zero or the eager amount past the whole.
+// §9.5's and §9.6's numbers, §15.5's receiver streams, and the readings beside them, as DefaultSidecarSettings gives
+// them; validate refuses what would make a wait zero or the eager amount past the whole.
 func TestDefaultSocketSettingsMatchDesign(t *testing.T) {
 	want := SidecarSocketSettings{
 		HeartbeatInterval:       15 * time.Second,
@@ -958,6 +958,7 @@ func TestDefaultSocketSettingsMatchDesign(t *testing.T) {
 		DialQuotaMaxWait:        30 * time.Second,
 		ListenDrainTimeout:      30 * time.Second,
 		ListenPositionWait:      2 * time.Second,
+		ReceiverMaxStreams:      16,
 	}
 	got := *DefaultSidecarSettings().Sockets
 	forward, share := got.Forward, got.Share

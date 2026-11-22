@@ -32,6 +32,8 @@ func TestSocketDeviceFollowsSignedPublicScope(t *testing.T) {
 	engine := NewAclEngine(device.sidecarId, nil, nil, nil)
 	policy := NewSocketEnginePolicy(engine)
 	fixture.component.SetPolicy(policy)
+	// the listens' grants are built on the same engine, whose document grants them standing
+	fixture.useListenGrants(engine)
 	install := func(scopeMember Id) {
 		t.Helper()
 		state := net.log.State()

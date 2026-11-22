@@ -983,6 +983,7 @@ func tlsListenTestVisitThroughAdmission(t *testing.T, fixture *testListenFixture
 // try sends the whole set, which registers the same listen again, and a visitor reaches Accept as before.
 func TestTlsListenerLapsesByLeaseAndRegistersAgainOnResume(t *testing.T) {
 	fixture := newTestListenFixture(t)
+	fixture.grantStandingListens(t, tlsFrontTestName)
 	registrar := fixture.component.registrar
 	service := &testTlsLeaseService{
 		clock:         fixture.clock,

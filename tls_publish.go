@@ -263,12 +263,14 @@ func newTlsPublishPlan(settings *TlsPublishSettings) (*tlsPublishPlan, error) {
 	if len(plan.alpn) == 0 && !settings.Tcp {
 		plan.alpn = []string{"h2", "http/1.1"}
 	}
-	if socketListenMaxAlpnCount < len(plan.alpn) {
+	// the registration's bounds, which the listen holds it to again
+	format := DefaultSocketFormatSettings()
+	if format.AlpnMaxCount < len(plan.alpn) {
 		return nil, fmt.Errorf("%w: too many ALPN ids", ErrTlsPublishInvalid)
 	}
 	for _, id := range plan.alpn {
-		if id == "" || 255 < len(id) {
-			return nil, fmt.Errorf("%w: an ALPN id is 1 to 255 bytes", ErrTlsPublishInvalid)
+		if id == "" || format.AlpnMaxByteCount < len(id) {
+			return nil, fmt.Errorf("%w: an ALPN id is 1 to %d bytes", ErrTlsPublishInvalid, format.AlpnMaxByteCount)
 		}
 	}
 	if settings.Expires < 0 {

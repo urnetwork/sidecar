@@ -9,8 +9,9 @@
 //
 // The stock daemon and native SDK use Sidecar.NewSocketComponent. Its application and share names use only the
 // network's verified config head's K_sock ring. It follows the standing ACL engine for admissions and revocations,
-// and resolves labels through the authenticated network APIs. Each prerequisite is required by its consumer.
-// Connect legs only. Safe for concurrent use.
+// builds a tls/ or smtp/ listen's grant and its effect on that engine (socket_listen.go), registers the listen kind's
+// Lookup on its host while it lives, and resolves labels through the authenticated network APIs. Each prerequisite is
+// required by its consumer. Connect legs only. Safe for concurrent use.
 
 package sidecar
 
@@ -34,6 +35,10 @@ type SocketComponentArgs struct {
 	NetworkId Id
 	// SidecarSettings.Sockets.
 	Settings *SidecarSocketSettings
+	// §9.5's registration format, which the sockets service holds too (socketsservice.SocketsSettings.Format): a
+	// listen's default weight and max_streams and the most ALPN ids and protocol bytes it registers. Nil takes
+	// DefaultSocketFormatSettings.
+	Format *SocketFormatSettings
 	// Sidecar.Sign, which claims each registration (§9.5).
 	Sign func(purpose string, signedType bridge.SignedType, body []byte, agentId *Id) (*bridge.Signed, error)
 	// nil is real time.
@@ -177,8 +182,11 @@ type SocketComponent struct {
 	registrar     *socketRegistrar
 	networkId     Id
 	settings      *SidecarSocketSettings
+	format        *SocketFormatSettings
 	clock         Clock
 	log           Logger
+	// removes the listen kind's Lookup the host's gate reconciles a reserved use by; nil without a host
+	removeListenLookup func()
 
 	stateLock sync.Mutex
 	// the attached generation, nil between generations
@@ -188,8 +196,13 @@ type SocketComponent struct {
 	labels        *SocketNetworkLabels
 	// the live listeners, each taking its target on every generation's dispatcher
 	listeners map[*SocketListener]bool
+	// the grant filer a tls/ or smtp/ listen's action is built and activated by where the component has no host, which
+	// a test sets; nil reads the host's (listenGrantFiler)
+	grants *AclGrantFiler
+	// each tls/ or smtp/ listen's action as its request was filed, kept until its expiry (keptListenAction)
+	listenActions map[socketListenActionKey]*StoredCanonicalAction
 	// the §5.4 action a tls/ or smtp/ listen goes through Authorize as: socketListenAction, which a test replaces
-	listenAction func(name string, settings *SocketListenSettings) (*SidecarAction, error)
+	listenAction func(ctx context.Context, generation *socketGeneration, name string, settings *SocketListenSettings) (*SidecarAction, error)
 }
 
 // The args a SocketComponent takes from this Sidecar for the network it is enrolled in: its settings, Sign, the clock
@@ -233,6 +246,8 @@ func (self *Sidecar) NewSocketComponent(ctx context.Context) (*SocketComponent, 
 	}
 	component.host = self
 	component.configDone = make(chan struct{})
+	// a spent tls/ or smtp/ listen's grant is the grant component's, which a restart reconciles by this Lookup (§16.6)
+	component.removeListenLookup = self.RegisterEffectLookup(SidecarActionListen, component.listenLookup)
 	go component.followSocketConfig()
 	return component, nil
 }
@@ -252,15 +267,22 @@ func NewSocketComponent(ctx context.Context, args *SocketComponentArgs) (*Socket
 	if err != nil {
 		return nil, err
 	}
-	return &SocketComponent{
-		registrar:    registrar,
-		networkId:    args.NetworkId,
-		settings:     registrar.settings,
-		clock:        registrar.clock,
-		log:          registrar.log,
-		listeners:    map[*SocketListener]bool{},
-		listenAction: socketListenAction,
-	}, nil
+	format := args.Format
+	if format == nil {
+		format = DefaultSocketFormatSettings()
+	}
+	component := &SocketComponent{
+		registrar:     registrar,
+		networkId:     args.NetworkId,
+		settings:      registrar.settings,
+		format:        format,
+		clock:         registrar.clock,
+		log:           registrar.log,
+		listeners:     map[*SocketListener]bool{},
+		listenActions: map[socketListenActionKey]*StoredCanonicalAction{},
+	}
+	component.listenAction = component.socketListenAction
+	return component, nil
 }
 
 // "sockets".
@@ -357,12 +379,15 @@ func (self *SocketComponent) current() (*socketGeneration, SocketPolicy, *Socket
 	return self.generation, self.policy, self.labels
 }
 
-// Ends the registrar, after the Sidecar's last generation. Never from a registration's callback, which runs on the
-// registrar's own goroutine.
+// Ends the registrar, after the Sidecar's last generation, and takes the listen kind's Lookup off the host. Never from
+// a registration's callback, which runs on the registrar's own goroutine.
 func (self *SocketComponent) Close() {
 	self.registrar.close()
 	if self.configDone != nil {
 		<-self.configDone
+	}
+	if self.removeListenLookup != nil {
+		self.removeListenLookup()
 	}
 }
 

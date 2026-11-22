@@ -616,7 +616,7 @@ func TestSocketListenSystemPublishStandsOnTheReceiversListen(t *testing.T) {
 // §5.4's gate as any tls/ name does.
 func TestSocketListenSystemPublishRefusesANonReceiver(t *testing.T) {
 	fixture := newTestListenFixture(t)
-	fixture.component.listenAction = func(name string, settings *SocketListenSettings) (*SidecarAction, error) {
+	fixture.component.listenAction = func(ctx context.Context, generation *socketGeneration, name string, settings *SocketListenSettings) (*SidecarAction, error) {
 		return &SidecarAction{Kind: SidecarActionListen, Canonical: []byte(name), Risk: SidecarRiskNormal}, nil
 	}
 	refused := errors.New("the test's gate refuses")

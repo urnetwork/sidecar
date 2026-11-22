@@ -903,6 +903,9 @@ type SidecarSocketSettings struct {
 	// retry (§9.6's step 6): 2 s, a reading, inside the dialer's 5 s accept timeout so the dialer still has time for
 	// its backup.
 	ListenPositionWait time.Duration
+	// What an smtp/ listen's max_streams of 0 takes: 16, a receiver's (§15.5). Other names take the registration
+	// format's default (SocketFormatSettings.DefaultMaxStreams).
+	ReceiverMaxStreams int
 	// The daemon's forwards: ur socket listen and ur socket dial (§9.9; daemon_socket.go).
 	Forward *SidecarSocketForwardSettings
 	// ur share (§9.9, D-SOCK-16; socket_share.go).
@@ -964,6 +967,7 @@ func DefaultSidecarSocketSettings() *SidecarSocketSettings {
 		DialQuotaMaxWait:        30 * time.Second,
 		ListenDrainTimeout:      30 * time.Second,
 		ListenPositionWait:      2 * time.Second,
+		ReceiverMaxStreams:      16,
 		Forward: &SidecarSocketForwardSettings{
 			TargetDialTimeout:     2 * time.Second,
 			TargetProbeInterval:   2 * time.Second,
