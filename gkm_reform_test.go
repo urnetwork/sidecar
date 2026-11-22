@@ -32,8 +32,9 @@ import (
 var _ sidecar.GkmReformApi = (*gkmFakeApi)(nil)
 
 // POST forms as gkm serves it: the owner marker first, 409 with no winner for another repo's group; then the form,
-// which must re-form the repo's newest group where one stands, 409 with the newest otherwise; then epoch/0, whose
-// header holds the form's generation and no pin. Equal bytes resume.
+// which must re-form the repo's newest group where one stands, 409 with the newest otherwise, and is refused 409 with
+// gen/<the form's generation + 1> where the group it re-forms holds that generation, as gkm's fence voids that
+// closing (QD-1187); then epoch/0, whose header holds the form's generation and no pin. Equal bytes resume.
 func (self *gkmFakeApi) Reform(ctx context.Context, repoId sidecar.Id, request *protocol.GkmGroupReformRequest) error {
 	return self.call("Reform", func() error {
 		store := self.store
@@ -51,6 +52,9 @@ func (self *gkmFakeApi) Reform(ctx context.Context, repoId sidecar.Id, request *
 			newest := &protocol.GroupForm{}
 			if err := proto.Unmarshal(forms[len(forms)-1].GetBody(), newest); err != nil || !bytes.Equal(newest.GetGroupId(), form.GetPreviousGroupId()) {
 				return gkmFakeRefusal(http.StatusConflict, forms[len(forms)-1])
+			}
+			if previous := store.groupGenerations[sidecar.Id(form.GetPreviousGroupId())]; form.GetGeneration() < uint64(len(previous)) {
+				return gkmFakeRefusal(http.StatusConflict, previous[form.GetGeneration()])
 			}
 		}
 		store.groupOwnerRepoIds[groupId] = repoId
