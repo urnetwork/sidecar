@@ -541,19 +541,25 @@ func evsGitDescends(ctx context.Context, ancestor EvsGitOid, descendant EvsGitOi
 	return false, nil
 }
 
-// The identity key a statement's signer had at its authorization pin: what SidecarCommitterClaim names.
+// The identity key a statement's signer had at its authorization pin: what SidecarCommitterClaim names. A pin before
+// what the reader retains gives the key the oldest retained rows that admit the signer give it (QD-1178), the key that
+// signed the statement itself.
 func (self *EvsVerifier) signerIdentityKey(push *protocol.EvsPush) ([]byte, error) {
 	newest, err := self.config()
 	if err != nil {
 		return nil, err
 	}
 	state, err := newest.At(push.GetAuth())
-	if err != nil {
+	unjudged := errors.Is(err, ErrGkmAuthNotRetained)
+	if err != nil && !unjudged {
 		return nil, fmt.Errorf("%w: its authorization pin: %w", ErrEvsStatementRefused, err)
 	}
 	signerId, err := IdFromBytes(push.GetSignerSidecarId())
 	if err != nil {
 		return nil, fmt.Errorf("%w: its signer", ErrEvsStatementRefused)
+	}
+	if unjudged {
+		return evsUnjudgedSignerKey(newest, signerId, push.GetAuth())
 	}
 	return state.IdentityKey(signerId), nil
 }
@@ -563,7 +569,9 @@ const evsImportPurpose = "evs-import"
 
 // A push's signed_import as a replaying reader checks it (DESIGN-DETAILS 8.2.6): a Signed EvsImport, purpose
 // evs-import, by the identity key of a sidecar that is a repo admin at the push's authorization pin. What it signs is
-// held to the push's own commits by EvsGitCheckUpdate.
+// held to the push's own commits by EvsGitCheckUpdate. A push pinned before what the reader retains is not judged
+// (QD-1178): its import is taken on its signature, under the key the oldest retained rows that admit its signer give
+// it.
 func (self *EvsVerifier) verifyImport(signedBytes []byte, repoId Id, push *protocol.EvsPush) (*protocol.EvsImport, error) {
 	signed := &bridge.Signed{}
 	if err := proto.Unmarshal(signedBytes, signed); err != nil {
@@ -578,18 +586,26 @@ func (self *EvsVerifier) verifyImport(signedBytes []byte, repoId Id, push *proto
 		return nil, err
 	}
 	state, err := newest.At(push.GetAuth())
-	if err != nil {
+	unjudged := errors.Is(err, ErrGkmAuthNotRetained)
+	if err != nil && !unjudged {
 		return nil, fmt.Errorf("%w: the push's authorization pin: %w", ErrEvsStatementRefused, err)
 	}
 	signerId, err := IdFromBytes(signed.GetSignerId())
 	if err != nil {
 		return nil, fmt.Errorf("%w: an import's signer", ErrEvsStatementRefused)
 	}
-	repo := state.Repo(repoId)
-	if repo == nil || !evsRepoAdmin(state, repo, signerId) {
-		return nil, fmt.Errorf("%w: an import by a sidecar no repo admin at the push's pin", ErrEvsStatementRefused)
+	var identityKey []byte
+	if unjudged {
+		if identityKey, err = evsUnjudgedSignerKey(newest, signerId, push.GetAuth()); err != nil {
+			return nil, err
+		}
+	} else {
+		repo := state.Repo(repoId)
+		if repo == nil || !evsRepoAdmin(state, repo, signerId) {
+			return nil, fmt.Errorf("%w: an import by a sidecar no repo admin at the push's pin", ErrEvsStatementRefused)
+		}
+		identityKey = state.IdentityKey(signerId)
 	}
-	identityKey := state.IdentityKey(signerId)
 	if err := bridge.VerifySigned(signed, evsImportPurpose, bridge.SignedType_SIGNED_EVS_IMPORT, bridge.SignedKeyAlgEd25519, identityKey); err != nil {
 		return nil, fmt.Errorf("%w: an import's signature: %w", ErrEvsStatementRefused, err)
 	}

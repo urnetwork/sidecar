@@ -19,6 +19,13 @@
 // A log restored at a base (RestoreConfigLog, a new device or a gate's cold start) never built the states before it,
 // so its window starts at that base until the next base moves the window past it.
 //
+// What a reader does with a statement pinned before the window is its own (§10.9's judged row for gkm, QD-1178 for
+// evs): not judged, and counting against no one. A statement's signature is still checked, and retainedIdentityKey
+// gives the key: the one the oldest retained rows that admit the signer give it, refused where none does at the
+// statement's pin. A sidecar_id is admitted once and its row stays, its identity key with it (config_admit.go), and the
+// row keeps the positions it was admitted and revoked at, so the rows tell each signer's key exactly and tell that no
+// state at the pin admitted a signer admitted after it or revoked at or before it.
+//
 // Safe for concurrent use: the window is an immutable view swapped atomically by the log's one applying goroutine,
 // and a rebuild reads only immutable states and kept entries. Nothing here creates, derives or unwraps a key, so
 // nothing calls testHookSecret.
@@ -30,6 +37,7 @@ package sidecar
 import (
 	"bytes"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"slices"
 	"sync"
@@ -46,6 +54,9 @@ var (
 	// The pin's chain value is not this log's at its position: a fork alarm. ConfigForkError beside it carries the
 	// evidence.
 	ErrConfigPinOffChain = fmt.Errorf("config pin off the chain: %w", ErrGkmAuthOffChain)
+	// A statement pinned before what the reader retains whose signer no retained row admits at that pin: one never
+	// admitted, one admitted after the pin, or one revoked at or before it (QD-1178).
+	ErrConfigSignerNotAdmitted = errors.New("config signer not admitted at the pin")
 )
 
 // The states a log keeps for StateAt, shared by every state of that log, so ConfigState.At reaches back along the
@@ -296,6 +307,45 @@ func (self *ConfigState) StateAt(pin *bridge.AuthPin) (*ConfigState, error) {
 // concurrent use, with no lock but a rebuild cache's.
 func (self *ConfigLog) StateAt(pin *bridge.AuthPin) (*ConfigState, error) {
 	return self.state.Load().StateAt(pin)
+}
+
+// The identity key that checks what sidecarId signed at pin, a pin StateAt answers ErrConfigPinNotRetained, which is
+// not judged (see the file header): the key the oldest retained rows that admit the signer give it, the window's first
+// state where it lies at or below this one, then this one's. ErrConfigSignerNotAdmitted where neither admits the
+// signer at pin.
+func (self *ConfigState) retainedIdentityKey(sidecarId Id, pin *bridge.AuthPin) ([]byte, error) {
+	states := []*ConfigState{}
+	if self.history != nil {
+		if view := self.history.view.Load(); view != nil && view.from < self.n {
+			if oldest, ok := self.history.stateAt(view.from); ok {
+				states = append(states, oldest)
+			}
+		}
+	}
+	states = append(states, self)
+	for _, state := range states {
+		if key := state.IdentityKey(sidecarId); len(key) != 0 {
+			return configSignerKeyAt(state.SidecarRow(sidecarId), key, pin)
+		}
+	}
+	return nil, fmt.Errorf("%w: a signer no retained row admits", ErrConfigSignerNotAdmitted)
+}
+
+// key, the identity key a state gives a signer whose row it holds, for what that signer signed at pin: refused where
+// the row shows the signer admitted after pin or revoked at or before it, since no state at pin admitted it. A nil
+// row (the Genesis's device before base 1, which no entry admitted, or a stand-in state's) checks key alone, and no
+// key refuses.
+func configSignerKeyAt(row *bridge.SidecarRow, key []byte, pin *bridge.AuthPin) ([]byte, error) {
+	k := pin.GetVersion()
+	switch {
+	case len(key) == 0:
+		return nil, fmt.Errorf("%w: a signer no retained row admits", ErrConfigSignerNotAdmitted)
+	case row != nil && k < row.GetAdmittedAt():
+		return nil, fmt.Errorf("%w: a signer admitted at %d, after the pin %d", ErrConfigSignerNotAdmitted, row.GetAdmittedAt(), k)
+	case row != nil && row.GetRevokedAt() != 0 && row.GetRevokedAt() <= k:
+		return nil, fmt.Errorf("%w: a signer revoked at %d, at or before the pin %d", ErrConfigSignerNotAdmitted, row.GetRevokedAt(), k)
+	}
+	return key, nil
 }
 
 // Replaces the tip with a state at its own position: the window's last state, kept or not.

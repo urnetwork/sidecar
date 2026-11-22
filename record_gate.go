@@ -6,8 +6,9 @@
 //
 //	1  tainted, from the run file now: true for a run file that does not read (D-MCP-16); no run, an app's or a
 //	   typed ur command's action, is untainted
-//	2  untainted and a standing grant covers it (ACL-M4-02's AclEngine.ActiveGrant): the effect under an empty key,
-//	   no ledger row; in a tainted run no standing grant passes (TS1)
+//	2  untainted and a standing grant covers it (ACL-M4-02's AclEngine.ActiveGrant, and for a bridge exposure, whose
+//	   action names no grant, the rule its effect files under AclEngine.StandingRule: record_gate_standing.go): the
+//	   effect under an empty key, no ledger row and nothing filed; in a tainted run no standing grant passes (TS1)
 //	3  the decisions: the one passed, kept first through the inbox's intake, else an approval of this action, its
 //	   detail (the socket name, local port, weight and ALPNs its request binds, QD-740, QD-772), run and agent the
 //	   inbox holds: one whose
@@ -75,7 +76,8 @@ type ApprovalHarnessEvidence interface {
 
 // What the gate asks beyond the requester's approval state.
 type ApprovalGateArgs struct {
-	// nil: no standing grant passes, so every action takes a decision
+	// nil: no standing grant passes, so every action takes a decision; one that also implements ApprovalStandingRules
+	// passes the bridge exposures a standing grant covers
 	Grants ApprovalStandingGrants
 	// nil: no harness evidence, so a member with no other device or presence key waits for one
 	Harness ApprovalHarnessEvidence
@@ -170,7 +172,7 @@ func (self *ApprovalGate) Authorize(ctx context.Context, action *SidecarAction, 
 	tainted := action.RunId != nil && self.args.Runs.RunTainted(*action.RunId)
 
 	// 2: a standing grant, in an untainted run alone, for an action that is no template
-	if !tainted && !isTemplate && self.grants != nil && self.grants.ActiveGrant(stored, self.args.SidecarId, now) {
+	if !tainted && !isTemplate && self.standingCovers(action, stored, now) {
 		effectRef, runErr := action.Effect.Run(ctx, nil)
 		action.Outcome = approvalOutcomeOfRun(effectRef, runErr, false)
 		return nil
@@ -373,7 +375,8 @@ type ApprovalGateSources struct {
 	// P now: NewConfigApprovalStates over the ConfigClient's verified state and the compiled policy. Nil files no
 	// request and keeps no decision, so every action is refused.
 	States func() (ApprovalStates, error)
-	// ACL-M4-02's standing grants; nil for none.
+	// ACL-M4-02's standing grants, an exposure's standing rules too where it implements ApprovalStandingRules, as
+	// AclEngine does; nil for none.
 	Grants ApprovalStandingGrants
 	// MCP-M3-10's harness evidence; nil for none.
 	Harness ApprovalHarnessEvidence

@@ -5,7 +5,10 @@
 // A pin is (ref, v, C_v), the newest head this device verified, written before any read it backs is shown. It never
 // falls and never forks: a raise to a lower version, or to the same version with another chain, is refused, and only
 // a verified EvsReseed lowers one, which is kept as a loss (§11.13, §19.10). A pin re-raised past §11.9's catch-up
-// budget keeps the time of that re-pin, which VerifiedSince reports (g0-recheck-0-head-reader-read-paths#3).
+// budget keeps the time of that re-pin, which VerifiedSince reports (g0-recheck-0-head-reader-read-paths#3). What lies
+// at or below a pin is what this device verified when it was new, each statement judged at its own authorization pin
+// then; once two bases pass that pin the config no longer retains it, and the reader takes such a statement on its
+// signature rather than judge it again (QD-1178; EvsVerifier.VerifyStatement).
 //
 // A read record is (ref_id, path, entry version, pin at last read), one per path a head reader read, at most
 // EvsSettings.HeadReadRecordCount for the network, least recently used out (g0-recheck-0-head-reader-read-paths#1). A
