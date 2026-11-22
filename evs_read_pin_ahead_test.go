@@ -28,6 +28,7 @@ type evsTestPinAheadWorld struct {
 	waits chan uint64
 }
 
+// The world, its follower caught up to the net's tip.
 func newEvsTestPinAheadWorld(t *testing.T) *evsTestPinAheadWorld {
 	t.Helper()
 	config := newTestConfigClientWorld(t)
@@ -157,6 +158,7 @@ type evsTestPinWaitClock struct {
 	bounds chan evsTestPinWaitBound
 }
 
+// Arms a bound only the test ends, by calling its expire.
 func (self *evsTestPinWaitClock) AfterFunc(timeout time.Duration, function func()) func() bool {
 	self.bounds <- evsTestPinWaitBound{timeout: timeout, expire: function}
 	return func() bool { return true }

@@ -286,8 +286,9 @@ func TestEvsForgedStatementPinnedBeforeTwoBasesRefused(t *testing.T) {
 }
 
 // A statement pinned off the reader's chain before what it retains, where the reader still holds a base's chain value
-// there, is refused as a fork whatever its signature; one pinned ahead of the reader's state waits, with no alarm; one
-// pinned before the window where the reader holds no chain value is taken on its signature, which must verify.
+// there, is refused as a fork whatever its signature; one pinned ahead of the reader's state, which has no log to wait
+// on (EvsClientArgs.ConfigWait, QD-1202), is withheld with no alarm; one pinned before the window where the reader holds
+// no chain value is taken on its signature, which must verify.
 func TestEvsStatementPinOffTheChainOrAheadStillRefused(t *testing.T) {
 	retained := newEvsTestRetainedWorld(t)
 	written := retained.net.log.Pin()
