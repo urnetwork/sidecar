@@ -12,6 +12,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"net/netip"
 	"os"
 	"slices"
@@ -19,6 +20,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
@@ -61,6 +64,14 @@ type tlsPublishTestBackend struct {
 	revoked          [][]byte
 	revokeOrigins    []SidecarActOrigin
 	lastStoredAction *StoredCanonicalAction
+	// no requests rule takes the publish, and whether a standing grant covers it then
+	noRule        bool
+	standingCover bool
+	// what priorGrant answers
+	priorGrantId []byte
+	priorStands  bool
+	// where set, the outcome an approved gate gives in place of done
+	outcomeState ApprovalOutcomeState
 }
 
 func newTlsPublishTestBackend(t *testing.T) *tlsPublishTestBackend {
@@ -97,7 +108,10 @@ func (self *tlsPublishTestBackend) grantAction(ctx context.Context, base *protoc
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	self.grantCount += 1
-	action := base
+	if self.noRule {
+		return nil, fmt.Errorf("%w: %w", ErrAclGrantFile, ErrAclRequestNoMatch)
+	}
+	action := proto.Clone(base).(*protocol.CanonicalAction)
 	action.Subject = request.Subject.Bytes()
 	action.GrantDst = slices.Clone(request.GrantDst)
 	action.GrantAllow = slices.Clone(request.GrantAllow)
@@ -125,6 +139,19 @@ func (self *tlsPublishTestBackend) grantEffect(action *StoredCanonicalAction) Si
 	return &tlsPublishTestEffect{}
 }
 
+func (self *tlsPublishTestBackend) standingGrant(action *StoredCanonicalAction, now time.Time) bool {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.lastStoredAction = action
+	return self.standingCover
+}
+
+func (self *tlsPublishTestBackend) priorGrant(action *StoredCanonicalAction, detail *SidecarActionDetail, runId *Id, agentId *Id, now time.Time) ([]byte, bool) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return slices.Clone(self.priorGrantId), self.priorStands
+}
+
 func (self *tlsPublishTestBackend) authorize(ctx context.Context, action *SidecarAction, decision *bridge.Signed) error {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
@@ -135,6 +162,10 @@ func (self *tlsPublishTestBackend) authorize(ctx context.Context, action *Sideca
 	}
 	if !self.approved {
 		return &ApprovalPendingError{ApprovalId: self.approvalId}
+	}
+	if self.outcomeState != "" {
+		action.Outcome = &SidecarOutcome{State: self.outcomeState}
+		return nil
 	}
 	action.Outcome = &SidecarOutcome{State: ApprovalOutcomeDone, EffectRef: slices.Clone(self.grantId)}
 	return nil
@@ -548,5 +579,101 @@ func TestSidecarTlsPublishBackendRefusesWithoutItsParts(t *testing.T) {
 	}
 	if _, _, err := backend.identity(); err == nil {
 		t.Errorf("an unenrolled sidecar has an identity")
+	}
+	if backend.standingGrant(&StoredCanonicalAction{}, time.Time{}) {
+		t.Error("a standing grant with no grant filer")
+	}
+	if grantId, stands := backend.priorGrant(&StoredCanonicalAction{}, nil, nil, nil, time.Time{}); grantId != nil || stands {
+		t.Error("a prior grant with no grant filer")
+	}
+	if backend.config() != nil {
+		t.Error("a config to wait on with no config follower")
+	}
+}
+
+// A config whose follow never reaches the position asked, until its waiter's context ends.
+type tlsPublishStuckConfig struct {
+	waited int
+}
+
+func (self *tlsPublishStuckConfig) WaitFor(ctx context.Context, n uint64) (*ConfigState, error) {
+	self.waited += 1
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// A publish's grant the engine does not hold answers uncertain, and its listen does not run: with no receipt, with no
+// config to wait on, and with a config whose follow does not reach the receipt's position within
+// PublishGrantLandTimeout, here none at all.
+func TestTlsPublishConfirmGrantAnswersUncertainWithoutItsGrant(t *testing.T) {
+	running := newTestSidecar(t)
+	backend := &sidecarTlsPublishBackend{
+		sidecar: running,
+		args:    &TlsPublishArgs{Grants: NewAclGrantFiler(running, NewAclEngine(tlsCertTestId("a publishing sidecar"), nil, nil, nil))},
+	}
+	grantId := make([]byte, sha256.Size)
+	if err := backend.confirmGrant(t.Context(), nil, nil, grantId); !errors.Is(err, ErrTlsPublishUnavailable) {
+		t.Errorf("no receipt: %v", err)
+	}
+	receipt := &bridge.AuthPin{Version: 3, Chain: make([]byte, sha256.Size)}
+	if err := backend.confirmGrant(t.Context(), receipt, nil, grantId); !errors.Is(err, ErrTlsPublishUnavailable) {
+		t.Errorf("no config to wait on: %v", err)
+	}
+	stuck := &tlsPublishStuckConfig{}
+	settings := DefaultSidecarTlsSettings()
+	settings.PublishGrantLandTimeout = 0
+	backend.args.Config, backend.settings = stuck, settings
+	if err := backend.confirmGrant(t.Context(), receipt, nil, grantId); !errors.Is(err, ErrTlsPublishUnavailable) || !errors.Is(err, context.DeadlineExceeded) || stuck.waited != 1 {
+		t.Errorf("a follow that does not reach the receipt: %v, waited %d times", err, stuck.waited)
+	}
+}
+
+// An end a tool names reaches the request as it is, so the same publish asked again asks the same end; an end and a
+// time from now together, and an end not ahead, are refused before anything is filed; and a use that came to not_done
+// refuses the publish while an uncertain one answers unavailable, neither listening.
+func TestTlsPublishEndAndOutcome(t *testing.T) {
+	publisher, backend, target := newTlsPublishTest(t)
+	end := backend.current.Add(90 * time.Minute)
+	for _, settings := range []*TlsPublishSettings{
+		{Host: "blog", Target: target, Expires: time.Hour, ExpiresAt: end},
+		{Host: "blog", Target: target, ExpiresAt: backend.current},
+	} {
+		if _, err := publisher.publish(t.Context(), settings); !errors.Is(err, ErrTlsPublishInvalid) {
+			t.Errorf("expires %s and end %s: %v", settings.Expires, settings.ExpiresAt, err)
+		}
+	}
+	if backend.grantCount != 0 || len(backend.authorized) != 0 {
+		t.Fatalf("a refused end filed: %d grants built, %d authorized", backend.grantCount, len(backend.authorized))
+	}
+	settings := &TlsPublishSettings{Host: "blog", Target: target, ExpiresAt: end}
+	if _, err := publisher.publish(t.Context(), settings); !errors.As(err, new(*ApprovalPendingError)) {
+		t.Fatalf("the first publish: %v", err)
+	}
+	if backend.lastStoredAction.Action.GetExpiresMillis() != end.UnixMilli() {
+		t.Errorf("the request asks %d, not the end %d", backend.lastStoredAction.Action.GetExpiresMillis(), end.UnixMilli())
+	}
+	backend.current = backend.current.Add(time.Minute)
+	if _, err := publisher.publish(t.Context(), settings); !errors.As(err, new(*ApprovalPendingError)) {
+		t.Fatalf("the publish asked again: %v", err)
+	}
+	if !bytes.Equal(backend.authorized[0].Canonical, backend.authorized[1].Canonical) {
+		t.Error("the publish asked again with the same end presented another action")
+	}
+
+	backend.approve()
+	for _, c := range []struct {
+		state ApprovalOutcomeState
+		want  error
+	}{
+		{state: ApprovalOutcomeNotDone, want: ErrSidecarEffectNotDone},
+		{state: ApprovalOutcomeUncertain, want: ErrTlsPublishUnavailable},
+	} {
+		backend.outcomeState = c.state
+		if _, err := publisher.publish(t.Context(), settings); !errors.Is(err, c.want) {
+			t.Errorf("%s: %v", c.state, err)
+		}
+	}
+	if len(backend.endpoints) != 0 || backend.certificates != 0 || len(publisher.list()) != 0 {
+		t.Errorf("a publish whose grant did not activate listened: %d endpoints", len(backend.endpoints))
 	}
 }

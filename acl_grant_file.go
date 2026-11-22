@@ -65,16 +65,21 @@ var _ ApprovalStandingGrants = (*AclEngine)(nil)
 // destination. A version-4 action's ports ride sealed_detail too, so its ask names none, and only a rule that limits
 // no ports covers it. A share's grant (QD-820) is covered by none: its inbound half is another network's reach, not
 // the spender's, so the spender's own standing reach to the same sidecars says nothing of it, and each share is its
-// own admin-approved activation (§8.11). A listen that no requests rule takes names no rule_id (socket_listen.go):
-// what covers a grant is its subject, destinations and actions, never the rule it would be requested under, so such a
-// listen is judged on those alone, and only a standing grant can cover it. Reads the installed state with no lock.
+// own admin-approved activation (§8.11). A listen or a publish that no requests rule takes names no rule_id
+// (socket_listen.go, socket_listen_grant.go, tls_publish.go): what covers a grant is its subject, destinations and
+// actions, never the rule it would be requested under, so such an action is judged on those alone, and only a
+// standing grant can cover it. A publish binds its audience, app mode and a raw link's pin besides, which the
+// listener's front enforces from the grant (§8.10, §13.7): only a grant that gives exactly those, by PublishGrant's
+// agreement rule, covers it (acl_grant_publish.go), so a publish never passes on a grant that would serve it to
+// another audience than it asked. Reads the installed state with no lock.
 func (self *AclEngine) ActiveGrant(action *StoredCanonicalAction, spender Id, now time.Time) bool {
 	installed := self.installed.Load()
 	if installed == nil || action == nil || action.Action == nil {
 		return false
 	}
 	grantAction := action.Action
-	if SidecarActionKind(grantAction.GetKind()) == SidecarActionListen && len(grantAction.GetRuleId()) == 0 {
+	kind := SidecarActionKind(grantAction.GetKind())
+	if (kind == SidecarActionListen || kind == SidecarActionPublish) && len(grantAction.GetRuleId()) == 0 {
 		// a rule id of the right size for the parse alone, as Action's ask takes one; coverage never reads it
 		grantAction = proto.Clone(grantAction).(*protocol.CanonicalAction)
 		grantAction.RuleId = make([]byte, aclAtomByteCount)
@@ -103,7 +108,14 @@ func (self *AclEngine) ActiveGrant(action *StoredCanonicalAction, spender Id, no
 			return false
 		}
 	}
-	return len(appliedActions) == len(ask.Allow)
+	if len(appliedActions) != len(ask.Allow) {
+		return false
+	}
+	if kind == SidecarActionPublish {
+		// acl_grant_publish.go, and acl_grant_publish_http.go on the page Worker's leg, which publishes nothing
+		return installed.publishAgrees(subject, grantAction, nowMs)
+	}
+	return true
 }
 
 // Whether an action applies to a grant destination's kind (§8.4's resources): dial and route to a subject, dial and

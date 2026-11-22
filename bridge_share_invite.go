@@ -22,9 +22,14 @@
 //	ActivateShare X's approving admin, on what PreviewShare showed. The row is fetched and opened again and must hash
 //	              to the preview. The share's inbound grant, a dial on the targets' hosts for Y's network (§8.11; QD-820),
 //	              passes §5.4's gate, and the BridgeShareGrant that pins the ShareKey, K, Y and both tables' hashes and
-//	              versions is written to bridge/share-grant/<share_id hex> with the grant's id. The grant's id is kept
-//	              in the invite's record first: a grant whose file did not land compiles nothing, and calling again
-//	              writes the file for that grant while it stands, asking for no second one.
+//	              versions is written to bridge/share-grant/<share_id hex> with the grant's id. The grant's action is kept
+//	              in the invite's record as its request was filed, before the gate files it, and presented again until
+//	              its expiry, so the activation asked again after a person's decision spends it: the gate spends a
+//	              decision on the action its request stored alone, and an action built afresh asks a later expiry and
+//	              seals its detail under a fresh nonce, as a forward's retries keep theirs (forwardApprovalAction). A
+//	              kept action whose grant has since ended is asked afresh. The grant's id is kept in the record too: a
+//	              grant whose file did not land compiles nothing, and calling again writes the file for that grant
+//	              while it stands, asking for no second one, and once it no longer stands asks for a new one.
 //	RevokeShare   X: the grant's GrantRevoke, which ends the share at every host (the pin file counts only while its
 //	              grant is live).
 //	ReleaseShare  Y: a BridgeAlias release for each alias the share holds, which drain and then free their blocks.
@@ -166,6 +171,11 @@ type bridgeShareInviteRecord struct {
 	// written, so a call after a kill writes the file for this grant and asks for no second one.
 	GrantId    []byte `json:"grant_id,omitempty"`
 	ApprovalId Id     `json:"approval_id,omitempty"`
+	// The grant's action as its request was filed, as stored, and the lifetime it was asked for in ms, 0 for its
+	// rule's default: kept before the gate files it, so the activation asked again presents the bytes a decision
+	// names (shareGrantAction).
+	GrantAction     []byte `json:"grant_action,omitempty"`
+	GrantLifetimeMs int64  `json:"grant_lifetime_ms,omitempty"`
 }
 
 // share/accept/<share_id hex>: the completion an accept posts, kept until the server answered it.
@@ -782,13 +792,18 @@ func (self *BridgeFiler) ActivateShare(ctx context.Context, origin *BridgeFileOr
 		expiresMs = now.Add(lifetime).UnixMilli()
 	}
 	grantId, approvalId := record.GrantId, record.ApprovalId
-	if len(grantId) == 0 || !grants.held(grantId) {
+	if len(grantId) == 0 || !bridgeShareGrantStands(grants, grantId, now) {
 		// a share's grant is a dial grant (§8.11; QD-820): the forward kind's, naming the other network, its detail sealed
-		stored, err := grants.Action(ctx, &protocol.CanonicalAction{Kind: uint32(SidecarActionForward)}, &AclGrantRequest{
+		detail := &protocol.CanonicalActionDetail{GrantDst: prefixes}
+		fresh, err := grants.Action(ctx, &protocol.CanonicalAction{Kind: uint32(SidecarActionForward)}, &AclGrantRequest{
 			Subject: acts.view.self, GrantDst: destinations, GrantAllow: []string{"dial"}, ExpiresMs: expiresMs,
-			Detail:         &protocol.CanonicalActionDetail{GrantDst: prefixes},
+			Detail:         detail,
 			ShareNetworkId: opened.AcceptingNetworkId,
 		}, now)
+		if err != nil {
+			return nil, err
+		}
+		stored, err := self.shareGrantAction(origin, opened.ShareId, record, fresh, detail, lifetime, now)
 		if err != nil {
 			return nil, err
 		}
@@ -835,6 +850,56 @@ func (self *BridgeFiler) ActivateShare(ctx context.Context, origin *BridgeFileOr
 		}
 	}
 	return &BridgeFiling{GrantId: grantId, ApprovalId: approvalId}, nil
+}
+
+// Whether the installed state holds grantId as a rule in force at now: a share's grant that was revoked or ended no
+// longer stands, and the activation asked again asks for a new one.
+func bridgeShareGrantStands(grants *AclGrantFiler, grantId []byte, now time.Time) bool {
+	state := grants.engine.State()
+	if state == nil {
+		return false
+	}
+	rule := state.grantRule(grantId)
+	return rule != nil && rule.activeAt(now.UnixMilli())
+}
+
+// The share's grant action to present (the file's ActivateShare row): the one its request was filed with, kept in
+// record, while its expiry is ahead, it was asked for the same lifetime, and fresh, the action built now, differs from
+// it in its expiry and its detail's seal alone, the detail sealed in it opening to detail; and while the grant a
+// decision on it activated has not ended. Else fresh, kept in record in its place before the gate files its request.
+// A kept action that does not parse or open is not presented, the closed direction: its request is filed afresh.
+func (self *BridgeFiler) shareGrantAction(origin *BridgeFileOrigin, shareId Id, record *bridgeShareInviteRecord, fresh *StoredCanonicalAction,
+	detail *protocol.CanonicalActionDetail, lifetime time.Duration, now time.Time) (*StoredCanonicalAction, error) {
+	kept := func() *StoredCanonicalAction {
+		if len(record.GrantAction) == 0 || record.GrantLifetimeMs != lifetime.Milliseconds() {
+			return nil
+		}
+		kept, err := ParseStoredCanonicalAction(record.GrantAction)
+		if err != nil || kept.Action.GetExpiresMillis() <= now.UnixMilli() || fresh.Action.GetExpiresMillis() < kept.Action.GetExpiresMillis() {
+			return nil
+		}
+		freshAsKept := proto.Clone(fresh.Action).(*protocol.CanonicalAction)
+		freshAsKept.ExpiresMillis, freshAsKept.SealedDetail = kept.Action.GetExpiresMillis(), kept.Action.GetSealedDetail()
+		if !proto.Equal(kept.Action, freshAsKept) {
+			return nil
+		}
+		opened, err := self.args.Sidecar.OpenActionDetail(kept)
+		if err != nil || !proto.Equal(opened, detail) {
+			return nil
+		}
+		if self.args.Grants.grantEnded(kept, nil, origin.RunId, origin.AgentId, now) {
+			return nil
+		}
+		return kept
+	}()
+	if kept != nil {
+		return kept, nil
+	}
+	record.GrantAction, record.GrantLifetimeMs = bytes.Clone(fresh.Bytes), lifetime.Milliseconds()
+	if err := self.saveRecord(bridgeShareInviteRecordName(shareId), record); err != nil {
+		return nil, fmt.Errorf("%w: the share's grant action was not kept: %w", ErrBridgeFileUncertain, err)
+	}
+	return fresh, nil
 }
 
 // The grant component's effect for a share, noting the decision it spent under.

@@ -17,8 +17,8 @@
 //     gives way once it expires, its rule changes or the rule gives a shorter grant;
 //   - a use that came to not_done refuses the listen and an uncertain one answers unavailable, nothing registered;
 //   - the standing effect does nothing under an empty key and proves nothing happened under a use's;
-//   - ActiveGrant judges a listen that names no requests rule on its subject, socket and action alone, and still covers
-//     no other kind that names none;
+//   - ActiveGrant judges a listen that names no requests rule on its subject, socket and action alone, and a publish
+//     that names none on those and on the audience, app mode and pin its grant gives;
 //   - the stock component registers the listen kind's Lookup on its host for its life, and builds a listen's grant on its
 //     host's standing follower's engine alone.
 //
@@ -619,8 +619,10 @@ func TestSocketListenKeepsTheActionItsRequestWasFiledWith(t *testing.T) {
 }
 
 // ActiveGrant judges a listen that names no requests rule on its subject, socket and action alone: a standing rule
-// covers its own subject's, and no other spender's, no other socket's and no other action's; and it still covers no
-// publish that names none, nor a listen naming a rule_id of the wrong size.
+// covers its own subject's, and no other spender's, no other socket's and no other action's, nor a listen naming a
+// rule_id of the wrong size. A publish that names no requests rule is judged so too, and on the audience, app mode and
+// pin the grant gives (tls_publish.go's standing names): the rule's members over http cover that publish, and no
+// public one, no raw one and no other spender's.
 func TestAclActiveGrantReadsAListenWithNoRequestsRule(t *testing.T) {
 	cast := newAclStatementCast()
 	fixture := cast.fixture
@@ -659,14 +661,25 @@ func TestAclActiveGrantReadsAListenWithNoRequestsRule(t *testing.T) {
 	if engine.ActiveGrant(wrongSize, cast.laptop, aclTestNow) {
 		t.Error("a listen with a rule_id of the wrong size was covered")
 	}
-	// a publish that names no requests rule is still covered by nothing
-	publish := buildTestAction(t, &protocol.CanonicalAction{
-		Kind: uint32(SidecarActionPublish), Host: "blog", Port: 443,
-		Audience: uint32(protocol.AclAudience_ACL_AUDIENCE_MEMBERS), AppMode: uint32(protocol.AclAppMode_ACL_APP_MODE_HTTP),
-		Subject: cast.laptop.Bytes(), GrantDst: []string{"dns:blog", "sock:tls/443/blog"}, GrantAllow: []string{"publish", "listen"},
-	})
-	if engine.ActiveGrant(publish, cast.laptop, aclTestNow) {
-		t.Error("a publish that names no requests rule was covered")
+	// a publish that names no requests rule, judged on what its grant gives too
+	publish := func(audience protocol.AclAudience, appMode protocol.AclAppMode) *StoredCanonicalAction {
+		return buildTestAction(t, &protocol.CanonicalAction{
+			Kind: uint32(SidecarActionPublish), Host: "blog", Port: 443, Audience: uint32(audience), AppMode: uint32(appMode),
+			Subject: cast.laptop.Bytes(), GrantDst: []string{"dns:blog", "sock:tls/443/blog"}, GrantAllow: []string{"publish", "listen"},
+		})
+	}
+	members := publish(protocol.AclAudience_ACL_AUDIENCE_MEMBERS, protocol.AclAppMode_ACL_APP_MODE_HTTP)
+	if !engine.ActiveGrant(members, cast.laptop, aclTestNow) {
+		t.Error("a standing rule did not cover a publish that names no requests rule")
+	}
+	if engine.ActiveGrant(members, cast.phone, aclTestNow) {
+		t.Error("another spender's presentation of the publish was covered")
+	}
+	if engine.ActiveGrant(publish(protocol.AclAudience_ACL_AUDIENCE_PUBLIC, protocol.AclAppMode_ACL_APP_MODE_HTTP), cast.laptop, aclTestNow) {
+		t.Error("a publish to another audience than the rule gives was covered")
+	}
+	if engine.ActiveGrant(publish(protocol.AclAudience_ACL_AUDIENCE_PUBLIC, protocol.AclAppMode_ACL_APP_MODE_RAW), cast.laptop, aclTestNow) {
+		t.Error("a raw publish was covered by a rule that gives http")
 	}
 }
 

@@ -564,6 +564,11 @@ type SidecarTlsSettings struct {
 	// How long a raw link's client certificate is valid when the publish names no expiry: 7 days, the longest a
 	// Community grant lasts (§13.9).
 	PublishLinkCertificateLifetime time.Duration
+	// How long a publish waits for the grant its approval activated to reach this device's engine before its listen
+	// (tls_publish.go's confirmGrant): 30 s, a reading, a forward's AddressLandTimeout, well past §8.9's p99 of 5 s
+	// from the entry. Past it the publish answers unavailable and the same publish asked again completes it;
+	// non-positive waits not at all, so a grant not yet installed always answers so.
+	PublishGrantLandTimeout time.Duration
 }
 
 // §5.5's agent subkeys (identity_agent.go): each agent registration's Ed25519 subkey, which the daemon holds and
@@ -618,6 +623,7 @@ func DefaultSidecarTlsSettings() *SidecarTlsSettings {
 		ProbeTimeout:                   3 * time.Second,
 		ProbeResponseMaxByteCount:      64 * 1024,
 		PublishLinkCertificateLifetime: 7 * 24 * time.Hour,
+		PublishGrantLandTimeout:        30 * time.Second,
 	}
 }
 

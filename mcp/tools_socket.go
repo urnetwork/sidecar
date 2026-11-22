@@ -16,9 +16,16 @@
 //     is outward, §5.4's gate with a CanonicalAction of kind listen naming the socket by its grant_dst alone, its token
 //     path under the network's current K_sock (QD-772), and beside it the name and the local port as the request's
 //     socket_name and local_port (QD-740), which the approver renders and the decision binds: the tool listens on the
-//     name and the port it asked for and no other. A network whose K_sock this daemon does not hold yet takes no
-//     outward listen, as its sockets would register none. tls/ is tls_publish's, smtp/ a receiver's, share/ ur
-//     share's and ur/ the platform's: each is refused here.
+//     name and the port it asked for and no other. The action is grant-backed as Sidecar.Listen's is
+//     (sidecar.SocketListenGrantAction): its grant's fields come from the requests rule that takes it, on the grant
+//     filer over the engine the gate reads its standing grants from, its effect the grant component's, which a
+//     spendable decision runs into the GrantActivate the approval fixes; each action is kept as its request was filed
+//     until its expiry, so the listen asked again after a person approves spends the decision rather than filing
+//     anew; and a listen no requests rule takes names no rule, passing on a standing grant alone and refused with
+//     nothing filed where none covers it. A use that came to not_done refuses the listen and an uncertain one answers
+//     unavailable, which the same listen asked again completes. A network whose K_sock this daemon does not hold yet
+//     takes no outward listen, as its sockets would register none. tls/ is tls_publish's, smtp/ a receiver's, share/
+//     ur share's and ur/ the platform's: each is refused here.
 //   - socket_unlisten(name) ends the daemon's listen on name at once (§9.9's Close); streams accepted stay.
 //
 // No result holds a key, a seal, a token path or a credential (I-7), and the framework's matcher holds every result to
@@ -32,6 +39,7 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
@@ -123,7 +131,8 @@ type mcpSocketListenIn struct {
 type mcpSocketListenOut struct {
 	// listening, or approval_pending with approval_id.
 	Status string `json:"status"`
-	// The covering grant's id, hex, when one let the listen run without an approval.
+	// The covering grant's id, hex, when one let the listen run without an approval, or the grant an approval of it
+	// activated.
 	GrantId    string `json:"grant_id,omitempty"`
 	ApprovalId string `json:"approval_id,omitempty"`
 	// It takes tickets now: its local port answered.
@@ -157,22 +166,79 @@ func mcpSocketTargetPort(target string) int {
 	return port
 }
 
-// The §5.4 action an uncovered socket_listen on name goes through Authorize as: kind listen naming the socket by
-// grantDst alone (QD-772), built by NewCanonicalAction. The tool sets the request's detail beside it. A test replaces
-// it.
-type mcpSocketListenActionFunction func(call *McpCall, name string, grantDst string) (*sidecar.SidecarAction, error)
+// The §5.4 action an uncovered socket_listen on name, forwarding to localPort, goes through Authorize as, with its
+// effect: kind listen naming the socket by grantDst alone (QD-772), grant-backed (the file header). The tool sets the
+// request's detail beside it. A test replaces it.
+type mcpSocketListenActionFunction func(ctx context.Context, call *McpCall, name string, localPort int, grantDst string) (*sidecar.SidecarAction, error)
 
-// The production action: NewCanonicalAction, then NewSidecarAction bound to the call's run and its session's agent.
-func mcpSocketListenAction(call *McpCall, name string, grantDst string) (*sidecar.SidecarAction, error) {
-	stored, err := sidecar.NewCanonicalAction(&protocol.CanonicalAction{
-		Kind:     uint32(sidecar.SidecarActionListen),
-		GrantDst: []string{grantDst},
-	})
-	if err != nil {
-		return nil, err
+// What an outward socket_listen builds its grant on: a grant filer over the engine the network's gate reads its
+// standing grants from, nil while none stands.
+type mcpSocketGrants interface {
+	socketListenGrants() *sidecar.AclGrantFiler
+}
+
+// See mcpSocketGrants: over the hosted Sidecar and the engine its standing follower installs states in, or the engine
+// the network was built on (McpNetworkOf).
+func (self *mcpSidecarNetwork) socketListenGrants() *sidecar.AclGrantFiler {
+	engine, _ := self.policy()
+	if engine == nil {
+		return nil
 	}
-	runId := call.RunId
-	return sidecar.NewSidecarAction(stored, sidecar.SidecarRiskNormal, sidecar.SidecarRiskNormal, &runId, mcpCallAgentId(call))
+	return sidecar.NewAclGrantFiler(self.Sidecar, engine)
+}
+
+// What an outward socket_listen's action is kept by (sidecar.GrantActionKeeper): its network, and the name and the
+// local port its request binds beside it.
+type mcpSocketListenKey struct {
+	networkId sidecar.Id
+	name      string
+	localPort int
+}
+
+// The production action (the file header): sidecar.SocketListenGrantAction on the network's grant filer for its
+// sidecar, each action kept until its expiry by one keeper for the server's life, then NewSidecarAction bound to the
+// call's run and its session's agent. now reads the time a grant's expiry is measured from.
+// sidecar.ErrSocketUnavailable where the network stands no engine or holds no identity yet, and
+// sidecar.ErrAclGrantFile where no grant could cover the listen.
+func newMcpSocketListenAction(now func() time.Time) mcpSocketListenActionFunction {
+	keeper := sidecar.NewGrantActionKeeper[mcpSocketListenKey]()
+	return func(ctx context.Context, call *McpCall, name string, localPort int, grantDst string) (*sidecar.SidecarAction, error) {
+		var grants *sidecar.AclGrantFiler
+		if holder, ok := call.Network.(mcpSocketGrants); ok {
+			grants = holder.socketListenGrants()
+		}
+		var identity *sidecar.SidecarIdentity
+		if network, ok := mcpToolNetworkOf(call); ok {
+			identity = network.Identity()
+		}
+		if grants == nil || identity == nil {
+			return nil, sidecar.ErrSocketUnavailable
+		}
+		runId := call.RunId
+		agentId := mcpCallAgentId(call)
+		stored, effect, err := sidecar.SocketListenGrantAction(ctx, &sidecar.SocketListenGrantArgs{
+			Grants:   grants,
+			Subject:  identity.SidecarId,
+			GrantDst: grantDst,
+			Detail:   mcpSocketListenDetail(name, localPort),
+			RunId:    &runId,
+			AgentId:  agentId,
+		}, keeper, mcpSocketListenKey{networkId: call.NetworkId, name: name, localPort: localPort}, now())
+		if err != nil {
+			return nil, err
+		}
+		action, err := sidecar.NewSidecarAction(stored, sidecar.SidecarRiskNormal, sidecar.SidecarRiskNormal, &runId, agentId)
+		if err != nil {
+			return nil, err
+		}
+		action.Effect = effect
+		return action, nil
+	}
+}
+
+// The request's detail an outward listen on name forwarding to localPort binds (QD-740, QD-772).
+func mcpSocketListenDetail(name string, localPort int) *sidecar.SidecarActionDetail {
+	return &sidecar.SidecarActionDetail{SocketName: name, LocalPort: uint32(localPort)}
 }
 
 // What an outward socket_listen passes: the network's §5.4 gate, *sidecar.Sidecar's Authorize.
@@ -188,7 +254,7 @@ type mcpSocketKeys interface {
 
 func init() {
 	registerMcpTools(func(catalog *McpCatalog, server *McpServer) {
-		addSocketTools(catalog, func() McpSockets { return mcpSocketsOf(server) }, mcpSocketListenAction)
+		addSocketTools(catalog, func() McpSockets { return mcpSocketsOf(server) }, newMcpSocketListenAction(server.clock.Now))
 	})
 }
 
@@ -303,19 +369,37 @@ func addSocketTools(catalog *McpCatalog, sockets func() McpSockets, listenAction
 			if err != nil {
 				return nil, errMcpSocketHeld
 			}
-			action, err := listenAction(call, name, grantDst)
+			action, err := listenAction(ctx, call, name, in.LocalPort, grantDst)
+			if errors.Is(err, sidecar.ErrSocketUnavailable) {
+				return nil, mcpSocketError(err)
+			}
 			if err != nil {
+				// no requests rule takes the listen and no standing grant covers it: nothing is filed
 				return nil, errMcpSocketHeld
 			}
 			// the name and the port the listen below forwards to ride the request, so the approval is of this socket
 			// and this port
-			action.Detail = &sidecar.SidecarActionDetail{SocketName: name, LocalPort: uint32(in.LocalPort)}
+			action.Detail = mcpSocketListenDetail(name, in.LocalPort)
 			if err := authorizer.Authorize(ctx, action, nil); err != nil {
 				var pending *sidecar.ApprovalPendingError
 				if errors.As(err, &pending) {
 					return &mcpSocketListenOut{Status: "approval_pending", ApprovalId: pending.ApprovalId.String()}, nil
 				}
 				return nil, errMcpSocketHeld
+			}
+			// the gate ran the listen's effect: its grant stands, or the use says why the listen cannot register
+			if outcome := action.Outcome; outcome != nil {
+				switch outcome.State {
+				case sidecar.ApprovalOutcomeDone:
+					if 0 < len(outcome.EffectRef) {
+						out.GrantId = hex.EncodeToString(outcome.EffectRef)
+					}
+				case sidecar.ApprovalOutcomeNotDone:
+					return nil, errMcpSocketHeld
+				default:
+					// uncertain: the same listen asked again completes its use under its key (AU4)
+					return nil, mcpSocketError(sidecar.ErrSocketUnavailable)
+				}
 			}
 		}
 		reply, err := held.Listen(ctx, call.NetworkId, name, "127.0.0.1:"+strconv.Itoa(in.LocalPort))
