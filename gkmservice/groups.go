@@ -488,8 +488,9 @@ func (self *GkmEngine) serveReform(request *GkmRequest) {
 		return
 	}
 	prices := self.settings.Prices
-	// the owner marker and the form, and the fence's closing marker and verdict, each of the form's bytes
-	charge := prices.create(gkmGroupOwnerByteCount(form.repoId, request)) + 3*prices.create(len(form.raw))
+	// the owner marker; the form; and the fence's closing marker and verdict, each of the form's bytes
+	formCharge := prices.create(len(form.raw))
+	charge := prices.create(gkmGroupOwnerByteCount(form.repoId, request)) + formCharge + formCharge + formCharge
 	var epochZero *protocol.GkmEpochObject
 	if len(reformRequest.GetGenWrap()) != 0 || len(reformRequest.GetSealedGroupInfo()) != 0 || reformRequest.GetCipherSuite() != 0 {
 		if !self.settings.DraftMls {
