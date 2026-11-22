@@ -271,9 +271,9 @@ func configAdvanceShrinks(before *ConfigState, next *configStateBuilder, effects
 // its acl rows: a device an owner's consented device or recovery key admitted after the repo's RepoCreate (the scoped
 // clause), one an AdmissionConfirm by the owner's consented device confirmed, and an invited first device, each at the
 // entry that consents it, a proposal's completing cosign or activating tick included, as ACL's fold lists an
-// OwnerConfirm's (acl_access_log.go's consented row). Without it such a device read none of its owner's vault, mailbox
-// or secrets anywhere, though every reader, gate and the exchange took it for consented. Rows a state cannot index
-// list nothing more, their readers already refusing what they would open.
+// OwnerConfirm's (acl_access_log.go's consented row). So such a device reads and writes its owner's vault, mailbox and
+// secrets from that entry on at every reader, gate and the exchange, which already took it for consented (owner
+// decision 355). Rows a state cannot index list nothing more, their readers already refusing what they would open.
 //
 // Returns the state the entry made with the listing, an immutable view with an acl part of its own, which the shrink
 // step reads: the view this step judged consent on where it listed nothing, so an entry builds one acl state here.
