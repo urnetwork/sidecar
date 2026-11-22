@@ -1082,8 +1082,14 @@ func TestGkmApiKeepsTheNarrowedScopeThroughAReadsRetries(t *testing.T) {
 		_, err := api.Wraps(context.Background(), repoId, groupId, 2, &GkmWrapsQuery{Recipient: "s:" + gkmUrlId(NewId())})
 		done <- err
 	}()
-	if wait := <-clock.armed; wait != 2*time.Second {
-		t.Errorf("the narrowed read waits %s", wait)
+	// a read that goes no second time ends without arming its wait
+	select {
+	case wait := <-clock.armed:
+		if wait != 2*time.Second {
+			t.Errorf("the narrowed read waits %s", wait)
+		}
+	case err := <-done:
+		t.Fatalf("the read ended before waiting out its 503: %v", err)
 	}
 	clock.Advance(2 * time.Second)
 	if err := <-done; err != nil {

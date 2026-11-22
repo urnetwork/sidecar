@@ -337,8 +337,8 @@ func (self *Subprotocol) peerVerified(clientId connect.Id) bool {
 	return ok && now.Before(identity.expireTime)
 }
 
-// Closes the gate for sourceId: on a send's ack error or a refused Hello (reading 1). A peer with no
-// record is left as it is.
+// Closes the gate for sourceId: on a send's ack error or a refused Hello (reading 1), or on the peer's lost
+// connect session (QD-1185). A peer with no record is left as it is.
 func (self *Subprotocol) forgetPeer(sourceId connect.Id) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()

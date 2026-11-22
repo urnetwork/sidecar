@@ -169,6 +169,91 @@ func testStreamOpenAfterRestart(t *testing.T, edge bool) {
 	accepted.Close()
 }
 
+// The listener restarts under its identity, as a daemon that keeps its generation's connect identity does, so the
+// opener's Hello with it still stands, under the same C15 key, while the restarted gate holds none and rejects an open
+// INVALID (QD-1185). With no word from connect, that INVALID stands, as a listener's own would, and no Hello goes. When
+// connect reports, while the open is in flight, that the listener lost its session with this client, the opener meets
+// the INVALID with one fresh Hello and the open again; reported before an open, the open runs the fresh Hello first.
+func TestStreamOpenToAListenerRestartedUnderItsIdentity(t *testing.T) {
+	pair := newTestRpcPair(t)
+	listenerId, listenerIdentity := connect.NewId(), newTestRpcIdentity()
+	listener := pair.addClient(listenerId, listenerIdentity, nil)
+	opener := pair.add(nil, nil)
+	stream, accepted := testStreamOpen(t, opener, listener, testStreamAccepting(t, listener, testStreamTarget), nil)
+	stream.Close()
+	accepted.Close()
+	countSent := func(side *testRpcSide, messageType protocol.MessageType) int {
+		count := 0
+		for _, sentType := range testSentTypes(side) {
+			if sentType == messageType {
+				count += 1
+			}
+		}
+		return count
+	}
+	talk := func(stream *SubprotocolStream, accepted *SubprotocolStream) {
+		t.Helper()
+		if _, err := stream.Write([]byte("after")); err != nil {
+			t.Fatal(err)
+		}
+		if got := string(testStreamReadFull(t, accepted, 5)); got != "after" {
+			t.Fatalf("the restarted listener read %q", got)
+		}
+		stream.Close()
+		accepted.Close()
+	}
+	restart := func() (*testRpcSide, chan *StreamIncoming) {
+		running := func() *testRpcSide {
+			pair.stateLock.Lock()
+			defer pair.stateLock.Unlock()
+			return pair.sides[listenerId]
+		}()
+		running.subprotocol.Close()
+		running.cancel()
+		restarted := pair.addClient(listenerId, listenerIdentity, nil)
+		return restarted, testStreamAccepting(t, restarted, testStreamTarget)
+	}
+
+	// no word from connect: the gate's INVALID is the open's answer, as a listener's would be
+	restarted, incomings := restart()
+	hellos := countSent(opener, protocol.MessageType_HELLO)
+	var rejectErr *StreamRejectError
+	_, err := opener.subprotocol.OpenStream(t.Context(), Id(listenerId), &StreamOpenRequest{Target: testStreamTarget})
+	if !errors.As(err, &rejectErr) || rejectErr.Code != protocol.StreamRejectCode_SR_INVALID || rejectErr.Local {
+		t.Fatalf("an open under the standing Hello answered %v", err)
+	}
+	if got := countSent(opener, protocol.MessageType_HELLO); got != hellos {
+		t.Fatalf("an INVALID under a standing Hello sent %d Hellos", got-hellos)
+	}
+
+	// connect reports the lost session while the open is in flight, as the restarted listener's nack makes it do
+	opener.setDeliver(func(from *testRpcSide, to *testRpcSide, envelope *protocol.Envelope) *protocol.Envelope {
+		if from == opener && envelope.Type == uint32(protocol.MessageType_STREAM_OPEN) {
+			opener.losePeerSession(listenerId)
+		}
+		return envelope
+	})
+	fresh, freshAccepted := testStreamOpen(t, opener, restarted, incomings, nil)
+	opener.setDeliver(nil)
+	if got := countSent(opener, protocol.MessageType_HELLO); got != hellos+1 {
+		t.Fatalf("the open after the lost session sent %d Hellos, want 1", got-hellos)
+	}
+	talk(fresh, freshAccepted)
+
+	// reported before the open: the open runs the fresh Hello first, and the restarted gate rejects nothing
+	restarted, incomings = restart()
+	rejects := countSent(restarted, protocol.MessageType_STREAM_REJECT)
+	opener.losePeerSession(listenerId)
+	fresh, freshAccepted = testStreamOpen(t, opener, restarted, incomings, nil)
+	if got := countSent(opener, protocol.MessageType_HELLO); got != hellos+2 {
+		t.Fatalf("the open after a reported lost session sent %d Hellos, want 1", got-hellos-1)
+	}
+	if got := countSent(restarted, protocol.MessageType_STREAM_REJECT); got != rejects {
+		t.Fatalf("the restarted listener rejected %d opens", got-rejects)
+	}
+	talk(fresh, freshAccepted)
+}
+
 // An expired range reservation cannot publish an open to the listener.
 func TestStreamOpenDeadlineCoversRangeReservation(t *testing.T) {
 	pair := newTestRpcPair(t)
