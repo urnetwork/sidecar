@@ -56,6 +56,16 @@ type mailSessionTestRepo struct {
 // The deposits of a message whose plaintext passes this many bytes keep only a tail, which holds the trailer.
 const testMailSessionKeptByteCount = 1024 * 1024
 
+// See mailDepositRightRepo.
+func (self *mailSessionTestRepo) depositRight(depositorId Id) (bool, bool) {
+	self.world.stateLock.Lock()
+	defer self.world.stateLock.Unlock()
+	if self.world.refusedRepos[self.repoId] {
+		return false, true
+	}
+	return false, false
+}
+
 func (self *mailSessionTestRepo) Deposit(ctx context.Context, args *EvsDepositArgs) (*EvsDepositResult, error) {
 	world := self.world
 	hash := sha256.New()
@@ -142,6 +152,9 @@ type mailSessionTestWorld struct {
 	// a deposit waits on it while set, as evs holding a push would
 	hold       chan struct{}
 	depositErr error
+	// repos the receiver's own verified state gives no deposit (mailDepositRightRepo); every other repo's right is not
+	// known, as a client holding no ACL state's is
+	refusedRepos map[Id]bool
 	// raised as each deposit reaches its repo, before its hold
 	depositCalls *MonitorValue[int]
 }
@@ -414,6 +427,70 @@ func TestMailSessionDepositFailureAnswers451(t *testing.T) {
 			t.Errorf("%v: a deposit committed", failure)
 		}
 	}
+}
+
+// A recipient's repo this receiver's own verified state gives no deposit, as a member's consented device's mailbox
+// before anything marks it mail_send (owner decision 333), is answered 451 4.3.0 at DATA at once: no repo's deposit
+// starts and no evs refusal is waited out, where evs's client would retry the exchange's refusal for most of a
+// minute, past a sender's wait; the sender's next transaction, once the state gives the deposit, is taken.
+func TestMailSessionAnswers451AtOnceWhereTheReceiverMayNotDeposit(t *testing.T) {
+	spools := &mailSessionTestSpoolCount{}
+	world := newMailSessionTestWorld(t, func(args *MailSessionArgs) {
+		spools.SidecarStore = args.SpoolStore
+		args.SpoolStore = spools
+	})
+	world.stateLock.Lock()
+	world.refusedRepos = map[Id]bool{world.recipients[testMailSessionAlice].RepoId: true}
+	world.stateLock.Unlock()
+	sender := world.open(testMailSessionIngress(t))
+	sender.envelope(testMailSessionAlice, testMailSessionBob)
+	codes, messages := sender.data(testMailSessionMessage("not depositable"))
+	if code, message := <-codes, <-messages; code != 451 || !strings.HasPrefix(message, "4.3.0") {
+		t.Fatalf("DATA answered %d %s", code, message)
+	}
+	if calls, _ := world.depositCalls.Get(); calls != 0 {
+		t.Fatalf("%d deposits reached a repo", calls)
+	}
+	if count := spools.count(); count != 0 {
+		t.Fatalf("the refused message's body was spooled: %d spool files", count)
+	}
+	world.stateLock.Lock()
+	world.refusedRepos = nil
+	world.stateLock.Unlock()
+	sender.expect("MAIL FROM:<bounce@sender.example>", 250)
+	sender.expect("RCPT TO:<"+testMailSessionAlice+">", 250)
+	codes, messages = sender.data(testMailSessionMessage("depositable"))
+	if code, message := <-codes, <-messages; code != 250 {
+		t.Fatalf("DATA answered %d %s once the deposit was given", code, message)
+	}
+	if deposits := world.takenDeposits(); len(deposits) != 1 {
+		t.Errorf("%d deposits taken", len(deposits))
+	}
+	if count := spools.count(); count == 0 {
+		t.Error("the taken message was never spooled")
+	}
+}
+
+// A spool store that counts the spool files it is asked to create.
+type mailSessionTestSpoolCount struct {
+	SidecarStore
+	stateLock sync.Mutex
+	creates   int
+}
+
+func (self *mailSessionTestSpoolCount) Create(name string) (SidecarStoreWriter, error) {
+	if strings.HasPrefix(name, mailSpoolDirectory) {
+		self.stateLock.Lock()
+		self.creates += 1
+		self.stateLock.Unlock()
+	}
+	return self.SidecarStore.Create(name)
+}
+
+func (self *mailSessionTestSpoolCount) count() int {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.creates
 }
 
 // A session that ends while evs holds its deposit, as a crash before durability ends it, gets no 250, and the

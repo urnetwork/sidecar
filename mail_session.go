@@ -30,9 +30,12 @@
 //	data      DATA and BDAT stream into the spool (mail_spool.go) ChunkByteCount at a time, hashed as they arrive. At
 //	          the last byte one of the receiver's check slots takes the message (MailAuthSlots), whose 30 s start then,
 //	          and the evidence is sealed (MailEvidenceBuilder); then one deposit a repo (mail_deposit.go)
-//	reply     250 only once evs confirmed every deposit; 451 4.3.0 for any failure. Accepted mail never bounces, and
-//	          no authentication result refuses it: a check that fails or is cut deposits as no result. A reset (RFC
-//	          5321 §3.8), RSET mid-BDAT's ErrDataReset or the connection's end, discards everything, and nothing commits
+//	reply     250 only once evs confirmed every deposit; 451 4.3.0 for any failure, within the depositor's
+//	          DepositTimeout, and at DATA's start, before the body is spooled or checked, where this receiver's own
+//	          verified state gives it no deposit into a recipient's repo (MailDepositor.Refuses). Accepted mail never
+//	          bounces, and no authentication result refuses it: a check that fails or is cut deposits as no result. A
+//	          reset (RFC 5321 §3.8), RSET mid-BDAT's ErrDataReset or the connection's end, discards everything, and
+//	          nothing commits
 //
 // Every reply's text is fixed: no lookup's error, address or name reaches the sender, and nothing here logs one
 // (I-13). go-smtp's Debug stays nil and its ErrorLog writes nothing, since either would carry a session's text. One
@@ -552,6 +555,11 @@ func (self *MailSession) Data(reader io.Reader) error {
 		return mailSessionReplyNoTransaction
 	}
 	server := self.server
+	if server.args.Depositor.Refuses(transaction.targets) {
+		// a repo this receiver's own state gives no deposit (§8.5): no deposit can commit, so the message is answered
+		// at once, its body read on and dropped by go-smtp, as the deposit's refusal would answer it far later
+		return mailSessionReplyTryLater
+	}
 	spool, err := newMailSpool(server.args.SpoolStore, server.settings.ChunkByteCount)
 	if err != nil {
 		return mailSessionReplyTryLater
