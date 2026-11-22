@@ -47,6 +47,11 @@ type WriteBudgetSettings struct {
 	ReportTtl    time.Duration
 	// The governor's saved B, W and counter readings: 48 h after the loop's last write (§19.4).
 	StateTtl time.Duration
+	// How long a process's Close waits, on the host's clock, for its interval's goroutine to end and then
+	// for its last report on every cluster to be written: 2 s, as the loop's lease release, a report being
+	// two Redis calls of milliseconds. What is not written by then is lost, as a killed process's last
+	// interval is (§11.13's wallet row). Not positive: Close writes no last report.
+	CloseReportTimeout time.Duration
 
 	// A process without a fresh allowance this long falls back (§11.13's fallback row): 60 s.
 	FallbackAfter time.Duration
@@ -108,6 +113,7 @@ func DefaultWriteBudgetSettings() *WriteBudgetSettings {
 		AllowanceTtl:          15 * time.Second,
 		ReportTtl:             15 * time.Second,
 		StateTtl:              48 * time.Hour,
+		CloseReportTimeout:    2 * time.Second,
 		FallbackAfter:         60 * time.Second,
 		FallbackShare:         0.5,
 		FallbackFundedWindow:  1 * time.Minute,
