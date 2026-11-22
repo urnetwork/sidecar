@@ -52,7 +52,8 @@ const (
 // One kind's row of §8.5's table and the rules around it.
 type AclKindDefault struct {
 	Kind protocol.RepoKind
-	// Who reads and who writes by the kind alone, and who deposits.
+	// Who reads and who writes by the kind alone, and who deposits; in a kind whose Deposit names anyone, every
+	// subject that writes the repo deposits too, as in a general repo marked an inbox (QD-1173).
 	Read    AclKindAudience
 	Write   AclKindAudience
 	Deposit AclKindAudience

@@ -29,6 +29,11 @@ func TestRecordAuthPublishedLogRightsAtTheirOwnPin(t *testing.T) {
 		!auth.Reads(world.VaultId, world.MemberDevice) || !auth.Admins(world.VaultId, world.MemberDevice) {
 		t.Fatal("the creator lost its vault")
 	}
+	// the deposit its write implies (QD-1173) is none of the record's: its stream is its route, and a gap in it
+	// alarms at once
+	if auth.Deposits(world.VaultId, world.MemberDevice) {
+		t.Fatal("the vault's writer reads as a depositor of its own log")
+	}
 	if auth.Consented(world.VaultId, world.Unconsented) || !auth.Deposits(world.VaultId, world.Unconsented) ||
 		auth.Reads(world.VaultId, world.Unconsented) || auth.Writes(world.VaultId, world.Unconsented) {
 		t.Fatal("a depositor acquired owner access")

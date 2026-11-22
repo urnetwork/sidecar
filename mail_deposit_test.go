@@ -333,8 +333,8 @@ func TestMailDepositorEndsItsDepositsAtDepositTimeout(t *testing.T) {
 }
 
 // The production repo's right is its client's newest verified state as the exchange reads it for repo:<id>:deposit
-// (AclExchangeScopes): the mailbox's own member's consented device has none until a send grant on mail: marks it
-// (owner decision 333), and with no state to judge by nothing is known.
+// (AclExchangeScopes): the mailbox's own member's consented device deposits by its write (QD-1173), another member's
+// device only once a send grant on mail: marks it (owner decision 333), and with no state to judge by nothing is known.
 func TestMailEvsDepositRepoReadsItsClientsVerifiedState(t *testing.T) {
 	net := newAclExchangeNet(t)
 	mailboxId := testConfigId("deposit right mailbox")
@@ -350,8 +350,11 @@ func TestMailEvsDepositRepoReadsItsClientsVerifiedState(t *testing.T) {
 		t.Fatalf("with no state: %t %t", allowed, known)
 	}
 	test.client.args.Config = func() GkmAuthView { return net.log.State() }
-	if allowed, known := repo.depositRight(net.owner.sidecarId); allowed || !known {
-		t.Fatalf("the receiver before a send grant: %t %t", allowed, known)
+	if allowed, known := repo.depositRight(net.owner.sidecarId); !allowed || !known {
+		t.Fatalf("the receiver, by its write: %t %t", allowed, known)
+	}
+	if allowed, known := repo.depositRight(net.phone.sidecarId); allowed || !known {
+		t.Fatalf("another member's device before a send grant: %t %t", allowed, known)
 	}
 	net.withAclRows(func(rows *protocol.AclRows) {
 		rows.Rules = append(rows.Rules, &protocol.AclRule{
@@ -361,8 +364,8 @@ func TestMailEvsDepositRepoReadsItsClientsVerifiedState(t *testing.T) {
 			Actions:  []uint32{uint32(protocol.AclAction_ACL_ACTION_SEND)},
 		})
 	})
-	if allowed, known := repo.depositRight(net.owner.sidecarId); !allowed || !known {
-		t.Fatalf("the receiver once a send grant marks it: %t %t", allowed, known)
+	if allowed, known := repo.depositRight(net.phone.sidecarId); !allowed || !known {
+		t.Fatalf("another member's device once a send grant marks it: %t %t", allowed, known)
 	}
 	if allowed, known := repo.depositRight(net.readOnly.sidecarId); allowed || !known {
 		t.Fatalf("a read_only device: %t %t", allowed, known)

@@ -429,8 +429,8 @@ func TestMailSessionDepositFailureAnswers451(t *testing.T) {
 	}
 }
 
-// A recipient's repo this receiver's own verified state gives no deposit, as a member's consented device's mailbox
-// before anything marks it mail_send (owner decision 333), is answered 451 4.3.0 at DATA at once: no repo's deposit
+// A recipient's repo this receiver's own verified state gives no deposit, as another member's mailbox before a send
+// grant marks this receiver mail_send (owner decision 333), is answered 451 4.3.0 at DATA at once: no repo's deposit
 // starts and no evs refusal is waited out, where evs's client would retry the exchange's refusal for most of a
 // minute, past a sender's wait; the sender's next transaction, once the state gives the deposit, is taken.
 func TestMailSessionAnswers451AtOnceWhereTheReceiverMayNotDeposit(t *testing.T) {

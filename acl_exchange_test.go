@@ -272,10 +272,10 @@ func TestAclExchangeScopesMintOnlyAdminForADeletedRepo(t *testing.T) {
 	}
 }
 
-// Owner decision 333 through the exchange: the mailbox's own member's consented device, a receiver that deposits the
-// mail it takes, is refused repo:<mailbox>:deposit while nothing marks it mail_send, and granted it once a send grant
-// on mail: does, beside its r and rw; another member's sending device gets the deposit and no r, and a read_only
-// device none, whatever marks it.
+// The mailbox's deposit through the exchange: its own member's consented device, a receiver that deposits the mail it
+// takes, is granted repo:<mailbox>:deposit by its write with no send grant (QD-1173), beside its r and rw; another
+// member's device is refused it until a send grant on mail: marks it mail_send (owner decision 333), and then gets the
+// deposit and no r; a read_only device gets none, whatever marks it.
 func TestAclExchangeScopesGiveTheMailboxDepositToMailSendSubjects(t *testing.T) {
 	net := newAclExchangeNet(t)
 	mailboxId := testConfigId("exchange mailbox")
@@ -287,7 +287,7 @@ func TestAclExchangeScopesGiveTheMailboxDepositToMailSendSubjects(t *testing.T) 
 	})
 	deposit, read, write := aclExchangeScope(mailboxId, "deposit"), aclExchangeScope(mailboxId, "r"), aclExchangeScope(mailboxId, "rw")
 	aclExchangeCheck(t, "the receiver before a send grant", net.exchange(t, net.owner, AclTokenAudienceEvs, deposit, read, write),
-		[]string{read, write}, []string{deposit})
+		[]string{deposit, read, write}, []string{})
 	aclExchangeCheck(t, "another member before a send grant", net.exchange(t, net.phone, AclTokenAudienceEvs, deposit), []string{}, []string{deposit})
 	net.withAclRows(func(rows *protocol.AclRows) {
 		rows.Rules = append(rows.Rules, &protocol.AclRule{
