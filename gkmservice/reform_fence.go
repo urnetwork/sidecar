@@ -26,12 +26,13 @@
 //     so what a claim wrote after the marker stood reaches no member;
 //   - another re-form finding a marker that closes the group answers 409 with it, which its client reads as another
 //     re-form standing (ErrGkmWait), unless that closing is void, or has no verdict yet while the old group holds a
-//     generation past its form's, when it is voided here as its own try would void it; then the marker is taken by
-//     If-Match.
-//
-// A closing whose re-former stops between its marker and its verdict, and never sends its request again, leaves the
-// group closed: no rotation of it lands until a re-form whose closing can void that one, and none can while the old
-// group holds nothing past the stalled form's generation. Not built here: what lets another re-form take over then.
+//     generation past its form's, when it is voided here as its own try would void it, or has no verdict yet and a
+//     marker older than ReformClosingStallAge while this re-form's generation is at least its own (QD-1188), when it
+//     is voided too: its re-former stopped between its marker and its verdict, and without this the group stayed
+//     closed for good. Then the marker is taken by If-Match. A void recorded here races the stalled request, if it
+//     still runs, on the verdict's one create, and the loser follows the winner, so a takeover is safe at any age;
+//     the bound only keeps two live re-forms from voiding each other in turn. A closing voided so, its form's
+//     generation the group's newest, refuses its own request with the marker that took over, or 503 while none has.
 
 package gkmservice
 
@@ -39,6 +40,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -53,6 +55,8 @@ type gkmGroupClosing struct {
 	// group again
 	raw  []byte
 	etag string
+	// when the store wrote the marker, by its own clock, for a marker a read found; zero for one this request wrote
+	lastModified time.Time
 	// the closing form's new group, and the newest generation its ladder carries
 	newGroupId sidecar.Id
 	generation uint64
@@ -98,7 +102,12 @@ func (self *GkmEngine) readGroupClosing(ctx context.Context, cluster sidecar.Blo
 	if err != nil {
 		return nil, err
 	}
-	return parseGkmGroupClosing(groupId, objectBytes, info.Etag)
+	closing, err := parseGkmGroupClosing(groupId, objectBytes, info.Etag)
+	if err != nil {
+		return nil, err
+	}
+	closing.lastModified = info.LastModified
+	return closing, nil
 }
 
 // The fence's read after a write to groupId: false once it has answered, 409 with the marker of a group a re-form
@@ -139,36 +148,37 @@ func (self *GkmEngine) servedGenerations(ctx context.Context, cluster sidecar.Bl
 }
 
 // Creates key holding body, If-None-Match, as createGkmObject does, and answers the bytes that then stand there with
-// their etag: body itself when this call or an earlier try of the same bytes wrote it. errGkmObjectGone for a key
-// that existed and is gone, which only a shred leaves.
-func createGkmObjectHeld(ctx context.Context, cluster sidecar.BlobCluster, key string, body []byte, maxByteCount int64) (held []byte, etag string, err error) {
+// what the store says of them: body itself, with only its etag, when this call wrote it, and as a read found them
+// otherwise, an earlier try of the same bytes included. errGkmObjectGone for a key that existed and is gone, which
+// only a shred leaves.
+func createGkmObjectHeld(ctx context.Context, cluster sidecar.BlobCluster, key string, body []byte, maxByteCount int64) (held []byte, info *sidecar.BlobInfo, err error) {
 	if err := checkGkmWriteClass(ctx); err != nil {
-		return nil, "", err
+		return nil, nil, err
 	}
 	for writeCount := 1; ; writeCount += 1 {
 		newEtag, err := cluster.PutIfNoneMatch(ctx, key, body, nil)
 		var unknown *sidecar.BlobUnknownError
 		switch {
 		case err == nil:
-			return body, newEtag, nil
+			return body, &sidecar.BlobInfo{Key: key, Etag: newEtag}, nil
 		case errors.Is(err, sidecar.ErrBlobPrecondition), errors.As(err, &unknown):
 			objectBytes, info, readErr := readGkmObject(ctx, cluster, key, maxByteCount)
 			switch {
 			case readErr == nil:
-				return objectBytes, info.Etag, nil
+				return objectBytes, info, nil
 			case !errors.Is(readErr, sidecar.ErrBlobNotFound) && unknown != nil:
 				// the read could not tell, so the create's outcome stays unknown
-				return nil, "", err
+				return nil, nil, err
 			case !errors.Is(readErr, sidecar.ErrBlobNotFound):
-				return nil, "", readErr
+				return nil, nil, readErr
 			case unknown == nil:
-				return nil, "", errGkmObjectGone
+				return nil, nil, errGkmObjectGone
 			case gkmCreateWriteCount <= writeCount:
-				return nil, "", err
+				return nil, nil, err
 			}
 			// it never landed, and by the settle rule it never will: send the same bytes again
 		default:
-			return nil, "", err
+			return nil, nil, err
 		}
 	}
 }
@@ -250,7 +260,7 @@ func (self *GkmEngine) takeGroupClosing(request *GkmRequest, oldGroupId sidecar.
 			return nil, false
 		}
 		testHookBarrier(BarrierGroupCloseBefore, barrierKey)
-		held, etag, err := createGkmObjectHeld(request.Ctx, request.Cluster, key, form.raw, maxByteCount)
+		held, info, err := createGkmObjectHeld(request.Ctx, request.Cluster, key, form.raw, maxByteCount)
 		testHookBarrier(BarrierGroupCloseAfter, barrierKey)
 		if errors.Is(err, errGkmObjectGone) {
 			continue
@@ -259,17 +269,18 @@ func (self *GkmEngine) takeGroupClosing(request *GkmRequest, oldGroupId sidecar.
 			self.answerStoreError(request, err)
 			return nil, false
 		}
-		standing, err := parseGkmGroupClosing(oldGroupId, held, etag)
+		standing, err := parseGkmGroupClosing(oldGroupId, held, info.Etag)
 		if err != nil {
 			self.answerStoreError(request, err)
 			return nil, false
 		}
+		standing.lastModified = info.LastModified
 		if bytes.Equal(held, form.raw) {
 			return standing, true
 		}
 		if standing.closes() {
-			// another re-form's closing, which stands, is under way, or came to nothing
-			displaceable, ok := self.closingDisplaceable(request, oldGroupId, standing)
+			// another re-form's closing, which stands, is under way, stalled, or came to nothing
+			displaceable, ok := self.closingDisplaceable(request, oldGroupId, standing, form)
 			if !ok {
 				return nil, false
 			}
@@ -302,10 +313,11 @@ func (self *GkmEngine) takeGroupClosing(request *GkmRequest, oldGroupId sidecar.
 	return nil, false
 }
 
-// Whether another re-form's closing of the old group gives way to this one's: void, or with no verdict yet and the
-// old group holding a generation past its form's, which voids it here as its own try's verdict would. false in ok once
-// it has answered.
-func (self *GkmEngine) closingDisplaceable(request *GkmRequest, oldGroupId sidecar.Id, standing *gkmGroupClosing) (displaceable bool, ok bool) {
+// Whether another re-form's closing of the old group gives way to form's: void; or with no verdict yet, either the old
+// group holding a generation past its form's, which voids it here as its own try's verdict would, or its marker older
+// than ReformClosingStallAge while form's generation is at least its own (QD-1188), its re-former having stopped
+// between its marker and its verdict. false in ok once it has answered.
+func (self *GkmEngine) closingDisplaceable(request *GkmRequest, oldGroupId sidecar.Id, standing *gkmGroupClosing, form *gkmFormUpload) (displaceable bool, ok bool) {
 	sealed, found, ok := self.readClosingVerdict(request, oldGroupId, standing.raw)
 	if !ok {
 		return false, false
@@ -317,7 +329,9 @@ func (self *GkmEngine) closingDisplaceable(request *GkmRequest, oldGroupId sidec
 	if !ok {
 		return false, false
 	}
-	if newer == nil {
+	stalled := !standing.lastModified.IsZero() && self.settings.ReformClosingStallAge <= request.Now().Sub(standing.lastModified) &&
+		standing.generation <= form.body.GetGeneration()
+	if newer == nil && !stalled {
 		// under way, and the group has not moved past its form
 		return false, true
 	}
@@ -409,7 +423,9 @@ func (self *GkmEngine) settleGroupClosing(request *GkmRequest, oldGroupId sideca
 
 // Refuses a form whose closing came to void: empties the old group's marker where it still holds the form, opening
 // the group again, and answers 409 with the generation past the form's, which its re-former takes before it forms
-// again. Always false, once it has answered.
+// again. A closing another re-form took over as stalled (QD-1188) may have none past it: then the 409 carries the
+// marker that took over, which its client reads as another re-form standing, and with none standing yet the answer is
+// 503, so a resend finds what came of it. Always false, once it has answered.
 func (self *GkmEngine) refuseVoidClosing(request *GkmRequest, oldGroupId sidecar.Id, form *gkmFormUpload) bool {
 	if !self.openGroup(request, oldGroupId, form.raw) {
 		return false
@@ -418,12 +434,20 @@ func (self *GkmEngine) refuseVoidClosing(request *GkmRequest, oldGroupId sidecar
 	if !ok {
 		return false
 	}
-	if newer == nil {
-		// a closing is voided only beside a generation past its form's, which gen/ keeps for the repo's life
-		self.answerStoreError(request, errors.Join(errGkmStoreFault, errors.New("a void closing with no generation past its form's")))
+	if newer != nil {
+		request.Conflict(newer)
 		return false
 	}
-	request.Conflict(newer)
+	closing, err := self.readGroupClosing(request.Ctx, request.Cluster, oldGroupId)
+	if err != nil {
+		self.answerStoreError(request, err)
+		return false
+	}
+	if closing.closes() && !bytes.Equal(closing.raw, form.raw) {
+		request.Conflict(closing.raw)
+		return false
+	}
+	request.Unavailable()
 	return false
 }
 

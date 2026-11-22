@@ -314,3 +314,49 @@ func TestGkmKeyDeliveryClaimSentAgainIsRefusedByAMarkerLandingAfterItsFirstRead(
 		t.Errorf("the won claim sent again after a rebind, the marker landing after its first read: %d", recorder.Code)
 	}
 }
+
+// QD-1188's takeover racing the request it takes over, which was only slow: held between its marker and its verdict,
+// the stalled request's closing is voided past ReformClosingStallAge by another re-form at its generation, which takes
+// the marker and files its form. The stalled request's seal then loses the verdict's one create and follows the void,
+// refused with the form that took over; nothing is filed for it.
+func TestGkmStalledClosingStillAliveLosesItsVerdictToTheTakeover(t *testing.T) {
+	world := newGkmGroupWorld(t)
+	world.createAndActivate()
+	fixture := world.fixture
+	oldGroupId := world.groupId
+	stalledGroupId := testId("group-stalled")
+	takerGroupId := testId("group-taker")
+	hits, takerCode := 0, 0
+	sidecar.SetTestHooks(&sidecar.TestHooks{Barrier: func(name string, key string) {
+		if name != BarrierGroupClosingBefore || key != gkmBarrierGroupKey(oldGroupId) {
+			return
+		}
+		hits += 1
+		if hits == 1 {
+			// the first re-form's request is between its marker and its verdict, past the bound
+			fixture.clock.Advance(fixture.settings.ReformClosingStallAge)
+			takerCode = world.postReform(takerGroupId, oldGroupId, 1).Code
+		}
+	}})
+	stalled := world.postReform(stalledGroupId, oldGroupId, 1)
+	sidecar.SetTestHooks(nil)
+	if hits < 3 {
+		t.Fatalf("the schedule held %d verdicts", hits)
+	}
+	takerForm := world.reformBytes(takerGroupId, oldGroupId, 1)
+	if takerCode != http.StatusOK {
+		t.Fatalf("the takeover of the stalled closing: %d", takerCode)
+	}
+	if stalled.Code != http.StatusConflict || !bytes.Equal(stalled.Body.Bytes(), takerForm) {
+		t.Errorf("the stalled request after the takeover: %d", stalled.Code)
+	}
+	if verdict, found := world.stored(GkmGroupClosingKey(oldGroupId, sha256Of(world.reformBytes(stalledGroupId, oldGroupId, 1)))); !found || len(verdict) != 0 {
+		t.Errorf("the stalled closing is not void")
+	}
+	if !bytes.Equal(fixture.object("meta-2", GkmFormKey(world.repoId, 2)), takerForm) || fixture.object("meta-2", GkmFormKey(world.repoId, 3)) != nil {
+		t.Errorf("the repo does not hold the one re-form that took over")
+	}
+	if marker, _ := world.stored(GkmGroupClosedKey(oldGroupId)); !bytes.Equal(marker, takerForm) {
+		t.Errorf("the marker is not the takeover's")
+	}
+}
