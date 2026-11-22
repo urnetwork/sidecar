@@ -25,6 +25,8 @@ import (
 const (
 	testMailIngestRoot      = "root.example"
 	testMailIngestRecipient = "bo@acme.root.example"
+	// A group's address, whose repo is a general one.
+	testMailIngestGroupAddress = "team@acme.root.example"
 	// 2026-11-10T12:00:00Z, the sealed receive time of the test deposits.
 	testMailIngestReceiveMillis = uint64(1794312000000)
 	// 2026-12-02T00:00:00Z, their pushes' time, in the next month.
@@ -940,6 +942,247 @@ func TestMailIngestAclAuthorityFailsClosedWithNoState(t *testing.T) {
 			authority.DepositorClass(NewId(), NewId(), nil) != MailDepositorUnknown {
 			t.Error("an authority with no engine answered")
 		}
+	}
+}
+
+// The ACL-backed authority of one device holding state, read at aclTestNow: an AclEngine with state installed, so a
+// deposit pinned at state's pin is judged at that state.
+func mailIngestTestAclAuthority(t *testing.T, sidecarId Id, state *AclState) *MailIngestAclAuthority {
+	t.Helper()
+	engine := NewAclEngine(sidecarId, nil, nil, nil)
+	if err := engine.Install(state, nil); err != nil {
+		t.Fatal(err)
+	}
+	return &MailIngestAclAuthority{Engine: engine, Root: testMailIngestRoot, Clock: fixedClock{at: aclTestNow}}
+}
+
+// A deposit of plaintext by depositorId, which signs it, its push pinned at pin.
+func (self *mailIngestTestWorld) depositAt(depositorId Id, plaintext []byte, pin *bridge.AuthPin) *mailIngestTestDeposit {
+	deposit := self.repo.deposit(depositorId, depositorId, plaintext)
+	deposit.pin = pin
+	return deposit
+}
+
+// A same-network deposit of a message from fromAddress to the group (MAIL-FORMAT.md: version, mail_from and recipients).
+func testMailIngestGroupSend(t *testing.T, fromAddress string, subject string) []byte {
+	t.Helper()
+	message := []byte("From: <" + fromAddress + ">\r\nTo: " + testMailIngestGroupAddress + "\r\nSubject: " + subject + "\r\n\r\nbody\r\n")
+	return testMailIngestPlaintext(t, message, &protocol.MailDeposit{
+		Version: mailFormatVersion, MailFrom: []byte(fromAddress), Recipients: []string{testMailIngestGroupAddress},
+	})
+}
+
+// QD-1181: on a personal network the group's writer, its creating device, ingests as mail what the member's other
+// devices deposit, though each of them also reads the group (QD-1177's grants): a receiver's deposit of internet mail
+// and a same-network send's, each written into the group's m/ and i/ and consumed. Only an owner-bound repo takes read
+// receipts (§11.12). Before, a depositor that read without writing was a receipt depositor wherever it deposited, so
+// the writer skipped both refs and the group held none of its mail. The state is §8's own, folded from what MailRepos
+// filed, and each deposit is judged at its push's pin.
+func TestMailIngestPersonalGroupTakesTheMembersOtherDevicesDepositsAsMail(t *testing.T) {
+	repos := newMailReposTestWorld(t)
+	member, owner := repos.fixture.memberWithDevice(bridge.MemberRole_MEMBER_ROLE_OWNER)
+	receiver := repos.fixture.device(member, NewId().Bytes())
+	sender := repos.fixture.device(member, NewId().Bytes())
+	repos.fixture.configRepo(owner, member)
+	repos.rebuild()
+	groupId := mailReposTestGroupWithMember(t, repos, repos.repos(owner), owner, member)
+	state := repos.state()
+	authority := mailIngestTestAclAuthority(t, owner, state)
+	pin := state.Pin()
+	for _, device := range []Id{receiver, sender} {
+		if rights := aclTestRights(state, device, groupId, AclTokenAudienceEvs); rights != AclEvsRead|AclEvsDeposit {
+			t.Fatalf("another device of the member holds %b on the group", rights)
+		}
+		if class := authority.DepositorClass(groupId, device, pin); class != MailDepositorMail {
+			t.Fatalf("another device of the member, which reads the group, is depositor class %d", class)
+		}
+	}
+	if !authority.Ingests(groupId, owner) {
+		t.Fatal("the group's creating device does not ingest it")
+	}
+
+	world := newMailIngestTestWorld(t)
+	world.repoId = groupId
+	message := testMailIngestMessage("To the group", "body")
+	trailer := testMailIngestTrailer(receiver, message)
+	trailer.Recipients = []string{testMailIngestGroupAddress}
+	received := world.depositAt(receiver, testMailIngestPlaintext(t, message, trailer), pin)
+	sent := world.depositAt(sender, testMailIngestGroupSend(t, testMailIngestRecipient, "lunch"), pin)
+	pass := world.ingest(world.ingestor(func(args *MailIngestArgs) {
+		args.SidecarId = owner
+		args.Authority = authority
+	}))
+	if pass.Ingested != 2 || pass.Consumed != 2 || pass.Left+pass.Pending+pass.Refused != 0 {
+		t.Fatalf("pass %+v", pass)
+	}
+	// the receiver's under its sealed receive time's month, the same-network send's under its push's
+	written := []struct {
+		deposit *mailIngestTestDeposit
+		month   MailYearMonth
+	}{
+		{deposit: received, month: MailYearMonthOf(testMailIngestReceiveMillis)},
+		{deposit: sent, month: MailYearMonthOf(uint64(testMailIngestPushMillis))},
+	}
+	for _, w := range written {
+		if world.store.file(MailMessagePath(w.month, w.deposit.id)) == nil {
+			t.Errorf("no m/ file in %d among %v", w.month, world.store.paths())
+		}
+		entries := world.entries(w.month)
+		if len(entries) != 1 || !bytes.Equal(entries[0].GetId(), w.deposit.id.Bytes()) || entries[0].GetAddress() != testMailIngestGroupAddress {
+			t.Errorf("the i/ rows of %d: %v", w.month, entries)
+		}
+	}
+	depositorIds := []Id{}
+	for _, message := range world.messages {
+		depositorIds = append(depositorIds, message.DepositorId)
+	}
+	slices.SortFunc(depositorIds, Id.Cmp)
+	if !slices.Equal(depositorIds, aclTestSorted([]Id{receiver, sender})) {
+		t.Errorf("messages from %v", depositorIds)
+	}
+	if world.repo.standingCount(receiver) != 0 || world.repo.standingCount(sender) != 0 || len(world.alarms) != 0 {
+		t.Errorf("standing %d and %d, alarms %v", world.repo.standingCount(receiver), world.repo.standingCount(sender), world.alarmKinds())
+	}
+}
+
+// QD-1181 changes nothing in an owner-bound repo: in a mailbox an EvsShare's subject, which reads and does not write,
+// stays a receipt depositor, its ref left unopened and unconsumed for the record, while the owner's consented
+// receiver, which writes, deposits mail the owner's device ingests.
+func TestMailIngestOwnerBoundRepoKeepsItsShareReaderAReceiptDepositor(t *testing.T) {
+	fixture := newAclTestFixture()
+	owner := fixture.member(bridge.MemberRole_MEMBER_ROLE_MEMBER)
+	other := fixture.member(bridge.MemberRole_MEMBER_ROLE_MEMBER)
+	laptop := fixture.invitedDevice(owner)
+	receiver := fixture.device(owner, laptop.Bytes())
+	friend := fixture.invitedDevice(other)
+	mailboxId, mailbox := fixture.repo(protocol.RepoKind_REPO_KIND_MAILBOX, owner)
+	mailbox.ConsentedSidecarIds = [][]byte{laptop.Bytes(), receiver.Bytes()}
+	mailbox.Shares = []*protocol.AclRepoShareRow{{Subject: friend.Bytes(), Signer: laptop.Bytes(), At: fixture.next()}}
+	state := fixture.state(t)
+	if rights := aclTestRights(state, friend, mailboxId, AclTokenAudienceEvs); rights != AclEvsRead|AclEvsDeposit {
+		t.Fatalf("the share's subject holds %b on the mailbox", rights)
+	}
+	authority := mailIngestTestAclAuthority(t, laptop, state)
+	pin := state.Pin()
+	if class := authority.DepositorClass(mailboxId, friend, pin); class != MailDepositorReceipts {
+		t.Fatalf("the share's subject is depositor class %d", class)
+	}
+	if class := authority.DepositorClass(mailboxId, receiver, pin); class != MailDepositorMail {
+		t.Fatalf("the owner's receiver is depositor class %d", class)
+	}
+
+	world := newMailIngestTestWorld(t)
+	world.repoId = mailboxId
+	world.depositAt(friend, []byte("a read receipt batch, which is the record's"), pin)
+	message := testMailIngestMessage("Hello", "body")
+	received := world.depositAt(receiver, testMailIngestPlaintext(t, message, testMailIngestTrailer(receiver, message)), pin)
+	pass := world.ingest(world.ingestor(func(args *MailIngestArgs) {
+		args.SidecarId = laptop
+		args.Authority = authority
+	}))
+	if pass.Ingested != 1 || pass.Consumed != 1 || pass.Left+pass.Pending+pass.Refused != 0 {
+		t.Fatalf("pass %+v", pass)
+	}
+	if world.store.file(MailMessagePath(MailYearMonthOf(testMailIngestReceiveMillis), received.id)) == nil {
+		t.Errorf("no m/ file for the receiver's deposit among %v", world.store.paths())
+	}
+	if world.repo.standingCount(friend) != 1 || len(world.repo.consumes) != 1 || world.repo.consumes[0].depositorId != receiver || len(world.alarms) != 0 {
+		t.Errorf("standing receipts %d, consumes %+v, alarms %v", world.repo.standingCount(friend), world.repo.consumes, world.alarmKinds())
+	}
+}
+
+// On a Team network a group's deposit grant names tag:mail alone (§15.8; QD-102), and QD-1181 leaves its mail indexer,
+// which deposits and does not read, a mail depositor whose deposit the group's writer ingests. The member's other
+// device reads the group and holds no deposit right there: no longer a receipt depositor whose ref ingest skipped, its
+// deposit is consumed unrecorded with an alarm, as that of any depositor with no right there is.
+func TestMailIngestTeamGroupKeepsItsMailIndexerAMailDepositor(t *testing.T) {
+	repos := newMailReposTestWorld(t)
+	member, device := repos.fixture.memberWithDevice(bridge.MemberRole_MEMBER_ROLE_OWNER)
+	other := repos.fixture.device(member, NewId().Bytes())
+	tag := repos.fixture.tag(member)
+	indexer := repos.fixture.agent(member, tag)
+	repos.fixture.repo(protocol.RepoKind_REPO_KIND_TEAM_RECORD, Id{})
+	repos.rebuild()
+	mailRepos := repos.repos(device)
+	mailRepos.mailIndexerTag = func(*AclState) (Id, bool) { return tag, true }
+	groupId := mailReposTestGroupWithMember(t, repos, mailRepos, device, member)
+	state := repos.state()
+	authority := mailIngestTestAclAuthority(t, device, state)
+	pin := state.Pin()
+	if class := authority.DepositorClass(groupId, indexer, pin); class != MailDepositorMail {
+		t.Fatalf("the mail indexer is depositor class %d", class)
+	}
+	if class := authority.DepositorClass(groupId, other, pin); class != MailDepositorNone {
+		t.Fatalf("the member's other device, which only reads the group, is depositor class %d", class)
+	}
+
+	world := newMailIngestTestWorld(t)
+	world.repoId = groupId
+	message := testMailIngestMessage("To the team", "body")
+	trailer := testMailIngestTrailer(indexer, message)
+	trailer.Recipients = []string{testMailIngestGroupAddress}
+	indexed := world.depositAt(indexer, testMailIngestPlaintext(t, message, trailer), pin)
+	world.depositAt(other, testMailIngestGroupSend(t, testMailIngestRecipient, "stray"), pin)
+	pass := world.ingest(world.ingestor(func(args *MailIngestArgs) {
+		args.SidecarId = device
+		args.Authority = authority
+	}))
+	if pass.Ingested != 1 || pass.Refused != 1 || pass.Consumed != 2 || pass.Left+pass.Pending != 0 {
+		t.Fatalf("pass %+v", pass)
+	}
+	if world.store.file(MailMessagePath(MailYearMonthOf(testMailIngestReceiveMillis), indexed.id)) == nil || len(world.messagePaths()) != 1 {
+		t.Errorf("m/ holds %v", world.messagePaths())
+	}
+	if world.repo.standingCount(indexer) != 0 || world.repo.standingCount(other) != 0 {
+		t.Errorf("standing %d and %d", world.repo.standingCount(indexer), world.repo.standingCount(other))
+	}
+	if !slices.Equal(world.alarmKinds(), []MailIngestAlarmKind{MailIngestAlarmDepositor}) || world.alarms[0].DepositorId != other {
+		t.Errorf("alarms %+v", world.alarms)
+	}
+}
+
+// A read_only sidecar's deposit is §16.8's receipt deposit alone (§7.8's exchange), which only an owner-bound repo
+// takes. On a personal network the member's read_only device reads the group and holds deposit there, yet none of its
+// deposits is mail: ingest consumes them unrecorded with an alarm, where QD-1181's rule alone would file them as the
+// member's mail, trusted where it may send as their From. In the member's mailbox, which it reads as a consented
+// device, it stays a receipt depositor.
+func TestMailIngestReadOnlyDeviceDepositsNoMailInAGroup(t *testing.T) {
+	repos := newMailReposTestWorld(t)
+	member, owner := repos.fixture.memberWithDevice(bridge.MemberRole_MEMBER_ROLE_OWNER)
+	pageWorker := repos.fixture.device(member, owner.Bytes())
+	repos.fixture.admission(pageWorker).Row.Capabilities |= uint32(bridge.SidecarCapability_SIDECAR_CAPABILITY_READ_ONLY)
+	repos.fixture.configRepo(owner, member)
+	mailboxId, mailbox := repos.fixture.repo(protocol.RepoKind_REPO_KIND_MAILBOX, member)
+	mailbox.ConsentedSidecarIds = [][]byte{owner.Bytes(), pageWorker.Bytes()}
+	repos.rebuild()
+	groupId := mailReposTestGroupWithMember(t, repos, repos.repos(owner), owner, member)
+	state := repos.state()
+	for _, repoId := range []Id{groupId, mailboxId} {
+		if rights := aclTestRights(state, pageWorker, repoId, AclTokenAudienceEvs); rights != AclEvsRead|AclEvsDeposit {
+			t.Fatalf("the read_only device holds %b on %s", rights, repoId)
+		}
+	}
+	authority := mailIngestTestAclAuthority(t, owner, state)
+	pin := state.Pin()
+	if class := authority.DepositorClass(groupId, pageWorker, pin); class != MailDepositorNone {
+		t.Fatalf("the read_only device is depositor class %d in the group", class)
+	}
+	if class := authority.DepositorClass(mailboxId, pageWorker, pin); class != MailDepositorReceipts {
+		t.Fatalf("the read_only device is depositor class %d in the mailbox", class)
+	}
+
+	world := newMailIngestTestWorld(t)
+	world.repoId = groupId
+	world.depositAt(pageWorker, testMailIngestGroupSend(t, testMailIngestRecipient, "planted"), pin)
+	pass := world.ingest(world.ingestor(func(args *MailIngestArgs) {
+		args.SidecarId = owner
+		args.Authority = authority
+	}))
+	if pass.Ingested != 0 || pass.Refused != 1 || pass.Consumed != 1 || pass.Left != 0 {
+		t.Fatalf("pass %+v", pass)
+	}
+	if len(world.messagePaths()) != 0 || world.repo.standingCount(pageWorker) != 0 || !slices.Equal(world.alarmKinds(), []MailIngestAlarmKind{MailIngestAlarmDepositor}) {
+		t.Errorf("m/ %v, standing %d, alarms %v", world.messagePaths(), world.repo.standingCount(pageWorker), world.alarmKinds())
 	}
 }
 
