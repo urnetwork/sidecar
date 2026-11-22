@@ -98,6 +98,10 @@ type CertsSettings struct {
 	ChainRetention time.Duration
 	// Queued rows one admission pass reads at most. Positive.
 	AdmitBatchCount int
+	// Rows under way (ordering, waiting_dns) one read of the admission pass takes: it reads them all, this
+	// many at a time, before any queued row, so no set gets a second order beside one under way (QD-1189).
+	// Default 100. Positive.
+	UnderWayBatchCount int
 	// What GET /tls/cert-order/<id> tells a device to wait before asking again while its order is under
 	// way. Positive.
 	OrderRetryAfter time.Duration
@@ -203,6 +207,7 @@ func DefaultCertsSettings() *CertsSettings {
 		RowRetention:              30 * 24 * time.Hour,
 		ChainRetention:            30 * 24 * time.Hour,
 		AdmitBatchCount:           100,
+		UnderWayBatchCount:        100,
 		OrderRetryAfter:           30 * time.Second,
 		CallTimeout:               10 * time.Second,
 		OrderResumeCount:          32,
@@ -301,6 +306,7 @@ func (self *CertsSettings) Validate() error {
 		"RowRetention":              int64(self.RowRetention),
 		"ChainRetention":            int64(self.ChainRetention),
 		"AdmitBatchCount":           int64(self.AdmitBatchCount),
+		"UnderWayBatchCount":        int64(self.UnderWayBatchCount),
 		"OrderRetryAfter":           int64(self.OrderRetryAfter),
 		"CallTimeout":               int64(self.CallTimeout),
 		"OrderResumeCount":          int64(self.OrderResumeCount),

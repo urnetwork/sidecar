@@ -87,6 +87,9 @@ const (
 	CertsWaitNameHold CertsWaitReason = "name_hold"
 	// One of its names waits out its failure backoff at the first CA it may use, and no other CA is open.
 	CertsWaitNameBackoff CertsWaitReason = "name_backoff"
+	// Another order of its identifier set is under way at a CA, whose challenges hold the set's
+	// _acme-challenge names (QD-1189); a renewal waits on it too.
+	CertsWaitSetUnderWay CertsWaitReason = "set_under_way"
 	// Its CSR no longer parses, or its predecessor's CA is unknown: it fails rather than waits.
 	CertsWaitUnusable CertsWaitReason = "unusable"
 )
