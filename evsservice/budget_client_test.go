@@ -1212,6 +1212,8 @@ type budgetHeldReadRedis struct {
 	releaseOnce sync.Once
 }
 
+// The first allowance read once armed waits for release whatever its ctx, then answers as the fake does, as
+// every other read does at once.
 func (self *budgetHeldReadRedis) HashGet(ctx context.Context, key string, field string) ([]byte, bool, error) {
 	if field == writeBudgetAllowanceField && self.armed.CompareAndSwap(true, false) {
 		close(self.entered)
@@ -1220,6 +1222,7 @@ func (self *budgetHeldReadRedis) HashGet(ctx context.Context, key string, field 
 	return self.Redis.HashGet(ctx, key, field)
 }
 
+// Lets the held read go. Safe more than once.
 func (self *budgetHeldReadRedis) releaseRead() {
 	self.releaseOnce.Do(func() {
 		close(self.release)
