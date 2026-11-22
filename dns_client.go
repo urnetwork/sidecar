@@ -6,8 +6,10 @@
 //
 //   - Zone answers GET /dns/zone: the label, the alias, the version and the caller's view of the RRsets, cached
 //     until a DNS_ZONE_CHANGED hint above its version or ResyncInterval since the fetch (§6.8's hourly resync,
-//     dns_hint.go), and fed to DNS-M2-01's NetworkLabelTable where one is given. TLS-M5-18 and TLS-M6-05 read the
-//     label and host readiness here.
+//     dns_hint.go), and fed to DNS-M2-01's NetworkLabelTable where one is given: Sidecar.NetworkLabels gives it the
+//     network's own, in the network's dns/ directory (§12.5's label row, read from GET /dns/zone from M5), and the
+//     dns component a host adds attaches it and the hints on each client generation (dns_component.go). TLS-M5-18
+//     and TLS-M6-05 read the label and host readiness here.
 //   - SetRecord and DeleteRecord write one RRset under a standing grant. SetRecordEffect and DeleteRecordEffect are
 //     §16.5's dns_set and dns_delete as SidecarEffects that Sidecar.Authorize runs (plan-MCP-effect-seam): with an
 //     empty effect key a standing grant's write, else the decision the use spends, from the context, with its action
@@ -65,6 +67,10 @@ type DnsServiceTokenFunction func(ctx context.Context, resource string, scopes [
 
 // An answer that does not hold the route's form. Never read as a refusal.
 var ErrDnsClientReply = errors.New("dns client: reply invalid")
+
+// The network's dns/ directory and its file class (§5.9's <component>/): the label table's file (Sidecar.NetworkLabels)
+// and the zone watch's (DnsWatchArgs.Store) sit there, and it is the dns component's own store (dns_component.go).
+const dnsDirectoryName = "dns"
 
 // What NewDnsClient takes.
 type DnsClientArgs struct {
@@ -135,6 +141,13 @@ func (self *DnsClient) FeedLabels(labels *NetworkLabelTable) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	self.labels = labels
+}
+
+// The table each fetch feeds, nil for none (FeedLabels).
+func (self *DnsClient) Labels() *NetworkLabelTable {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.labels
 }
 
 // One request to the block: its answer's body for a 2xx, a *DnsApiError for a refusal, or the transport's error.
@@ -430,8 +443,9 @@ func RegisterDnsEffectLookups(sidecar *Sidecar, client *DnsClient) func() {
 }
 
 // The network's DnsClient, built once over the sidecar's settings, transport and ServiceToken: nil with an error
-// before the network is known or with no dns url. Its label table and hint subscription are the daemon's to attach
-// (FeedLabels, SubscribeHints).
+// before the network is known or with no dns url. Its label table is NetworkLabels', and the dns component a host adds
+// at its composition, as ur daemon and the sdk's local Sidecar do, attaches the table and the hint subscription on
+// each client generation (NewDnsComponent).
 func (self *Sidecar) Dns() (*DnsClient, error) {
 	self.dns.stateLock.Lock()
 	defer self.dns.stateLock.Unlock()
@@ -461,6 +475,34 @@ func (self *Sidecar) Dns() (*DnsClient, error) {
 
 // A DnsClient is what the Sidecar holds as its own (sidecar_types.go's sidecarDns).
 func (self *DnsClient) isSidecarDnsClient() {}
+
+// The network's label table (DNS-M2-01; §12.5's label row) in its dns/ directory, the one its DnsClient feeds: opened
+// at the first call and fed to the client, so every zone fetched from then on writes this network's row, and every
+// later call answers the same table, or the one a host fed the client in its place (FeedLabels). Its rows outlive a
+// restart, the retiring aliases among them that a writer's network: label read takes (acl_writer_subjects.go).
+// ErrSidecarStoreLocked before enrollment and while the keychain is locked; a call that fails opens nothing, and a
+// later one tries again.
+func (self *Sidecar) NetworkLabels() (*NetworkLabelTable, error) {
+	client, err := self.Dns()
+	if err != nil {
+		return nil, err
+	}
+	self.dns.labelsLock.Lock()
+	defer self.dns.labelsLock.Unlock()
+	if labels := client.Labels(); labels != nil {
+		return labels, nil
+	}
+	store, err := self.LocalStore().Directory(dnsDirectoryName, dnsDirectoryName)
+	if err != nil {
+		return nil, err
+	}
+	labels, err := OpenNetworkLabelTable(store)
+	if err != nil {
+		return nil, err
+	}
+	client.FeedLabels(labels)
+	return labels, nil
+}
 
 // Attaches watch, whose last pass SidecarStatus reports as "zone watch degraded"; nil detaches it.
 func (self *Sidecar) SetDnsWatch(watch *DnsWatch) {
