@@ -9,7 +9,8 @@
 //
 // The issuer commits each contract to its destination's certificate (Net.CommitSequenceCertificates), so the peer
 // checks the certificate the restarted daemon presents, as it does on a platform. Real connect clients keep real
-// timers, so the bounds are real time, each one a broken run's, never a sleep.
+// timers, so the bounds are real time, each one a broken run's, never a sleep: a context's deadline for an open or a
+// call, and a real timer for a stream read, since a stream's own deadline runs on the Net's fake clock.
 //
 // In the first test the restarted daemon opens the stream, as the restarted edge does in the edge's test, so its own
 // first sends start the pair's new TLS session. In the waiting tests the restarted daemon only listens or answers, and
@@ -149,14 +150,17 @@ func restartIdentityOpen(t *testing.T, ctx context.Context, opener *SubprotocolS
 	}
 }
 
-// Reads exactly len(want) bytes from stream by deadline and fails unless they are want.
+// Reads exactly len(want) bytes from stream by deadline in real time and fails unless they are want. The stream's own
+// read deadline would run on its dispatcher's clock, the Net's fake one, which no real wait moves: a read set that way
+// once waited twelve minutes for bytes the test had written to a replayed stream's incoming (testStreamReadBy).
 func restartIdentityRead(t *testing.T, stream *sidecar.SubprotocolStream, deadline time.Time, want string, what string) {
 	t.Helper()
-	if err := stream.SetReadDeadline(deadline); err != nil {
-		t.Fatal(err)
-	}
 	got := make([]byte, len(want))
-	if _, err := io.ReadFull(stream, got); err != nil || string(got) != want {
+	err := testStreamReadBy(t, stream, deadline, what, func() error {
+		_, err := io.ReadFull(stream, got)
+		return err
+	})
+	if err != nil || string(got) != want {
 		t.Fatalf("%s read %q, %v", what, got, err)
 	}
 }

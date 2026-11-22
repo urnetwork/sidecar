@@ -645,3 +645,86 @@ func TestSocketListenCloseUnlistens(t *testing.T) {
 		t.Errorf("a pending accept: %v", err)
 	}
 }
+
+// A daemon restarted under its kept generation listens on its names again, each under a fresh listen_id (§9.5: random
+// per Listen), while connect may replay to it the open of a stream from before the restart with the held bytes behind
+// it (QD-1176), that open's ticket unexpired. The ticket names a listen the restarted listener does not hold, so step 2
+// refuses it with retry before step 4's replay set is read; nothing reaches AcceptSocket; and the opener, whose open was
+// answered before the restart, resets the stream, as it would on a replay's invalid (stream_state.go's receiveReject).
+// This holds for a sidecar's open of an application name and an edge's open of a tls/ name alike. The restarted
+// listener's replay set, in memory and empty at its start, is never consulted, and its own tickets are admitted. Were a
+// listener ever to keep its listen_id across a restart, this would fail: its replay set would then have to be kept as
+// well (QD-1198).
+func TestSocketListenRefusesAnOpenReplayedFromBeforeARestart(t *testing.T) {
+	type restartCase struct {
+		address string
+		// an edge's open, with no Hello, on a tls/ name
+		edge bool
+	}
+	for _, c := range []restartCase{{address: "db/primary"}, {address: "tls/443/blog", edge: true}} {
+		// the daemon before and after its restart: two components on the same identity, the second holding nothing of
+		// the first, the service's keys and clock the same
+		before := newTestListenFixture(t)
+		after := newTestListenFixture(t)
+		for _, fixture := range []*testListenFixture{before, after} {
+			fixture.component.listenAction = func(ctx context.Context, generation *socketGeneration, name string, settings *SocketListenSettings) (*SidecarAction, error) {
+				return &SidecarAction{Kind: SidecarActionListen, Canonical: []byte(name), Risk: SidecarRiskNormal}, nil
+			}
+		}
+		request := func(fixture *testListenFixture, ticketBytes []byte) *socketAdmissionRequest {
+			if c.edge {
+				return &socketAdmissionRequest{ticketBytes: ticketBytes, sourceId: fixture.dialerId, edge: true}
+			}
+			return fixture.request(ticketBytes)
+		}
+		mutate := func(ticket *protocol.SocketTicket) {
+			if c.edge {
+				ticket.DialerNetworkId = before.service.urnetworkEdge.Bytes()
+			}
+		}
+
+		listener := before.listen(t, c.address, nil)
+		ticketBytes := before.ticket(t, listener, mutate)
+		dialerEnd, err := before.open(listener, request(before, ticketBytes))
+		if err != nil {
+			t.Fatalf("%s before the restart: %v", c.address, err)
+		}
+		if _, err := dialerEnd.Write([]byte("held")); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := listener.AcceptSocket(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		if seen := listener.admission.seenCount(); seen != 1 {
+			t.Fatalf("%s: the listener before the restart holds %d ticket ids", c.address, seen)
+		}
+
+		restarted := after.listen(t, c.address, nil)
+		if restarted.listenId == listener.listenId {
+			t.Fatalf("%s: the restarted listener kept the listen_id", c.address)
+		}
+		// the service never repeats a ticket_id
+		after.ticketSeq = before.ticketSeq
+		// connect's replay: the same open with the same ticket bytes, which the held write would follow
+		_, err = after.open(restarted, request(after, ticketBytes))
+		if code := testRejectCode(err); code != protocol.StreamRejectCode_SR_RETRY {
+			t.Errorf("%s: the replayed open answered %v, %v", c.address, code, err)
+		}
+		if queued, inflight := testListenerQueued(restarted), restarted.inflightCount(); queued != 0 || inflight != 0 {
+			t.Errorf("%s: the replayed open reached the listener: %d queued, %d in flight", c.address, queued, inflight)
+		}
+		if seen := restarted.admission.seenCount(); seen != 0 {
+			t.Errorf("%s: the replayed open reached the replay set, which holds %d ticket ids", c.address, seen)
+		}
+
+		// the restarted listener takes its own tickets
+		if _, err := after.open(restarted, request(after, after.ticket(t, restarted, mutate))); err != nil {
+			t.Errorf("%s: a ticket for the restarted listener: %v", c.address, err)
+		}
+		if _, err := restarted.AcceptSocket(t.Context()); err != nil {
+			t.Errorf("%s: %v", c.address, err)
+		}
+		listener.Close()
+		restarted.Close()
+	}
+}
