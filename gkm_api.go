@@ -21,8 +21,19 @@
 // answer, no answer from gkm at all, and is ErrGkmNoAnswer, never a *GkmError (QD-876, as QD-758 has evs's client
 // read one): its callers take it as they take a transport error, so gkm is unreachable for KF7, and a write's
 // outcome is unknown and read back, never judged refused. A read retries a 429 or 503 after its Retry-After; a
-// write never retries here, since each flow resolves its own unknown outcome by rereading (§10.5's Rotate, §10.6's
-// late wraps).
+// write never retries those here, since each flow resolves its own unknown outcome by rereading (§10.5's Rotate,
+// §10.6's late wraps).
+//
+// A 403 to a batch carrying a stronger role on the call's repo than the call needs goes once more, read or write,
+// under that repo's one scope at the role the call needs (QD-1179). gkm's guard asks its newest state for the
+// strongest right the token holds of those the route takes, with each weaker right of its role that the route takes,
+// and honors them only whole (§10.6's checks row; owner decision 563). So while this client's state and gkm's
+// disagree on the role, as in the moments after an ACL save narrows or widens it, gkm refuses the batch's stronger
+// scope though the client holds the right the call needs; the call's own role alone, which evs's client always
+// presents (evsCallScopes), is honored. Every 403 of a route that goes again is answered before gkm writes anything,
+// so a write goes again with its same bytes. A call refused for a right the client lacks is refused twice. A call
+// whose batch carries its own role there, or that presented its repo's one scope already, goes once, and so does an
+// admin route, whose role nothing outranks.
 //
 // Safe for concurrent use.
 
@@ -243,25 +254,43 @@ func (self *GkmApi) SetRepoScopes(scopes []GkmRepoScope) {
 	self.repoIdRoles = repoIdRoles
 }
 
+// What one call presents: its token's scopes, and those of the one retry a 403 to them takes.
+type gkmCallScopes struct {
+	scopes []string
+	// The call's repo scope alone at the role the call needs, where scopes is a batch carrying a stronger role on
+	// that repo (QD-1179); nil where the batch carries the call's own role there, where scopes is that one scope
+	// already, and for a call on no repo.
+	narrowedScopes []string
+}
+
 // The scopes a call on repoId needing role presents: the batch holding the repo when its role covers role, else that
-// one scope alone. A call on no repo, repoId nil, presents the first batch holding an r, rw or admin scope.
-func (self *GkmApi) scopesFor(repoId *Id, role string) ([]string, error) {
+// one scope alone, and that one scope as the narrowed retry's where the batch's role outranks role. A call on no repo,
+// repoId nil, presents the first batch holding an r, rw or admin scope, and has no narrowed retry.
+func (self *GkmApi) scopesFor(repoId *Id, role string) (gkmCallScopes, error) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	if repoId == nil {
 		for _, scopes := range self.batchScopes {
 			for _, scope := range scopes {
 				if !strings.HasSuffix(scope, ":"+GkmScopeRoleDeposit) {
-					return scopes, nil
+					return gkmCallScopes{scopes: scopes}, nil
 				}
 			}
 		}
-		return nil, ErrGkmNoScope
+		return gkmCallScopes{}, ErrGkmNoScope
 	}
-	if batch, ok := self.repoIdBatches[*repoId]; ok && gkmRoleCovers(self.repoIdRoles[*repoId], role) {
-		return self.batchScopes[batch], nil
+	repoScopes := []string{GkmRepoScope{RepoId: *repoId, Role: role}.scope()}
+	batch, ok := self.repoIdBatches[*repoId]
+	batchRole := self.repoIdRoles[*repoId]
+	if !ok || !gkmRoleCovers(batchRole, role) {
+		return gkmCallScopes{scopes: repoScopes}, nil
 	}
-	return []string{GkmRepoScope{RepoId: *repoId, Role: role}.scope()}, nil
+	callScopes := gkmCallScopes{scopes: self.batchScopes[batch]}
+	if batchRole != role {
+		// covers and is not role: a stronger role, which gkm refuses whole while its state does not give it
+		callScopes.narrowedScopes = repoScopes
+	}
+	return callScopes, nil
 }
 
 // Every batch holding an r, rw or admin scope, for a route gkm answers per token.
@@ -289,8 +318,8 @@ type gkmCall struct {
 	method string
 	// After the service url, opaque ids only (I-13), with its query.
 	path string
-	// The token's scopes.
-	scopes []string
+	// The token's scopes, and the narrowed retry's.
+	scopes gkmCallScopes
 	// The body: a message's bytes, a Signed's, or none.
 	body []byte
 	// Whether a 429 or 503 goes again (reads only).
@@ -306,23 +335,34 @@ func gkmBody(message proto.Message) ([]byte, error) {
 	return body, nil
 }
 
-// Sends call, retrying as call.retry allows, and answers a success's status and body, at most ReplyMaxByteCount, or
-// an error for any other answer. Only gkm's own 429 or 503 goes again: no answer, the lb's 502 or 504 among them,
-// comes back at once, as a transport error does.
+// Sends call and answers a success's status and body, at most ReplyMaxByteCount, or an error for any other answer.
+// gkm's own 429 or 503 goes again as call.retry allows. Its 403 to a batch with narrowed scopes goes again once, at
+// once, under those scopes, which the rest of the call presents; ReadRetryCount does not count that retry. No answer,
+// the lb's 502 or 504 among them, comes back at once, as a transport error does, and so does an error minting the
+// narrowed token, which leaves the call as a failed exchange leaves any other.
 func (self *GkmApi) do(ctx context.Context, call *gkmCall) (int, []byte, error) {
-	attempts := 1
-	if call.retry {
-		attempts += self.settings.ReadRetryCount
-	}
-	for attempt := 0; ; attempt += 1 {
-		status, body, err := self.doOnce(ctx, call)
+	scopes := call.scopes.scopes
+	narrowedScopes := call.scopes.narrowedScopes
+	retryCount := 0
+	for {
+		status, body, err := self.doOnce(ctx, call, scopes)
 		if err == nil {
 			return status, body, nil
 		}
 		gkmError, ok := GkmErrorOf(err)
-		if !ok || !call.retry || !gkmError.RefusesNothing() || attempts <= attempt+1 {
+		if !ok {
 			return 0, nil, err
 		}
+		if gkmError.Status == http.StatusForbidden && narrowedScopes != nil {
+			// QD-1179: the batch's stronger role on the call's repo, which gkm's state does not give yet or any
+			// longer; the role the call needs alone may be honored
+			scopes, narrowedScopes = narrowedScopes, nil
+			continue
+		}
+		if !call.retry || !gkmError.RefusesNothing() || self.settings.ReadRetryCount <= retryCount {
+			return 0, nil, err
+		}
+		retryCount += 1
 		wait := gkmError.RetryAfter
 		if wait <= 0 {
 			wait = self.settings.ReadRetryWait
@@ -338,9 +378,9 @@ func (self *GkmApi) do(ctx context.Context, call *gkmCall) (int, []byte, error) 
 	}
 }
 
-// One attempt.
-func (self *GkmApi) doOnce(ctx context.Context, call *gkmCall) (int, []byte, error) {
-	token, err := self.serviceToken(ctx, self.baseUrl, call.scopes)
+// One attempt, presenting a token of scopes.
+func (self *GkmApi) doOnce(ctx context.Context, call *gkmCall, scopes []string) (int, []byte, error) {
+	token, err := self.serviceToken(ctx, self.baseUrl, scopes)
 	if err != nil {
 		return 0, nil, fmt.Errorf("gkm %s: no service token: %w", call.route, err)
 	}
@@ -962,7 +1002,8 @@ func (self *GkmApi) Welcomes(ctx context.Context) ([]*protocol.GkmWelcomeEntry, 
 	seenPointers := map[string]bool{}
 	for _, scopes := range batches {
 		reply := &protocol.GkmWelcomesReply{}
-		call := &gkmCall{route: "GET /gkm/welcomes", method: http.MethodGet, path: "/gkm/welcomes", scopes: scopes, retry: true}
+		// no narrowed retry: gkm leaves out a group whose repo's scope its state does not honor, refusing nothing
+		call :=&gkmCall{route: "GET /gkm/welcomes", method: http.MethodGet, path: "/gkm/welcomes", scopes: gkmCallScopes{scopes: scopes}, retry: true}
 		if err := self.callMessage(ctx, call, reply); err != nil {
 			return nil, err
 		}
@@ -998,7 +1039,7 @@ func (self *GkmApi) DropKeys(ctx context.Context, repoId Id, since uint64) (*pro
 // GET /gkm/recovery/<member_id>/wraps, as a device of that member, or with recoveryScope as its unadmitted client
 // under recovery:<member_id>, which reaches nothing else (§7.8, §7.9).
 func (self *GkmApi) RecoveryWraps(ctx context.Context, memberId Id, recoveryScope bool) (*protocol.GkmRecoveryWrapsReply, error) {
-	scopes := []string{gkmRecoveryScopePrefix + memberId.String()}
+	scopes := gkmCallScopes{scopes: []string{gkmRecoveryScopePrefix + memberId.String()}}
 	if !recoveryScope {
 		var err error
 		scopes, err = self.scopesFor(nil, GkmScopeRoleRead)
