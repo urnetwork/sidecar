@@ -4,8 +4,8 @@
 // peers the network's verified state names, on an authority held in memory as sidecartest.FakeAuthority
 // holds one. An unadmitted, revoked or parked peer is refused, each beside a twin that passes; a key that
 // is not the admission's is refused and alarmed; a late admission passes after one catch-up; an M1 pin
-// that disagrees is resolved for the admission; a sidecar not itself admitted takes no peer; and a
-// revocation closes a Hello that stood.
+// that disagrees is resolved for the admission; a sidecar not itself admitted takes no peer; a
+// revocation closes a Hello that stood; and a call a peer revoked meanwhile answers fails at once.
 
 package sidecar
 
@@ -16,6 +16,7 @@ import (
 	"errors"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -583,6 +584,49 @@ func TestRevocationClosesAStandingHello(t *testing.T) {
 	}
 	if _, ok := b.subprotocol.PeerIdentity(Id(a.clientId)); ok {
 		t.Errorf("a revoked peer's identity is still served")
+	}
+}
+
+// A revocation of the callee lands while a call to it is in flight. The callee, whose own view never sees it,
+// answers, and the caller's gate closes on that answer and drops it, as it closes on any frame from a peer the state
+// no longer admits. The call hears of it rather than waiting out its deadline: the fresh Hello it runs then meets the
+// state's refusal, and the call fails UNAUTHENTICATED at once.
+func TestCallAnsweredByAPeerRevokedMeanwhileFailsAtOnce(t *testing.T) {
+	pair, authority, aIdentity, bIdentity := newTestAdmissionPair(t)
+	a := pair.add(aIdentity, nil)
+	// b's own view, which never sees its revocation, so b keeps answering
+	b := pair.addViewing(bIdentity, newTestAdmissionView(aIdentity, bIdentity))
+	if _, err := b.subprotocol.Handle(testCallType, func(ctx context.Context, request *SubprotocolRequest) ([]byte, error) {
+		return []byte("answered"), nil
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.subprotocol.EnsureHello(t.Context(), Id(b.clientId)); err != nil {
+		t.Fatal(err)
+	}
+	revoked := atomic.Bool{}
+	a.setDeliver(func(from *testRpcSide, to *testRpcSide, envelope *protocol.Envelope) *protocol.Envelope {
+		if from == a && envelope.Type == uint32(testCallType) && !revoked.Swap(true) {
+			authority.edit(b.sidecarId, func(row *bridge.SidecarRow) { row.RevokedAt = row.GetAdmittedAt() + 1 })
+		}
+		return envelope
+	})
+	// on the fake clocks the call's deadline never comes, so a call that waits on the dropped answer never returns
+	result := testAwait(t, testStartCall(a, t.Context(), b, testCallType, []byte("ask"), nil), "call")
+	if code, _ := SubprotocolErrorCode(result.err); code != protocol.ErrorCode_ERR_UNAUTHENTICATED {
+		t.Fatalf("%q, %v", result.body, result.err)
+	}
+	if answers := testSentOfType(b, testCallType+1); len(answers) != 1 {
+		t.Errorf("b answered %d times", len(answers))
+	}
+	if calls := testSentOfType(a, testCallType); len(calls) != 1 {
+		t.Errorf("a sent the call %d times, want once, its fresh Hello refused", len(calls))
+	}
+	if hellos := testSentOfType(a, protocol.MessageType_HELLO); len(hellos) != 2 {
+		t.Errorf("%d Hellos, want the first and the fresh one the state refused", len(hellos))
+	}
+	if a.subprotocol.peerVerified(b.clientId) {
+		t.Error("a revoked peer's Hello stands")
 	}
 }
 

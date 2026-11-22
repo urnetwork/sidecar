@@ -13,6 +13,19 @@
 // with CallOptions.RequestId. A Required peer with no session surfaces as UNAVAILABLE with reason
 // encryption.
 //
+// A call meets the identity gate at both ends (§6.4). A peer that holds no Hello with this side refuses it
+// UNAUTHENTICATED. And this side's gate refuses the peer's answer when the Hello the call went under ended
+// while the call was in flight: a send's ack error, HelloCacheTimeout, a change of C15's key, or connect's word
+// that the peer lost its session ends it (QD-290, QD-1185). That answer is dropped unread, since a response is
+// not answered, so the gate tells the call at once rather than leaving it to wait out its deadline. A peer
+// restarted under its kept generation shows both orders: connect ends this side's Hello when the restarted
+// peer nacks, and replays the Hello this side sent before the restart ahead of the call. When the replay opens
+// the restarted gate first, the peer admits the call and answers it, and this side's gate refuses the answer.
+// Either refusal is met once with a fresh Hello and the same request again, under the same request_id and within
+// the same deadline. A mutating handler that did run answers that request from what it kept, and runs nothing
+// twice (§6.6). The fresh Hello replaces only the Hello the call went under, never a newer one another call's
+// Hello verified meanwhile, which the peer's gate holds too. A second refusal is the call's UNAUTHENTICATED.
+//
 // A call to an edge (CallOptions.Edge; §6.4, owner decision 624), as §14.5's SmtpProof and SmtpHandshake
 // to smtpedge, runs no Hello and no HeadCheck, since an edge shows no binding and drops every Hello
 // (stream_edge.go): the signed ur/ ticket its dialer verified is the edge's identity, the basis its stream
@@ -56,7 +69,8 @@ var (
 const SubprotocolReasonEncryption = "encryption"
 
 // A call's failure with an ErrorCode: the peer's Error, or this side's own DEADLINE_EXCEEDED,
-// UNAVAILABLE, CANCELLED, INVALID_ARGUMENT or TOO_LARGE. A handler may return one to answer with it.
+// UNAVAILABLE, CANCELLED, INVALID_ARGUMENT, TOO_LARGE or UNAUTHENTICATED. A handler may return one to answer
+// with it.
 type SubprotocolError struct {
 	Code    protocol.ErrorCode
 	Message string
@@ -123,13 +137,19 @@ type rpcResponse struct {
 // One pending request's mailbox, which takes its first response.
 type rpcPending struct {
 	responses chan *rpcResponse
+	// a call's: word that this side's gate refused the peer's answer to it (noteAnswerRefused). nil for a Hello's,
+	// whose HelloResult and Error pass the gate closed (helloExchange).
+	answerRefused chan struct{}
 }
 
-// Registers a request to clientId under requestId; remove takes it away. A second request under one
-// id to one peer is refused, since its responses could not be told apart.
+// Registers a request to clientId under requestId, whose answer is resultType; remove takes it away. A
+// second request under one id to one peer is refused, since its responses could not be told apart.
 func (self *Subprotocol) addPending(clientId connect.Id, requestId uint64, resultType protocol.MessageType) (*rpcPending, func(), error) {
 	key := rpcPendingKey{peerId: clientId, requestId: requestId}
 	pending := &rpcPending{responses: make(chan *rpcResponse, 1)}
+	if resultType != protocol.MessageType_HELLO_RESULT {
+		pending.answerRefused = make(chan struct{}, 1)
+	}
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	if self.closed {
@@ -174,12 +194,42 @@ func (self *Subprotocol) dispatchResponse(ctx context.Context, message *subproto
 	}
 }
 
+// Tells the call pending on sourceId under requestId that this side's gate refused a frame of the peer's answer to
+// it, which was dropped unread: the Hello the call went under ended while it was in flight. Runs on connect's
+// receive path and on the source's worker, so it takes the state lock for the lookup alone and never blocks. A
+// frame no call waits on is left as the gate counted it.
+func (self *Subprotocol) noteAnswerRefused(sourceId connect.Id, requestId uint64) {
+	var pending *rpcPending
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		pending = self.pendingRequests[rpcPendingKey{peerId: sourceId, requestId: requestId}]
+	}()
+	if pending == nil || pending.answerRefused == nil {
+		return
+	}
+	select {
+	case pending.answerRefused <- struct{}{}:
+	default:
+		// a chunk of the same answer told it already
+	}
+}
+
 // Waits for pending's response, at most timeout on this side's clock, ctx, or the Subprotocol's end. A
-// timeout is DEADLINE_EXCEEDED with requestId, which the caller retries with.
+// timeout is DEADLINE_EXCEEDED with requestId, which the caller retries with. An answer this side's gate
+// refused ends the wait as UNAUTHENTICATED with requestId, which Call meets with a fresh Hello, unless a
+// response the gate took came beside it.
 func (self *Subprotocol) awaitPending(ctx context.Context, pending *rpcPending, timeout time.Duration, requestId uint64) (*rpcResponse, error) {
 	select {
 	case response := <-pending.responses:
 		return response, nil
+	case <-pending.answerRefused:
+		select {
+		case response := <-pending.responses:
+			return response, nil
+		default:
+		}
+		return nil, &SubprotocolError{Code: protocol.ErrorCode_ERR_UNAUTHENTICATED, RequestId: requestId}
 	case <-self.clock.After(timeout):
 		return nil, &SubprotocolError{Code: protocol.ErrorCode_ERR_DEADLINE_EXCEEDED, RequestId: requestId}
 	case <-ctx.Done():
@@ -323,8 +373,9 @@ func (self *Subprotocol) Call(ctx context.Context, clientId Id, messageType prot
 		return nil, &SubprotocolError{Code: protocol.ErrorCode_ERR_FAILED_PRECONDITION, Message: errStreamPeerKind.Error(), RequestId: requestId}
 	}
 
-	// a peer that refused at its gate holds no Hello with this side any more: one fresh Hello, then the
-	// same request again, which no handler can have run
+	// a peer that refused at its gate holds no Hello with this side any more, and an answer this side's gate
+	// refused came after the Hello the call went under ended: either way one fresh Hello, then the same request
+	// again, which a mutating handler that ran answers from what it kept (see the file header)
 	for attempt := 0; ; attempt += 1 {
 		if err := self.ensurePeerVerifiedWithin(ctx, peerId, deadline.Sub(self.clock.Now())); err != nil {
 			var subprotocolError *SubprotocolError
@@ -340,11 +391,13 @@ func (self *Subprotocol) Call(ctx context.Context, clientId Id, messageType prot
 			}
 			return nil, &SubprotocolError{Code: protocol.ErrorCode_ERR_UNAUTHENTICATED, RequestId: requestId}
 		}
+		// the Hello this attempt goes under, which a refusal ends, leaving a newer one standing
+		helloSerial := self.standingHelloSerial(peerId)
 		// the first RPC with a peer each HeadCheckInterval starts a HeadCheck beside it (rpc_headcheck_rounds.go)
 		self.headCheckOnExchange(peerId, messageType)
 		response, err := self.callOnce(ctx, peerId, messageType, body, requestId, deadline, false)
 		if code, ok := SubprotocolErrorCode(err); ok && code == protocol.ErrorCode_ERR_UNAUTHENTICATED && attempt == 0 {
-			self.forgetPeer(peerId)
+			self.forgetPeerHello(peerId, helloSerial)
 			continue
 		}
 		return response, err
