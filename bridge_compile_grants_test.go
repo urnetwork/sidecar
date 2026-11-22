@@ -16,6 +16,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"net/netip"
 	"slices"
 	"strings"
 	"testing"
@@ -366,6 +367,52 @@ func TestCompileGivesNothingForAnActivatedRouteGrantWhoseDetailDoesNotOpen(t *te
 			}
 		}
 	}
+}
+
+// The desktop's compiled states under a route grant of the laptop's crosses into the external test, as
+// ForwardProviderFixture does, so the root keeps its device-independent build: the state while the grant stands and
+// after its GrantRevoke, at a clock standing at each state's time, the flows the grant's detail admits and those it
+// does not.
+type RouteGrantHostFixture struct {
+	Granted, Revoked           *bridge.BridgeState
+	GrantedClock, RevokedClock Clock
+	NetworkId, SubjectId       Id
+	HostId                     Id
+	Admitted, Refused          []RouteGrantFlow
+}
+
+// One flow of the laptop's to a destination behind the desktop.
+type RouteGrantFlow struct {
+	// The IP protocol number.
+	Protocol uint32
+	To       netip.AddrPort
+}
+
+// Compiles RouteGrantHostFixture's states: a grant naming 192.168.7.0/25 at the desktop's tcp 22, under which the
+// desktop serves 192.168.7.0/24 and 192.168.9.0/24.
+func CompileActivatedRouteGrantHost(t *testing.T) RouteGrantHostFixture {
+	net := newTestBridgeGrantNet(t)
+	grantId := net.activate("host", net.routeGrantAction(&protocol.CanonicalActionDetail{
+		Cidrs: []string{"192.168.7.0/25"}, GrantDst: []string{aclTestDst(net.peer.sidecarId) + ":tcp:22"},
+	}, net.timeMs+60*60*1000, nil))
+	flow := func(ipProtocol uint32, to string) RouteGrantFlow {
+		return RouteGrantFlow{Protocol: ipProtocol, To: netip.MustParseAddrPort(to)}
+	}
+	fixture := RouteGrantHostFixture{
+		NetworkId: net.networkId, SubjectId: net.host.sidecarId, HostId: net.peer.sidecarId,
+		Admitted: []RouteGrantFlow{flow(aclIpProtocolTcp, "192.168.7.10:22"), flow(aclIpProtocolTcp, "192.168.7.127:22")},
+		Refused: []RouteGrantFlow{
+			// another port, another protocol, the served route's part the grant does not name, and another route
+			flow(aclIpProtocolTcp, "192.168.7.10:23"), flow(aclIpProtocolUdp, "192.168.7.10:22"),
+			flow(aclIpProtocolTcp, "192.168.7.130:22"), flow(aclIpProtocolTcp, "192.168.9.10:22"),
+		},
+	}
+	compiled, _ := testBridgeCompile(t, net.grantViewOf(net.log, true), net.localOf(net.peer))
+	fixture.Granted, fixture.GrantedClock = compiled.State, &identityTestClock{current: time.UnixMilli(net.log.State().TimeMs())}
+	net.mustPost(net.host, bridge.SignedType_SIGNED_GRANT_REVOKE, &bridge.GrantRevoke{Header: net.header(), GrantId: grantId})
+	compiled, _ = testBridgeCompile(t, net.grantViewOf(net.log, true), net.localOf(net.peer))
+	fixture.Revoked, fixture.RevokedClock = compiled.State, &identityTestClock{current: time.UnixMilli(net.log.State().TimeMs())}
+	return fixture
 }
 
 // A port-limited activated grant whose action the state does not hold, as rows a base carries name it and no head's
