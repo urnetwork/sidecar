@@ -204,8 +204,10 @@ func TestTlsPublishAnswersThePublish(t *testing.T) {
 	if out.Expires != testTlsToolNow.Add(24*time.Hour).Format(time.RFC3339) {
 		t.Errorf("expires %q", out.Expires)
 	}
+	// the end as the agent named it, so the call made again asks the same end and spends a decision on it
 	settings := env.network.published[0]
-	if settings.Host != "db" || settings.Port != 5671 || settings.Target != "127.0.0.1:5432" || !settings.Tcp || settings.Audience != "link" || settings.Expires != 2*time.Hour {
+	if settings.Host != "db" || settings.Port != 5671 || settings.Target != "127.0.0.1:5432" || !settings.Tcp || settings.Audience != "link" ||
+		settings.Expires != 0 || !settings.ExpiresAt.Equal(expires) {
 		t.Errorf("settings %+v", settings)
 	}
 	if len(settings.Alpn) != 1 || settings.Alpn[0] != "postgresql" {

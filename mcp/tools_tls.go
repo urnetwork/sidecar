@@ -150,13 +150,12 @@ func addTlsTools(catalog *McpCatalog, now func() time.Time) {
 		}
 		if in.Expires != "" {
 			expires, err := time.Parse(time.RFC3339, in.Expires)
-			if err != nil {
+			if err != nil || !now().Before(expires) {
 				return nil, errMcpTlsExpires
 			}
-			settings.Expires = expires.Sub(now())
-			if settings.Expires <= 0 {
-				return nil, errMcpTlsExpires
-			}
+			// the end as the agent named it, so the same call made again after a person approves asks the same end and
+			// spends the decision, where a time from now would ask a later one each call
+			settings.ExpiresAt = expires
 		}
 		publisher, ok := call.Network.(mcpTlsPublisher)
 		if !ok {

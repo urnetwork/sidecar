@@ -12,6 +12,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"net/netip"
 	"os"
 	"slices"
@@ -19,6 +20,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
@@ -61,6 +64,12 @@ type tlsPublishTestBackend struct {
 	revoked          [][]byte
 	revokeOrigins    []SidecarActOrigin
 	lastStoredAction *StoredCanonicalAction
+	// no requests rule takes the publish, and whether a standing grant covers it then
+	noRule        bool
+	standingCover bool
+	// what priorGrant answers
+	priorGrantId []byte
+	priorStands  bool
 }
 
 func newTlsPublishTestBackend(t *testing.T) *tlsPublishTestBackend {
@@ -97,7 +106,10 @@ func (self *tlsPublishTestBackend) grantAction(ctx context.Context, base *protoc
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	self.grantCount += 1
-	action := base
+	if self.noRule {
+		return nil, fmt.Errorf("%w: %w", ErrAclGrantFile, ErrAclRequestNoMatch)
+	}
+	action := proto.Clone(base).(*protocol.CanonicalAction)
 	action.Subject = request.Subject.Bytes()
 	action.GrantDst = slices.Clone(request.GrantDst)
 	action.GrantAllow = slices.Clone(request.GrantAllow)
@@ -123,6 +135,19 @@ func (self *tlsPublishTestEffect) Run(ctx context.Context, effectKey []byte) ([]
 
 func (self *tlsPublishTestBackend) grantEffect(action *StoredCanonicalAction) SidecarEffect {
 	return &tlsPublishTestEffect{}
+}
+
+func (self *tlsPublishTestBackend) standingGrant(action *StoredCanonicalAction, now time.Time) bool {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.lastStoredAction = action
+	return self.standingCover
+}
+
+func (self *tlsPublishTestBackend) priorGrant(action *StoredCanonicalAction, detail *SidecarActionDetail, runId *Id, agentId *Id, now time.Time) ([]byte, bool) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return slices.Clone(self.priorGrantId), self.priorStands
 }
 
 func (self *tlsPublishTestBackend) authorize(ctx context.Context, action *SidecarAction, decision *bridge.Signed) error {

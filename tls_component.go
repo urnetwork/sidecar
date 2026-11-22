@@ -309,7 +309,7 @@ func NewTlsComponent(ctx context.Context, args *TlsComponentArgs) (*TlsComponent
 		listeners:      map[*TlsListener]bool{},
 	}
 	if args.sidecar != nil {
-		self.publisher = newTlsPublisher(&sidecarTlsPublishBackend{sidecar: args.sidecar, args: args.Publish}, args.Manager.Settings)
+		self.publisher = newTlsPublisher(&sidecarTlsPublishBackend{sidecar: args.sidecar, args: args.Publish, settings: args.Manager.Settings}, args.Manager.Settings)
 	}
 	if args.CtWatch != nil {
 		watchArgs := *args.CtWatch

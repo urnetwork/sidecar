@@ -9,9 +9,17 @@
 //     audience, app_mode and a raw link's pin, with the grant {dst: [dns:<host>, sock:tls/<port>/<host>], allow:
 //     [publish, listen], expires} filled from the requests rule that takes it. With no active approved grant the gate
 //     files the request and answers *ApprovalPendingError, which a caller shows as `ur approve <id>` and waits on; the
-//     same call made again after the decision spends it.
+//     same call made again after the decision spends it, since the action is kept as its request was filed until its
+//     expiry (GrantActionKeeper, acl_grant_keep.go), where a fresh build would ask a later expiry and file anew. A kept
+//     action whose decision's grant has since ended is asked afresh. A publish no requests rule takes names no rule and
+//     no expiry: a standing grant that gives its audience, app mode and pin passes it, a standing name of §8.5's, and
+//     with none it is refused, filing nothing. A use that came to not_done refuses the publish, and an uncertain one
+//     answers unavailable, which the same publish asked again completes under its key (AU4).
 //  3. The device's certificate is got if missing, the target is probed (tls_probe.go), and the listener and its front
-//     start: Listen("tls/<port>/<host>") with the ALPN ids and the app mode, then §13.7's front on it.
+//     start: Listen("tls/<port>/<host>") with the ALPN ids and the app mode, then §13.7's front on it. The listen asks
+//     its own grant at the gate, which the publish's grant covers, so it carries no decision of the publish's; and the
+//     publish's use is done only once this device's engine holds the grant it activated (confirmGrant), so the listen
+//     right after it finds the grant rather than being refused or filing a request of its own.
 //  4. The result is the URL, the expiry, the audience and "passthrough: key on this device"; for a raw link the path
 //     of the client-certificate file.
 //
@@ -100,15 +108,19 @@ type TlsPublishSettings struct {
 	// --proxy-protocol: the visitor's address reaches the service, as a PROXY v2 header on raw and a Forwarded
 	// header on http.
 	ProxyProtocol bool
-	// --expires: how long the grant asked for lasts. 0 takes the rule's default.
+	// --expires: how long the grant asked for lasts. 0 takes the rule's default, or ExpiresAt.
 	Expires time.Duration
+	// The grant's end as a time, which a tool's call names (RFC 3339), so the call made again asks the same end where
+	// a time from now would ask a later one each call. Zero takes Expires; both set is refused.
+	ExpiresAt time.Time
 	// The run and agent a decision binds, and the agent's own words and asked risk, for a tool's call. Nil and
 	// empty from a person's terminal.
 	RunId     *Id
 	AgentId   *Id
 	Summary   string
 	AskedRisk SidecarRisk
-	// The ApprovalDecision, when the caller holds one. nil lets the gate find a grant or a recorded decision.
+	// The publish's ApprovalDecision, when the caller holds one. nil lets the gate find a grant or a recorded
+	// decision. The publish's listen spends none: it asks its own grant, which the publish's covers.
 	Decision *bridge.Signed
 }
 
@@ -142,9 +154,13 @@ type tlsPublishBackend interface {
 	names(ctx context.Context) (*TlsCertNames, error)
 	// §7.7's client names at the newest verified state. An error when no verified state is there to read.
 	clientNames() ([]string, error)
-	// AclGrantFiler.Action and Effect.
+	// AclGrantFiler.Action and Effect, the effect confirming its grant where the publish's listen reads it.
 	grantAction(ctx context.Context, base *protocol.CanonicalAction, request *AclGrantRequest, now time.Time) (*StoredCanonicalAction, error)
 	grantEffect(action *StoredCanonicalAction) SidecarEffect
+	// AclEngine.ActiveGrant for this sidecar: whether a standing grant covers an action no requests rule takes.
+	standingGrant(action *StoredCanonicalAction, now time.Time) bool
+	// AclGrantFiler.priorGrant: the grant a decision on action already activated, and whether it still stands.
+	priorGrant(action *StoredCanonicalAction, detail *SidecarActionDetail, runId *Id, agentId *Id, now time.Time) ([]byte, bool)
 	// Sidecar.Authorize.
 	authorize(ctx context.Context, action *SidecarAction, decision *bridge.Signed) error
 	// Sidecar.EnsureTlsCertificate.
@@ -167,16 +183,33 @@ type tlsPublishEndpoint interface {
 	Close() error
 }
 
-// One live publish.
+// One live publish, and the key its action is kept by.
 type tlsPublish struct {
 	result   *TlsPublishResult
 	endpoint tlsPublishEndpoint
+	key      tlsPublishActionKey
+}
+
+// What a publish's action is kept by (GrantActionKeeper): the name, audience and app mode its action names, the local
+// port and the ALPN ids its request binds beside it, and the end it asks as its caller gave it, so the same publish
+// asked again finds the action its request was filed with and one asking another end asks afresh.
+type tlsPublishActionKey struct {
+	name      string
+	audience  protocol.AclAudience
+	appMode   protocol.AclAppMode
+	localPort uint16
+	// the ids in order, each ended by a NUL
+	alpn        string
+	expires     time.Duration
+	expiresAtMs int64
 }
 
 // The publishes of one network on this device.
 type tlsPublisher struct {
 	backend  tlsPublishBackend
 	settings *SidecarTlsSettings
+	// each publish's action as its request was filed (the file header's step 2)
+	kept *GrantActionKeeper[tlsPublishActionKey]
 
 	stateLock sync.Mutex
 	// by registration name; nil while a publish of the name is on its way
@@ -188,7 +221,7 @@ func newTlsPublisher(backend tlsPublishBackend, settings *SidecarTlsSettings) *t
 	if settings == nil {
 		settings = DefaultSidecarTlsSettings()
 	}
-	return &tlsPublisher{backend: backend, settings: settings, publishes: map[string]*tlsPublish{}}
+	return &tlsPublisher{backend: backend, settings: settings, kept: NewGrantActionKeeper[tlsPublishActionKey](), publishes: map[string]*tlsPublish{}}
 }
 
 // A publish's settings checked and resolved, before anything is filed.
@@ -276,7 +309,28 @@ func newTlsPublishPlan(settings *TlsPublishSettings) (*tlsPublishPlan, error) {
 	if settings.Expires < 0 {
 		return nil, fmt.Errorf("%w: --expires is a time from now", ErrTlsPublishInvalid)
 	}
+	if settings.Expires != 0 && !settings.ExpiresAt.IsZero() {
+		return nil, fmt.Errorf("%w: an expiry is a time from now or an end, not both", ErrTlsPublishInvalid)
+	}
 	return plan, nil
+}
+
+// The key the plan's action is kept by, as settings ask it.
+func (self *tlsPublishPlan) actionKey(settings *TlsPublishSettings) tlsPublishActionKey {
+	key := tlsPublishActionKey{
+		name:      self.name,
+		audience:  self.audience,
+		appMode:   self.appMode,
+		localPort: self.localAddress.Port(),
+		expires:   settings.Expires,
+	}
+	for _, id := range self.alpn {
+		key.alpn += id + "\x00"
+	}
+	if !settings.ExpiresAt.IsZero() {
+		key.expiresAtMs = settings.ExpiresAt.UnixMilli()
+	}
+	return key
 }
 
 // The names visitors reach host by: <host>.<label>.<root>, or <label>.<root> for @, and each alias's.
@@ -439,6 +493,9 @@ func (self *tlsPublisher) publish(ctx context.Context, settings *TlsPublishSetti
 		self.settle(plan.name, publish)
 	}()
 	now := self.backend.now()
+	if !settings.ExpiresAt.IsZero() && !now.Before(settings.ExpiresAt) {
+		return nil, fmt.Errorf("%w: an end that is not ahead", ErrTlsPublishInvalid)
+	}
 
 	// step 2
 	base := &protocol.CanonicalAction{
@@ -457,7 +514,10 @@ func (self *tlsPublisher) publish(ctx context.Context, settings *TlsPublishSetti
 		}
 		clientCertificateFile = tlsPublishClientCertificateFile(directory, plan)
 		lifetime := settings.Expires
-		if lifetime == 0 {
+		if !settings.ExpiresAt.IsZero() {
+			lifetime = settings.ExpiresAt.Sub(now)
+		}
+		if lifetime <= 0 {
 			lifetime = self.settings.PublishLinkCertificateLifetime
 		}
 		base.LinkSpkiSha256, err = tlsPublishClientCertificate(clientCertificateFile, serverNames[0], now, lifetime)
@@ -470,10 +530,16 @@ func (self *tlsPublisher) publish(ctx context.Context, settings *TlsPublishSetti
 		GrantDst:   []string{"dns:" + plan.host, "sock:" + plan.name},
 		GrantAllow: []string{"publish", "listen"},
 	}
-	if 0 < settings.Expires {
+	switch {
+	case !settings.ExpiresAt.IsZero():
+		request.ExpiresMs = settings.ExpiresAt.UnixMilli()
+	case 0 < settings.Expires:
 		request.ExpiresMs = now.Add(settings.Expires).UnixMilli()
 	}
-	stored, err := self.backend.grantAction(ctx, base, request, now)
+	// the port and the ALPN ids ride the request, so the approval is of this target and these protocols
+	detail := &SidecarActionDetail{LocalPort: uint32(plan.localAddress.Port()), Alpn: slices.Clone(plan.alpn)}
+	key := plan.actionKey(settings)
+	stored, effect, err := self.grantAction(ctx, key, base, request, detail, settings, now)
 	if err != nil {
 		return nil, err
 	}
@@ -481,12 +547,15 @@ func (self *tlsPublisher) publish(ctx context.Context, settings *TlsPublishSetti
 	if err != nil {
 		return nil, err
 	}
-	// the port and the ALPN ids ride the request, so the approval is of this target and these protocols
-	action.Detail = &SidecarActionDetail{LocalPort: uint32(plan.localAddress.Port()), Alpn: slices.Clone(plan.alpn)}
+	action.Detail = detail
 	action.Summary = settings.Summary
-	action.Effect = self.backend.grantEffect(stored)
+	action.Effect = effect
 	if err := self.backend.authorize(ctx, action, settings.Decision); err != nil {
 		// pending, with the request's id, or refused
+		return nil, err
+	}
+	// the gate ran the publish's effect: its grant stands where its listen reads it, or the use says why not
+	if err := tlsPublishOutcomeError(action.Outcome); err != nil {
 		return nil, err
 	}
 	result := &TlsPublishResult{
@@ -499,6 +568,13 @@ func (self *tlsPublisher) publish(ctx context.Context, settings *TlsPublishSetti
 	}
 	if action.Outcome != nil {
 		result.GrantId = slices.Clone(action.Outcome.EffectRef)
+	}
+	if len(result.GrantId) == 0 && len(stored.Action.GetRuleId()) != 0 {
+		// passed under the grant its own decision activated, which the gate takes as standing (§16.6's step 2), as
+		// the same publish asked again after an uncertain use does: the publish names that grant, so its end revokes it
+		if grantId, stands := self.backend.priorGrant(stored, detail, settings.RunId, settings.AgentId, now); stands {
+			result.GrantId = grantId
+		}
 	}
 	if expiresMs := stored.Action.GetExpiresMillis(); expiresMs != 0 {
 		result.Expires = time.UnixMilli(expiresMs).UTC()
@@ -535,18 +611,69 @@ func (self *tlsPublisher) publish(ctx context.Context, settings *TlsPublishSetti
 		ProxyProtocol: proxyV2,
 		Forwarded:     forwarded,
 	}, &SocketListenSettings{
-		Alpn:     slices.Clone(plan.alpn),
-		AppMode:  plan.appModeText,
-		Decision: settings.Decision,
+		// the listen asks its own grant, which the publish's covers, and spends none of the publish's decisions
+		Alpn:    slices.Clone(plan.alpn),
+		AppMode: plan.appModeText,
 	})
 	if err != nil {
 		return nil, err
 	}
 
 	// step 4
-	publish = &tlsPublish{result: result, endpoint: endpoint}
+	publish = &tlsPublish{result: result, endpoint: endpoint, key: key}
 	copied := *result
 	return &copied, nil
+}
+
+// Step 2's action and its effect (the file header): the grant's fields filled from the requests rule that takes the
+// publish, kept under key as its request was filed while its expiry is ahead and its decision's grant has not ended,
+// under the grant component's effect; or, where no requests rule takes the publish, naming no rule and no expiry, under
+// the standing effect, while a standing grant covers it. With neither the publish is refused, filing nothing.
+func (self *tlsPublisher) grantAction(ctx context.Context, key tlsPublishActionKey, base *protocol.CanonicalAction, request *AclGrantRequest,
+	detail *SidecarActionDetail, settings *TlsPublishSettings, now time.Time) (*StoredCanonicalAction, SidecarEffect, error) {
+	fresh, err := self.backend.grantAction(ctx, base, request, now)
+	switch {
+	case err == nil:
+		stored := self.kept.Keep(key, fresh, now, func(kept *StoredCanonicalAction) bool {
+			grantId, stands := self.backend.priorGrant(kept, detail, settings.RunId, settings.AgentId, now)
+			return grantId != nil && !stands
+		})
+		return stored, self.backend.grantEffect(stored), nil
+	case !errors.Is(err, ErrAclRequestNoMatch):
+		return nil, nil, err
+	}
+	// no requests rule takes it, so no decision could activate its grant: a standing grant alone passes it, a standing
+	// name, and with none nothing is filed
+	standing, buildErr := aclStandingGrantAction(base, request)
+	if buildErr != nil {
+		return nil, nil, buildErr
+	}
+	if !self.backend.standingGrant(standing, now) {
+		return nil, nil, err
+	}
+	return standing, aclStandingGrantEffect{}, nil
+}
+
+// What a publish the gate passed answers for its outcome, as a listen's does (socket_listen.go's
+// socketListenOutcomeError): nil once its grant stands, a standing grant's included; refused where its use proved the
+// grant did not activate; unavailable while that is uncertain, its GrantActivate's answer lost or the grant not yet in
+// this device's engine, which the same publish asked again completes under its use's key (AU4). A gate that set no
+// outcome passed it with nothing more to say.
+func tlsPublishOutcomeError(outcome *SidecarOutcome) error {
+	if outcome == nil {
+		return nil
+	}
+	switch outcome.State {
+	case ApprovalOutcomeDone:
+		return nil
+	case ApprovalOutcomeNotDone:
+		return fmt.Errorf("%w: the publish's grant did not activate: %w", ErrAclGrantFile, errors.Join(outcome.Err, ErrSidecarEffectNotDone))
+	}
+	err := fmt.Errorf("%w: the publish's grant is not confirmed in this device's engine yet: ask again", ErrTlsPublishUnavailable)
+	if outcome.Err != nil {
+		err = fmt.Errorf("%w: %w", err, outcome.Err)
+	}
+	return err
 }
 
 // Ends the publish of host on port: the listener and its front at once, then the grant its approval activated, and a
@@ -575,6 +702,8 @@ func (self *tlsPublisher) unpublish(ctx context.Context, host string, port int, 
 	if publish.result.ClientCertificateFile != "" {
 		os.Remove(publish.result.ClientCertificateFile)
 	}
+	// the publish asked again after its end asks afresh, whatever the engine holds of the revocation yet
+	self.kept.Forget(publish.key)
 	if len(publish.result.GrantId) == 0 {
 		// a standing grant is the config's, and stays
 		return closeErr
@@ -630,12 +759,26 @@ type TlsPublishArgs struct {
 	ClientCertificateDirectory string
 	// Records a probe's refusal. nil records none.
 	RecordProbeRefusal func(refusal TlsProbeRefusal)
+	// The network's verified config, which a publish's GrantActivate is waited on in before its listen (confirmGrant):
+	// a ConfigClient, whose follower installs each state in Grants' engine before WaitFor answers. nil reads the
+	// Sidecar's standing config follower's client.
+	Config TlsPublishConfig
 }
+
+// What a publish waits on for its grant to reach this device's engine: TEAM-M2-10's ConfigClient is one.
+type TlsPublishConfig interface {
+	// The state at or past n, once the follow reaches it.
+	WaitFor(ctx context.Context, n uint64) (*ConfigState, error)
+}
+
+var _ TlsPublishConfig = (*ConfigClient)(nil)
 
 // The Sidecar's parts as a publish runs on them.
 type sidecarTlsPublishBackend struct {
 	sidecar *Sidecar
 	args    *TlsPublishArgs
+	// the tls component's; nil takes the defaults
+	settings *SidecarTlsSettings
 }
 
 // A listener and the front on it.
@@ -679,9 +822,88 @@ func (self *sidecarTlsPublishBackend) grantAction(ctx context.Context, base *pro
 	return self.args.Grants.Action(ctx, base, request, now)
 }
 
-// See tlsPublishBackend. Called only after grantAction answered, so the filer is there.
+// See tlsPublishBackend: the grant component, whose GrantActivate is confirmed in this device's engine before its use
+// is done (confirmGrant). Called only after grantAction answered, so the filer is there.
 func (self *sidecarTlsPublishBackend) grantEffect(action *StoredCanonicalAction) SidecarEffect {
-	return self.args.Grants.Effect(action)
+	return &aclGrantEffect{filer: self.args.Grants, action: action, confirm: self.confirmGrant}
+}
+
+// See tlsPublishBackend: AclEngine.ActiveGrant on the grant filer's engine, for this sidecar. False with no filer or
+// before enrollment.
+func (self *sidecarTlsPublishBackend) standingGrant(action *StoredCanonicalAction, now time.Time) bool {
+	if self.args == nil || self.args.Grants == nil || self.args.Grants.engine == nil {
+		return false
+	}
+	_, sidecarId, err := self.identity()
+	if err != nil {
+		return false
+	}
+	return self.args.Grants.engine.ActiveGrant(action, sidecarId, now)
+}
+
+// See tlsPublishBackend: AclGrantFiler.priorGrant. None with no filer.
+func (self *sidecarTlsPublishBackend) priorGrant(action *StoredCanonicalAction, detail *SidecarActionDetail, runId *Id, agentId *Id, now time.Time) ([]byte, bool) {
+	if self.args == nil || self.args.Grants == nil {
+		return nil, false
+	}
+	return self.args.Grants.priorGrant(action, detail, runId, agentId, now)
+}
+
+// §13.10 step 3 listens right after step 2's grant activates, and that listen's own action and the gate's standing
+// grants read this device's engine (socket_listen.go), which installs a state only as the device's config follows the
+// log: until the engine holds the grant, the listen finds none and is refused, or files a request of its own. So the
+// publish's use is done only once the engine holds the grant in force, as a forward's is once its receipt is on the
+// verified log (BridgeFiler.confirmForwardGrant): the network's config is waited on, within PublishGrantLandTimeout,
+// until it reaches the receipt's position, whose follower installs each state in the engine before that position shows
+// (acl_follow.go). A grant the engine does not hold by then answers uncertain, which the same publish asked again
+// completes under its use's key, and no listen runs meanwhile.
+func (self *sidecarTlsPublishBackend) confirmGrant(ctx context.Context, pin *bridge.AuthPin, signed []byte, grantId []byte) error {
+	engine := self.args.Grants.engine
+	stands := func() bool {
+		state := engine.State()
+		if state == nil {
+			return false
+		}
+		rule := state.grantRule(grantId)
+		return rule != nil && rule.activeAt(self.now().UnixMilli())
+	}
+	if stands() {
+		return nil
+	}
+	if pin == nil || pin.GetVersion() == 0 {
+		return fmt.Errorf("%w: no receipt for the publish's grant", ErrTlsPublishUnavailable)
+	}
+	config := self.config()
+	if config == nil {
+		return fmt.Errorf("%w: no verified config to wait on for the publish's grant", ErrTlsPublishUnavailable)
+	}
+	settings := self.settings
+	if settings == nil {
+		settings = DefaultSidecarTlsSettings()
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, settings.PublishGrantLandTimeout)
+	defer cancel()
+	if _, err := config.WaitFor(waitCtx, pin.GetVersion()); err != nil {
+		return fmt.Errorf("%w: waiting for the publish's grant: %w", ErrTlsPublishUnavailable, err)
+	}
+	if !stands() {
+		return fmt.Errorf("%w: the publish's grant is not in force in this device's engine", ErrTlsPublishUnavailable)
+	}
+	return nil
+}
+
+// The config a publish's grant is waited on in: TlsPublishArgs.Config, else the Sidecar's standing config follower's
+// client. Nil for none.
+func (self *sidecarTlsPublishBackend) config() TlsPublishConfig {
+	if self.args != nil && self.args.Config != nil {
+		return self.args.Config
+	}
+	if follower := self.sidecar.ConfigFollower(); follower != nil {
+		if _, client := follower.StandingPolicy(); client != nil {
+			return client
+		}
+	}
+	return nil
 }
 
 // See tlsPublishBackend: §5.4's gate.
