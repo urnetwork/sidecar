@@ -2,14 +2,27 @@
 // is spent, an ephemeral sidecar goes to GTS first, a repeated set gets five at LE and one per 34 h, a
 // CA's Retry-After holds every capped order while a renewal goes on, failed authorizations hold a name,
 // a waiting order spends nothing, and the pass resumes from its cursor.
+//
+// A set has one order under way at a time (QD-1189): its next order waits, a renewal too, asking no CA and
+// spending nothing, until that one ends, and then goes as a repeated set when it issued or as a new one
+// when it failed; other networks' sets go in the same pass; a pass reads every row under way, a batch at
+// a time, and one that cannot read them admits nothing. On Pebble, two devices of each of two networks
+// make one CA order, spend one unit of the budget and write their name once a network in the first pass,
+// and the other two issue as repeated sets in the next.
 package certsservice_test
 
 import (
+	"context"
+	"errors"
+	"math/big"
+	"slices"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/certsservice"
+	"github.com/urnetwork/sidecar/sidecartest"
 )
 
 // A new set goes to LE under its profile and spends one unit there; once LE's budget is spent, the next
@@ -287,5 +300,300 @@ func TestOrderStatusAndCertsAnswerTheirCallerOnly(t *testing.T) {
 	result, err := certs.service.Certs(certs.ctx, device.networkId)
 	if err != nil || len(result.Certs) != 1 || result.Certs[0].CertId != id || result.Certs[0].Csr != nil || len(result.Certs[0].Attestation) == 0 {
 		t.Fatalf("certs %+v, %v", result, err)
+	}
+}
+
+// Two devices of one network queued together: a pass admits the first, which spends the set's one unit of
+// LE's budget, and leaves the second waiting on its set, with no time, asking for nothing, for as long as
+// the first is under way; once the first has issued, the second goes as a repeated set and spends none.
+func TestSetHasOneOrderUnderWayAtATime(t *testing.T) {
+	certs := newTestCerts(t, nil)
+	first := newTestDevice(t, "one-set")
+	firstId := certs.accept(first)
+	secondId := certs.accept(newTestDeviceOf(t, first.networkId, first.identifierSet))
+	report := certs.admit()
+	if len(report.Admitted) != 1 || report.Admitted[0].Cert.CertId != firstId || report.Admitted[0].Kind != certsservice.CertsOrderNewSet {
+		t.Fatalf("the first pass: %+v", report)
+	}
+	if len(report.Waiting) != 1 || report.Waiting[0].CertId != secondId || report.Waiting[0].Reason != certsservice.CertsWaitSetUnderWay ||
+		!report.Waiting[0].Until.IsZero() {
+		t.Fatalf("the second waits %+v", report.Waiting)
+	}
+	// still under way at the next pass, which holds the second again
+	report = certs.admit()
+	if len(report.Admitted) != 0 || len(report.Waiting) != 1 || report.Waiting[0].Reason != certsservice.CertsWaitSetUnderWay {
+		t.Fatalf("the next pass: %+v", report)
+	}
+	if row := certs.row(secondId); row.State != sidecar.TlsCertStateQueued || row.Ca != "" {
+		t.Fatalf("the waiting row %+v", row)
+	}
+	if members := testBudgetMembers(t, certs); len(members) != 1 || members[firstId.String()] == 0 {
+		t.Fatalf("LE's budget %v", members)
+	}
+	certs.issue(firstId, "5e7a01")
+	report = certs.admit()
+	if len(report.Admitted) != 1 || report.Admitted[0].Cert.CertId != secondId || report.Admitted[0].Kind != certsservice.CertsOrderRepeatSet ||
+		report.Admitted[0].Ca != certsservice.CertsCaLetsEncrypt {
+		t.Fatalf("once the first issued: %+v", report)
+	}
+	if members := testBudgetMembers(t, certs); len(members) != 1 {
+		t.Fatalf("the repeated set spent budget: %v", members)
+	}
+}
+
+// Other networks' sets are not held by one another: a pass admits the first device of each, and holds
+// only the second devices of their sets.
+func TestSetsOfOtherNetworksOrderInOnePass(t *testing.T) {
+	certs := newTestCerts(t, nil)
+	firstIds := []sidecar.Id{}
+	secondIds := []sidecar.Id{}
+	for _, label := range []string{"sets-a", "sets-b", "sets-c"} {
+		first := newTestDevice(t, label)
+		firstIds = append(firstIds, certs.accept(first))
+		secondIds = append(secondIds, certs.accept(newTestDeviceOf(t, first.networkId, first.identifierSet)))
+	}
+	report := certs.admit()
+	admittedIds := []sidecar.Id{}
+	for _, admission := range report.Admitted {
+		admittedIds = append(admittedIds, admission.Cert.CertId)
+	}
+	if !slices.Equal(admittedIds, firstIds) {
+		t.Fatalf("admitted %v, want %v", admittedIds, firstIds)
+	}
+	reasons := testWaitReasons(report.Waiting)
+	for _, secondId := range secondIds {
+		if reasons[secondId] != certsservice.CertsWaitSetUnderWay {
+			t.Fatalf("waits %+v", reasons)
+		}
+	}
+	if members := testBudgetMembers(t, certs); len(members) != len(firstIds) {
+		t.Fatalf("LE's budget %v", members)
+	}
+}
+
+// A pass reads every row under way, a batch at a time: the held set's row is the last of three under way
+// with a batch of one, and still holds its set's next row, after four reads.
+func TestRowsUnderWayAreReadWholeABatchAtATime(t *testing.T) {
+	settings := testSettings()
+	settings.UnderWayBatchCount = 1
+	certs := newTestCerts(t, settings)
+	for _, label := range []string{"batch-a", "batch-b"} {
+		certs.accept(newTestDevice(t, label))
+	}
+	held := newTestDevice(t, "batch-held")
+	certs.accept(held)
+	// left under way, as a pass that died leaves its orders
+	if report := certs.admit(); len(report.Admitted) != 3 {
+		t.Fatalf("admitted %+v", report)
+	}
+	nextId := certs.accept(newTestDeviceOf(t, held.networkId, held.identifierSet))
+	readCount := certs.store.OpCounts()["ListInStates"]
+	report := certs.admit()
+	if len(report.Admitted) != 0 || testWaitReasons(report.Waiting)[nextId] != certsservice.CertsWaitSetUnderWay {
+		t.Fatalf("report %+v", report)
+	}
+	if reads := certs.store.OpCounts()["ListInStates"] - readCount; reads != 4 {
+		t.Fatalf("%d reads of the rows under way", reads)
+	}
+}
+
+// A pass that cannot read the rows under way admits nothing and spends nothing: the row stays queued for
+// the next, which admits it.
+func TestAdmissionThatCannotReadTheRowsUnderWayAdmitsNothing(t *testing.T) {
+	certs := newTestCerts(t, nil)
+	certId := certs.accept(newTestDevice(t, "unread"))
+	if _, err := certs.host.Redis.Faults().Add(&sidecartest.FaultPlan{Op: sidecartest.FaultOpHost, KeyPrefix: "certs.ListInStates", Result: sidecartest.FailBeforeApply}); err != nil {
+		t.Fatal(err)
+	}
+	report, err := certs.service.Admit(certs.ctx, sidecar.Id{})
+	if err == nil || len(report.Admitted) != 0 || len(report.Waiting) != 0 || certs.row(certId).State != sidecar.TlsCertStateQueued {
+		t.Fatalf("report %+v, %v", report, err)
+	}
+	if members := testBudgetMembers(t, certs); len(members) != 0 {
+		t.Fatalf("LE's budget %v", members)
+	}
+	if report := certs.admit(); len(report.Admitted) != 1 || report.Admitted[0].Cert.CertId != certId {
+		t.Fatalf("the next pass: %+v", report)
+	}
+}
+
+// A set whose order fails frees its next: while the first order queues again after a young failure, the
+// next pass admits it again and the second still waits; once it fails past its give-up age, the second
+// goes, as a new set, since no certificate came of the first, and spends a unit of its own.
+func TestSetWhoseFirstOrderFailsFreesTheNext(t *testing.T) {
+	settings := testSettings()
+	run := newTestRun(t, settings)
+	first := run.device("first-fails")
+	firstId := run.accept(first)
+	secondId := run.accept(newTestDeviceOf(t, first.networkId, first.identifierSet))
+	run.acme.script(errors.New("the CA answered 500"))
+	report := run.runOrders()
+	if !slices.Equal(report.Admitted, []sidecar.Id{firstId}) || !slices.Equal(report.Requeued, []sidecar.Id{firstId}) ||
+		testWaitReasons(report.Waiting)[secondId] != certsservice.CertsWaitSetUnderWay {
+		t.Fatalf("the first pass: %+v", report)
+	}
+	// past LE's order lifetime, the first order's next failure ends it
+	run.clock.Advance(settings.Cas[certsservice.CertsCaLetsEncrypt].OrderLifetime)
+	run.acme.script(errors.New("the CA called the order invalid"))
+	report = run.runOrders()
+	if !slices.Equal(report.Admitted, []sidecar.Id{firstId}) || !slices.Equal(report.Failed, []sidecar.Id{firstId}) ||
+		testWaitReasons(report.Waiting)[secondId] != certsservice.CertsWaitSetUnderWay {
+		t.Fatalf("the second pass: %+v", report)
+	}
+	report = run.runOrders()
+	if !slices.Equal(report.Admitted, []sidecar.Id{secondId}) || !slices.Equal(report.Issued, []sidecar.Id{secondId}) {
+		t.Fatalf("the third pass: %+v", report)
+	}
+	if orders := run.acme.ordered(); len(orders) != 3 {
+		t.Fatalf("%d orders", len(orders))
+	}
+	if members := testBudgetMembers(t, run.testCerts); len(members) != 2 || members[secondId.String()] == 0 {
+		t.Fatalf("LE's budget %v", members)
+	}
+}
+
+// A renewal writes its set's names too, so it waits while another device's order of the set is under way,
+// as one a pass that died left; the pass that takes that order up issues it, and the renewal goes at the
+// next, to its certificate's CA with its replaces.
+func TestRenewalWaitsOnItsSetsOrderUnderWay(t *testing.T) {
+	run := newTestRun(t, nil)
+	device := run.device("renewal-waits")
+	serial := big.NewInt(0x5e7a02)
+	run.issuedWithChain(device, certsservice.CertsCaLetsEncrypt, serial)
+	// rows accepted from here sort after the certificate's, so its set reads as issued before them
+	run.clock.Advance(time.Millisecond)
+	otherId := run.accept(newTestDeviceOf(t, device.networkId, device.identifierSet))
+	if admitted := run.admit(); len(admitted.Admitted) != 1 {
+		t.Fatalf("admitted %+v", admitted)
+	}
+	renewal := device.order(t)
+	renewal.Args.Replaces = testCertificateId(run.acme.issuer.SubjectKeyId, serial)
+	renewalResult, err := run.service.Accept(run.ctx, renewal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := run.runOrders()
+	if !slices.Equal(report.Resumed, []sidecar.Id{otherId}) || !slices.Equal(report.Issued, []sidecar.Id{otherId}) || len(report.Admitted) != 0 ||
+		testWaitReasons(report.Waiting)[renewalResult.CertId] != certsservice.CertsWaitSetUnderWay {
+		t.Fatalf("while the other order is under way: %+v", report)
+	}
+	report = run.runOrders()
+	if !slices.Equal(report.Admitted, []sidecar.Id{renewalResult.CertId}) || !slices.Equal(report.Issued, []sidecar.Id{renewalResult.CertId}) {
+		t.Fatalf("the next pass: %+v", report)
+	}
+	sent := run.acme.ordered()
+	if last := sent[len(sent)-1]; last.Ca != certsservice.CertsCaLetsEncrypt || last.Replaces != renewal.Args.Replaces {
+		t.Fatalf("the renewal went %+v", last)
+	}
+}
+
+// A CertsAcme counting the orders certs sends its CAs.
+type testCountingAcme struct {
+	certsservice.CertsAcme
+
+	stateLock sync.Mutex
+	orders    []*certsservice.CertsAcmeOrder
+}
+
+func (self *testCountingAcme) Order(ctx context.Context, order *certsservice.CertsAcmeOrder) (*certsservice.CertsAcmeIssued, error) {
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.orders = append(self.orders, order)
+	}()
+	return self.CertsAcme.Order(ctx, order)
+}
+
+func (self *testCountingAcme) orderCount() int {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return len(self.orders)
+}
+
+// Two devices of each of two networks queued at once, on Pebble, which asks for both of each order's
+// authorizations: the first pass makes one CA order a network, spends one unit of LE's budget a network
+// and writes each network's _acme-challenge name once, its set's name and wildcard in one write, while
+// the second devices wait on their sets; the next pass issues those as repeated sets, one order and one
+// write a network more and no unit, and every chain verifies on its device's key. No challenge is left.
+func TestOneSetOneOrderAPassOnPebble(t *testing.T) {
+	pebble := sidecartest.StartPebble(t, nil)
+	settings := testAcmeSettings(pebble, nil)
+	ctx := testAcmeContext(t)
+	clock := sidecartest.NewFakeClock(time.Now().UTC().Truncate(time.Microsecond))
+	host := sidecartest.NewFakeHost(ctx, clock, nil, nil, nil)
+	sidecartest.RegisterCertsBudgetTwins(host.Redis)
+	store := sidecartest.NewFakeCertsStore(host.Redis.Faults())
+	acme := &testCountingAcme{CertsAcme: testAcme(t, settings, pebble, testAccountFile(t, certsservice.CertsCaLetsEncrypt, time.Now(), "", ""))}
+	service, err := certsservice.NewCertsService(ctx, host.ServiceHost(), store, nil, acme, settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certs := &testCerts{t: t, ctx: ctx, clock: clock, host: host, store: store, settings: settings, service: service}
+
+	devices := map[sidecar.Id]*testDevice{}
+	firstIds := []sidecar.Id{}
+	secondIds := []sidecar.Id{}
+	for _, label := range []string{"k7oneset01", "k7oneset02"} {
+		first := newTestDevice(t, label)
+		second := newTestDeviceOf(t, first.networkId, first.identifierSet)
+		firstId := certs.accept(first)
+		secondId := certs.accept(second)
+		devices[firstId] = first
+		devices[secondId] = second
+		firstIds = append(firstIds, firstId)
+		secondIds = append(secondIds, secondId)
+	}
+	sorted := func(ids []sidecar.Id) []sidecar.Id {
+		ids = slices.Clone(ids)
+		slices.SortFunc(ids, func(a sidecar.Id, b sidecar.Id) int { return a.Cmp(b) })
+		return ids
+	}
+
+	report, err := service.RunOrders(ctx, sidecar.Id{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(report.Admitted, firstIds) || !slices.Equal(sorted(report.Issued), firstIds) {
+		t.Fatalf("the first pass: %+v", report)
+	}
+	reasons := testWaitReasons(report.Waiting)
+	for _, secondId := range secondIds {
+		if reasons[secondId] != certsservice.CertsWaitSetUnderWay {
+			t.Fatalf("the first pass's waits %+v", reasons)
+		}
+	}
+	writeCount, _, _ := pebble.Dns.Counts()
+	if orderCount := acme.orderCount(); orderCount != 2 || writeCount != 2 {
+		t.Fatalf("the first pass: %d CA orders, %d challenge writes", orderCount, writeCount)
+	}
+	if members := testBudgetMembers(t, certs); len(members) != 2 || members[firstIds[0].String()] == 0 || members[firstIds[1].String()] == 0 {
+		t.Fatalf("LE's budget %v", members)
+	}
+
+	report, err = service.RunOrders(ctx, sidecar.Id{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(report.Admitted, secondIds) || !slices.Equal(sorted(report.Issued), secondIds) || len(report.Waiting) != 0 {
+		t.Fatalf("the second pass: %+v", report)
+	}
+	writeCount, removeCount, _ := pebble.Dns.Counts()
+	if orderCount := acme.orderCount(); orderCount != 4 || writeCount != 4 || removeCount != 4 {
+		t.Fatalf("both passes: %d CA orders, %d challenge writes, %d removals", orderCount, writeCount, removeCount)
+	}
+	if members := testBudgetMembers(t, certs); len(members) != 2 {
+		t.Fatalf("the repeated sets spent budget: %v", members)
+	}
+	for certId, device := range devices {
+		row := certs.row(certId)
+		if row.State != sidecar.TlsCertStateIssued {
+			t.Fatalf("row %+v", row)
+		}
+		if leaf := testVerifyChain(t, pebble, row.Chain, device.identifierSet); !device.tlsKey.PublicKey.Equal(leaf.PublicKey) {
+			t.Fatal("a chain is not on its device's key")
+		}
+	}
+	if names := pebble.Dns.Names(); len(names) != 0 {
+		t.Fatalf("challenges left at %v", names)
 	}
 }

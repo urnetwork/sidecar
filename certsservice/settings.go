@@ -98,6 +98,10 @@ type CertsSettings struct {
 	ChainRetention time.Duration
 	// Queued rows one admission pass reads at most. Positive.
 	AdmitBatchCount int
+	// Rows under way (ordering, waiting_dns) one read of the admission pass takes: it reads them all, this
+	// many at a time, before any queued row, so no set gets a second order beside one under way (QD-1189).
+	// Default 100. Positive.
+	UnderWayBatchCount int
 	// What GET /tls/cert-order/<id> tells a device to wait before asking again while its order is under
 	// way. Positive.
 	OrderRetryAfter time.Duration
@@ -146,6 +150,10 @@ type CertsSettings struct {
 	CanaryRetryDelay time.Duration
 	// How long removing an order's challenges may take, on a context of its own. Default 30 s.
 	DnsCleanupTimeout time.Duration
+	// The most TXT values one _acme-challenge name holds: a set's name's and its wildcard's (§12.7, §12.8;
+	// RFC 8555 §8.4). A protocol limit, which dns's challenge route holds writes to (server's
+	// model.DnsChallengeSettings.ValueMaxCount), so it changes on both sides at once. Default 2. Positive.
+	DnsChallengeValueMaxCount int
 	// How old an account key is when it rolls over (RFC 8555 §7.3.5). Default a year (§13.8).
 	AccountRolloverAge time.Duration
 	// How far into its validity a certificate with no ARI window renews (§13.8: two thirds). Between 0
@@ -199,6 +207,7 @@ func DefaultCertsSettings() *CertsSettings {
 		RowRetention:              30 * 24 * time.Hour,
 		ChainRetention:            30 * 24 * time.Hour,
 		AdmitBatchCount:           100,
+		UnderWayBatchCount:        100,
 		OrderRetryAfter:           30 * time.Second,
 		CallTimeout:               10 * time.Second,
 		OrderResumeCount:          32,
@@ -215,6 +224,7 @@ func DefaultCertsSettings() *CertsSettings {
 		DnsWaitingDelay:           1 * time.Second,
 		CanaryRetryDelay:          30 * time.Second,
 		DnsCleanupTimeout:         30 * time.Second,
+		DnsChallengeValueMaxCount: 2,
 		AccountRolloverAge:        365 * 24 * time.Hour,
 		RenewalLifetimeFraction:   2.0 / 3.0,
 	}
@@ -296,6 +306,7 @@ func (self *CertsSettings) Validate() error {
 		"RowRetention":              int64(self.RowRetention),
 		"ChainRetention":            int64(self.ChainRetention),
 		"AdmitBatchCount":           int64(self.AdmitBatchCount),
+		"UnderWayBatchCount":        int64(self.UnderWayBatchCount),
 		"OrderRetryAfter":           int64(self.OrderRetryAfter),
 		"CallTimeout":               int64(self.CallTimeout),
 		"OrderResumeCount":          int64(self.OrderResumeCount),
@@ -312,6 +323,7 @@ func (self *CertsSettings) Validate() error {
 		"DnsWaitingDelay":           int64(self.DnsWaitingDelay),
 		"CanaryRetryDelay":          int64(self.CanaryRetryDelay),
 		"DnsCleanupTimeout":         int64(self.DnsCleanupTimeout),
+		"DnsChallengeValueMaxCount": int64(self.DnsChallengeValueMaxCount),
 		"AccountRolloverAge":        int64(self.AccountRolloverAge),
 	} {
 		if value <= 0 {

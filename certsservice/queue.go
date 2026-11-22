@@ -11,6 +11,17 @@
 // A name's failure backoff at a CA (QD-857) is read from the store once a row, and holds the row at that
 // CA alone: the next CA in the order is tried, under its own hold, rule and budget, and the row waits
 // only when none is open. A renewal skips it, as it skips every limit.
+//
+// An identifier set has one order under way at a time (QD-1189). Its orders validate at the same
+// _acme-challenge names, which hold two values (§12.7), so a second order of the set beside the first
+// would be refused at a name only after it had opened its order at the CA, spent a unit of the budget as
+// a new set and perhaps one of the name's ten writes an hour. A queued row whose set has a row ordering or
+// waiting_dns waits, a renewal too, since it writes the same names; once that order has ended the row
+// goes, as a repeated set when the order issued. The budget's unit is then the set's first certificate,
+// as §13.8's Budget reads. A pass reads every row under way, a batch at a time, before it reads the
+// queue, and counts each row it admits as under way from then: the order pass admits only while it has
+// taken up fewer rows under way than OrderResumeCount (run.go), so there are few to read. Two passes at
+// once, which the order chain's one task makes rare, may still each admit a row of one set, as before.
 
 package certsservice
 
@@ -72,11 +83,15 @@ func certsSetOrderTimes(rows []*sidecar.TlsCertRecord, now time.Time) []time.Tim
 }
 
 // One pass from after afterCertId. A store or budget error ends the pass with what it has done, and the
-// rows it did not reach stay queued for the next.
+// rows it did not reach stay queued for the next; one reading the rows under way admits none.
 func (self *CertsService) Admit(ctx context.Context, afterCertId sidecar.Id) (*CertsAdmitReport, error) {
 	callCtx, cancel := self.callContext(ctx)
 	defer cancel()
 	report := &CertsAdmitReport{}
+	underWaySetCertIds, err := self.underWaySetCertIds(callCtx)
+	if err != nil {
+		return report, err
+	}
 	rows, err := self.store.ListQueued(callCtx, afterCertId, self.settings.AdmitBatchCount)
 	if err != nil {
 		return report, err
@@ -85,15 +100,37 @@ func (self *CertsService) Admit(ctx context.Context, afterCertId sidecar.Id) (*C
 		report.NextCertId = rows[len(rows)-1].CertId
 	}
 	for _, row := range rows {
-		if err := self.admitRow(callCtx, row, report); err != nil {
+		if err := self.admitRow(callCtx, row, underWaySetCertIds, report); err != nil {
 			return report, err
 		}
 	}
 	return report, nil
 }
 
-// Admits row to the first CA the policy opens, or notes why it waits.
-func (self *CertsService) admitRow(ctx context.Context, row *sidecar.TlsCertRecord, report *CertsAdmitReport) error {
+// The identifier sets with a row under way at a CA (ordering, waiting_dns), each with one such row's id,
+// read whole, UnderWayBatchCount rows at a time.
+func (self *CertsService) underWaySetCertIds(ctx context.Context) (map[string]sidecar.Id, error) {
+	underWay := []sidecar.TlsCertState{sidecar.TlsCertStateOrdering, sidecar.TlsCertStateWaitingDns}
+	setCertIds := map[string]sidecar.Id{}
+	afterCertId := sidecar.Id{}
+	for {
+		rows, err := self.store.ListInStates(ctx, underWay, afterCertId, self.settings.UnderWayBatchCount)
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			setCertIds[string(row.IdentifierSetSha256)] = row.CertId
+		}
+		if len(rows) < self.settings.UnderWayBatchCount {
+			return setCertIds, nil
+		}
+		afterCertId = rows[len(rows)-1].CertId
+	}
+}
+
+// Admits row to the first CA the policy opens, or notes why it waits. underWaySetCertIds holds the sets
+// with an order under way, and takes row's once row is admitted.
+func (self *CertsService) admitRow(ctx context.Context, row *sidecar.TlsCertRecord, underWaySetCertIds map[string]sidecar.Id, report *CertsAdmitReport) error {
 	now := self.clock.Now()
 	names, err := certsCsrNames(row.Csr)
 	if err != nil || len(names) == 0 {
@@ -112,6 +149,19 @@ func (self *CertsService) admitRow(ctx context.Context, row *sidecar.TlsCertReco
 		return nil
 	}
 
+	// one order of a set at a time, a renewal's too (the file header): a row that waits on its set asks no
+	// CA, budget or name for anything, and its wait has no time, since only the other order's end frees it
+	setKey := string(row.IdentifierSetSha256)
+	if _, held := underWaySetCertIds[setKey]; held {
+		report.Waiting = append(report.Waiting, &CertsWait{CertId: row.CertId, Reason: CertsWaitSetUnderWay})
+		return nil
+	}
+	admit := func(ca CertsCa, kind CertsOrderKind, replaces *sidecar.TlsCertRecord) error {
+		// held from the move's try on: a row another pass moved first is under way there
+		underWaySetCertIds[setKey] = row.CertId
+		return self.admitTo(ctx, row, ca, kind, replaces, report)
+	}
+
 	// a renewal goes to its certificate's CA past every limit and hold, in its ARI window or not: LE
 	// exempts an order from every rate limit when its replaces names a certificate not already replaced
 	// through ARI, and names no window (rate-limits page, read 2026-11-15)
@@ -123,7 +173,7 @@ func (self *CertsService) admitRow(ctx context.Context, row *sidecar.TlsCertReco
 		bytes.Equal(predecessor.IdentifierSetSha256, row.IdentifierSetSha256) {
 		ca := CertsCa(predecessor.Ca)
 		if self.settings.Cas[ca] != nil {
-			return self.admitTo(ctx, row, ca, CertsOrderRenewal, predecessor, report)
+			return admit(ca, CertsOrderRenewal, predecessor)
 		}
 	}
 
@@ -193,7 +243,7 @@ func (self *CertsService) admitRow(ctx context.Context, row *sidecar.TlsCertReco
 				continue
 			}
 		}
-		return self.admitTo(ctx, row, ca, kind, nil, report)
+		return admit(ca, kind, nil)
 	}
 	report.Waiting = append(report.Waiting, wait)
 	return nil
