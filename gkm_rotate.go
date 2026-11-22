@@ -693,7 +693,8 @@ func (self *gkmGroupManager) ownDeliveries(ctx context.Context, state GkmAuthVie
 }
 
 // §10.6's late ask of one generation, to this sidecar's current ReaderKey, at most once a LateAskInterval. A lost
-// ask costs latency alone, so its error is dropped.
+// ask costs latency alone, so its error is dropped. With no current ReaderKey there is nothing a holder could seal
+// to, so the ask waits for one: the upkeep is asked to publish it (askReaderKey), and its upload's resync asks.
 func (self *gkmGroupManager) askLate(ctx context.Context, groupId Id, generation uint64, now time.Time) {
 	client := self.client
 	if client.args.ReaderKeySha256 == nil {
@@ -701,6 +702,7 @@ func (self *gkmGroupManager) askLate(ctx context.Context, groupId Id, generation
 	}
 	keySha256 := client.args.ReaderKeySha256()
 	if len(keySha256) != gkmDigestByteCount {
+		client.askReaderKey(now)
 		return
 	}
 	recipient := "s:" + hex.EncodeToString(client.args.SidecarId.Bytes())
@@ -712,4 +714,30 @@ func (self *gkmGroupManager) askLate(ctx context.Context, groupId Id, generation
 	if _, err := client.args.Api.Wraps(ctx, self.repoId, groupId, generation, query); err != nil && client.log.V(1).Enabled() {
 		client.log.Infof("[gkm]late ask of generation %d failed: %v", generation, err)
 	}
+}
+
+// A late ask that found no current ReaderKey (DESIGN-DETAILS 6.2.4's asker row: a device none of whose keys opens
+// anything publishes a fresh ReaderKey first): the upkeep is asked for a pass, at most once a LateAskInterval, whose
+// upload resyncs the hint intake and so asks again with the key. A network's first device meets this where its
+// upkeep's first upload went before gkm could load the network's state, the next pass an hour off.
+func (self *GkmGroupClient) askReaderKey(now time.Time) {
+	if self.args.PublishReaderKey == nil {
+		return
+	}
+	due := func() bool {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		if !self.readerKeyAskedAt.IsZero() && now.Sub(self.readerKeyAskedAt) < self.settings.LateAskInterval {
+			return false
+		}
+		self.readerKeyAskedAt = now
+		return true
+	}()
+	if !due {
+		return
+	}
+	if self.log.V(1).Enabled() {
+		self.log.Infof("[gkm]a late ask found no current ReaderKey: the upkeep publishes one first")
+	}
+	self.args.PublishReaderKey()
 }
