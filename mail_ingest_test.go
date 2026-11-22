@@ -1057,7 +1057,7 @@ func TestMailGroupMessageStoresOnceWithAReferencePerMember(t *testing.T) {
 func TestMailIngestRunTriesAgainSoonForADepositItCannotJudgeYet(t *testing.T) {
 	world := newMailIngestTestWorld(t)
 	world.authority.classes[world.receiverId] = MailDepositorUnknown
-	clock := newMailReceiverTestClock()
+	clock := newTestConfigClock()
 	settings := DefaultMailIngestSettings()
 	settings.MinPassInterval = 0
 	ingested := make(chan Id, 4)
@@ -1070,7 +1070,6 @@ func TestMailIngestRunTriesAgainSoonForADepositItCannotJudgeYet(t *testing.T) {
 	if pass := world.ingest(ingestor); pass.Left != 1 || pass.Pending != 1 || pass.Ingested != 0 {
 		t.Fatalf("a pass over a deposit it cannot judge: %+v", pass)
 	}
-	start := clock.Now()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
@@ -1081,19 +1080,9 @@ func TestMailIngestRunTriesAgainSoonForADepositItCannotJudgeYet(t *testing.T) {
 		cancel()
 		<-done
 	}()
-	// Run's first pass leaves the deposit again and arms its next pass RetryInterval on
-	clock.awaitArmedPast(0)
-	armed := func() []time.Time {
-		clock.stateLock.Lock()
-		defer clock.stateLock.Unlock()
-		ats := []time.Time{}
-		for _, wait := range clock.waits {
-			ats = append(ats, wait.at)
-		}
-		return ats
-	}()
-	if !slices.Equal(armed, []time.Time{start.Add(settings.RetryInterval)}) {
-		t.Fatalf("the next pass is armed at %v, not %s on", armed, settings.RetryInterval)
+	// Run's first pass leaves the deposit again and arms its next pass RetryInterval on, its one wait
+	if armed := <-clock.armed; armed != settings.RetryInterval {
+		t.Fatalf("the next pass is armed %s on, not %s", armed, settings.RetryInterval)
 	}
 	world.authority.stateLock.Lock()
 	world.authority.classes[world.receiverId] = MailDepositorMail
