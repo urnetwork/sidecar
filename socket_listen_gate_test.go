@@ -287,29 +287,58 @@ func (self *testListenGateWorld) approve(request *StoredApprovalRequest) {
 	}
 }
 
-// fixture's component given a grant filer over an ACL cast's state, the cast's laptop its listener from here on: a
-// requests rule by which members ask listen on each of names, which the requester's own member approves, and no
-// standing grant. The rule's id.
-func (self *testListenFixture) grantListensByRequest(t testing.TB, names ...string) []byte {
+// fixture's component given a grant filer over engine, which its tls/ and smtp/ listens build their grants on.
+func (self *testListenFixture) useListenGrants(engine *AclEngine) {
+	self.component.stateLock.Lock()
+	defer self.component.stateLock.Unlock()
+	self.component.grants = NewAclGrantFiler(nil, engine)
+}
+
+// fixture's component given a grant filer over an ACL state that admits the fixture's own listener as a member's
+// device, with what edit adds to its rows; the engine.
+func (self *testListenFixture) listenGrantsWith(t testing.TB, edit func(acl *aclTestFixture, listener Id)) *AclEngine {
 	t.Helper()
-	cast := newAclStatementCast()
+	acl := newAclTestFixture()
+	member, _ := acl.memberWithDevice(bridge.MemberRole_MEMBER_ROLE_MEMBER)
+	listener := self.generation.identity.SidecarId
+	acl.view.sidecars[listener] = &AclSidecar{Row: &bridge.SidecarRow{SidecarId: listener.Bytes(), AdmittedAt: acl.next()}, MemberId: member}
+	edit(acl, listener)
+	engine := NewAclEngine(listener, nil, nil, nil)
+	if err := engine.Install(acl.state(t), nil); err != nil {
+		t.Fatal(err)
+	}
+	self.useListenGrants(engine)
+	return engine
+}
+
+// Public names' socket targets, as rows carry a tls/ or smtp/ name.
+func testListenTargets(names []string) []*protocol.AclTarget {
 	targets := []*protocol.AclTarget{}
 	for _, name := range names {
 		targets = append(targets, &protocol.AclTarget{PublicName: name})
 	}
-	ruleId := cast.fixture.requestRule([]Id{AclAutogroupAtom(protocol.AclAutogroup_ACL_AUTOGROUP_MEMBER)}, targets,
-		[]protocol.AclAction{protocol.AclAction_ACL_ACTION_LISTEN}, []Id{AclAutogroupAtom(protocol.AclAutogroup_ACL_AUTOGROUP_SELF)}, 0)
-	engine := NewAclEngine(cast.laptop, nil, nil, nil)
-	if err := engine.Install(cast.fixture.state(t), nil); err != nil {
-		t.Fatal(err)
-	}
-	func() {
-		self.component.stateLock.Lock()
-		defer self.component.stateLock.Unlock()
-		self.component.grants = NewAclGrantFiler(nil, engine)
-	}()
-	self.generation.identity.SidecarId = cast.laptop
+	return targets
+}
+
+// fixture's listener asks listen on each of names under a requests rule by which members ask it, which the
+// requester's own member approves, and holds no standing grant. The rule's id.
+func (self *testListenFixture) grantListensByRequest(t testing.TB, names ...string) []byte {
+	t.Helper()
+	var ruleId []byte
+	self.listenGrantsWith(t, func(acl *aclTestFixture, listener Id) {
+		ruleId = acl.requestRule([]Id{AclAutogroupAtom(protocol.AclAutogroup_ACL_AUTOGROUP_MEMBER)}, testListenTargets(names),
+			[]protocol.AclAction{protocol.AclAction_ACL_ACTION_LISTEN}, []Id{AclAutogroupAtom(protocol.AclAutogroup_ACL_AUTOGROUP_SELF)}, 0)
+	})
 	return ruleId
+}
+
+// fixture's listener holds a standing grant, a document's rule naming it, to listen on each of names, and no requests
+// rule takes a listen.
+func (self *testListenFixture) grantStandingListens(t testing.TB, names ...string) {
+	t.Helper()
+	self.listenGrantsWith(t, func(acl *aclTestFixture, listener Id) {
+		acl.rule([]Id{acl.sidecarAtom(listener)}, testListenTargets(names), protocol.AclAction_ACL_ACTION_LISTEN)
+	})
 }
 
 // A listen no requests rule takes passes the gate on a standing grant, a document's rule: its action names the
