@@ -895,6 +895,9 @@ secret dkim_private_key smtp_dkim_rotate.go
 secret dns_internal_credential dnsservice/api.go
 secret dns_zsk dnsservice/ceremony.go
 secret dns_zsk dnsservice/keyset.go
+secret edge_client_identity_seed host_edge_identity.go
+secret edge_client_key_seed host_edge_identity.go
+secret edge_client_sequence_tls_key host_edge_identity.go
 secret edge_server_handshake_iv smtpproof/edge.go
 secret edge_server_handshake_key smtpproof/edge.go
 secret edge_shts smtpproof/edge.go

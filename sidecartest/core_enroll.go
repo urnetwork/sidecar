@@ -119,7 +119,7 @@ func (self *netSidecarPlatform) setReachable(reachable bool) {
 // Opens one generation's client on the exchange. See sidecar.SidecarPlatform.
 func (self *netSidecarPlatform) OpenClient(ctx context.Context, args *sidecar.SidecarPlatformClientArgs) (*sidecar.SidecarPlatformClient, error) {
 	clientCtx, cancel := context.WithCancel(ctx)
-	netClient := self.net.exchange.addClient(clientCtx, self.name, args.ClientId, args.ClientSettings)
+	netClient := self.net.exchange.addClientWithProvideKeys(clientCtx, self.name, args.ClientId, args.ClientSettings, args.ProvideSecretKeys)
 	client := &netSidecarPlatformClient{netClient: netClient, connected: sidecar.NewMonitorValue(false)}
 	authorizationClosed := args.PlatformTransportSettings.AuthorizationClosed
 	// what the platform's auth does with a token: take it, or refuse it and say so, never in the caller's goroutine

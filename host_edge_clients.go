@@ -7,10 +7,15 @@
 // HeadCheck.
 //
 // The pool lists its clients for Find (Clients, ClientIds) and hands out the one a ticket names (Client), refusing
-// an id it does not hold. An edge is ready only while all K are connected (Ready, D-TLS-9), and the pool holds no TLS
-// key and no user secret (D-TLS-1): a client's jwt is its only credential, asked of the source again whenever the
-// platform closes its authorization, and never logged (I-7). Log lines name a client by its index, never an address
-// or an id (I-13).
+// an id it does not hold. An edge is ready only while all K are connected (Ready, D-TLS-9), and the pool holds no
+// user's TLS key and no user secret (D-TLS-1): a client's jwt is its only credential to the platform, asked of the
+// source again whenever the platform closes its authorization, and never logged (I-7). Log lines name a client by its
+// index, never an address or an id (I-13).
+//
+// A source that answers each client's identity seed (EdgeClientIdentitySource, host_edge_identity.go) gives the client
+// the connect identity it had in every earlier process of its slot: its client key, its sequence certificate and its
+// Service provide key, so a restart costs its listeners none of the contracts they hold to its id. A client keeps one
+// instance id for the process's life, across the jwts it is given (connect's Auth: one id per in-memory instance).
 
 package sidecar
 
@@ -92,8 +97,10 @@ type EdgeClientPoolArgs struct {
 
 // One of the pool's clients.
 type edgePoolClient struct {
-	index       int
-	clientId    Id
+	index    int
+	clientId Id
+	// the one instance id every auth of this client names, so a refreshed jwt is the same instance to the platform
+	instanceId  connect.Id
 	platform    *SidecarPlatformClient
 	subprotocol *Subprotocol
 	// a token for each authorization the platform closed, never blocking
@@ -200,13 +207,14 @@ func NewEdgeClientPool(ctx context.Context, args *EdgeClientPoolArgs) (*EdgeClie
 	return self, nil
 }
 
-// The auth a client connects with: its jwt, and a stream lease, as a sidecar's generation asks (sidecar_new_connect.go).
-func (self *EdgeClientPool) clientAuth(credential *ServiceClientAuth) *connect.ClientAuth {
+// The auth a client connects with: its jwt under its one instance id, and a stream lease, as a sidecar's generation
+// asks (sidecar_new_connect.go).
+func (self *EdgeClientPool) clientAuth(client *edgePoolClient, credential *ServiceClientAuth) *connect.ClientAuth {
 	clientInfo := connect.UnknownClientInfo()
 	clientInfo.AppVersion = self.settings.AppVersion
 	return &connect.ClientAuth{
 		ByJwt:              credential.ByJwt,
-		InstanceId:         connect.NewId(),
+		InstanceId:         client.instanceId,
 		AppVersion:         self.settings.AppVersion,
 		ClientInfo:         clientInfo,
 		StreamLeaseVersion: 1,
@@ -225,9 +233,35 @@ func (self *EdgeClientPool) readCredential(ctx context.Context, index int) (*Ser
 	return credential, nil
 }
 
-// One client: Required, relay-only, on id 21842 alone, providing Service, with its edge dispatcher.
+// The connect identity index's client had in every earlier process of its slot, derived from the seed the source
+// answers for it (host_edge_identity.go); nil from a source that answers no seeds, whose clients draw fresh material.
+// A source that answers an error or a seed that is not one fails the client, so it never comes up as another identity
+// under its id.
+func (self *EdgeClientPool) readIdentity(ctx context.Context, index int, clientId Id) (*edgeClientIdentity, error) {
+	source, ok := self.source.(EdgeClientIdentitySource)
+	if !ok {
+		return nil, nil
+	}
+	seed, err := source.EdgeClientIdentitySeed(ctx, index, clientId)
+	if err != nil {
+		return nil, fmt.Errorf("%w: client %d's identity was not answered", ErrEdgeClientPool, index)
+	}
+	defer clear(seed)
+	identity, err := newEdgeClientIdentity(seed)
+	if err != nil {
+		return nil, fmt.Errorf("%w: client %d's identity: %w", ErrEdgeClientPool, index, err)
+	}
+	return identity, nil
+}
+
+// One client: Required, relay-only, on id 21842 alone, providing Service, with its edge dispatcher, and the connect
+// identity its slot's earlier processes had where the source answers it.
 func (self *EdgeClientPool) openClient(index int, platform SidecarPlatform, strategy *connect.ClientStrategy, budget *SubprotocolBudget, inbound SubprotocolInboundFunction) (*edgePoolClient, error) {
 	credential, err := self.readCredential(self.ctx, index)
+	if err != nil {
+		return nil, err
+	}
+	identity, err := self.readIdentity(self.ctx, index, Id(credential.ClientId))
 	if err != nil {
 		return nil, err
 	}
@@ -239,10 +273,22 @@ func (self *EdgeClientPool) openClient(index int, platform SidecarPlatform, stra
 	}
 	ApplySidecarClientSettings(&clientSettings)
 	clientSettings.Log = connectLogger(self.log)
+	var provideSecretKeys map[connectprotocol.ProvideMode][]byte
+	if identity != nil {
+		// the client key and the sequence certificate a contract to this id commits to, as the earlier processes had
+		// them; a ServerTlsConfig in the host's settings still wins over the certificate, as connect has it
+		clientSettings.ClientKeySeed = identity.clientKeySeed
+		clientSettings.EncryptionSettings.ProvideTlsCertificatePem = identity.tlsCertificatePem
+		clientSettings.EncryptionSettings.ProvideTlsPrivateKeyPem = identity.tlsPrivateKeyPem
+		provideSecretKeys = map[connectprotocol.ProvideMode][]byte{
+			connectprotocol.ProvideMode_Service: identity.serviceProvideSecretKey,
+		}
+	}
 
 	client := &edgePoolClient{
 		index:      index,
 		clientId:   Id(credential.ClientId),
+		instanceId: connect.NewId(),
 		authClosed: make(chan struct{}, 1),
 	}
 	transportSettings := *self.settings.PlatformTransportSettings
@@ -257,14 +303,24 @@ func (self *EdgeClientPool) openClient(index int, platform SidecarPlatform, stra
 	client.platform, err = platform.OpenClient(self.ctx, &SidecarPlatformClientArgs{
 		ClientId:                  credential.ClientId,
 		ClientSettings:            &clientSettings,
-		Auth:                      self.clientAuth(credential),
+		Auth:                      self.clientAuth(client, credential),
 		ClientStrategy:            strategy,
 		ApiUrl:                    credential.ApiUrl,
 		PlatformUrl:               credential.PlatformUrl,
 		PlatformTransportSettings: &transportSettings,
+		ProvideSecretKeys:         provideSecretKeys,
 	})
+	if identity != nil {
+		// connect took its key from the seed as the client was built, as a generation's client does
+		// (sidecar_new_connect.go); only the derived seed is the pool's to clear, never a host's settings
+		clear(identity.clientKeySeed)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("%w: client %d did not open", ErrEdgeClientPool, index)
+	}
+	if provideSecretKeys != nil {
+		// a platform that loads no keys as it builds a client gets them here, still before Service is provided
+		client.platform.Client.ContractManager().LoadProvideSecretKeys(provideSecretKeys)
 	}
 	// Service and nothing else: no edge provides Network, and none Public (§6.10.1)
 	client.platform.Client.ContractManager().SetProvideModes(map[connectprotocol.ProvideMode]bool{
@@ -309,7 +365,7 @@ func (self *EdgeClientPool) refreshAuth(client *edgePoolClient) {
 				err = ErrEdgeClientPoolUnknown
 			}
 			if err == nil {
-				client.platform.SetAuth(self.clientAuth(credential))
+				client.platform.SetAuth(self.clientAuth(client, credential))
 				break
 			}
 			self.log.Warningf("[edge]client %d's credential did not refresh", client.index)

@@ -327,13 +327,28 @@ func (self *netExchange) addClientWithControl(ctx context.Context, name string, 
 	return self.attachClient(ctx, name, clientId, settings, control)
 }
 
+// addClient whose contract manager holds provideSecretKeys before the client is on the exchange, as a platform loads a
+// client's kept keys before it can connect (sidecar.SidecarPlatformClientArgs.ProvideSecretKeys). Nil keys: addClient.
+func (self *netExchange) addClientWithProvideKeys(ctx context.Context, name string, clientId connect.Id, settings *connect.ClientSettings, provideSecretKeys map[protocol.ProvideMode][]byte) *NetClient {
+	requireRequiredClient(name, settings)
+	return self.attachClientWithProvideKeys(ctx, name, clientId, settings, nil, provideSecretKeys)
+}
+
 // addClientWithControl whatever settings' encryption mode: only a test of the refusal of an unsealed peer, the
 // adversary I-3 shuts out, attaches a client that is not Required (bridge_net.go).
 func (self *netExchange) attachClient(ctx context.Context, name string, clientId connect.Id, settings *connect.ClientSettings, control connect.OutOfBandControl) *NetClient {
+	return self.attachClientWithProvideKeys(ctx, name, clientId, settings, control, nil)
+}
+
+// attachClient with provideSecretKeys loaded before the client is on the exchange, so no frame reaches it first.
+func (self *netExchange) attachClientWithProvideKeys(ctx context.Context, name string, clientId connect.Id, settings *connect.ClientSettings, control connect.OutOfBandControl, provideSecretKeys map[protocol.ProvideMode][]byte) *NetClient {
 	if control == nil {
 		control = &netContractIssuer{exchange: self, sourceId: clientId, settings: connect.DefaultContractManagerSettings()}
 	}
 	client := connect.NewClient(ctx, clientId, control, settings)
+	if 0 < len(provideSecretKeys) {
+		client.ContractManager().LoadProvideSecretKeys(provideSecretKeys)
+	}
 	netClient := &NetClient{
 		Name:          name,
 		ClientId:      clientId,
