@@ -14,7 +14,12 @@
 //	          network's group mail; a read_only sidecar's deposit is the receipt deposit alone (§7.8's exchange), so
 //	          none of its deposits there is mail. One with no right to deposit there is consumed unrecorded; a pin
 //	          this device does not hold yet leaves the deposit for a later pass, which Run makes after RetryInterval
-//	          rather than its hourly resync, since no change of the mailbox comes when this device's state catches up
+//	          rather than its hourly resync, since no change of the mailbox comes when this device's state catches up.
+//	          A pin before what this device retains, a lagging depositor's once two bases landed since it read, is
+//	          not judged and counts against no one (QD-1178): the depositor is classed at the installed state, and one
+//	          that state gives no right leaves its deposit standing, unjudged (MailIngestAclAuthority.DepositorClass).
+//	          A deposit ref takes only its depositor's own deposits (§11.8's refs table), so one another sidecar
+//	          signed is consumed unrecorded
 //	erased    a signed ERASE consumes its deposit without a message. If a deposit-only ERASE races the mailbox push,
 //	          the post-commit check withholds callbacks. Readers mask the signed message id and a repo admin's next
 //	          pass destroys any new body and index slots under the original erasure id (mail_erase_late.go)
@@ -102,6 +107,10 @@ const (
 	// In an owner-bound repo, a reader that does not write (§8.5, §11.12): its deposits are §16.8's read receipts,
 	// which mail leaves alone. No other repo takes receipts (QD-1181).
 	MailDepositorReceipts
+	// The push's pin is before what this device retains, so it is not judged, and the installed state gives the
+	// depositor no right there: the deposit stands, counting against no one, and no pass waits for it, since no later
+	// state of this device judges that pin (QD-1178).
+	MailDepositorUnjudged
 )
 
 // What ingest asks of §8's verified state. Implementations are safe for concurrent use.
@@ -110,7 +119,7 @@ type MailIngestAuthority interface {
 	// or a group repo's reader that writes (§15.7's readers).
 	Ingests(repoId Id, sidecarId Id) bool
 	// What depositorId's deposits in repoId are at pin, the deposit push's own; a nil pin asks at the installed
-	// state.
+	// state, which never answers MailDepositorUnjudged.
 	DepositorClass(repoId Id, depositorId Id, pin *bridge.AuthPin) MailDepositorClass
 	// Whether signerSidecarId may send as fromAddress, an address of this network (mail:<alias>#send, §15.10): a
 	// same-network deposit's label rests on it (D-MAIL-8).
@@ -150,17 +159,36 @@ func (self *MailIngestAclAuthority) Ingests(repoId Id, sidecarId Id) bool {
 // one kind the read-receipt gate deposits into (evs_receipt_gate.go); in any other, a group repo among them, deposit
 // or write is a mail depositor even while it reads (QD-1181), but a read_only sidecar, whose deposit is §16.8's
 // receipt deposit alone (§7.8's exchange), deposits no mail there.
+//
+// A pin before what this device retains (ErrConfigPinNotRetained from a log that judges pins: before its previous
+// base, as a depositor's push is when it deposited on a state two bases behind this device's, or before the base a
+// restored log starts at) is not judged, and counts against no one, as the evs read took the deposit's push (QD-1178,
+// §10.9's judged row): that read checked the push's signature by the key the oldest retained rows give its signer,
+// refusing a signer they do not admit at the pin, and ingest holds the signer to the depositor. Left for a later
+// state, such a deposit would stand forever, since no later state of this device judges that pin, and the mail it
+// carried, answered delivered, would never be listed. So the depositor is classed at the installed state, whose
+// repo kind and sidecar row no later state changes: a receipt depositor or a read_only one outside an owner-bound
+// repo as above, and a mail depositor where that state gives it deposit or write. One that state gives no right, a
+// sidecar revoked or a grant ended since its deposit, is MailDepositorUnjudged: its deposit stands rather than being
+// refused at a state it was not made at, or taken from a depositor that holds no right now. A pin ahead of the state,
+// off its chain, or asked of an engine with no log stays MailDepositorUnknown.
 func (self *MailIngestAclAuthority) DepositorClass(repoId Id, depositorId Id, pin *bridge.AuthPin) MailDepositorClass {
 	if self == nil || self.Engine == nil {
 		return MailDepositorUnknown
 	}
 	state := self.Engine.State()
+	judged := true
 	if pin != nil {
 		pinned, err := self.Engine.stateAt(pin)
-		if err != nil {
+		switch {
+		case err == nil:
+			state = pinned
+		case errors.Is(err, ErrConfigPinNotRetained) && self.Engine.states != nil:
+			// before what this device retains: classed at the installed state, unjudged
+			judged = false
+		default:
 			return MailDepositorUnknown
 		}
-		state = pinned
 	}
 	if state == nil {
 		return MailDepositorUnknown
@@ -172,10 +200,12 @@ func (self *MailIngestAclAuthority) DepositorClass(repoId Id, depositorId Id, pi
 	case ownerBound && rights.Has(AclEvsRead) && !rights.Has(AclEvsWrite):
 		return MailDepositorReceipts
 	case !ownerBound && depositor != nil && depositor.readOnly:
-		// its deposit right is for receipts, which no repo but an owner-bound one takes
+		// its deposit right is for receipts, which no repo but an owner-bound one takes: its row's, whatever the pin
 		return MailDepositorNone
 	case rights.Has(AclEvsDeposit) || rights.Has(AclEvsWrite):
 		return MailDepositorMail
+	case !judged:
+		return MailDepositorUnjudged
 	}
 	return MailDepositorNone
 }
@@ -327,6 +357,9 @@ type MailIngestPass struct {
 	Left int
 	// Of those, the deposits whose depositor is not judged yet: their push's pin is one this device does not hold.
 	Pending int
+	// Of those, the deposits no state of this device judges, pinned before what it retains, whose depositor the
+	// installed state gives no right there (MailDepositorUnjudged).
+	Unjudged int
 	// Deposits a CONSUME named.
 	Consumed int
 }
@@ -674,6 +707,13 @@ func (self *MailIngestor) ingestDeposit(ctx context.Context, depositorId Id, dep
 		pass.Erased += 1
 		return true, nil
 	}
+	if deposit.SignerSidecarId != depositorId {
+		// a deposit ref takes only its depositor's own deposits (§11.8's refs table): the evs read holds that at a
+		// judged pin and takes a push pinned before what it retains unjudged (QD-1178), so ingest holds it here
+		self.alarm(MailIngestAlarmDepositor, depositorId, messageId)
+		pass.Refused += 1
+		return true, nil
+	}
 	switch self.authority.DepositorClass(self.repoId, depositorId, deposit.AuthPin) {
 	case MailDepositorMail:
 	case MailDepositorNone:
@@ -681,6 +721,10 @@ func (self *MailIngestor) ingestDeposit(ctx context.Context, depositorId Id, dep
 		pass.Refused += 1
 		return true, nil
 	case MailDepositorReceipts:
+		return false, nil
+	case MailDepositorUnjudged:
+		// no state of this device judges it, and no pass waits for one
+		pass.Unjudged += 1
 		return false, nil
 	default:
 		// a pin this device does not hold yet: Run tries again after RetryInterval
