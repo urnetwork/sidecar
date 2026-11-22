@@ -99,8 +99,8 @@ type CertsSettings struct {
 	// Queued rows one admission pass reads at most. Positive.
 	AdmitBatchCount int
 	// Rows under way (ordering, waiting_dns) one read of the admission pass takes: it reads them all, this
-	// many at a time, before any queued row, so no set gets a second order beside one under way (QD-1189).
-	// Default 100. Positive.
+	// many at a time, before any queued row, so no set or challenge name gets a second order beside one
+	// under way (QD-1189, QD-1203). Default 100. Positive.
 	UnderWayBatchCount int
 	// What GET /tls/cert-order/<id> tells a device to wait before asking again while its order is under
 	// way. Positive.
