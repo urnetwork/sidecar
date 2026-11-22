@@ -169,19 +169,13 @@ func TestPrivacySearchQueryCanaries(t *testing.T) {
 		}
 		traces = append(traces, &FrameSizeTrace{Label: fmt.Sprintf("failure %d", index), Kind: "1 step", Requests: []int{len(body)}, Replies: []int{len(reply)}})
 	}
-	// the budget still spends what its meter measures: past RemoteCpuPerMinute there, the phone's next request is
-	// refused before parsing, and the held slot counted the meter's time and none of the clock's minute
+	// the budget still spends what its meter measures: past RemoteCpuPerMinute there the next request is refused, from
+	// a requester of its own so no leg's rate is spent, and the held slot counted the meter's time and none of the
+	// clock's minute
 	cpuClock.Advance(searchSettings.RemoteCpuPerMinute)
-	body, err := sidecar.SearchTestRemoteRequestBody(wire, failures[0])
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = indexer.Server.Handle(ctx, &sidecar.SubprotocolRequest{
-		SourceId: phoneId, Peer: &sidecar.SubprotocolPeerIdentity{SidecarId: phoneId}, MessageType: protocol.MessageType_SEARCH, Body: body,
-	})
 	var refusal *sidecar.SidecarRemoteRefusal
-	if !errors.As(err, &refusal) || refusal.Reason != sidecar.SidecarRemoteRefusedCpu {
-		t.Errorf("past RemoteCpuPerMinute on the meter the desktop answered %v", err)
+	if _, err := indexer.Budget.Admit(ctx, team.Net.Id("a request past the meter's cap")); !errors.As(err, &refusal) || refusal.Reason != sidecar.SidecarRemoteRefusedCpu {
+		t.Errorf("past RemoteCpuPerMinute on the meter the desktop's budget answered %v", err)
 	}
 	if held := straggler.Release(); held != searchSettings.RemoteCpuPerMinute {
 		t.Errorf("the held slot counted %s of compute, not the meter's %s", held, searchSettings.RemoteCpuPerMinute)
