@@ -249,6 +249,13 @@ type EvsSettings struct {
 	// Whether this host is a background daemon, which waits out SubscribeResetMaxWait after an incomplete reset: the
 	// desktop daemon is; an app in the foreground is not.
 	SubscribeBackground bool
+	// The paths one Subscribe takes, each a lease's token prefix: the format's bound on a lease request
+	// (EvsFormatSettings.SubscriptionMaxPrefixCount), 16.
+	SubscribeMaxPrefixCount int
+	// The statements a pin raise of a followed ref carried that the subscriber holds for the ref's next delivery of
+	// its changes (evs_subscribe.go's marks row): 1,024 a ref, about 1 MiB at format 1's 1 KiB a statement, none once
+	// delivered, which is a round or so later. Past it a delivery reads the rest from GET .../log. Positive.
+	SubscribeHeldStatementCount int
 
 	// §16.2's evs_write on a git-mode ref (owner decision 141; EVS1-M3-01): how many tips WriteAtTip commits on
 	// while the path stays at its base version, a moved tip building the commit again on the newer one: 3.
@@ -422,6 +429,7 @@ func DefaultEvsSettings() *EvsSettings {
 		SubscribeRetryMaxWait:    5 * time.Minute,
 		SubscribeRetryCount:      8,
 		SubscribeBackground:      true,
+		SubscribeMaxPrefixCount:  DefaultEvsFormatSettings().SubscriptionMaxPrefixCount,
 		WriteAtTipTryCount:       3,
 		LookupVersionCount:       10000,
 		MaxFormat:                2,
@@ -449,5 +457,7 @@ func DefaultEvsSettings() *EvsSettings {
 		DropBodyKeepByteCount:    4 * 1024 * 1024,
 		DropBodyReadCount:        4,
 		StatusPathCount:          5,
+
+		SubscribeHeldStatementCount: 1024,
 	}
 }
