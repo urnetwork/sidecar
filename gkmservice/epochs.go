@@ -23,10 +23,10 @@
 //
 // The store operations of a commit are §10.6's list: GET epoch/<n-1>, GET repo/<id> (5 s cache), GET gen/<g+1> (404)
 // and the PUT, besides the closing marker's GET (404 but in a closed group), a HEAD of gen/<g> when the generation
-// moved since epoch n-1, and at 16 leaves or fewer one
-// group-info GET (5 s cache) and, 16 epochs past the pointer, the pointer's PUT (groupinfo.go). A retry of a lost
-// answer finds its own commit standing and answers the original 200 (FI-2). A success hints commit on gkm:<group_id>
-// to the repo's readers, versioned epoch × 2^24 + generation (D-KEYS-19).
+// moved since epoch n-1, and at 16 leaves or fewer one group-info GET (5 s cache) and, 16 epochs past the pointer, the
+// pointer's PUT (groupinfo.go). A retry of a lost answer finds its own commit standing and answers the original 200
+// (FI-2). A success hints commit on gkm:<group_id> to the repo's readers, versioned epoch × 2^24 + generation
+// (D-KEYS-19).
 
 package gkmservice
 

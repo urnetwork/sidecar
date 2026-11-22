@@ -22,11 +22,11 @@
 //
 // A wrong kind, generation, commitment or key answers 409, and so does every delivery to a group a re-form closed,
 // whatever its PUT left, the fence reading the group's closing marker after the batch's PUTs (QD-1186;
-// reform_fence.go), a key another delivery holds 412 with the winner, a check
-// refused 403, the STAGED bound 429, and a delivery gkm did not reach a definite answer for, because its PUT was not
-// started by WrapBatchStartDeadline into the request or its store did not answer, 0: the client sends it again, and
-// If-None-Match makes that safe. PUTs run WrapPutConcurrency at once. A malformed delivery is refused as one whose
-// signature does not verify, 403, since gkm cannot tell the two apart without trusting it.
+// reform_fence.go); a key another delivery holds answers 412 with the winner, a check refused 403, the STAGED bound
+// 429, and a delivery gkm did not reach a definite answer for, because its PUT was not started by
+// WrapBatchStartDeadline into the request or its store did not answer, 0: the client sends it again, and If-None-Match
+// makes that safe. PUTs run WrapPutConcurrency at once. A malformed delivery is refused as one whose signature does
+// not verify, 403, since gkm cannot tell the two apart without trusting it.
 //
 // In KeyDelivery mode a ReaderWrap that stands (201, or 412 whatever its winner) and that its recipient can take now
 // wakes the recipient with pending on its per-client topic: a LATE one, which comes with no new generation, and a

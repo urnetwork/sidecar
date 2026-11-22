@@ -12,9 +12,9 @@
 //   - the repo's newest GroupForm names the group and is a re-form, and the group's epoch/1 does not exist yet; that
 //     form was filed only once its closing of the group it re-forms was sealed (reform_fence.go), so the old group
 //     holds nothing past the form's generation that a member took;
-//   - at most LadderMaxCount (64) statements a call, consecutive and ascending, none past the form's generation, each a Signed
-//     GenRotate of the repo held to its shape, whose parent_commitment is gen/<k-1>'s commitment, the call's own
-//     previous statement or the one stored, so the ladder goes up in order from generation 1;
+//   - at most LadderMaxCount (64) statements a call, consecutive and ascending, none past the form's generation, each
+//     a Signed GenRotate of the repo held to its shape, whose parent_commitment is gen/<k-1>'s commitment, the call's
+//     own previous statement or the one stored, so the ladder goes up in order from generation 1;
 //   - each is written If-None-Match, equal bytes answering success, so a call a crash cut short is sent again;
 //     other bytes at a generation answer 409 with them, and nothing past it is written.
 //
