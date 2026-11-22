@@ -8,6 +8,11 @@
 // Pebble reads its knobs from the environment when it starts, so StartPebble sets them with t.Setenv,
 // and a test that starts one cannot run in parallel. It answers on loopback TLS under a certificate of
 // its own, which HttpClient trusts. Everything stops when the test ends.
+//
+// A test whose challenges a real dns edge serves gives the resolver Pebble's validation authority asks
+// (PebbleSettings.DnsAddress), as server's e2e world does with its own, which reaches the edge; Pebble
+// then starts no DNS server of its own and Dns is nil. SetRenewalWindow answers a certificate's ARI
+// with the window a test chooses, as a CA asking for an early renewal does (RFC 9773 §4.2).
 
 package sidecartest
 
@@ -29,6 +34,7 @@ import (
 	"time"
 
 	"github.com/letsencrypt/pebble/v2/ca"
+	"github.com/letsencrypt/pebble/v2/core"
 	"github.com/letsencrypt/pebble/v2/db"
 	"github.com/letsencrypt/pebble/v2/va"
 	"github.com/letsencrypt/pebble/v2/wfe"
@@ -48,6 +54,10 @@ type PebbleSettings struct {
 	RequireEab bool
 	// EAB key ids to their base64url MAC keys.
 	EabKeys map[string]string
+	// The DNS server Pebble's validation authority asks over TCP for each DNS-01 challenge, host:port, as
+	// a recursive resolver is asked: a test's own. Empty starts Pebble's own beside it, which certs
+	// writes to through Dns.
+	DnsAddress string
 }
 
 func DefaultPebbleSettings() *PebbleSettings {
@@ -66,7 +76,8 @@ type Pebble struct {
 	HttpClient *http.Client
 	// Pebble's issuing roots, which its chains verify under.
 	Roots *x509.CertPool
-	// Where certs writes the challenges Pebble checks.
+	// Where certs writes the challenges Pebble checks; nil when PebbleSettings.DnsAddress named the
+	// resolver Pebble asks.
 	Dns *FakeCertsDns
 
 	newOrderPath string
@@ -89,14 +100,20 @@ func StartPebble(t testing.TB, settings *PebbleSettings) *Pebble {
 	t.Setenv("PEBBLE_WFE_NONCEREJECT", strconv.Itoa(settings.NonceRejectPercent))
 	t.Setenv("PEBBLE_AUTHZREUSE", strconv.Itoa(settings.AuthzReusePercent))
 
-	dnsServer := startPebbleDns(t)
+	dnsAddress := settings.DnsAddress
+	var fakeDns *FakeCertsDns
+	if dnsAddress == "" {
+		dnsServer := startPebbleDns(t)
+		dnsAddress = dnsServer.address
+		fakeDns = newFakeCertsDns(dnsServer)
+	}
 	logger := log.New(io.Discard, "", 0)
 	memoryStore := db.NewMemoryStore()
 	authority := ca.New(logger, memoryStore, "", "ecdsa", 0, 1, map[string]ca.Profile{
 		PebbleProfileTlsServer: {Description: "45 days, as LE's tlsserver", ValidityPeriod: uint64((45 * 24 * time.Hour).Seconds())},
 		"default":              {Description: "Pebble's default"},
 	})
-	validator := va.New(logger, 0, 0, false, dnsServer.address, memoryStore)
+	validator := va.New(logger, 0, 0, false, dnsAddress, memoryStore)
 	for keyId, macKey := range settings.EabKeys {
 		if err := memoryStore.AddExternalAccountKeyByID(keyId, macKey); err != nil {
 			t.Fatal(err)
@@ -105,7 +122,7 @@ func StartPebble(t testing.TB, settings *PebbleSettings) *Pebble {
 	frontEnd := wfe.New(logger, memoryStore, validator, authority, []string{"pebble.example"}, false, settings.RequireEab, 0, 0)
 
 	pebble := &Pebble{
-		Dns:          newFakeCertsDns(dnsServer),
+		Dns:          fakeDns,
 		newOrderPath: "/order-plz",
 		memoryStore:  memoryStore,
 	}
@@ -153,6 +170,21 @@ func (self *Pebble) RevocationReason(leaf []byte) (reason int, revoked bool) {
 		reason = int(*record.Reason)
 	}
 	return reason, true
+}
+
+// Answers ARI for leaf's certificate (RFC 9773) with the window from start to end from now on, in
+// place of the one Pebble computes, as a CA asking for an early renewal does: a window that has begun
+// asks its client to renew now.
+func (self *Pebble) SetRenewalWindow(leaf []byte, start time.Time, end time.Time) error {
+	certificate, err := x509.ParseCertificate(leaf)
+	if err != nil {
+		return err
+	}
+	answer, err := json.Marshal(&core.RenewalInfo{SuggestedWindow: core.SuggestedWindow{Start: start.UTC(), End: end.UTC()}})
+	if err != nil {
+		return err
+	}
+	return self.memoryStore.SetARIResponse(certificate.SerialNumber, string(answer))
 }
 
 // Refuses the next count newOrder requests with 429 rateLimited and Retry-After, as LE's limits do.
