@@ -23,7 +23,7 @@
 //	           holding it, and the sender's retry deposits it again there, which QD-208 bounds by
 //	           mail_inbound_repos_per_message
 //	right      a repo this receiver's own newest verified state gives no deposit (§8.5; repo:<id>:deposit's table,
-//	           AclExchangeScopes, D-ACL-21) refuses the message before any deposit is made, at once (Refuses), so the
+//	           AclExchangeScopes, D-ACL-21) refuses the message before any deposit is made, at once (refuses), so the
 //	           session answers 451 4.3.0 before the body is even spooled, where the exchange's refusal would otherwise
 //	           be retried by evs's client for most of a minute; a repo whose client holds no ACL state to judge by is
 //	           left to the exchange and evs, which judge every deposit whatever this says
@@ -192,7 +192,7 @@ func (self *MailDepositor) trailer(input *MailDepositInput, target *MailDepositT
 // Whether this receiver's own newest verified state already refuses it a deposit into one of targets' repos, so a
 // message for them is answered 451 4.3.0 with no deposit made (the file header's right row). False where every repo
 // gives it deposit or holds no state to judge by.
-func (self *MailDepositor) Refuses(targets []*MailDepositTarget) bool {
+func (self *MailDepositor) refuses(targets []*MailDepositTarget) bool {
 	for _, target := range targets {
 		repo, ok := self.repo(target.RepoId).(mailDepositRightRepo)
 		if !ok {
@@ -207,12 +207,12 @@ func (self *MailDepositor) Refuses(targets []*MailDepositTarget) bool {
 
 // Deposits the message to every target's repo, at most DepositConcurrency at once and within DepositTimeout: nil only
 // once evs confirmed each, else ErrMailDepositFailed with the first failure, and at once, with none made, where the
-// receiver's own state refuses it one (Refuses). See the file header.
+// receiver's own state refuses it one (refuses). See the file header.
 func (self *MailDepositor) Deposit(ctx context.Context, input *MailDepositInput) error {
 	if input == nil || input.Spool == nil || !input.Spool.finished || len(input.Targets) == 0 {
 		return fmt.Errorf("%w: no message or no repo", ErrMailDepositorInvalid)
 	}
-	if self.Refuses(input.Targets) {
+	if self.refuses(input.Targets) {
 		return fmt.Errorf("%w: this receiver may not deposit into a recipient's repo", ErrMailDepositFailed)
 	}
 	// the bound row: every deposit still open is cancelled at DepositTimeout

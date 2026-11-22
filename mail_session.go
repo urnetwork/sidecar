@@ -32,7 +32,7 @@
 //	          and the evidence is sealed (MailEvidenceBuilder); then one deposit a repo (mail_deposit.go)
 //	reply     250 only once evs confirmed every deposit; 451 4.3.0 for any failure, within the depositor's
 //	          DepositTimeout, and at DATA's start, before the body is spooled or checked, where this receiver's own
-//	          verified state gives it no deposit into a recipient's repo (MailDepositor.Refuses). Accepted mail never
+//	          verified state gives it no deposit into a recipient's repo (MailDepositor.refuses). Accepted mail never
 //	          bounces, and no authentication result refuses it: a check that fails or is cut deposits as no result. A
 //	          reset (RFC 5321 §3.8), RSET mid-BDAT's ErrDataReset or the connection's end, discards everything, and
 //	          nothing commits
@@ -555,7 +555,7 @@ func (self *MailSession) Data(reader io.Reader) error {
 		return mailSessionReplyNoTransaction
 	}
 	server := self.server
-	if server.args.Depositor.Refuses(transaction.targets) {
+	if server.args.Depositor.refuses(transaction.targets) {
 		// a repo this receiver's own state gives no deposit (§8.5): no deposit can commit, so the message is answered
 		// at once, its body read on and dropped by go-smtp, as the deposit's refusal would answer it far later
 		return mailSessionReplyTryLater

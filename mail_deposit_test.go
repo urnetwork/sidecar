@@ -271,7 +271,7 @@ func TestMailDepositorRefusesAtOnceARepoItsStateGivesNoDeposit(t *testing.T) {
 		{RepoId: unknown, Recipients: []string{testMailSessionBob}},
 		{RepoId: refused, Recipients: []string{testMailSessionCarol}},
 	}
-	if !depositor.Refuses(targets) {
+	if !depositor.refuses(targets) {
 		t.Fatal("a repo the state refuses was not refused")
 	}
 	err := depositor.Deposit(context.Background(), &MailDepositInput{Spool: newMailDepositTestSpool(t, testMailSessionMessage("refused")), Targets: targets})
@@ -282,7 +282,7 @@ func TestMailDepositorRefusesAtOnceARepoItsStateGivesNoDeposit(t *testing.T) {
 		t.Fatalf("%d deposits started, %d made", started, len(repos.plaintexts))
 	}
 	targets = targets[:2]
-	if depositor.Refuses(targets) {
+	if depositor.refuses(targets) {
 		t.Fatal("a repo the state allows, or knows nothing of, was refused")
 	}
 	if err := depositor.Deposit(context.Background(), &MailDepositInput{Spool: newMailDepositTestSpool(t, testMailSessionMessage("allowed")), Targets: targets}); err != nil {
