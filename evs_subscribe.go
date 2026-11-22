@@ -18,7 +18,11 @@
 //	           in the new epoch, then deletes the old epoch's leases (§11.6's leases row)
 //	changes    each verified statement a read brings raises a change (ref, version, the subscribed paths it touched,
 //	           signer) to the subscription's own callback and to the client's listeners: MCP sessions and §18's
-//	           SidecarRepoChangeListener (AddRepoChangeListener)
+//	           SidecarRepoChangeListener (AddRepoChangeListener). A read starts at the client's pin, which every read
+//	           of the client raises, the epoch mapper's fresh read on each hint among them (evs_component.go), so the
+//	           subscriber keeps each followed ref's newest version it raised, or the pin that stood when the repo's
+//	           first subscription began: a round whose read begins past it names the statements another read took
+//	           as a gap, every subscribed path, so no change is lost to that read
 //
 // The subscriber's work runs in rounds (runDue) on one goroutine (run), which Start begins and Close ends; every input
 // only queues work and wakes it, so a hint's path never waits. A round's I/O holds no lock. Paths are this device's
@@ -67,8 +71,9 @@ type EvsRepoChange struct {
 	Paths []string
 	// A subscription of the whole ref matched.
 	WholeRef bool
-	// The read re-pinned past §11.9's catch-up budget, so which paths changed between is not known: every subscribed
-	// path is named.
+	// The read re-pinned past §11.9's catch-up budget, or began at a pin another read of this client raised past what
+	// the subscriber had raised, so which paths changed between is not known: every subscribed path is named. The
+	// latter's Version is that pin, and the read's own statements follow it as changes of their own.
 	Gap bool
 	// The push moved the ref's path epoch.
 	PathEpoch bool
@@ -137,6 +142,10 @@ type evsSubscriber struct {
 	syncs         map[Id]*evsSyncRequest
 	// each repo's push sequence as the last hint or listing gave it
 	repoSequences map[Id]uint64
+	// each followed ref's newest version the subscriber accounted for: what its rounds raised, or the pin that stood
+	// when the repo's first subscription began, whose statements no subscription is owed (the file header's changes
+	// row); a followed repo's refs only
+	raisedVersions map[evsRefKey]uint64
 	// the UTC day of each repo's last whole listing
 	repoListedDays map[Id]string
 	nextResyncAt   time.Time
@@ -168,6 +177,7 @@ func newEvsSubscriber(client *EvsClient) *evsSubscriber {
 		subscriptions:  map[Id]*evsSubscriptionState{},
 		syncs:          map[Id]*evsSyncRequest{},
 		repoSequences:  map[Id]uint64{},
+		raisedVersions: map[evsRefKey]uint64{},
 		repoListedDays: map[Id]string{},
 		listeners:      map[int]*evsRepoChangeListener{},
 		wake:           make(chan struct{}, 1),
@@ -345,16 +355,44 @@ func (self *evsSubscriber) load() error {
 			states = append(states, state)
 		}
 	}
+	// the baseline the loaded repos' rounds raise past: the pins held now
+	repoIdPins := map[Id][]*EvsPin{}
+	for _, state := range states {
+		if _, read := repoIdPins[state.repoId]; read {
+			continue
+		}
+		pins, err := self.client.pins.Pins(&state.repoId)
+		if err != nil {
+			return err
+		}
+		repoIdPins[state.repoId] = pins
+	}
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	if self.loaded {
 		return nil
+	}
+	for repoId, pins := range repoIdPins {
+		self.baselineWithLock(repoId, pins)
 	}
 	for _, state := range states {
 		self.subscriptions[state.id] = state
 	}
 	self.loaded = true
 	return nil
+}
+
+// The repo's baseline as its first subscription begins: each of pins that is the repo's, whose statements no
+// subscription of the repo is owed. A repo already followed keeps the versions its rounds raised.
+func (self *evsSubscriber) baselineWithLock(repoId Id, pins []*EvsPin) {
+	if self.followsWithLock(repoId) {
+		return
+	}
+	for _, pin := range pins {
+		if pin.RepoId == repoId {
+			self.raisedVersions[evsRefKey{repoId: repoId, refId: pin.RefId}] = pin.Version
+		}
+	}
 }
 
 // A stored record's state.
@@ -500,9 +538,15 @@ func (self *evsSubscriber) subscribe(ctx context.Context, repo *EvsRepo, args *E
 	if err := self.tokenizeState(ctx, repo, state, pathEpoch); err != nil {
 		return nil, err
 	}
+	// the baseline, should this be the repo's first subscription: the pins held now, the reads above's among them
+	pins, err := self.client.pins.Pins(&repo.repoId)
+	if err != nil {
+		return nil, err
+	}
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
+		self.baselineWithLock(repo.repoId, pins)
 		self.subscriptions[state.id] = state
 	}()
 	if err := self.persist(repo.repoId); err != nil {
@@ -598,12 +642,19 @@ func (self *evsSubscriber) tokenizePaths(ctx context.Context, repo *EvsRepo, pat
 	return prefixes, nil
 }
 
-// Drops a subscription from memory.
+// Drops a subscription from memory, and with the repo's last its raised versions.
 func (self *evsSubscriber) drop(id Id) *evsSubscriptionState {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	state := self.subscriptions[id]
 	delete(self.subscriptions, id)
+	if state != nil && !self.followsWithLock(state.repoId) {
+		for key := range self.raisedVersions {
+			if key.repoId == state.repoId {
+				delete(self.raisedVersions, key)
+			}
+		}
+	}
 	return state
 }
 
@@ -1130,12 +1181,16 @@ type evsSubscriptionView struct {
 	callback  EvsRepoChangeFunction
 }
 
-// The changes a verified read of refId brought: each statement after the read's pin against each subscription of the
-// ref, then an epoch past a subscription's re-tokenized and owed a lease.
+// The changes a verified read of refId brought: a gap for what another read of the client took first, then each
+// statement after the read's pin, against each subscription of the ref; then an epoch past a subscription's
+// re-tokenized and owed a lease (the file header's changes row).
 func (self *evsSubscriber) raiseChanges(ctx context.Context, repo *EvsRepo, refId Id, head *EvsVerifiedHead) {
+	key := evsRefKey{repoId: repo.repoId, refId: refId}
+	var raisedVersion uint64
 	views := func() []*evsSubscriptionView {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
+		raisedVersion = self.raisedVersions[key]
 		views := []*evsSubscriptionView{}
 		for _, state := range self.subscriptions {
 			if state.repoId == repo.repoId && (state.refId == nil || *state.refId == refId) {
@@ -1177,13 +1232,16 @@ func (self *evsSubscriber) raiseChanges(ctx context.Context, repo *EvsRepo, refI
 	}
 	changes := []*EvsRepoChange{}
 	viewChanges := map[Id][]*EvsRepoChange{}
-	if head.Gap {
-		change := &EvsRepoChange{RepoId: repo.repoId, RefId: refId, Version: head.Version, Gap: true}
+	if head.Gap || raisedVersion < head.FromVersion {
+		// past the catch-up budget, the read's from is its head; else another read of the client raised the pin this
+		// read began at past what the rounds raised, and verified the statements between
+		gapVersion := head.FromVersion
+		change := &EvsRepoChange{RepoId: repo.repoId, RefId: refId, Version: gapVersion, Gap: true}
 		for _, view := range views {
 			change.WholeRef = change.WholeRef || len(view.paths) == 0
 			change.Paths = append(change.Paths, view.paths...)
 			viewChanges[view.id] = append(viewChanges[view.id], &EvsRepoChange{
-				RepoId: repo.repoId, RefId: refId, Version: head.Version, Gap: true, Paths: evsSortedPaths(view.paths), WholeRef: len(view.paths) == 0,
+				RepoId: repo.repoId, RefId: refId, Version: gapVersion, Gap: true, Paths: evsSortedPaths(view.paths), WholeRef: len(view.paths) == 0,
 			})
 		}
 		change.Paths = evsSortedPaths(change.Paths)
@@ -1241,6 +1299,13 @@ func (self *evsSubscriber) raiseChanges(ctx context.Context, repo *EvsRepo, refI
 			changes = append(changes, change)
 		}
 	}
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		if self.followsWithLock(repo.repoId) {
+			self.raisedVersions[key] = head.Version
+		}
+	}()
 	self.deliver(repo.repoId, views, changes, viewChanges)
 	self.followEpoch(ctx, repo, refId, head, views)
 }

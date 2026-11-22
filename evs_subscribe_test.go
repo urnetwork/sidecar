@@ -593,3 +593,131 @@ func TestEvsSubscriberRoundsRunOnTheirOwnGoroutine(t *testing.T) {
 	}
 	test.client.Close()
 }
+
+// A commit another read of the client verified and pinned before the subscriber's round read it, as the epoch mapper's
+// fresh head read on each hint does (EvsComponent.ReceiveHint's tick), still raises a change: the round's read starts
+// at that pin and brings no statement, so the subscriber names what it did not see as a gap. Before, the change was
+// lost, and a mailbox's ingest waited out its hourly resync for the first deposit on a new deposit ref.
+func TestEvsSubscriptionRaisesWhatAnotherReadPinnedFirst(t *testing.T) {
+	world := newEvsTestWorld(t)
+	leases := newEvsTestLeases(world)
+	test := newEvsSubscribeTest(t, world, leases, newEvsTestStore(t))
+	// the hourly resync half an hour on, out of this test's way
+	test.client.subscriber.random = func(limit time.Duration) time.Duration { return limit / 2 }
+	world.push(&evsTestChange{path: "docs/a", content: []byte("a")})
+	repo := test.client.Repo(world.repoId)
+	listened := &evsTestChanges{}
+	remove := test.client.AddRepoChangeListener(&world.repoId, listened.add)
+	defer remove()
+	own := &evsTestChanges{}
+	docs := &evsTestChanges{}
+	ctx := context.Background()
+	if _, err := repo.Subscribe(ctx, &EvsSubscribeArgs{RefName: EvsMainRefName, Changes: own.add}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.Subscribe(ctx, &EvsSubscribeArgs{RefName: EvsMainRefName, Paths: []string{"docs"}, Changes: docs.add}); err != nil {
+		t.Fatal(err)
+	}
+	test.clock.advance(test.client.settings.SubscribeRereadDelay)
+	test.client.subscriber.runDue(ctx)
+	if versions := listened.versions(); len(versions) != 0 {
+		t.Fatalf("changes before any commit: %v", versions)
+	}
+	// a commit the epoch mapper's tick on its hint pins first, as EvsComponent.ReceiveHint runs it, then the hint's round
+	world.push(&evsTestChange{path: "docs/b", content: []byte("b")})
+	if err := repo.TickMapper(ctx, world.refId); err != nil {
+		t.Fatal(err)
+	}
+	if pin, ok, err := test.client.pins.Pin(world.repoId, world.refId); err != nil || !ok || pin.Version != 2 {
+		t.Fatalf("the tick's pin %+v %v %v", pin, ok, err)
+	}
+	world.hint(test, 100)
+	test.client.subscriber.runDue(ctx)
+	change := listened.last()
+	if change == nil || change.Version != 2 || !change.Gap || !change.WholeRef || !slices.Equal(change.Paths, []string{"docs"}) {
+		t.Fatalf("the change another read pinned first: %+v", change)
+	}
+	if last := own.last(); last == nil || last.Version != 2 || !last.Gap || !last.WholeRef {
+		t.Errorf("the whole ref's own change %+v", last)
+	}
+	if last := docs.last(); last == nil || last.Version != 2 || !last.Gap || !slices.Equal(last.Paths, []string{"docs"}) {
+		t.Errorf("the path subscription's own change %+v", last)
+	}
+	// a commit the round reads itself raises its statement alone, once, with no gap before it
+	world.push(&evsTestChange{path: "src/main.go", content: []byte("main")})
+	world.hint(test, 101)
+	test.client.subscriber.runDue(ctx)
+	if versions := listened.versions(); !slices.Equal(versions, []uint64{2, 3}) {
+		t.Fatalf("changes %v, want 2 then 3", versions)
+	}
+	if change := listened.last(); change.Gap || change.SignerSidecarId != world.signer.sidecarId {
+		t.Errorf("the read's own change %+v", change)
+	}
+	if versions := docs.versions(); !slices.Equal(versions, []uint64{2}) {
+		t.Errorf("a commit outside docs reached its subscription: %v", versions)
+	}
+	// a round that finds nothing past what it raised raises nothing
+	world.hint(test, 102)
+	test.client.subscriber.runDue(ctx)
+	if versions := listened.versions(); !slices.Equal(versions, []uint64{2, 3}) {
+		t.Errorf("a round with nothing new raised %v", versions)
+	}
+}
+
+// A restarted subscriber's baseline is the pins held when it loads: its reread raises nothing for what stood then, and
+// a commit another read of the client pins first after the start still raises a gap. The repo's last subscription
+// ending drops what the subscriber kept for it.
+func TestEvsSubscriptionBaselineAcrossARestart(t *testing.T) {
+	world := newEvsTestWorld(t)
+	leases := newEvsTestLeases(world)
+	store := newEvsTestStore(t)
+	test := newEvsSubscribeTest(t, world, leases, store)
+	world.push(&evsTestChange{path: "docs/a", content: []byte("a")})
+	ctx := context.Background()
+	if _, err := test.client.Repo(world.repoId).Subscribe(ctx, &EvsSubscribeArgs{RefName: EvsMainRefName}); err != nil {
+		t.Fatal(err)
+	}
+	// a commit read and pinned before the device stops, which its sealed store keeps
+	world.push(&evsTestChange{path: "docs/b", content: []byte("b")})
+	if _, err := test.client.Repo(world.repoId).readHeadAlone(ctx, world.refId, true); err != nil {
+		t.Fatal(err)
+	}
+	test.client.Close()
+	restarted := newEvsSubscribeTest(t, world, leases, store)
+	restarted.client.subscriber.random = func(limit time.Duration) time.Duration { return limit / 2 }
+	listened := &evsTestChanges{}
+	remove := restarted.client.AddRepoChangeListener(&world.repoId, listened.add)
+	defer remove()
+	repo := restarted.client.Repo(world.repoId)
+	restarted.client.ReceiveResync(world.repoId, 9)
+	restarted.client.subscriber.runDue(ctx)
+	if versions := listened.versions(); len(versions) != 0 {
+		t.Fatalf("the first read after the start raised %v for what stood at its load", versions)
+	}
+	world.push(&evsTestChange{path: "docs/c", content: []byte("c")})
+	if _, err := repo.readHeadAlone(ctx, world.refId, true); err != nil {
+		t.Fatal(err)
+	}
+	restarted.client.ReceiveResync(world.repoId, 10)
+	restarted.client.subscriber.runDue(ctx)
+	if change := listened.last(); change == nil || change.Version != 3 || !change.Gap || !change.WholeRef {
+		t.Fatalf("a commit another read pinned first after the start: %+v", change)
+	}
+	restarted.client.subscriber.stateLock.Lock()
+	kept := len(restarted.client.subscriber.raisedVersions)
+	subscriptionIds := []Id{}
+	for id := range restarted.client.subscriber.subscriptions {
+		subscriptionIds = append(subscriptionIds, id)
+	}
+	restarted.client.subscriber.stateLock.Unlock()
+	if kept != 1 || len(subscriptionIds) != 1 {
+		t.Fatalf("%d raised versions, %d subscriptions", kept, len(subscriptionIds))
+	}
+	restarted.client.subscriber.unsubscribe(subscriptionIds[0])
+	restarted.client.subscriber.stateLock.Lock()
+	kept = len(restarted.client.subscriber.raisedVersions)
+	restarted.client.subscriber.stateLock.Unlock()
+	if kept != 0 {
+		t.Errorf("%d raised versions kept past the repo's last subscription", kept)
+	}
+}
