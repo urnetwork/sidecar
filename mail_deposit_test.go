@@ -11,9 +11,11 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/http"
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -21,25 +23,40 @@ import (
 )
 
 // A repo that takes a deposit's plaintext, counting the deposits running at once, each waiting on gate while it is
-// set.
+// set, and says what its depositor's state gives the receiver there: deposit where allowed, nothing known elsewhere
+// unless known says so.
 type mailDepositTestRepos struct {
 	stateLock  sync.Mutex
 	plaintexts map[Id][]byte
 	active     int
 	maxActive  int
 	failing    map[Id]error
+	allowed    map[Id]bool
+	known      map[Id]bool
 	gate       chan struct{}
 	// raised as each deposit starts
 	started *MonitorValue[int]
 }
 
 func newMailDepositTestRepos() *mailDepositTestRepos {
-	return &mailDepositTestRepos{plaintexts: map[Id][]byte{}, failing: map[Id]error{}, started: NewMonitorValue(0)}
+	return &mailDepositTestRepos{
+		plaintexts: map[Id][]byte{}, failing: map[Id]error{}, allowed: map[Id]bool{}, known: map[Id]bool{}, started: NewMonitorValue(0),
+	}
 }
 
 type mailDepositTestRepo struct {
 	repos  *mailDepositTestRepos
 	repoId Id
+}
+
+// See mailDepositRightRepo; the receiver is the only depositor these repos judge.
+func (self *mailDepositTestRepo) depositRight(depositorId Id) (bool, bool) {
+	self.repos.stateLock.Lock()
+	defer self.repos.stateLock.Unlock()
+	if depositorId != testMailSessionReceiverId {
+		return false, true
+	}
+	return self.repos.allowed[self.repoId], self.repos.known[self.repoId]
 }
 
 func (self *mailDepositTestRepo) Deposit(ctx context.Context, args *EvsDepositArgs) (*EvsDepositResult, error) {
@@ -79,9 +96,14 @@ func (self *mailDepositTestRepo) Deposit(ctx context.Context, args *EvsDepositAr
 
 // A depositor over repos with settings, nil taking the defaults.
 func newMailDepositTestDepositor(repos *mailDepositTestRepos, settings *MailSessionSettings) *MailDepositor {
+	return newMailDepositTestDepositorOn(repos, settings, nil)
+}
+
+// A depositor over repos with settings on clock, nil taking the defaults and real time.
+func newMailDepositTestDepositorOn(repos *mailDepositTestRepos, settings *MailSessionSettings, clock Clock) *MailDepositor {
 	return newMailDepositor(func(repoId Id) mailDepositRepo {
 		return &mailDepositTestRepo{repos: repos, repoId: repoId}
-	}, &MailDepositorArgs{ReceiverSidecarId: testMailSessionReceiverId, Settings: settings})
+	}, &MailDepositorArgs{ReceiverSidecarId: testMailSessionReceiverId, Clock: clock, Settings: settings})
 }
 
 // A finished spool of message.
@@ -232,5 +254,120 @@ func TestMailDepositorRefusesWhatCannotBeDeposited(t *testing.T) {
 	}
 	if started, _ := repos.started.Get(); started != 0 {
 		t.Fatalf("%d deposits ran", started)
+	}
+}
+
+// A repo the receiver's own verified state gives no deposit refuses the message at once, before any repo's deposit
+// runs, so no repo holds a copy the sender's retry would duplicate; a repo its state gives deposit, or one whose
+// client holds no state to judge by, deposits as before.
+func TestMailDepositorRefusesAtOnceARepoItsStateGivesNoDeposit(t *testing.T) {
+	repos := newMailDepositTestRepos()
+	allowed, unknown, refused := NewId(), NewId(), NewId()
+	repos.allowed[allowed], repos.known[allowed] = true, true
+	repos.known[refused] = true
+	depositor := newMailDepositTestDepositor(repos, nil)
+	targets := []*MailDepositTarget{
+		{RepoId: allowed, Recipients: []string{testMailSessionAlice}},
+		{RepoId: unknown, Recipients: []string{testMailSessionBob}},
+		{RepoId: refused, Recipients: []string{testMailSessionCarol}},
+	}
+	if !depositor.refuses(targets) {
+		t.Fatal("a repo the state refuses was not refused")
+	}
+	err := depositor.Deposit(context.Background(), &MailDepositInput{Spool: newMailDepositTestSpool(t, testMailSessionMessage("refused")), Targets: targets})
+	if !errors.Is(err, ErrMailDepositFailed) {
+		t.Fatalf("Deposit answered %v", err)
+	}
+	if started, _ := repos.started.Get(); started != 0 || len(repos.plaintexts) != 0 {
+		t.Fatalf("%d deposits started, %d made", started, len(repos.plaintexts))
+	}
+	targets = targets[:2]
+	if depositor.refuses(targets) {
+		t.Fatal("a repo the state allows, or knows nothing of, was refused")
+	}
+	if err := depositor.Deposit(context.Background(), &MailDepositInput{Spool: newMailDepositTestSpool(t, testMailSessionMessage("allowed")), Targets: targets}); err != nil {
+		t.Fatal(err)
+	}
+	if len(repos.plaintexts) != 2 {
+		t.Errorf("%d deposits made", len(repos.plaintexts))
+	}
+}
+
+// A message's deposits end at DepositTimeout on the depositor's clock: every one still open is cancelled and the
+// message fails, so the session answers 451 4.3.0 inside the sender's wait; before the bound nothing ends them.
+func TestMailDepositorEndsItsDepositsAtDepositTimeout(t *testing.T) {
+	repos := newMailDepositTestRepos()
+	repos.gate = make(chan struct{})
+	clock := newMailReceiverTestClock()
+	settings := DefaultMailSessionSettings()
+	settings.DepositTimeout = time.Minute
+	depositor := newMailDepositTestDepositorOn(repos, settings, clock)
+	done := make(chan error, 1)
+	go func() {
+		done <- depositor.Deposit(context.Background(), &MailDepositInput{
+			Spool:   newMailDepositTestSpool(t, testMailSessionMessage("held")),
+			Targets: []*MailDepositTarget{{RepoId: NewId(), Recipients: []string{testMailSessionAlice}}},
+		})
+	}()
+	// the bound is armed before any deposit starts
+	for {
+		started, notify := repos.started.Get()
+		if started == 1 {
+			break
+		}
+		<-notify
+	}
+	clock.Advance(settings.DepositTimeout - time.Second)
+	select {
+	case err := <-done:
+		t.Fatalf("the deposits ended before their bound: %v", err)
+	default:
+	}
+	clock.Advance(time.Second)
+	if err := <-done; !errors.Is(err, ErrMailDepositFailed) || !errors.Is(err, context.Canceled) {
+		t.Fatalf("Deposit answered %v", err)
+	}
+	if len(repos.plaintexts) != 0 {
+		t.Errorf("%d deposits made", len(repos.plaintexts))
+	}
+}
+
+// The production repo's right is its client's newest verified state as the exchange reads it for repo:<id>:deposit
+// (AclExchangeScopes): the mailbox's own member's consented device deposits by its write (QD-1173), another member's
+// device only once a send grant on mail: marks it (owner decision 333), and with no state to judge by nothing is known.
+func TestMailEvsDepositRepoReadsItsClientsVerifiedState(t *testing.T) {
+	net := newAclExchangeNet(t)
+	mailboxId := testConfigId("deposit right mailbox")
+	net.withAclRows(func(rows *protocol.AclRows) {
+		rows.Repos = append(rows.Repos, &protocol.AclRepo{
+			RepoId: mailboxId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_MAILBOX, OwnerMemberId: net.ownerMemberId.Bytes(),
+			ConsentedSidecarIds: [][]byte{net.owner.sidecarId.Bytes()},
+		})
+	})
+	test := newEvsTestClient(t, http.NotFoundHandler(), newEvsTestStore(t))
+	repo := mailEvsDepositRepo{EvsRepo: test.client.Repo(mailboxId)}
+	if allowed, known := repo.depositRight(net.owner.sidecarId); allowed || known {
+		t.Fatalf("with no state: %t %t", allowed, known)
+	}
+	test.client.args.Config = func() GkmAuthView { return net.log.State() }
+	if allowed, known := repo.depositRight(net.owner.sidecarId); !allowed || !known {
+		t.Fatalf("the receiver, by its write: %t %t", allowed, known)
+	}
+	if allowed, known := repo.depositRight(net.phone.sidecarId); allowed || !known {
+		t.Fatalf("another member's device before a send grant: %t %t", allowed, known)
+	}
+	net.withAclRows(func(rows *protocol.AclRows) {
+		rows.Rules = append(rows.Rules, &protocol.AclRule{
+			RuleId:   testConfigId("deposit right members send").Bytes(),
+			SrcAtoms: [][]byte{AclAutogroupAtom(protocol.AclAutogroup_ACL_AUTOGROUP_MEMBER).Bytes()},
+			Targets:  []*protocol.AclTarget{{MailSend: true}},
+			Actions:  []uint32{uint32(protocol.AclAction_ACL_ACTION_SEND)},
+		})
+	})
+	if allowed, known := repo.depositRight(net.phone.sidecarId); !allowed || !known {
+		t.Fatalf("another member's device once a send grant marks it: %t %t", allowed, known)
+	}
+	if allowed, known := repo.depositRight(net.readOnly.sidecarId); allowed || !known {
+		t.Fatalf("a read_only device: %t %t", allowed, known)
 	}
 }

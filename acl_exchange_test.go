@@ -271,3 +271,34 @@ func TestAclExchangeScopesMintOnlyAdminForADeletedRepo(t *testing.T) {
 		live("after the RepoRestore")
 	}
 }
+
+// The mailbox's deposit through the exchange: its own member's consented device, a receiver that deposits the mail it
+// takes, is granted repo:<mailbox>:deposit by its write with no send grant (QD-1173), beside its r and rw; another
+// member's device is refused it until a send grant on mail: marks it mail_send (owner decision 333), and then gets the
+// deposit and no r; a read_only device gets none, whatever marks it.
+func TestAclExchangeScopesGiveTheMailboxDepositToMailSendSubjects(t *testing.T) {
+	net := newAclExchangeNet(t)
+	mailboxId := testConfigId("exchange mailbox")
+	net.withAclRows(func(rows *protocol.AclRows) {
+		rows.Repos = append(rows.Repos, &protocol.AclRepo{
+			RepoId: mailboxId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_MAILBOX, OwnerMemberId: net.ownerMemberId.Bytes(),
+			ConsentedSidecarIds: [][]byte{net.owner.sidecarId.Bytes()},
+		})
+	})
+	deposit, read, write := aclExchangeScope(mailboxId, "deposit"), aclExchangeScope(mailboxId, "r"), aclExchangeScope(mailboxId, "rw")
+	aclExchangeCheck(t, "the receiver before a send grant", net.exchange(t, net.owner, AclTokenAudienceEvs, deposit, read, write),
+		[]string{deposit, read, write}, []string{})
+	aclExchangeCheck(t, "another member before a send grant", net.exchange(t, net.phone, AclTokenAudienceEvs, deposit), []string{}, []string{deposit})
+	net.withAclRows(func(rows *protocol.AclRows) {
+		rows.Rules = append(rows.Rules, &protocol.AclRule{
+			RuleId:   testConfigId("exchange members send").Bytes(),
+			SrcAtoms: [][]byte{AclAutogroupAtom(protocol.AclAutogroup_ACL_AUTOGROUP_MEMBER).Bytes()},
+			Targets:  []*protocol.AclTarget{{MailSend: true}},
+			Actions:  []uint32{uint32(protocol.AclAction_ACL_ACTION_SEND)},
+		})
+	})
+	aclExchangeCheck(t, "the receiver", net.exchange(t, net.owner, AclTokenAudienceEvs, deposit, read, write), []string{deposit, read, write}, []string{})
+	aclExchangeCheck(t, "the receiver at gkm", net.exchange(t, net.owner, AclTokenAudienceGkm, deposit), []string{deposit}, []string{})
+	aclExchangeCheck(t, "another member's device", net.exchange(t, net.phone, AclTokenAudienceEvs, deposit, read), []string{deposit}, []string{read})
+	aclExchangeCheck(t, "a read_only device", net.exchange(t, net.readOnly, AclTokenAudienceEvs, deposit), []string{}, []string{deposit})
+}

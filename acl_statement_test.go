@@ -579,7 +579,7 @@ func TestAclRepoCreateSigners(t *testing.T) {
 		len(row.GetConsentedSidecarIds()) != 2 {
 		t.Errorf("the vault's row %+v", row)
 	}
-	if rights := aclTestRights(state, cast.phone, Id(vault.GetRepoId()), AclTokenAudienceEvs); rights != AclEvsRead|AclEvsWrite {
+	if rights := aclTestRights(state, cast.phone, Id(vault.GetRepoId()), AclTokenAudienceEvs); rights != AclEvsRead|AclEvsWrite|AclEvsDeposit {
 		t.Errorf("the owner's phone in its new vault: %b", rights)
 	}
 	directory := create(protocol.RepoKind_REPO_KIND_DIRECTORY)

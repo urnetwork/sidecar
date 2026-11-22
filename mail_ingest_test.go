@@ -1050,3 +1050,45 @@ func TestMailGroupMessageStoresOnceWithAReferencePerMember(t *testing.T) {
 		t.Errorf("a restart after the erasure: %+v, %v", result, err)
 	}
 }
+
+// A deposit whose push's pin this device's state does not hold yet stands, and Run's next pass comes after
+// RetryInterval, not its hourly resync, since nothing of the mailbox changes when the state catches up; that pass
+// ingests it once the depositor is judged.
+func TestMailIngestRunTriesAgainSoonForADepositItCannotJudgeYet(t *testing.T) {
+	world := newMailIngestTestWorld(t)
+	world.authority.classes[world.receiverId] = MailDepositorUnknown
+	clock := newTestConfigClock()
+	settings := DefaultMailIngestSettings()
+	settings.MinPassInterval = 0
+	ingested := make(chan Id, 4)
+	ingestor := world.ingestor(func(args *MailIngestArgs) {
+		args.Settings = settings
+		args.Clock = clock
+		args.Message = func(message *MailMessage) { ingested <- message.Id }
+	})
+	deposit := world.depositMessage(testMailIngestMessage("Pending", "body"))
+	if pass := world.ingest(ingestor); pass.Left != 1 || pass.Pending != 1 || pass.Ingested != 0 {
+		t.Fatalf("a pass over a deposit it cannot judge: %+v", pass)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ingestor.Run(ctx)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+	// Run's first pass leaves the deposit again and arms its next pass RetryInterval on, its one wait
+	if armed := <-clock.armed; armed != settings.RetryInterval {
+		t.Fatalf("the next pass is armed %s on, not %s", armed, settings.RetryInterval)
+	}
+	world.authority.stateLock.Lock()
+	world.authority.classes[world.receiverId] = MailDepositorMail
+	world.authority.stateLock.Unlock()
+	clock.Advance(settings.RetryInterval)
+	if id := <-ingested; id != deposit.id {
+		t.Errorf("the retried pass ingested another deposit")
+	}
+}

@@ -265,7 +265,7 @@ func TestAclOwnerBoundReadsFollowConsent(t *testing.T) {
 	fixture.admission(g).Row.OwnerConfirmedAt = fixture.next()
 	vaultId, vault := fixture.repo(protocol.RepoKind_REPO_KIND_VAULT, member)
 	vault.ConsentedSidecarIds = [][]byte{a.Bytes(), g.Bytes()}
-	if rights := aclTestRights(fixture.state(t), g, vaultId, AclTokenAudienceEvs); rights != AclEvsRead|AclEvsWrite {
+	if rights := aclTestRights(fixture.state(t), g, vaultId, AclTokenAudienceEvs); rights != AclEvsRead|AclEvsWrite|AclEvsDeposit {
 		t.Errorf("confirmed g: %b", rights)
 	}
 	fixture.view.voidFrom[string(a.Bytes())] = 1

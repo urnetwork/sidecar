@@ -10,7 +10,8 @@
 //	class     the depositor is judged at the deposit push's own pin (MailIngestAuthority): a reader that does not
 //	          write deposits §16.8's read receipts, which are the record's and are left alone; one with no right to
 //	          deposit there is consumed unrecorded; a pin this device does not hold yet leaves the deposit for a later
-//	          pass
+//	          pass, which Run makes after RetryInterval rather than its hourly resync, since no change of the mailbox
+//	          comes when this device's state catches up
 //	erased    a signed ERASE consumes its deposit without a message. If a deposit-only ERASE races the mailbox push,
 //	          the post-commit check withholds callbacks. Readers mask the signed message id and a repo admin's next
 //	          pass destroys any new body and index slots under the original erasure id (mail_erase_late.go)
@@ -204,7 +205,8 @@ type MailIngestSettings struct {
 	// How long Run waits for a change before it ingests anyway, which covers a hint that never came: an hour, as
 	// evs's own resync is. Non-positive ingests only on a change.
 	ResyncInterval time.Duration
-	// How long Run waits after a pass that failed before it tries again. Non-positive takes MinPassInterval.
+	// How long Run waits after a pass that failed, or that left a deposit whose pin this device does not hold yet,
+	// before it tries again. Non-positive takes MinPassInterval.
 	RetryInterval time.Duration
 	// The least time between two of Run's passes, so a burst of hints is one pass. Non-positive takes none.
 	MinPassInterval time.Duration
@@ -310,6 +312,8 @@ type MailIngestPass struct {
 	Refused int
 	// Deposits left standing: unopened, unread, a depositor not yet judged, or read receipts.
 	Left int
+	// Of those, the deposits whose depositor is not judged yet: their push's pin is one this device does not hold.
+	Pending int
 	// Deposits a CONSUME named.
 	Consumed int
 }
@@ -450,17 +454,18 @@ func (self *MailIngestor) Run(ctx context.Context) {
 		defer stop()
 	}
 	for {
-		_, err := self.Ingest(ctx)
+		pass, err := self.Ingest(ctx)
 		if ctx.Err() != nil {
 			return
 		}
 		// the least gap first, so a burst of hints is one pass
 		gap := max(self.settings.MinPassInterval, 0)
 		wait := self.settings.ResyncInterval
-		if err != nil {
-			if !errors.Is(err, ErrMailNotIngester) {
-				self.log.Warningf("[mail]ingest %s: %v", self.repoId, err)
-			}
+		if err != nil && !errors.Is(err, ErrMailNotIngester) {
+			self.log.Warningf("[mail]ingest %s: %v", self.repoId, err)
+		}
+		if err != nil || 0 < pass.Pending {
+			// a failed pass, or a deposit whose pin this device's state has yet to reach, which no hint announces
 			if wait = self.settings.RetryInterval; wait <= 0 {
 				wait = gap
 			}
@@ -662,8 +667,11 @@ func (self *MailIngestor) ingestDeposit(ctx context.Context, depositorId Id, dep
 		self.alarm(MailIngestAlarmDepositor, depositorId, messageId)
 		pass.Refused += 1
 		return true, nil
+	case MailDepositorReceipts:
+		return false, nil
 	default:
-		// read receipts, or a pin this device does not hold yet
+		// a pin this device does not hold yet: Run tries again after RetryInterval
+		pass.Pending += 1
 		return false, nil
 	}
 	plaintext, err := mailReadDeposit(body, self.settings.DepositMaxByteCount)
