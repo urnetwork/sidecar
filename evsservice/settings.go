@@ -81,8 +81,15 @@ type EvsSettings struct {
 	// The most bytes of a request body a route reads: the lb's client_max_body_size, 16 MiB (§11.3). A
 	// streamed segment upload is EVSB-M2-09's and takes its own bound. Non-positive refuses every body.
 	RequestBodyMaxByteCount int64
-	// How long Drain waits for requests in flight before it returns. Non-positive returns at once.
+	// How long Drain waits for requests in flight. Non-positive does not wait for them.
 	DrainTimeout time.Duration
+	// How long Drain then waits for §11.8's step 8 of every commit those requests answered (its push sequence and
+	// hints, its stored-byte delta, its head cache entry and a DROP's append) and for each hint the notifier took and
+	// has not yet handed to push, such as one waiting out its repo's interval, before it returns: 10 s, far past step
+	// 8's few soft-state round trips. Past it, Close ends what is left, which costs what step 8's own failures cost: a
+	// hint the clients' hourly resync covers, a stored-byte delta evs.nightly's count reconciles. Non-positive does
+	// not wait.
+	StepEightDrainTimeout time.Duration
 	// Retry-After on a 503 from a store or state that did not answer, which a retry may soon find answering: 1 s.
 	// A closed gate answers its own reread interval instead (§19.11). Non-positive sends 1 s.
 	UnavailableRetryAfter time.Duration
@@ -385,6 +392,7 @@ func DefaultEvsSettings() *EvsSettings {
 		PriceBlockByteCount:         4 * 1024,
 		RequestBodyMaxByteCount:     16 * 1024 * 1024,
 		DrainTimeout:                30 * time.Second,
+		StepEightDrainTimeout:       10 * time.Second,
 		UnavailableRetryAfter:       time.Second,
 		StoreProbeInterval:          5 * time.Second,
 		StoreProbeTimeout:           2 * time.Second,
