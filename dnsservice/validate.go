@@ -9,8 +9,8 @@
 //     zone (zone_scope.go) the same rules hold below the scope's apex, which keeps its system set alone.
 //   - LintZoneWrite holds every writer's result, system rows included, to RFC 2181 §10.1 and §12.7's
 //     DMARC rule, at each owner the write changed.
-//   - copy_rows.go's PlanCopyRows keeps the wildcard answering where a write makes an empty
-//     non-terminal.
+//   - copy_rows.go's PlanCopyRows keeps the wildcard answering at each owner a write leaves with no
+//     address or CNAME of its own, an empty non-terminal or a host holding a TXT say (QD-1190).
 //
 // A ZoneView withholds at answer time what slips past these (zone.go): these are the gate and it is
 // the backstop.
