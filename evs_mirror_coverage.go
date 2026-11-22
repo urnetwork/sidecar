@@ -192,7 +192,7 @@ func (self *EvsMirror) firstMissingTime(ctx context.Context, refId Id, version u
 		if read.GetVersion() != version {
 			continue
 		}
-		statement, err := self.client.verifier.VerifyStatement(read.GetStatement(), self.repoId, refId)
+		statement, err := self.client.verifier.VerifyStatement(ctx, read.GetStatement(), self.repoId, refId)
 		if err != nil {
 			return time.Time{}, false, nil
 		}

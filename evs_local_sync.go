@@ -539,7 +539,7 @@ func (self *evsGitReplayRun) replay(ctx context.Context, through uint64) error {
 		if err != nil {
 			return err
 		}
-		walked, err := client.verifier.walk(engine.mount.RepoId, self.ref.RefId, self.ref.Version, self.ref.Chain, statements, last)
+		walked, err := client.verifier.walk(ctx, engine.mount.RepoId, self.ref.RefId, self.ref.Version, self.ref.Chain, statements, last)
 		if err != nil {
 			return err
 		}

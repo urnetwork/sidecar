@@ -224,7 +224,7 @@ func (self *EvsRepo) streamVersions(ctx context.Context, group *evsStreamGroup, 
 	if through < read.PinVersion || headVersion < through {
 		return nil, fmt.Errorf("%w: more past the stream's head", ErrEvsReplyInvalid)
 	}
-	walked, err := self.client.verifier.walk(self.repoId, read.RefId, read.PinVersion, fromChain, group.statements, through)
+	walked, err := self.client.verifier.walk(ctx, self.repoId, read.RefId, read.PinVersion, fromChain, group.statements, through)
 	if err != nil {
 		return nil, err
 	}

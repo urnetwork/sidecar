@@ -506,7 +506,7 @@ func (self *evsMirrorRun) syncRef(ctx context.Context, summary *protocol.EvsHead
 	if err != nil {
 		return nil, err
 	}
-	walked, err := client.verifier.walk(mirror.repoId, refId, fromVersion, fromChain, statements, summary.GetVersion())
+	walked, err := client.verifier.walk(ctx, mirror.repoId, refId, fromVersion, fromChain, statements, summary.GetVersion())
 	if err != nil {
 		return nil, err
 	}
@@ -1270,7 +1270,7 @@ func (self *EvsMirror) Check(ctx context.Context) (*EvsMirrorCheckResult, error)
 		if len(statements) != int(ref.Version) {
 			continue
 		}
-		walked, err := self.client.verifier.walk(self.repoId, ref.RefId, 0, EvsChainStart(self.repoId, ref.RefId), statements, ref.Version)
+		walked, err := self.client.verifier.walk(ctx, self.repoId, ref.RefId, 0, EvsChainStart(self.repoId, ref.RefId), statements, ref.Version)
 		refName := evsMirrorRefName(ref.RefId)
 		if err != nil {
 			fail(refName, err.Error())

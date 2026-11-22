@@ -320,7 +320,7 @@ func (self *evsGitExport) next(ctx context.Context, ref *evsGitExportRef) (*EvsV
 		if err != nil {
 			return nil, err
 		}
-		walked, err := client.verifier.walk(self.repo.repoId, ref.refId, ref.passed, ref.chain, statements, through)
+		walked, err := client.verifier.walk(ctx, self.repo.repoId, ref.refId, ref.passed, ref.chain, statements, through)
 		if err != nil {
 			return nil, err
 		}
