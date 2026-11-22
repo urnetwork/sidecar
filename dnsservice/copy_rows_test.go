@@ -169,7 +169,7 @@ func TestPlanCopyRowsHostWithAnAddressKeepsOnlyIt(t *testing.T) {
 	address := testCopyUserRow("web", dns.TypeA, "11.22.33.44")
 	requireCopyPlan(t, append(testCopyZoneRows(), txt, address), nil, nil)
 	rows := requireCopyPlan(t, append(testCopyZoneRows(), txt), []string{"web"}, nil)
-	for _, own := range []DnsRecordSet{address, testCopyUserRow("web", dns.TypeAAAA, "2a0f:ffff::7")} {
+	for _, own := range []DnsRecordSet{address, testCopyUserRow("web", dns.TypeAAAA, "2001:db8::7")} {
 		withOwn := requireCopyPlan(t, DnsRowsAfter(rows, []DnsRecordSet{own}, nil), nil, []string{"web"})
 		requireCopyPlan(t, DnsRowsAfter(withOwn, nil, []DnsRecordKey{own.Key()}), []string{"web"}, nil)
 	}
