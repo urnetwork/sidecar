@@ -470,7 +470,9 @@ func testRestartRpcSide(pair *testRpcPair, side *testRpcSide, identity *testRpcI
 // restarted gate, so the callee admits the call and its handler answers. The caller's gate, which holds no Hello with
 // the callee any more, refuses that answer. The call does not wait out its deadline for it: it runs one fresh Hello
 // and sends the same request again, under its request_id, which the mutating handler answers from what it kept,
-// having run once.
+// having run once. The callee's answer to the replayed Hello is lost on its way back, so the call alone meets the
+// ended Hello: arriving, it runs a fresh Hello of its own (TestUnaskedHelloResultRunsAFreshHello), which could stand
+// before the call's answer came.
 func TestCallAnsweredAfterItsHelloEndedRunsHelloAgain(t *testing.T) {
 	pair := newTestRpcPair(t)
 	calleeIdentity := newTestRpcIdentity()
@@ -485,6 +487,9 @@ func TestCallAnsweredAfterItsHelloEndedRunsHelloAgain(t *testing.T) {
 
 	replayed := atomic.Bool{}
 	caller.setDeliver(func(from *testRpcSide, to *testRpcSide, envelope *protocol.Envelope) *protocol.Envelope {
+		if from == restarted && envelope.Type == uint32(protocol.MessageType_HELLO_RESULT) && envelope.RequestId == earlierHello.RequestId {
+			return nil
+		}
 		if from != caller || envelope.Type != uint32(testCallType) || replayed.Swap(true) {
 			return envelope
 		}

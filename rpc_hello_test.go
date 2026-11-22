@@ -2,7 +2,8 @@
 
 // §6.4's Hello between two dispatchers, each with an identity of its own: the exchange that opens both
 // gates, the identity check's refusals one at a time beside a twin that passes, the pin's first use
-// surviving a restart, generations, the floor, feature bits, and two Hellos crossing. A pair delivers
+// surviving a restart, generations, the floor, feature bits, two Hellos crossing, and a fresh Hello run on a
+// HelloResult nothing awaited from a peer this side holds no Hello with. A pair delivers
 // each side's sends to the other's inline handler as connect would, under the C15 key its binding
 // names, on clocks the test moves.
 
@@ -950,4 +951,66 @@ func TestHelloVectors(t *testing.T) {
 			t.Errorf("%s: %d B with the wrapper", vector.Name, len(envelope)+7)
 		}
 	}
+}
+
+// A HelloResult no Hello of this side's awaits, from a sidecar this side holds no Hello with, as a peer restarted under
+// its identity sends when connect replays this side's earlier Hello to it after connect's report ended this side's own
+// (QD-1197). The restarted gate holds a Hello this side does not, so the restarted peer's opens to this side met INVALID
+// under it, which QD-1185 reads as the listener's own, until HelloCacheTimeout. This side runs one fresh Hello at once,
+// which EnsureHello joins, and the restarted peer's open is accepted. Under a Hello that stands, an unasked HelloResult
+// runs none: the call behind it on the peer's worker finds no fresh Hello started.
+func TestUnaskedHelloResultRunsAFreshHello(t *testing.T) {
+	pair := newTestRpcPair(t)
+	calleeIdentity := newTestRpcIdentity()
+	callee := pair.addClient(connect.NewId(), calleeIdentity, nil)
+	caller := pair.add(nil, nil)
+	testEchoHandler(t, callee, nil)
+	if err := caller.subprotocol.EnsureHello(t.Context(), Id(callee.clientId)); err != nil {
+		t.Fatal(err)
+	}
+	earlierHello := testFirstSent(caller.sent(), protocol.MessageType_HELLO)
+	replay := func(to *testRpcSide) {
+		to.subprotocol.receive(connect.SourceId(caller.clientId), proto.Clone(earlierHello).(*protocol.Envelope), caller.peerTo(to))
+	}
+	countHellos := func(sent []*protocol.Envelope) int {
+		count := 0
+		for _, envelope := range sent {
+			if envelope.Type == uint32(protocol.MessageType_HELLO) {
+				count += 1
+			}
+		}
+		return count
+	}
+
+	// under the Hello that stands, the callee's answer to the replay runs nothing
+	replay(callee)
+	if response, err := caller.subprotocol.Call(t.Context(), Id(callee.clientId), testCallType, []byte("x"), nil); err != nil || string(response) != "x!" {
+		t.Fatalf("%q, %v", response, err)
+	}
+	if unasked := caller.subprotocol.stats.helloUnaskedCount.Load(); unasked != 0 || countHellos(caller.sent()) != 1 {
+		t.Fatalf("an unasked HelloResult under a standing Hello started %d Hellos", unasked)
+	}
+
+	// restarted under its identity: connect's report ends the caller's Hello, and the replay opens the restarted gate
+	restarted := testRestartRpcSide(pair, callee, calleeIdentity)
+	testStreamAccepting(t, caller, testStreamTarget)
+	caller.losePeerSession(restarted.clientId)
+	replay(restarted)
+	testAwaitSent(t, caller, func(sent []*protocol.Envelope) bool {
+		return 2 <= countHellos(sent)
+	})
+	if err := caller.subprotocol.EnsureHello(t.Context(), Id(restarted.clientId)); err != nil {
+		t.Fatal(err)
+	}
+	if hellos := countHellos(caller.sent()); hellos != 2 {
+		t.Errorf("%d Hellos, want the first and one fresh", hellos)
+	}
+	if unasked := caller.subprotocol.stats.helloUnaskedCount.Load(); unasked != 1 {
+		t.Errorf("%d fresh Hellos on unasked HelloResults", unasked)
+	}
+	stream, err := restarted.subprotocol.OpenStream(t.Context(), Id(caller.clientId), &StreamOpenRequest{Target: testStreamTarget})
+	if err != nil {
+		t.Fatalf("the restarted callee's open: %v", err)
+	}
+	stream.Close()
 }
