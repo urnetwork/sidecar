@@ -575,6 +575,154 @@ func TestMailReposGroupAddWritesTheRecordAndTheGrantTogether(t *testing.T) {
 	}
 }
 
+// One device's group, created confirmed on world's network, the member joined to it by group-add from the same
+// device, which administers the group's record as its repo's admin; and the group's repo id.
+func mailReposTestGroupWithMember(t *testing.T, world *mailReposTestWorld, repos *MailRepos, device Id, memberId Id) Id {
+	t.Helper()
+	authority := newMailConfigTestAuthority()
+	authority.grant(device, "*")
+	config := newMailConfigTestDevice(t, newMailConfigTestRepo(), authority, device, nil).config
+	args := &MailCreateGroupArgs{LocalPart: "team", Confirmed: true}
+	repo, err := repos.CreateGroup(t.Context(), config, args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	groupId := repo.RepoId()
+	authority.own(groupId, device)
+	if err := repos.AddGroupMember(t.Context(), config, args.LocalPart, memberId); err != nil {
+		t.Fatal(err)
+	}
+	// a completed creation asked again files nothing more
+	grants := world.filedCount(bridge.SignedType_SIGNED_REPO_GRANT)
+	if again, err := repos.CreateGroup(t.Context(), config, args); err != nil || again.RepoId() != groupId || world.filedCount(bridge.SignedType_SIGNED_REPO_GRANT) != grants {
+		t.Fatalf("a completed creation asked again: %v, %v", again, err)
+	}
+	return groupId
+}
+
+// On a personal network group-create grants the group's deposit to autogroup:member (QD-1177), so once group-add has
+// joined the member, a receiver on another of the member's devices, and every device of the member a same-network send
+// goes from, both reads the group and deposits its mail, while the creating device administers it. The grants name
+// two subjects, since the access log keeps one RepoGrant a subject: a deposit grant to the member would give way to
+// group-add's reader grant, and the receiver would read alone (rights 10, as the e2e case's receivers held). The deposit
+// grant reaches the sidecars a grant to the member names and no others: no ephemeral device of the member, and no
+// tagged sidecar it sponsors.
+func TestMailGroupOnAPersonalNetworkGrantsDepositToTheMembersDevices(t *testing.T) {
+	world := newMailReposTestWorld(t)
+	member, owner := world.fixture.memberWithDevice(bridge.MemberRole_MEMBER_ROLE_OWNER)
+	receiver := world.fixture.device(member, NewId().Bytes())
+	sender := world.fixture.device(member, NewId().Bytes())
+	ephemeral := world.fixture.device(member, NewId().Bytes())
+	world.fixture.admission(ephemeral).Ephemeral = true
+	agent := world.fixture.agent(member, world.fixture.tag(member))
+	world.fixture.configRepo(owner, member)
+	world.rebuild()
+	if world.state().teamNetwork() {
+		t.Fatal("the personal network reads as a Team")
+	}
+	groupId := mailReposTestGroupWithMember(t, world, world.repos(owner), owner, member)
+
+	state := world.state()
+	row := state.Repo(groupId)
+	everyMember := AclAutogroupAtom(protocol.AclAutogroup_ACL_AUTOGROUP_MEMBER)
+	if len(row.GetGrants()) != 2 || !mailRepoGrantStands(row, everyMember, protocol.RepoGrantRole_REPO_GRANT_ROLE_DEPOSIT) ||
+		!mailRepoGrantStands(row, member, protocol.RepoGrantRole_REPO_GRANT_ROLE_READER) {
+		t.Fatalf("the group's grants: %v", row.GetGrants())
+	}
+	for _, device := range []Id{receiver, sender} {
+		if rights := aclTestRights(state, device, groupId, AclTokenAudienceEvs); rights != AclEvsDeposit|AclEvsRead {
+			t.Fatalf("another device of the member holds %b on the group", rights)
+		}
+	}
+	if rights := aclTestRights(state, owner, groupId, AclTokenAudienceEvs); !rights.Has(AclEvsAdmin | AclEvsWrite | AclEvsRead | AclEvsDeposit) {
+		t.Fatalf("the creating device holds %b on the group", rights)
+	}
+	for _, outside := range []Id{ephemeral, agent} {
+		if rights := aclTestRights(state, outside, groupId, AclTokenAudienceEvs); rights != 0 {
+			t.Fatalf("a sidecar no grant to the member names holds %b on the group", rights)
+		}
+	}
+}
+
+// On a Team network group-create still grants the group's deposit to tag:mail alone (§15.8; QD-102): once group-add
+// has joined a member, the group holds the tag's deposit grant and the member's reader grant and no autogroup:member
+// grant, so the member's other device reads the group and deposits nothing, and the tag's mail indexer deposits and
+// reads nothing.
+func TestMailGroupOnATeamNetworkGrantsDepositToTagMailAlone(t *testing.T) {
+	world := newMailReposTestWorld(t)
+	member, device := world.fixture.memberWithDevice(bridge.MemberRole_MEMBER_ROLE_OWNER)
+	other := world.fixture.device(member, NewId().Bytes())
+	tag := world.fixture.tag(member)
+	indexer := world.fixture.agent(member, tag)
+	world.fixture.repo(protocol.RepoKind_REPO_KIND_TEAM_RECORD, Id{})
+	world.rebuild()
+	repos := world.repos(device)
+	repos.mailIndexerTag = func(*AclState) (Id, bool) { return tag, true }
+	groupId := mailReposTestGroupWithMember(t, world, repos, device, member)
+
+	state := world.state()
+	row := state.Repo(groupId)
+	everyMember := AclAutogroupAtom(protocol.AclAutogroup_ACL_AUTOGROUP_MEMBER)
+	personal := slices.ContainsFunc(row.GetGrants(), func(grant *protocol.AclRepoGrantRow) bool {
+		return slices.Equal(grant.GetSubject(), everyMember.Bytes())
+	})
+	if len(row.GetGrants()) != 2 || personal || !mailRepoGrantStands(row, tag, protocol.RepoGrantRole_REPO_GRANT_ROLE_DEPOSIT) ||
+		!mailRepoGrantStands(row, member, protocol.RepoGrantRole_REPO_GRANT_ROLE_READER) {
+		t.Fatalf("the group's grants: %v", row.GetGrants())
+	}
+	if rights := aclTestRights(state, other, groupId, AclTokenAudienceEvs); rights != AclEvsRead {
+		t.Fatalf("the member's other device holds %b on the group", rights)
+	}
+	if rights := aclTestRights(state, indexer, groupId, AclTokenAudienceEvs); rights != AclEvsDeposit {
+		t.Fatalf("the mail indexer holds %b on the group", rights)
+	}
+}
+
+// A grant stands for the right its role gives (aclGrantRoleRights), not for every role numbered below it: a reader
+// grant stands for no deposit, though the reader role's number is above the deposit role's, so a group whose deposit
+// subject held one would get its deposit grant still; a deposit grant stands for no read; a writer's stands for read,
+// and for deposit in a repo that takes deposits, as a group inbox does (QD-1173), but not in one that takes none; and
+// no grant stands that expires, names another subject, or meets a config writer's standing revoke of its subject.
+func TestMailRepoGrantStandsForTheRightItsRoleGives(t *testing.T) {
+	subject := NewId()
+	deposit := protocol.RepoGrantRole_REPO_GRANT_ROLE_DEPOSIT
+	reader := protocol.RepoGrantRole_REPO_GRANT_ROLE_READER
+	writer := protocol.RepoGrantRole_REPO_GRANT_ROLE_WRITER
+	grant := func(subject Id, role protocol.RepoGrantRole) *protocol.AclRepoGrantRow {
+		return &protocol.AclRepoGrantRow{Subject: subject.Bytes(), Role: role}
+	}
+	inbox := func(grants ...*protocol.AclRepoGrantRow) *protocol.AclRepo {
+		return &protocol.AclRepo{Kind: protocol.RepoKind_REPO_KIND_GENERAL, Inbox: protocol.RepoInbox_REPO_INBOX_GROUP, Grants: grants}
+	}
+	plain := &protocol.AclRepo{Kind: protocol.RepoKind_REPO_KIND_GENERAL, Grants: []*protocol.AclRepoGrantRow{grant(subject, writer)}}
+	expiring := grant(subject, deposit)
+	expiring.Expires = aclTestNow.UnixMilli()
+	revoked := inbox(grant(subject, deposit))
+	revoked.Revokes = []*protocol.AclRepoRevokeRow{{Subject: subject.Bytes()}}
+	cases := []struct {
+		name   string
+		repo   *protocol.AclRepo
+		role   protocol.RepoGrantRole
+		stands bool
+	}{
+		{name: "a deposit grant, for deposit", repo: inbox(grant(subject, deposit)), role: deposit, stands: true},
+		{name: "a deposit grant, for read", repo: inbox(grant(subject, deposit)), role: reader, stands: false},
+		{name: "a reader grant, for read", repo: inbox(grant(subject, reader)), role: reader, stands: true},
+		{name: "a reader grant, for deposit", repo: inbox(grant(subject, reader)), role: deposit, stands: false},
+		{name: "a writer grant, for read", repo: inbox(grant(subject, writer)), role: reader, stands: true},
+		{name: "a writer grant, for deposit in a group inbox", repo: inbox(grant(subject, writer)), role: deposit, stands: true},
+		{name: "a writer grant, for deposit in a repo that takes none", repo: plain, role: deposit, stands: false},
+		{name: "another subject's grant", repo: inbox(grant(NewId(), deposit)), role: deposit, stands: false},
+		{name: "a grant that expires", repo: inbox(expiring), role: deposit, stands: false},
+		{name: "a revoked subject's grant", repo: revoked, role: deposit, stands: false},
+	}
+	for _, c := range cases {
+		if stands := mailRepoGrantStands(c.repo, subject, c.role); stands != c.stands {
+			t.Errorf("%s: stands %t", c.name, stands)
+		}
+	}
+}
+
 // The network mail key's repo is the mailbox the admin@ record names: absent until that record stands.
 func TestMailReposNetworkMailKeyRepo(t *testing.T) {
 	world := newMailReposTestWorld(t)
