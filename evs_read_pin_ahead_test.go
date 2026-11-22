@@ -365,3 +365,76 @@ func TestEvsConfigFollowersOwnWalkNeverWaits(t *testing.T) {
 		t.Errorf("the reader's walk once its log reached the pin: %v", err)
 	}
 }
+
+// A subscriber whose follower lags hears a commit a faster device pushed under a base one ahead of it: the round that
+// reads what the hint moved waits for its log to reach the base, then verifies the statement and raises its change.
+func TestEvsSubscriberWaitsForItsLogToReachAPinOneBaseAhead(t *testing.T) {
+	ahead := newEvsTestPinAheadWorld(t)
+	ahead.push(&evsTestChange{path: "docs/a", content: []byte("before the base")})
+	leases := newEvsTestLeases(ahead.world)
+	subscriber := newEvsSubscribeTest(t, ahead.world, leases, newEvsTestStore(t))
+	// the hourly resync half an hour on, out of this test's way
+	subscriber.client.subscriber.random = func(limit time.Duration) time.Duration { return limit / 2 }
+	ahead.follow(subscriber)
+	listened := &evsTestChanges{}
+	remove := subscriber.client.AddRepoChangeListener(&ahead.repoId, listened.add)
+	defer remove()
+	ctx := context.Background()
+	if _, err := subscriber.client.Repo(ahead.repoId).Subscribe(ctx, &EvsSubscribeArgs{RefName: EvsMainRefName, Paths: []string{"docs"}}); err != nil {
+		t.Fatal(err)
+	}
+	subscriber.clock.advance(subscriber.client.settings.SubscribeRereadDelay)
+	subscriber.client.subscriber.runDue(ctx)
+	pin := ahead.base()
+	version := ahead.push(&evsTestChange{path: "docs/b", content: []byte("by a faster device under the new base")})
+	ahead.world.hint(subscriber, 100)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		subscriber.client.subscriber.runDue(ctx)
+	}()
+	if n := ahead.nextWait(t); n != pin.GetVersion() {
+		t.Fatalf("the round asked its log to reach %d, not the commit's pin %d", n, pin.GetVersion())
+	}
+	evsTestRequireWaiting(t, "the round", done)
+	ahead.publish()
+	evsTestAnswer(t, "the round", done)
+	change := listened.last()
+	if change == nil || change.Version != version || len(change.Paths) != 1 || change.Paths[0] != "docs" || change.Gap {
+		t.Fatalf("the round raised %+v, not the commit at %d", change, version)
+	}
+	evsTestRequireNoAlarm(t, "the subscriber", subscriber)
+}
+
+// A mirror whose device's follower lags syncs a ref a faster device pushed to under a base one ahead of it: the sync's
+// walk waits for the follower to reach the base, and the mirror then holds the head.
+func TestEvsMirrorSyncWaitsForItsLogToReachAPinOneBaseAhead(t *testing.T) {
+	ahead := newEvsTestPinAheadWorld(t)
+	ahead.push(&evsTestChange{path: "a.txt", content: []byte("before the base")})
+	reader := ahead.reader(t, "mirroring device whose log lags")
+	pin := ahead.base()
+	version := ahead.push(&evsTestChange{path: "b.txt", content: []byte("by a faster device under the new base")})
+	mirror, err := NewEvsMirror(reader.client, ahead.repoId, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := mirror.Sync(context.Background())
+		done <- err
+	}()
+	if n := ahead.nextWait(t); n != pin.GetVersion() {
+		t.Fatalf("the sync asked its log to reach %d, not the commit's pin %d", n, pin.GetVersion())
+	}
+	evsTestRequireWaiting(t, "the sync", done)
+	ahead.publish()
+	if err := evsTestAnswer(t, "the sync", done); err != nil {
+		t.Fatalf("the sync once its log reached the pin: %v", err)
+	}
+	if ref, ok, err := mirror.store.Ref(ahead.world.refId); err != nil || !ok || ref.Version != version {
+		t.Errorf("the mirror holds %+v %v %v, not the head %d", ref, ok, err, version)
+	}
+	evsTestRequireNoAlarm(t, "the mirroring device", reader)
+}
