@@ -7,7 +7,7 @@
 | Path | What it is |
 |---|---|
 | `sections/01-CTX.md` … `sections/23-PHASE.md` | DESIGN.md §1-§23, one file per section. The build copies them verbatim, adding only links. |
-| `owner/DECISIONS.md` | The owner's record, entries 1-684. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
+| `owner/DECISIONS.md` | The owner's record, entries 1-690. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
 | `owner/APPLY.md` | The rules for applying the owner's decisions: precedence (§1), supersession, where two decisions disagree (§2), notation (§3), editing rules (§4), and the follow-up decisions 112-136 with the sections each binds (§6-§8). |
 | `CONVENTIONS.md` | The writing conventions every section follows: the owner directive (§0), the owner rules (§1), the section template (§2) and the X registry (§7), which DESIGN.md's X1-X20 table replaced. |
 | `OUTLINE.md` | The original outline: section codes, scope boundaries, and the word budgets that G0's density rule replaced on 2026-11-04. |
@@ -44,7 +44,7 @@ It needs only `python3`; it was built and checked with Python 3.13. The steps, a
 
 The data files are layered. Each `data_*N.py` loads its predecessor with `runpy` and patches it: `data_front10.py` loads `data_front9.py`, back to `data_front3.py`, and the registers, glossary and appendices go the same way. Change the top layer (the `*10` files), or add an `*11` layer that loads them. Comments in the scripts cite working files from the design sessions (the reconcilers' orders, `peer/`, `review/`, `snap/`), which were not imported; they are history.
 
-## Adding owner decision N (685 onward)
+## Adding owner decision N (691 onward)
 
 1. Add entry N to `owner/DECISIONS.md`: the question, the answer, its cost, the options not taken, and what raised it.
 2. In `asm/data_front10.py`, append `(N, "<what it settles>", "<one line>")` to `INDEX`, add `DATES[N]`, and raise the `assert` to `list(range(1, N + 1))`. Update `STATUS` and `DECISIONS_INTRO` where they name a range. `@@OD:k@@` writes a link to decision k.
@@ -1118,3 +1118,37 @@ The design-records track dr13-late-fold (wave f47c) folds the one answer that th
 - **The metadata list** is unchanged at v65, its words now §2.8's own, and check's additions list is empty.
 
 Outside this folder the track touched DESIGN.md, DESIGN-DEFER.md, DESIGN-AMENDMENTS.md, DESIGN-DETAILS.md (17.2.6 and 17.2.9), protocol/design_unfenced_test.go and check/metadata_list_test.go. Left for the review phase: the as-built writer's refusal of a second label for one member or tag (`ur admin scopes add`; readers take a device two scopes name as ambiguous), which no decision states; and what the final sweep's validation section lists.
+
+## Validation after owner decisions 685 to 690: the fifth late fold (2026-11-21)
+
+The design-records track dr14-late-fold (wave f47c) folds the six answers that the run's list of pending decisions held on 2026-11-21 after the fourth late fold, QD-1170 to QD-1175, questions the end-to-end tests' fix tracks raised and the owner answered that day under the owner's standing acceptance of recommended options, each built by the track that raised it but the listen's expiry, whose code is queued fix track listen-expires. It numbers each answer as it folds it:
+
+| Ledger id | Owner decision | What it settles |
+|---|---|---|
+| QD-1170 | 685 | A head reader holds a directory's read record to the ref version its newest delta committed at, since merged directory deltas let a directory's own versions repeat and fall; a file keeps the entry-version rule. |
+| QD-1171 | 686 | §5.15's internal lookup of sidecars' current clients is `POST /internal/gate/sidecar-identity-clients`, under api's internal gate prefix, for the gkm and mxedge classes. |
+| QD-1172 | 687 | A `tls/` or `smtp/` listen asks its grant's expiry, `SocketListenSettings.Expires`, held to the rule's `maxExpiry`; the mail receiver asks 7 days by default, and `ur socket listen` gains `--expires`. |
+| QD-1173 | 688 | Write implies deposit in every repo that takes deposits, so a mailbox's consented devices, its receivers among them, deposit the mail they take without a send grant. |
+| QD-1174 | 689 | Each edge client's connect identity is derived from the block's edge bearer and its client id, so a restart presents the identity it had and the edge still keeps no state. |
+| QD-1175 | 690 | From M5 every label drawn comes with its zone's mail-off set, so the draw takes a root serial in the label map's order and a running tlsedge routes it. |
+
+- **evs (685).** §11.9's reader row, where a directory is held to the ref version of its newest delta, two records merge by commit version and a record stored before the commit version was kept fails closed on the entry-version rule, the gap-head clause saying a directory's "below" the same way; D-EVS-31, whose Why says a file's versions must only rise, for 5g and the search index's newest-wins rule, whose documents are files, while a directory's may repeat and fall, its newest by commit; and §11.7's directory row, which the answer gives as its premise, each delta at its writer's base plus one in commit order. The check the answer asked, that the newest-wins rule reads no directory path version, holds: §11.14's documents are files, mail messages, record entries and §16.8's derived documents, its version row is a file's entry version, and the code indexes file entries alone (evs_index_writer.go's plan, `indexEvsStore.fileVersions`, the retained index walking a directory only for its names). As evs-client-concurrent-pin built it (`evsBelowReadRecord`, `RaiseReadRecords`): Go code and the device's sealed records, no fence and no §2.8 row.
+- **The identity lookup (686).** §5.15's route, §2.8's api-5, §10.14's tables and §19.4's gkm row, the four places the answer names, and beyond them §8.9's gate surface, where other gates' reads join the prefix, and §19.4's paragraph on what the gate services read. As keys-late-delivery built it (server's `SidecarIdentityClientsGatePath`), gkm calls the route on its own gate bearer, `internal-gate-gkm.yml`, so §19.4's gkm row lists no other internal credential. api-5's published words change, so the list is v66 and `make metadata` brings it to metadata_list.yml; api-5 is no new row, so no guard line is needed.
+- **The listen's expiry (687).** §9.9's `SocketListenSettings` sketch takes `Expires` and its CLI line `ur socket listen --expires`, §8.6's Requests bullet says a `tls/` or `smtp/` listen asks its own expiry, and §15.5's Listener row says the receiver asks 7 days by default. Stated as decided while fix track listen-expires builds the field, the receiver's setting and the flag: a Go settings field and a CLI flag, no wire, since `CanonicalAction.expires_millis` already carries the expiry. The answer names `ur socket listen` alone, so §16.5's `socket_listen` tool keeps its arguments.
+- **Deposits (688).** The answer's "§8.5's readings" are §8.4's: its resource table's `evs:` row and its Readings paragraph take the reading; §8.5's owner-bound row's deposit cell and its group-inbox sentence, §7.8's token exchange and §7.9's tokens row, the exchange's scope and the honoring D-ACL-21 cites, follow, and so does D-ACL-21. As mail-receive-deposit built it (sidecar 417d57b3), the repos that take deposits are D-KEYS-17's, the kinds whose generations carry a drop key and a general repo marked an inbox, and the record still takes a vault writer's entries by its stream alone, so a gap in that chain alarms at once, which RECORD.md 4.2's vault path row now says.
+- **Edge clients (689).** §13.6's edge clients paragraph, where the block's source answers each client's seed from its edge bearer and `EdgeClientPool` derives the client key seed, the sequence certificate and the Service provide key from it, and §7.8's internal bearer row, the edge bearer's uses, whose `edge` class's value now also seeds its block's clients' identities. As tlsedge-restart-contracts built it (server 02b4eab04, sidecar's host_edge_identity.go): no change to connect, the wire or any D- item.
+- **Labels (690).** §12.5's label paragraph, §12.6's write row and §12.7's zone block, as dns-label-serial-order built it (server 7053ee91e): the zone writers that write a label's zone in the same transaction draw without the set, their own write taking the serial. No format, D- item or invariant changes, and no §2.8 row: dns-1 already lists a zone's system records, null MX among them, and its journal, and `dns_label` keeps the columns it had (api-2).
+- **Index rows.** Owner decisions 14, 74, 209, 333, 340, 428 and 577 note the decisions that extend, follow or refine them.
+- **"Later decisions".** QD-024 (§4) and QD-1086 (§22) are neither on this track's list nor in its sections, and keep the Not folded lines the final sweep gave them.
+
+`build.sh` on this folder reproduces DESIGN.md (SHA-256 `ee8bbb2f2027af2c5e21207a91442f141f82b75b9738a23a5d3bcbcbb7796cb7`) and DESIGN-DEFER.md (SHA-256 `c0e7b5f18658b6b8c90e08c6fa8062799826945d640fca6458420c37e4ab9f4d`, unchanged), and the validation shows:
+
+- **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item and no new §2.8 row, so no guard line was needed.
+- **Owner decisions.** All 690 rows are present and cited; APPLY.md's section pairs hold. `LATE_DATES` takes the new rows' date, which `validate10.py`'s row pattern already took.
+- **Open owner questions.** One, Q-REPO-6.
+- **Superseded options.** 317 grep hits, 3 more, every one carried with its reading; none is live. The 45 readings in §2, §7, §10, §11 and §12 whose lines these edits moved carry their new lines, the two on edited lines their new snippets, and three new readings cover the edge client pool, a receiver's weekly approval and gkm's secret files; the 64 whose recorded lines earlier folds had left behind keep them.
+- **Text.** No bare placeholders or HTML tags; the one research-sheet id stands; 12,044 section references, 30 more, with the one unresolved as before. `v7/words.json` and `v7/text_checks.json` were regenerated.
+- **DESIGN-DEFER.md.** 103 entries and 165 pointers, unchanged: none of the six decisions defers anything.
+- **The metadata list** is v66: api-5's internal lookup takes its gate path, no row is added, and check's additions list stays empty.
+
+Outside this folder the track touched DESIGN.md, DESIGN-AMENDMENTS.md, RECORD.md (4.2) and metadata_list.yml. Left for the review phase: fix track listen-expires, which builds owner decision 687's field, the receiver's setting and its flag, and names the setting; whether §16.5's `socket_listen` tool takes an expiry too, which the answer does not say; mxedge's router, whose class the identity lookup takes but which builds no resolver yet, gkm being its one caller; and what the final sweep's validation section lists.
