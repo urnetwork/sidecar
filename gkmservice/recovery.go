@@ -54,7 +54,7 @@ func (self *GkmEngine) serveRecoveryWrapBatch(request *GkmRequest) {
 		return
 	}
 	items := batchRequest.GetItems()
-	if len(items) == 0 || gkmWrapBatchMaxCount < len(items) {
+	if len(items) == 0 || self.settings.WrapBatchMaxCount < len(items) {
 		request.BadRequest()
 		return
 	}
@@ -177,7 +177,7 @@ func (self *GkmEngine) serveRecoveryWrapWrite(request *GkmRequest) {
 		request.Conflict(nil)
 		return
 	}
-	winner, err := createGkmObject(writeCtx, request.Cluster, key, wrap.GetCiphertext(), gkmDeliveryMaxByteCount)
+	winner, err := createGkmObject(writeCtx, request.Cluster, key, wrap.GetCiphertext(), self.settings.DeliveryMaxByteCount)
 	testHookBarrier(BarrierWrapPutAfter, barrierKey)
 	if err != nil {
 		self.answerStoreError(request, err)
@@ -455,7 +455,7 @@ func (self *GkmEngine) serveRecoveryWrapsRead(request *GkmRequest) {
 			// a staged wrap of a lost claim
 			continue
 		}
-		ciphertext, _, err := readGkmObject(request.Ctx, cluster, wrap.key, gkmDeliveryMaxByteCount)
+		ciphertext, _, err := readGkmObject(request.Ctx, cluster, wrap.key, self.settings.DeliveryMaxByteCount)
 		if errors.Is(err, sidecar.ErrBlobNotFound) {
 			continue
 		}

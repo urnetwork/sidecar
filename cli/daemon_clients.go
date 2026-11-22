@@ -402,6 +402,7 @@ func (self *urNetworkClients) groupClient() (*sidecar.GkmGroupClient, error) {
 	}
 	groupArgs.ReaderPrivateKey = self.readerPrivateKey
 	groupArgs.ReaderKeySha256 = self.upkeep.CurrentReaderKeySha256
+	groupArgs.PublishReaderKey = self.upkeep.Refresh
 	groupArgs.ReaderRepoIds = self.readerRepoIds
 	group, err = sidecar.NewGkmGroupClient(groupArgs)
 	if err != nil {

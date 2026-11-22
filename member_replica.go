@@ -187,6 +187,7 @@ func (self *MemberReplica) open() error {
 	}
 	groupArgs.ReaderPrivateKey = self.upkeep.ReaderPrivateKey
 	groupArgs.ReaderKeySha256 = self.upkeep.CurrentReaderKeySha256
+	groupArgs.PublishReaderKey = self.upkeep.Refresh
 	keys := &memberReplicaKeys{replica: self, api: api}
 	groupArgs.ReaderRepoIds = keys.readerRepos
 	group, err := NewGkmGroupClient(groupArgs)

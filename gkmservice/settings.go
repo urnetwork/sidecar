@@ -2,10 +2,11 @@
 // and read where it is used. A bound the design's argument needs, such as repo/'s 5 s cache (§10.6's checks row), is
 // a field too, its default the design's value (QD-702), and a ceiling Validate holds the settings under it to, so a
 // deployment shortens those and raising the bound itself changes the design's argument. Format limits move here as
-// their files are touched, the protocol's value their default: one POST /gkm/delegation-keys' 256 ids and repo/'s
-// 4 KiB so far. The rest still stand beside their formats until QD-706's sweep: a ReaderKey's 7 days and gkm's 10
-// minutes of clock skew (gkm_delivery.go), a token's 64 repo scopes (§7.8), a wrap batch's 256, reader-keys' 256 and
-// the drop-key route's 64 (§10.14), and store.go's two sends of one create, whose callers include wraps.go.
+// their files are touched, the protocol's value their default: one POST /gkm/delegation-keys' 256 ids, repo/'s
+// 4 KiB, a wrap batch's 256 and a stored delivery's 8 KiB so far. The rest still stand beside their formats until
+// QD-706's sweep: a ReaderKey's 7 days and gkm's 10 minutes of clock skew (gkm_delivery.go), a token's 64 repo scopes
+// (§7.8), reader-keys' 256 and the drop-key route's 64 (§10.14), and store.go's two sends of one create, whose callers
+// include wraps.go.
 //
 // The rates are counted per process, in memory (plan-KEYS-rate-counters, decided): each limit is its rate times the
 // process count, and a restart forgets it. The 24 h ReaderKey rule is exact, read from the stored object.
@@ -177,6 +178,12 @@ type GkmServiceSettings struct {
 	// The generations whose commitment and auth pin one process remembers: gen/ is create-only, so an entry never
 	// goes stale, and an evicted one costs a GET.
 	GenerationCacheCount int
+	// §10.14's bound on one POST /gkm/groups/<id>/wraps/<g>/<c8> or recovery-wraps batch (QD-066): 256 deliveries, a
+	// format value whose default is the client's (sidecar.GkmSettings.WrapBatchMaxCount), so the two sides keep one.
+	WrapBatchMaxCount int
+	// The most bytes of one stored delivery a write or read takes: 8 KiB, past a LATE delivery's ~1.42 KB and a
+	// RecoveryWrap's (§10.6's sizes).
+	DeliveryMaxByteCount int64
 	// Deliveries one batch PUTs at once (QD-066: 16).
 	WrapPutConcurrency int
 	// How far into a batch request gkm still starts a PUT, under the lb's 30 s; later items answer 0, not tried
@@ -268,6 +275,8 @@ func DefaultGkmServiceSettings() *GkmServiceSettings {
 
 		GenerationsReplyMaxCount:   1024,
 		GenerationCacheCount:       256 * 1024,
+		WrapBatchMaxCount:          sidecar.DefaultGkmSettings().WrapBatchMaxCount,
+		DeliveryMaxByteCount:       8 * 1024,
 		WrapPutConcurrency:         16,
 		WrapBatchStartDeadline:     20 * time.Second,
 		WrapsReplyMaxCount:         64,
@@ -340,6 +349,8 @@ func (self *GkmServiceSettings) Validate() error {
 		{name: "AckInterval", value: int64(self.AckInterval)},
 		{name: "AckTtl", value: int64(self.AckTtl)},
 		{name: "GenerationsReplyMaxCount", value: int64(self.GenerationsReplyMaxCount)},
+		{name: "WrapBatchMaxCount", value: int64(self.WrapBatchMaxCount)},
+		{name: "DeliveryMaxByteCount", value: self.DeliveryMaxByteCount},
 		{name: "WrapPutConcurrency", value: int64(self.WrapPutConcurrency)},
 		{name: "WrapBatchStartDeadline", value: int64(self.WrapBatchStartDeadline)},
 		{name: "WrapsReplyMaxCount", value: int64(self.WrapsReplyMaxCount)},
