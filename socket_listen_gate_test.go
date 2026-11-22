@@ -19,7 +19,8 @@
 //   - the standing effect does nothing under an empty key and proves nothing happened under a use's;
 //   - ActiveGrant judges a listen that names no requests rule on its subject, socket and action alone, and still covers
 //     no other kind that names none;
-//   - the stock component registers the listen kind's Lookup on its host for its life.
+//   - the stock component registers the listen kind's Lookup on its host for its life, and builds a listen's grant on its
+//     host's standing follower's engine alone.
 //
 // Synthetic values only.
 
