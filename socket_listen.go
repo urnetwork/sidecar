@@ -6,13 +6,26 @@
 //
 // Which names. An application name listens as its token paths, so it needs the K_sock ring (D-SOCK-13). tls/ and smtp/
 // are outward (I-8): Listen calls §5.4's Authorize first, which may answer *ApprovalPendingError, and holds the
-// dispatcher's Service mode only while the registration is held (§13.6), so edges' contracts reach it; the action is
-// kind listen naming the socket, the weight it registers with riding the request beside it (QD-740). §13.9's system
+// dispatcher's Service mode only while the registration is held (§13.6), so edges' contracts reach it. §13.9's system
 // publish, tls/443/mta-sts, is a mail receiver's own component's alone, through ListenSystemPublish: it takes no tls/
 // grant or approval of its own, so that entry asks this device's config for the receiver's approved smtp/25/mx listen
 // grant instead, which stands in (SOCK-M8-01; socket_admission.go), and refuses with no approval filed. share/ is
 // `ur share add`'s alone (SOCK-M5-15), ur/ the platform's (SOCK-M9-01), the system publish its entry's, and a reserved
 // name has no owner: each is refused here. A <net> must be this sidecar's own network.
+//
+// The gate's action (§9.10, §16.6's grant row; QD-772, QD-740). A tls/ or smtp/ listen goes through Authorize as kind
+// listen with a grant's fields alone, as a server may see them: this sidecar as subject, the socket as sock:<name> and
+// listen allowed, with the rule_id and expiry of the requests rule that takes it (AclGrantFiler.Action); its name and
+// weight ride the request beside it. Its effect is the grant component's. A standing grant, a document's rule or a
+// grant already activated, passes it under an empty key with nothing to do; else the request is filed for the rule's
+// approvers, and the listen asked again once a person approves spends the decision, whose use files the GrantActivate
+// the approval fixes and is done with its grant_id, which the listen kind's Lookup finds again after a restart. A
+// listen no requests rule takes names no rule and no expiry, so no decision could activate a grant for it: a standing
+// grant alone passes it, and with none it is refused here (ErrSocketDenied), filing nothing. A use that came to
+// not_done refuses the listen, and an uncertain one answers unavailable, which the same listen asked again completes
+// under its key (AU4). The expiry a rule gives moves with the clock, so each listen's action is kept as its request was
+// filed, by name and weight, until that expiry, and the listen asked again presents the bytes a decision names
+// (keptListenAction); the copy is in memory alone, so a request filed before a restart is filed again after it.
 //
 // smtp/ is a receiver's (§15.5; SOCK-M7-01): smtp/25/mx, or a Team scope's smtp/25/mx.<scope>, protocol smtp-starttls,
 // 16 streams unless the settings say otherwise. A receiver listens not serving, so its lease takes no ticket until §15
@@ -47,6 +60,8 @@ import (
 	"syscall"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/urnetwork/connect"
 	connectprotocol "github.com/urnetwork/connect/protocol"
 
@@ -58,8 +73,9 @@ import (
 // as a socket's bind does, since §9.9's six values have none for it (a reading).
 var errSocketNameTaken error = &socketErrorValue{text: "socket name taken", errno: syscall.EADDRINUSE}
 
-// §9.9's listen settings, defaults as §9.5 gives them: protocol "tcp" ("tls" on tls/, "smtp-starttls" on smtp/), weight
-// 100, max_streams 256 (16 on smtp/, §15.5), app_mode "http" on tls/.
+// §9.9's listen settings, defaults as §9.5 gives them: protocol "tcp" ("tls" on tls/, "smtp-starttls" on smtp/), the
+// registration format's weight and max_streams (SocketFormatSettings: 100 and 256) or a receiver's on smtp/
+// (SidecarSocketSettings.ReceiverMaxStreams: 16, §15.5), app_mode "http" on tls/.
 type SocketListenSettings struct {
 	Protocol string
 	Version  int
@@ -67,9 +83,9 @@ type SocketListenSettings struct {
 	Alpn []string
 	// tls/: "http" (default) or "raw" (§9.5).
 	AppMode string
-	// 1 to 1000. 0 takes 100.
+	// 1 to the format's MaxWeight. 0 takes its DefaultWeight.
 	Weight int
-	// At least 1. 0 takes 256, or 16 on smtp/.
+	// At least 1. 0 takes the format's DefaultMaxStreams, or ReceiverMaxStreams on smtp/.
 	MaxStreams int
 	Exclusive  bool
 	Affinity   bool
@@ -77,19 +93,15 @@ type SocketListenSettings struct {
 	Decision *bridge.Signed
 }
 
-// §9.5's defaults.
+// §9.5's protocol and app mode names, and §8.4's action name a listen's grant allows.
 const (
-	socketListenDefaultProtocol    = "tcp"
-	socketListenTlsProtocol        = "tls"
-	socketListenSmtpProtocol       = "smtp-starttls"
-	socketListenDefaultWeight      = 100
-	socketListenDefaultMaxStreams  = 256
-	socketListenSmtpMaxStreams     = 16
-	socketListenDefaultTlsAppMode  = "http"
-	socketListenTlsAppModeRaw      = "raw"
-	socketListenNoAppMode          = ""
-	socketListenMaxAlpnCount       = 16
-	socketListenMaxProtocolByteLen = 32
+	socketListenDefaultProtocol   = "tcp"
+	socketListenTlsProtocol       = "tls"
+	socketListenSmtpProtocol      = "smtp-starttls"
+	socketListenDefaultTlsAppMode = "http"
+	socketListenTlsAppModeRaw     = "raw"
+	socketListenNoAppMode         = ""
+	socketListenGrantAllow        = "listen"
 )
 
 // One generation's part of a listener: the target on its dispatcher, and the Service hold.
@@ -648,7 +660,7 @@ func (self *SocketListener) UpdateTls(alpns []string, certifiedNames []string, a
 	if self.namespace != SocketNamespaceTls {
 		return fmt.Errorf("%w: UpdateTls is a tls/ listener's", errSocketRegistrationInvalid)
 	}
-	if socketListenMaxAlpnCount < len(alpns) || slices.Contains(alpns, "") {
+	if self.component.format.AlpnMaxCount < len(alpns) || slices.Contains(alpns, "") {
 		return fmt.Errorf("%w: too many ALPN ids, or an empty one", errSocketRegistrationInvalid)
 	}
 	for _, acmeName := range acmeNames {
@@ -704,35 +716,165 @@ func (self *SocketComponent) PolicyChanged() {
 	}
 }
 
-// The §5.4 action a tls/ or smtp/ listen goes through Authorize as (QD-772): SidecarActionListen naming the socket by
-// its grant_dst alone, sock:<name>, as a server may see it (SocketListenGrantDst), built by NewCanonicalAction. The
-// name and the weight the listen registers with, §9.5's default for none, ride the request beside it as its
-// socket_name and weight (QD-740). This listener accepts in process and binds no local port, so the request carries
-// none.
-func socketListenAction(name string, settings *SocketListenSettings) (*SidecarAction, error) {
+// The key a listen's action is kept under (keptListenAction): its name and the weight its request binds.
+type socketListenActionKey struct {
+	name   string
+	weight int32
+}
+
+// The effect of a listen no requests rule takes: a standing grant passes it under an empty key, with nothing to do, and
+// no decision's use can activate a grant for it, since a GrantActivate names the requests rule its grant is asked under
+// (§8.8), so a use proves that nothing happened.
+type socketListenStandingEffect struct{}
+
+// See SidecarEffect.
+func (socketListenStandingEffect) Run(ctx context.Context, effectKey []byte) ([]byte, error) {
+	if len(effectKey) == 0 {
+		return nil, nil
+	}
+	return nil, fmt.Errorf("%w: no requests rule takes this listen, so no grant activates for it", ErrSidecarEffectNotDone)
+}
+
+// The grant filer a tls/ or smtp/ listen's action is built and activated by: the one a host-less component was given,
+// else one over the host's standing follower's ACL engine, the engine the host's gate reads its standing grants from
+// (cli's bridge_filing_config.go), for this network alone. Nil while there is none.
+func (self *SocketComponent) listenGrantFiler() *AclGrantFiler {
+	grants := func() *AclGrantFiler {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		return self.grants
+	}()
+	if grants != nil || self.host == nil {
+		return grants
+	}
+	follower := self.host.ConfigFollower()
+	if follower == nil {
+		return nil
+	}
+	engine, client := follower.StandingPolicy()
+	if engine == nil || client == nil || client.NetworkId() != self.networkId {
+		return nil
+	}
+	return NewAclGrantFiler(self.host, engine)
+}
+
+// The §5.4 action a tls/ or smtp/ listen on name goes through Authorize as, with its effect (the file header): kind
+// listen with the grant's fields for this generation's sidecar, its socket named as a server may see it
+// (SocketListenGrantDst), and beside it the name and the weight it registers with, the format's default for none, as
+// the request's socket_name and weight (QD-740). This listener accepts in process and binds no local port, so the
+// request carries none. ErrSocketDenied where no requests rule takes the listen and no standing grant covers it, and
+// ErrSocketUnavailable with no verified ACL state to judge it on.
+func (self *SocketComponent) socketListenAction(ctx context.Context, generation *socketGeneration, name string, settings *SocketListenSettings) (*SidecarAction, error) {
+	grants := self.listenGrantFiler()
+	if grants == nil || grants.engine == nil || grants.engine.State() == nil || generation == nil || generation.identity == nil {
+		return nil, &SocketCodeError{Err: ErrSocketUnavailable}
+	}
 	grantDst, err := SocketListenGrantDst(name, nil)
 	if err != nil {
 		return nil, err
 	}
-	stored, err := NewCanonicalAction(&protocol.CanonicalAction{
-		Kind:     uint32(SidecarActionListen),
-		GrantDst: []string{grantDst},
-	})
-	if err != nil {
-		return nil, err
-	}
-	weight := socketListenDefaultWeight
+	weight := self.format.DefaultWeight
 	if settings != nil && settings.Weight != 0 {
 		weight = settings.Weight
 	}
-	return &SidecarAction{
-		Kind: SidecarActionListen, Canonical: stored.Bytes, Risk: SidecarRiskNormal,
-		Detail: &SidecarActionDetail{SocketName: name, Weight: int32(weight)},
-	}, nil
+	subject := generation.identity.SidecarId
+	now := self.clock.Now()
+	ask := &AclGrantRequest{Subject: subject, GrantDst: []string{grantDst}, GrantAllow: []string{socketListenGrantAllow}}
+	stored, err := grants.Action(ctx, &protocol.CanonicalAction{Kind: uint32(SidecarActionListen)}, ask, now)
+	var effect SidecarEffect
+	switch {
+	case err == nil:
+		stored = self.keptListenAction(socketListenActionKey{name: name, weight: int32(weight)}, stored, now)
+		effect = grants.Effect(stored)
+	case errors.Is(err, ErrAclRequestNoMatch):
+		// no requests rule takes it, so no decision could activate its grant: a standing grant alone passes it, and with
+		// none nothing is filed
+		stored, err = NewCanonicalAction(&protocol.CanonicalAction{
+			Kind: uint32(SidecarActionListen), Subject: subject.Bytes(), GrantDst: ask.GrantDst, GrantAllow: ask.GrantAllow,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if !grants.engine.ActiveGrant(stored, subject, now) {
+			return nil, &SocketCodeError{Err: ErrSocketDenied}
+		}
+		effect = socketListenStandingEffect{}
+	default:
+		return nil, err
+	}
+	action, err := NewSidecarAction(stored, SidecarRiskNormal, SidecarRiskNormal, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	action.Detail = &SidecarActionDetail{SocketName: name, Weight: int32(weight)}
+	action.Effect = effect
+	return action, nil
 }
 
-// The registration args for name with settings' defaults applied and held to §9.5's bounds.
-func socketListenArgs(name string, namespace SocketNamespace, settings *SocketListenSettings) (*socketRegistrationArgs, error) {
+// The action a listen's request was filed with, by name and weight, while its expiry is ahead, else fresh, which is
+// kept in its place: the expiry a requests rule gives moves with the clock, so fresh, built now, asks another action,
+// and a decision on the first would never be spent (the file header). fresh replaces a kept action that has expired,
+// that asks a longer grant than the rule now gives, or that differs from fresh in anything but its expiry, a changed
+// rule's id say. Expired actions are dropped as each is asked for, so the map holds one per name and weight listened
+// on within a rule's lifetime.
+func (self *SocketComponent) keptListenAction(key socketListenActionKey, fresh *StoredCanonicalAction, now time.Time) *StoredCanonicalAction {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	nowMs := now.UnixMilli()
+	for keptKey, kept := range self.listenActions {
+		if kept.Action.GetExpiresMillis() <= nowMs {
+			delete(self.listenActions, keptKey)
+		}
+	}
+	if kept := self.listenActions[key]; kept != nil {
+		freshAtKeptExpiry := proto.Clone(fresh.Action).(*protocol.CanonicalAction)
+		freshAtKeptExpiry.ExpiresMillis = kept.Action.GetExpiresMillis()
+		if kept.Action.GetExpiresMillis() <= fresh.Action.GetExpiresMillis() && proto.Equal(kept.Action, freshAtKeptExpiry) {
+			return kept
+		}
+	}
+	self.listenActions[key] = fresh
+	return fresh
+}
+
+// The listen kind's Lookup (§16.6's grant row), which the host's gate reconciles a reserved use by: the grant
+// component's, whether the grant_id the spend fixes is in the log the host's engine installed; a listen no requests
+// rule names activated nothing (socketListenStandingEffect).
+func (self *SocketComponent) listenLookup(ctx context.Context, canonical []byte, effectKey []byte) (*SidecarOutcome, error) {
+	stored, err := ParseStoredCanonicalAction(canonical)
+	if err != nil {
+		return nil, err
+	}
+	if len(stored.Action.GetRuleId()) == 0 {
+		return &SidecarOutcome{State: ApprovalOutcomeNotDone}, nil
+	}
+	grants := self.listenGrantFiler()
+	if grants == nil {
+		return &SidecarOutcome{State: ApprovalOutcomeUncertain}, nil
+	}
+	return grants.Lookup(ctx, canonical, effectKey)
+}
+
+// What a listen the gate passed answers for its outcome: nil once its grant stands, a standing grant's included;
+// ErrSocketDenied where its use proved the grant did not activate; ErrSocketUnavailable while that is uncertain, which
+// the same listen asked again completes under the use's key (AU4). A gate that set no outcome passed the listen with
+// nothing more to say.
+func socketListenOutcomeError(outcome *SidecarOutcome) error {
+	if outcome == nil {
+		return nil
+	}
+	switch outcome.State {
+	case ApprovalOutcomeDone:
+		return nil
+	case ApprovalOutcomeNotDone:
+		return &SocketCodeError{Err: ErrSocketDenied}
+	}
+	return &SocketCodeError{Err: ErrSocketUnavailable}
+}
+
+// The registration args for name with settings' defaults applied, from format and from sockets for a receiver, and
+// held to format's bounds (§9.5).
+func socketListenArgs(format *SocketFormatSettings, sockets *SidecarSocketSettings, name string, namespace SocketNamespace, settings *SocketListenSettings) (*socketRegistrationArgs, error) {
 	args := &socketRegistrationArgs{
 		Name:       name,
 		Protocol:   settings.Protocol,
@@ -754,12 +896,12 @@ func socketListenArgs(name string, namespace SocketNamespace, settings *SocketLi
 		}
 	}
 	if args.Weight == 0 {
-		args.Weight = socketListenDefaultWeight
+		args.Weight = format.DefaultWeight
 	}
 	if args.MaxStreams == 0 {
-		args.MaxStreams = socketListenDefaultMaxStreams
+		args.MaxStreams = format.DefaultMaxStreams
 		if namespace == SocketNamespaceSmtp {
-			args.MaxStreams = socketListenSmtpMaxStreams
+			args.MaxStreams = sockets.ReceiverMaxStreams
 		}
 	}
 	if namespace == SocketNamespaceSmtp {
@@ -782,11 +924,11 @@ func socketListenArgs(name string, namespace SocketNamespace, settings *SocketLi
 		return nil, fmt.Errorf("%w: only tls/ takes an app mode or ALPN ids", errSocketRegistrationInvalid)
 	}
 	switch {
-	case args.Weight < socketRegistrationMinWeight || socketRegistrationMaxWeight < args.Weight:
-		return nil, fmt.Errorf("%w: a weight is 1 to 1000", errSocketRegistrationInvalid)
+	case args.Weight < socketRegistrationMinWeight || format.MaxWeight < args.Weight:
+		return nil, fmt.Errorf("%w: a weight is %d to %d", errSocketRegistrationInvalid, socketRegistrationMinWeight, format.MaxWeight)
 	case args.MaxStreams < 1:
 		return nil, fmt.Errorf("%w: max_streams is at least 1", errSocketRegistrationInvalid)
-	case socketListenMaxAlpnCount < len(args.Alpns), socketListenMaxProtocolByteLen < len(args.Protocol):
+	case format.AlpnMaxCount < len(args.Alpns), format.ProtocolMaxByteCount < len(args.Protocol):
 		return nil, fmt.Errorf("%w: too many ALPN ids or too long a protocol", errSocketRegistrationInvalid)
 	}
 	return args, nil
@@ -845,7 +987,7 @@ func (self *SocketComponent) listenAs(ctx context.Context, address *SocketAddres
 			return nil, &SocketCodeError{Err: ErrSocketDenied}
 		}
 	}
-	args, err := socketListenArgs(name, namespace, settings)
+	args, err := socketListenArgs(self.format, self.settings, name, namespace, settings)
 	if err != nil {
 		return nil, err
 	}
@@ -859,11 +1001,15 @@ func (self *SocketComponent) listenAs(ctx context.Context, address *SocketAddres
 		if generation == nil || generation.authorize == nil {
 			return nil, &SocketCodeError{Err: ErrSocketUnavailable}
 		}
-		action, err := self.listenAction(name, settings)
+		action, err := self.listenAction(ctx, generation, name, settings)
 		if err != nil {
 			return nil, err
 		}
 		if err := generation.authorize(ctx, action, settings.Decision); err != nil {
+			return nil, err
+		}
+		// the gate ran the listen's effect: its grant stands, or the use says why the listen cannot register
+		if err := socketListenOutcomeError(action.Outcome); err != nil {
 			return nil, err
 		}
 	}

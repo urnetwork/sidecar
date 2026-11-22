@@ -3,10 +3,11 @@
 // §9.5's and §9.6's field sizes and defaults: what a registration, a Find and a ticket hold at most, and what a
 // registration's zero fields take (QD-702). They are the protocol's values, and changing one is a protocol
 // change that no deployment makes on one side alone, so each side's settings carry this one object and its
-// defaults stay here. The sockets engine reads it as socketsservice.SocketsSettings.Format.
+// defaults stay here. The sockets engine reads it as socketsservice.SocketsSettings.Format, and a listener as
+// SocketComponentArgs.Format or SocketPlatformListenerArgs.Format; the TLS front and publish read its defaults.
 //
-// The registrar's, the listener's and the dialer's checks of the same values (socket_registrar.go,
-// socket_listen.go, socket_ticket.go and socket_dial.go) still hold them as constants, and read this object
+// The registrar's, the ticket's and the dialer's checks of the same values (socket_registrar.go, socket_ticket.go
+// and socket_dial.go) still hold them as constants, the registrar's weight range among them, and read this object
 // once those files move to settings. A page's 1,024 entries is socket_api.go's SocketRegistrationPageMaxEntryCount
 // until that file moves too.
 

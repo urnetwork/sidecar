@@ -53,14 +53,16 @@ type SocketPlatformListenerArgs struct {
 	Clients []*SocketEdgeClient
 	// How each client's registrations reach the sockets service, on the client's bearer.
 	Registrations *SocketPlatformRegistrationsArgs
-	// The protocol, version, weight and max_streams each client registers with. "" and 0 take §9.5's "tcp", 100 and
-	// 256.
+	// The protocol, version, weight and max_streams each client registers with. "" and 0 take §9.5's "tcp" and the
+	// format's DefaultWeight and DefaultMaxStreams.
 	Protocol   string
 	Version    int
 	Weight     int
 	MaxStreams int
 	// The registrar's intervals and admission's. Nil is DefaultSidecarSocketSettings.
 	Settings *SidecarSocketSettings
+	// §9.5's registration format, which the sockets service holds too. Nil is DefaultSocketFormatSettings.
+	Format *SocketFormatSettings
 	// The listener's own limits. Nil is DefaultSocketPlatformListenSettings.
 	Platform *SocketPlatformListenSettings
 	// Nil is real time.
@@ -155,17 +157,21 @@ func NewSocketPlatformListener(ctx context.Context, args *SocketPlatformListener
 	if platformSettings.RegistrationsMaxAnswerByteCount <= 0 {
 		return nil, fmt.Errorf("%w: a platform listener reads a positive answer", errInvalidSettings)
 	}
+	format := args.Format
+	if format == nil {
+		format = DefaultSocketFormatSettings()
+	}
 	protocolName := args.Protocol
 	if protocolName == "" {
 		protocolName = socketListenDefaultProtocol
 	}
 	weight := args.Weight
 	if weight == 0 {
-		weight = socketListenDefaultWeight
+		weight = format.DefaultWeight
 	}
 	maxStreams := args.MaxStreams
 	if maxStreams == 0 {
-		maxStreams = socketListenDefaultMaxStreams
+		maxStreams = format.DefaultMaxStreams
 	}
 	seen := map[Id]bool{}
 	for _, client := range args.Clients {

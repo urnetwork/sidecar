@@ -1128,7 +1128,7 @@ func TestTlsFrontListenSettings(t *testing.T) {
 	if settings := TlsFrontListenSettings(target, false); settings.AppMode != "http" || !slices.Equal(settings.Alpn, []string{tlsAlpnH2, tlsAlpnHttp11}) {
 		t.Errorf("http: %+v", settings)
 	}
-	if _, err := socketListenArgs(tlsFrontTestName, SocketNamespaceTls, TlsFrontListenSettings(target, true)); err != nil {
+	if _, err := socketListenArgs(DefaultSocketFormatSettings(), DefaultSidecarSocketSettings(), tlsFrontTestName, SocketNamespaceTls, TlsFrontListenSettings(target, true)); err != nil {
 		t.Errorf("the registration refuses its own settings: %v", err)
 	}
 }

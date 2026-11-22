@@ -283,7 +283,7 @@ func newTlsFrontTarget(target *TlsFrontTarget) (*TlsFrontTarget, error) {
 		copied.AppMode = socketListenDefaultTlsAppMode
 	}
 	if copied.MaxStreams == 0 {
-		copied.MaxStreams = socketListenDefaultMaxStreams
+		copied.MaxStreams = DefaultSocketFormatSettings().DefaultMaxStreams
 	}
 	name, namespace, err := ParseSocketName(copied.Name)
 	if err != nil || namespace != SocketNamespaceTls {
