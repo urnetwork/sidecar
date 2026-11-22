@@ -1,6 +1,6 @@
 //go:build !sidecar_http && !ios_extension
 
-// An edge client's connect identity, as stable as its client id (§13.6; QD tlsedge-restart-contracts-edge-identity).
+// An edge client's connect identity, as stable as its client id (§13.6; QD-1174).
 // api derives an edge client's id from its environment, host, block, slot and index, so a restart, or a deploy into a
 // slot an earlier process held, comes back under the same id while the edge keeps no state. A connect client's identity
 // material is drawn fresh each process unless its owner keeps it: the Service provide secret key that every contract

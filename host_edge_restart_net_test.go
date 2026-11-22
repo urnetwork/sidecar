@@ -1,13 +1,12 @@
 //go:build !sidecar_http && !ios_extension && !js
 
-// An edge restarted in place on sidecartest's Net (QD tlsedge-restart-contracts-edge-identity, §13.6): EdgeClientPool's
-// client comes back under the same client id, as api's derivation gives it, while a listener that served it keeps its
-// send sequence to that id and the contract it holds. The Net's issuer signs each contract with the destination's live
-// provide key, as CreateContract does, so the listener's contract is the old process's. A restarted pool whose client
-// presents the same connect identity, which its source's seed derives (host_edge_identity.go), verifies that contract,
-// and its next stream to the listener carries bytes both ways within RecoveryTimeout. A pool that drew a fresh identity
-// refuses the contract, and the listener's answers wait on its AckTimeout, connect's 60 s, which is the blogger case's
-// two-minute outage in small.
+// An edge restarted in place on sidecartest's Net (QD-1174, §13.6): EdgeClientPool's client comes back under the same
+// client id, as api's derivation gives it, while a listener that served it keeps its send sequence to that id and the
+// contract it holds. The Net's issuer signs each contract with the destination's live provide key, as CreateContract
+// does, so the listener's contract is the old process's. A restarted pool whose client presents the same connect
+// identity, which its source's seed derives (host_edge_identity.go), verifies that contract, and its next stream to the
+// listener carries bytes both ways within RecoveryTimeout. A pool that drew a fresh identity refuses the contract, and
+// the listener's answers wait on its AckTimeout, connect's 60 s, which is the blogger case's two-minute outage in small.
 //
 // Real connect clients keep real timers, so the bounds are real time, each one a broken run's, never a sleep.
 
