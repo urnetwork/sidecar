@@ -18,8 +18,9 @@
 //     (D-DNS-11): the zone moves by that one serial, <blabel> answers the wildcard's MX and A and AAAA, the selector
 //     answers the key the reply was signed under, the MX holds the reply signed d=<blabel> s=<sel>, and the burner
 //     still takes mail;
-//   - second selector: a rotation's call publishes another and retires the first in one write that adds no copy, and
-//     key expiry's run once the first's keep has passed takes it out while the copy stays;
+//   - second selector: a rotation's call publishes another and retires the first in one write that adds no copy but
+//     the new selector's own (QD-1190), and key expiry's run once the first's keep has passed takes it out with its
+//     own copy while the label's copies stay;
 //   - burn: Burn retires the label's last selector through the laptop's SmtpDkimKeys and changes no DNS (the zone's
 //     serial as before), while the receiver answers 550 5.1.1 for the label at once (§15.9's burn row);
 //   - last selector: key expiry's run once that keep has passed takes the last selector out, its write deleting the
@@ -224,8 +225,8 @@ func s10ReplyingRun(t testing.TB, settings *S10ReplyingSettings) func(ctx contex
 			return fmt.Errorf("a replying burner's mail: %s", reply)
 		}
 
-		// second selector: a rotation publishes one and retires the first in one write that adds no copy; key expiry
-		// past the first's keep takes it out and leaves the copies
+		// second selector: a rotation publishes one and retires the first in one write that adds no copy but the new
+		// selector's own; key expiry past the first's keep takes it out with its own copy and leaves the label's
 		if err := world.Dkim.Rotate(ctx, burnerDomain); err != nil {
 			return fmt.Errorf("rotate: %w", err)
 		}
@@ -497,7 +498,7 @@ func DefaultS10FakeDkimSettings() *S10FakeDkimSettings {
 // of the network, over the DNS harness's store, as SMTP-M9-19's PublishSmtpDkimKeys and SMTP-M9-17's
 // ExpireSmtpDkimKeys call DNS-M9-01's writers: a new selector is its key record at <sel>._domainkey.<domain> in one
 // journal write with the copies dnsservice.PlanCopyRows plans for what the write leaves, which for a burner's first is
-// <blabel>'s and _domainkey.<blabel>'s; a retirement marks it retired and writes nothing; key expiry takes each
+// <blabel>'s, _domainkey.<blabel>'s and its own; a retirement marks it retired and writes nothing; key expiry takes each
 // selector retired more than RetiredKeepTimeout before its now out of DNS, one write each, with the copies its removal
 // ends. A selector published again with its key, or retired again, is answered as before. Safe for concurrent use.
 func S10FakeDkim(ctx context.Context, t testing.TB, run *sidecartest.ScenarioRun, zone *S10Zone, networkId sidecar.Id, sidecarId sidecar.Id) (S10Dkim, error) {
