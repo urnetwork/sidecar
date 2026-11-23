@@ -234,8 +234,9 @@ func TestEvsReadFreshOnceWhileEvsStaysBehindItsPush(t *testing.T) {
 // What a device's reads of a ref are held to: the version its newest push committed at; a fresh read sent before a
 // commit was noted says nothing of it; one sent after that finds evs's cluster behind the push holds reads to what it
 // found instead, raised by later fresh reads and by this device's pushes the cluster commits below the lost one, and
-// never lowered by them; a fresh read at or past the push, a push past it and a reseed each end that; and each ref is
-// its own.
+// never lowered by them; a fresh read at or past the push holds reads to the push again, and no later fresh read
+// lowers them below what it showed; a push past it and a reseed each end that; and each ref is its own. Each head
+// noted here stands for one that verified (evs_own_floor_verified_test.go shows an unverified one is never noted).
 func TestEvsOwnFloorFollowsCommitsFreshReadsAndReseeds(t *testing.T) {
 	epochs := newEvsClientEpochs()
 	repoId, refId, otherRefId := evsTestId("floor repo"), evsTestId("floor ref"), evsTestId("floor other ref")
@@ -255,7 +256,7 @@ func TestEvsOwnFloorFollowsCommitsFreshReadsAndReseeds(t *testing.T) {
 		{name: "a late answer at 3", step: func() { epochs.noteCommitted(repoId, refId, 3) }, floor: 4},
 		{name: "a push the cluster commits at 5", step: func() { epochs.noteCommitted(repoId, refId, 5) }, floor: 5},
 		{name: "a fresh read finds 6", step: func() { epochs.noteFreshHead(repoId, refId, 6, 6) }, floor: 6},
-		{name: "a fresh read finds 2 again", step: func() { epochs.noteFreshHead(repoId, refId, 6, 2) }, floor: 2},
+		{name: "a fresh read, asked before the one that found 6, finds 2", step: func() { epochs.noteFreshHead(repoId, refId, 6, 2) }, floor: 6},
 		{name: "a push at 7", step: func() { epochs.noteCommitted(repoId, refId, 7) }, floor: 7},
 		{name: "a fresh read finds 1", step: func() { epochs.noteFreshHead(repoId, refId, 7, 1) }, floor: 1},
 		{name: "a reseed at 3", step: func() { epochs.forgetAbove(repoId, refId, 3) }, floor: 3},
