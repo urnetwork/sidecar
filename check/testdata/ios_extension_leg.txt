@@ -167,6 +167,7 @@ evs_slot.go
 evs_staged.go
 evs_statement.go
 evs_subscribe.go
+evs_subscribe_pin_wait.go
 evs_token.go
 evs_verify.go
 evs_window.go

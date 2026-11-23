@@ -23,7 +23,9 @@
 // Past the bound the statement is withheld, ErrConfigPinAhead under ErrEvsStatementRefused, which alarms nothing: a
 // pin no state of the log reaches still refuses, and nothing is judged at a state it was not signed under. The config
 // follower's own reads of the config repo (evs_config_head.go) never wait, since they run on the follow the wait
-// would wait on (withholdingAhead).
+// would wait on (withholdingAhead). Nor do the subscriber's rounds, whose one goroutine serves every subscription:
+// their reads and walks withhold such a statement at once and note its pin (evsPinWaitDeferral), and the subscriber
+// waits within the same bound for that ref alone (evs_subscribe_pin_wait.go).
 //
 // A head below the pin is refused and raises head_alarm's fork with both RefHeads as evidence, unless a verified
 // EvsReseed covers it (§11.13, §19.10), which lowers the pin and is kept as a loss. A head at the pin's version with
@@ -384,11 +386,22 @@ func (self *EvsVerifier) VerifyStatement(ctx context.Context, statementBytes []b
 // EvsClientArgs.ConfigWait within EvsSettings.AuthPinWaitTimeout on the client's clock, and within ctx, then read
 // again, for the caller to judge the statement in. Where this verifier withholds ahead, no wait is wired or the bound is
 // not positive it waits for nothing; a wait that fails, times out or ends with ctx leaves whatever state then stands,
-// whose At answers ErrConfigPinAhead as before. It holds no lock while it waits.
+// whose At answers ErrConfigPinAhead as before. Under a subscriber's round (evsPinWaitDeferralOf) it waits for nothing
+// either: the state is read again and n noted where that state is still below it, for the subscriber to wait for off
+// the round. It holds no lock while it waits.
 func (self *EvsVerifier) awaitPin(ctx context.Context, newest GkmAuthView, n uint64) GkmAuthView {
 	wait := self.client.args.ConfigWait
 	timeout := self.client.settings.AuthPinWaitTimeout
 	if self.withholdAhead || wait == nil || timeout <= 0 {
+		return newest
+	}
+	if deferral := evsPinWaitDeferralOf(ctx); deferral != nil {
+		if state, err := self.config(); err == nil {
+			newest = state
+		}
+		if newest.Pin().GetVersion() < n {
+			deferral.note(n)
+		}
 		return newest
 	}
 	waitCtx, cancel := context.WithCancel(ctx)

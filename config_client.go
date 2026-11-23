@@ -36,7 +36,8 @@
 // its logs, so the follows stop at it and its head_alarm is raised once; a head or rows api withheld, a run refused
 // and a page below the pin are no fork, and the next follow starts again. A base whose rows do not compile from its
 // head is such a fork, so a rows mismatch installs nothing. A reader that cannot fetch an entry it has proof of, a
-// hint naming a position api does not serve, treats itself as withheld.
+// hint naming a position api does not serve, treats itself as withheld, judging each follow by the hints noted before
+// it read api, so the position its own base lands at during a follow is the next follow's to judge.
 //
 // What it keeps across restarts is config_client_store.go's, in §5.9's authlog/.
 //
@@ -240,6 +241,10 @@ type ConfigClient struct {
 	floor *bridge.AuthPin
 	// the newest position a team hint named
 	hinted uint64
+	// hinted as it stood when the follow under way last read api (readProjection), set by the follower: what
+	// checkWithheld judges that read's answer by. A hint noted after it names what api may have sequenced once it
+	// answered, which the next follow, the one noteHint asked for, judges
+	readHinted uint64
 	// set once api serves less than this device holds proof of
 	withheldSince time.Time
 	// the heads this device verified, by config_head_sha256, with the settings each held: a restart from authlog/
@@ -615,7 +620,7 @@ func (self *ConfigClient) followConfirmed(ctx context.Context) error {
 		if log != nil {
 			after = log.Pin().GetVersion()
 		}
-		projection, err := self.args.Projection.ReadConfigProjection(ctx, after)
+		projection, err := self.readProjection(ctx, after)
 		if err != nil {
 			return err
 		}
@@ -711,7 +716,7 @@ func (self *ConfigClient) followJoining(ctx context.Context) error {
 // over as many pages as reach the floor (start), published only once it holds the floor and a base. Until then nothing
 // is published, and VerifiedState answers the state each base being checked lands on.
 func (self *ConfigClient) confirm(ctx context.Context) error {
-	projection, err := self.args.Projection.ReadConfigProjection(ctx, 0)
+	projection, err := self.readProjection(ctx, 0)
 	if err != nil {
 		return err
 	}
@@ -739,7 +744,7 @@ func (self *ConfigClient) followUnconfirmed(ctx context.Context, configRepoId Id
 		if log != nil {
 			after = log.Pin().GetVersion()
 		}
-		projection, err := self.args.Projection.ReadConfigProjection(ctx, after)
+		projection, err := self.readProjection(ctx, after)
 		if err != nil {
 			return err
 		}
@@ -830,15 +835,31 @@ func (self *ConfigClient) pageRowsSource(ctx context.Context, projection *Config
 	return source
 }
 
-// Whether api served all this device knows of: a hint or a held pin past api's tip is withheld (§7.9's retain row),
-// which alarms once until api serves it. A joining device counts its rows-only pass's position as served.
+// One page of the log after position after, read from api for the follow under way, under followLock. The hints noted
+// before the read are what its answer is judged by (readHinted, checkWithheld): api answers at most what it sequenced
+// by then, so a hint noted once the read is under way, as this device's own base notes one as it lands (the writer's
+// WaitFor after its post), is left to the next follow, which noteHint asked for.
+func (self *ConfigClient) readProjection(ctx context.Context, after uint64) (*ConfigProjection, error) {
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.readHinted = self.hinted
+	}()
+	return self.args.Projection.ReadConfigProjection(ctx, after)
+}
+
+// Whether api served all this device knew of when the follow last read it, the page that ended the follow: a hint
+// noted before that read, or a held pin, past what the follow applied is withheld (§7.9's retain row), which alarms
+// once until api serves it. A hint noted after the read is no evidence against that answer, since api may have
+// sequenced its position once it answered: the next follow judges it. A joining device counts its rows-only pass's
+// position as served. Under followLock.
 func (self *ConfigClient) checkWithheld(projection *ConfigProjection) {
 	position := self.appliedPosition()
 	alarm := false
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
-		known := max(self.hinted, self.floor.GetVersion())
+		known := max(self.readHinted, self.floor.GetVersion())
 		if position < known {
 			if self.withheldSince.IsZero() {
 				self.withheldSince = self.clock.Now()
@@ -975,7 +996,7 @@ func (self *ConfigClient) start(ctx context.Context, log *ConfigLog, projection 
 	// the pages after the first, until the log holds the floor
 	last := projection
 	for pageCount := 1; floor != nil && started.Pin().GetVersion() < floor.GetVersion() && last.More && pageCount < max(self.settings.MaxPagesPerFollow, 1); pageCount += 1 {
-		next, err := self.args.Projection.ReadConfigProjection(ctx, started.Pin().GetVersion())
+		next, err := self.readProjection(ctx, started.Pin().GetVersion())
 		if err != nil {
 			return nil, nil, err
 		}

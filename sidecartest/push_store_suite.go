@@ -382,7 +382,7 @@ func casePushNotCanonicalRefused(env *pushSuiteEnv) error {
 
 func casePushClockRaised(env *pushSuiteEnv) error {
 	clientId := pushSuiteClientId()
-	for _, topic := range []string{sidecar.PushTopicGkm, sidecar.PushTopicCore, sidecar.PushTopicMail, sidecar.PushTopicTls} {
+	for _, topic := range []string{sidecar.PushTopicGkm, sidecar.PushTopicCore, sidecar.PushTopicSock, sidecar.PushTopicMail, sidecar.PushTopicTls} {
 		writes := []struct {
 			version uint64
 			carried uint64
@@ -406,18 +406,19 @@ func casePushClockRaised(env *pushSuiteEnv) error {
 			return err
 		}
 	}
-	// a topic that is no raised clock keeps the stored value
-	if _, err := env.hint(clientId, sidecar.PushTopicSock, 1000); err != nil {
+	// a clock that is no raised clock, a repo's push sequence, keeps the stored value
+	evsTopic := sidecar.PushTopicEvs(sidecar.NewId())
+	if _, err := env.hint(clientId, evsTopic, 1000); err != nil {
 		return err
 	}
-	result, err := env.hint(clientId, sidecar.PushTopicSock, 500)
+	result, err := env.hint(clientId, evsTopic, 500)
 	if err != nil {
 		return err
 	}
 	if result.Version != 1000 {
-		return fmt.Errorf("sock: a lower hint carries %d", result.Version)
+		return fmt.Errorf("%s: a lower hint carries %d", evsTopic, result.Version)
 	}
-	return env.expectStored(clientId, sidecar.PushTopicSock, 1000)
+	return env.expectStored(clientId, evsTopic, 1000)
 }
 
 func casePushSeqRises(env *pushSuiteEnv) error {
