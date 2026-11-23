@@ -6,7 +6,7 @@
 //
 //	core            §5    api's clock in µs, raised past the stored value
 //	team            §7    the authorization log position n: durable
-//	sock            §9    sockets' clock in ms, per client
+//	sock            §9    sockets' clock in ms, per client, raised past the stored value (QD-1212)
 //	mail            §15   the writer's clock in ms, per client, raised past the stored value
 //	tls             §13   as mail
 //	dns             §12   the zone serial, which a restore raises above every serial issued: durable
@@ -116,10 +116,13 @@ func pushTopicIdValid(idText string) bool {
 }
 
 // Whether the hint script raises topic's version past the stored value when the writer's is not above
-// it: the clocks of core, mail, tls and gkm, as gkm's was first (§6.8).
+// it: the clocks of core, sock, mail, tls and gkm, as gkm's was first (§6.8). Several writers' clocks
+// share each, a hint written at a version not above the stored one would carry the stored one, and a
+// client ignores a hint at or below the version it holds: of two sock hints for one listener in one
+// millisecond, the second never reached it until sock was raised too (QD-1212).
 func PushTopicRaisesClock(topic string) bool {
 	switch topic {
-	case PushTopicCore, PushTopicMail, PushTopicTls, PushTopicGkm:
+	case PushTopicCore, PushTopicSock, PushTopicMail, PushTopicTls, PushTopicGkm:
 		return true
 	}
 	return false

@@ -35,12 +35,17 @@
 //	           at its version; and a pin a verified reseed lowered below the mark (§11.13) takes the mark down to it
 //	           with a gap change. A delivery whose log does not answer is owed again after ReadRetryWait, the mark
 //	           kept where it got to
+//	pin waits  (evs_subscribe_pin_wait.go) a read or delivery that meets a statement pinned above this device's config
+//	           state never waits for the log on the round: its ref is held, the rounds skipping just that ref while
+//	           the subscriber's pin waiter waits for the pin within AuthPinWaitTimeout (QD-1202), and the ref is
+//	           retried once the log reaches the pin or the bound passes
 //
 // The subscriber's work runs in rounds (runDue) on one goroutine (run), which Start begins and Close ends; every input
 // only queues work and wakes it, so a hint's path and a raise's never wait and do no I/O. A round's I/O holds no lock
-// but deliverLock, which serializes deliveries so each change is raised once and in order. Marks and held statements
-// are memory only: after a restart the marks start at the pins, as the listeners, which are memory too, start anew.
-// Paths are this device's plaintext, kept only in the sealed store and never logged (I-13).
+// but deliverLock, which serializes deliveries so each change is raised once and in order, and no round waits on one
+// ref's pin (the pin waits row). Marks and held statements are memory only: after a restart the marks start at the
+// pins, as the listeners, which are memory too, start anew. Paths are this device's plaintext, kept only in the sealed
+// store and never logged (I-13).
 //
 // On every leg. Safe for concurrent use.
 
@@ -191,6 +196,17 @@ type evsSubscriber struct {
 	wake      chan struct{}
 	// rounds done, for a test to wait on
 	roundCount *MonitorValue[int]
+	// each followed ref held for a pin above this device's config state, its rounds deferred
+	// (evs_subscribe_pin_wait.go)
+	pinHolds map[evsRefKey]*evsPinHold
+	// the pin waiter's lifetime, nil while none runs, and the waiters still running, one but for a last pass, which
+	// Close joins; the end of the wait it is in, and the pin that wait is for
+	pinWaiterCancel context.CancelFunc
+	pinWaits        sync.WaitGroup
+	pinWaitCancel   context.CancelFunc
+	pinWaitPosition uint64
+	// holds released, for a test to wait on
+	pinReleaseCount *MonitorValue[int]
 }
 
 // A listener of one repo's changes, or every repo's.
@@ -202,16 +218,18 @@ type evsRepoChangeListener struct {
 // A subscriber of client, with nothing loaded until a call needs it.
 func newEvsSubscriber(client *EvsClient) *evsSubscriber {
 	return &evsSubscriber{
-		client:         client,
-		random:         evsRandomDuration,
-		subscriptions:  map[Id]*evsSubscriptionState{},
-		syncs:          map[Id]*evsSyncRequest{},
-		refMarks:       map[evsRefKey]*evsRefMark{},
-		repoSequences:  map[Id]uint64{},
-		repoListedDays: map[Id]string{},
-		listeners:      map[int]*evsRepoChangeListener{},
-		wake:           make(chan struct{}, 1),
-		roundCount:     NewMonitorValue(0),
+		client:          client,
+		random:          evsRandomDuration,
+		subscriptions:   map[Id]*evsSubscriptionState{},
+		syncs:           map[Id]*evsSyncRequest{},
+		refMarks:        map[evsRefKey]*evsRefMark{},
+		repoSequences:   map[Id]uint64{},
+		repoListedDays:  map[Id]string{},
+		listeners:       map[int]*evsRepoChangeListener{},
+		wake:            make(chan struct{}, 1),
+		roundCount:      NewMonitorValue(0),
+		pinHolds:        map[evsRefKey]*evsPinHold{},
+		pinReleaseCount: NewMonitorValue(0),
 	}
 }
 
@@ -284,7 +302,8 @@ func (self *EvsClient) StartSubscriptions() error {
 	return self.subscriber.start()
 }
 
-// Ends and joins the mount workers and subscription rounds. Their durable records stay for the next start.
+// Ends and joins the mount workers, the subscription rounds and their pin waiter. Their durable records stay for the
+// next start.
 func (self *EvsClient) Close() {
 	self.stateLock.Lock()
 	mounts, _ := self.localTier.(interface{ closeMounts() })
@@ -300,6 +319,7 @@ func (self *EvsClient) Close() {
 		cancel()
 		<-done
 	}
+	self.subscriber.endPinWaits()
 }
 
 // See StartSubscriptions.
@@ -1023,13 +1043,13 @@ func (self *evsSubscriber) dueSyncs(now time.Time) []Id {
 	return repoIds
 }
 
-// The followed refs owed a delivery at now, in order.
+// The followed refs owed a delivery at now, in order, but for those held for a pin, which wait for their release.
 func (self *evsSubscriber) dueMarks(now time.Time) []evsRefKey {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	keys := []evsRefKey{}
 	for key, mark := range self.refMarks {
-		if mark.owed && !now.Before(mark.deliverAt) {
+		if mark.owed && !now.Before(mark.deliverAt) && !self.heldForPinWithLock(key) {
 			keys = append(keys, key)
 		}
 	}
@@ -1042,8 +1062,8 @@ func (self *evsSubscriber) dueMarks(now time.Time) []evsRefKey {
 	return keys
 }
 
-// When the next work is due: a lease, a renewal, a queued read, the resyncs, a delivery. Zero for none, with no
-// subscription.
+// When the next work is due: a lease, a renewal, a queued read, the resyncs, a delivery, but for a held ref's, whose
+// release wakes the rounds. Zero for none, with no subscription.
 func (self *evsSubscriber) nextDue() time.Time {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
@@ -1079,8 +1099,8 @@ func (self *evsSubscriber) nextDue() time.Time {
 			earlier(self.client.clock.Now())
 		}
 	}
-	for _, mark := range self.refMarks {
-		if !mark.owed {
+	for key, mark := range self.refMarks {
+		if !mark.owed || self.heldForPinWithLock(key) {
 			continue
 		}
 		earlier(mark.deliverAt)
@@ -1146,7 +1166,9 @@ func evsLeaseKey(refId []byte, epoch uint64, prefix EvsTokenPath) string {
 
 // The reads queued for repoId: each ref asked, or every subscribed ref (a whole repo's subscription listing the repo's
 // refs), each verified and pinned, which owes the ref's changes (notePinned); a ref whose current epoch moved past a
-// subscription's re-tokenizes it. A read that fails is queued again after ReadRetryWait.
+// subscription's re-tokenizes it. A read that fails is queued again after ReadRetryWait, but for one withheld for a
+// statement pinned above this device's config state, which holds its ref, and a held ref's read, which waits for its
+// release, every other ref's going on (evs_subscribe_pin_wait.go).
 func (self *evsSubscriber) syncRepo(ctx context.Context, repoId Id) {
 	request := func() *evsSyncRequest {
 		self.stateLock.Lock()
@@ -1165,8 +1187,17 @@ func (self *evsSubscriber) syncRepo(ctx context.Context, repoId Id) {
 		return
 	}
 	for _, refId := range refIds {
-		result, err := repo.read(ctx, refId, nil, 0, request.fresh)
+		key := evsRefKey{repoId: repoId, refId: refId}
+		if self.readHeldForPin(key, request.fresh) {
+			continue
+		}
+		deferral := &evsPinWaitDeferral{}
+		result, err := repo.read(withEvsPinWaitDeferral(ctx, deferral), refId, nil, 0, request.fresh)
 		if err != nil {
+			if position := deferral.heldPosition(err); 0 < position {
+				self.holdReadForPin(ctx, key, position, request.fresh)
+				continue
+			}
 			self.requeue(repoId, &evsSyncRequest{refIds: map[Id]bool{refId: true}, fresh: request.fresh})
 			continue
 		}
@@ -1326,7 +1357,8 @@ type evsRaised struct {
 }
 
 // The changes owed on one followed ref, raised from its mark to its pin, and the mark moved to where they reach (see
-// the file header's marks row).
+// the file header's marks row). A walk withheld for a statement pinned above this device's config state holds the
+// ref, its delivery owed to the release (evs_subscribe_pin_wait.go).
 func (self *evsSubscriber) raiseOwed(ctx context.Context, key evsRefKey) {
 	self.deliverLock.Lock()
 	defer self.deliverLock.Unlock()
@@ -1359,15 +1391,17 @@ func (self *evsSubscriber) raiseOwed(ctx context.Context, key evsRefKey) {
 		}()
 		return
 	}
-	raised, version, chain, retry := self.owedChanges(ctx, key, mark, pin)
+	deferral := &evsPinWaitDeferral{}
+	raised, version, chain, retryErr := self.owedChanges(withEvsPinWaitDeferral(ctx, deferral), key, mark, pin)
+	heldPosition := deferral.heldPosition(retryErr)
 	fell := version < mark.version || (version == mark.version && chain != mark.chain)
-	func() {
+	startHold := func() func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		held := self.refMarks[key]
 		if held == nil {
 			// no subscription follows the ref any longer
-			return
+			return nil
 		}
 		held.version, held.chain = version, chain
 		for heldVersion := range held.versionStatements {
@@ -1378,11 +1412,21 @@ func (self *evsSubscriber) raiseOwed(ctx context.Context, key evsRefKey) {
 		if fell || held.gapVersion <= version {
 			held.gapVersion = 0
 		}
-		if retry {
+		switch {
+		case 0 < heldPosition:
+			// owed to the hold, whose release sets when it is due
+			held.owed = true
+			held.deliverAt = time.Time{}
+			return self.holdForPinWithLock(ctx, key, heldPosition, false, false)
+		case retryErr != nil:
 			held.owed = true
 			held.deliverAt = self.client.clock.Now().Add(self.client.settings.ReadRetryWait)
 		}
+		return nil
 	}()
+	if startHold != nil {
+		startHold()
+	}
 	if 0 < len(raised) {
 		self.raiseChanges(ctx, self.client.Repo(key.repoId), key.refId, raised)
 	}
@@ -1398,11 +1442,12 @@ func (self *evsSubscriber) oweAgain(key evsRefKey) {
 	}
 }
 
-// What a delivery from mark to pin raises, in version order, and the version and chain it reaches; retry when the log
-// did not answer, or held what this device cannot judge yet, short of the pin, what was raised before standing.
-func (self *evsSubscriber) owedChanges(ctx context.Context, key evsRefKey, mark *evsRefMark, pin *EvsPin) ([]*evsRaised, uint64, [sha256.Size]byte, bool) {
-	pinGap := func() ([]*evsRaised, uint64, [sha256.Size]byte, bool) {
-		return []*evsRaised{{version: pin.Version, gap: true}}, pin.Version, pin.Chain, false
+// What a delivery from mark to pin raises, in version order, and the version and chain it reaches; the error to retry
+// on where the log did not answer, or held what this device cannot judge yet, short of the pin, what was raised before
+// standing, nil for none.
+func (self *evsSubscriber) owedChanges(ctx context.Context, key evsRefKey, mark *evsRefMark, pin *EvsPin) ([]*evsRaised, uint64, [sha256.Size]byte, error) {
+	pinGap := func() ([]*evsRaised, uint64, [sha256.Size]byte, error) {
+		return []*evsRaised{{version: pin.Version, gap: true}}, pin.Version, pin.Chain, nil
 	}
 	if pin.Version < mark.version || (pin.Version == mark.version && pin.Chain != mark.chain) {
 		// a verified reseed lowered the pin (§11.13): what the mark passed above it is history the incident lost
@@ -1426,7 +1471,7 @@ func (self *evsSubscriber) owedChanges(ctx context.Context, key evsRefKey, mark 
 		}
 		walked, gap, err := self.walkLog(ctx, key, version, chain, pin.Version)
 		if err != nil && evsDeliveryRetries(err) {
-			return raised, version, chain, true
+			return raised, version, chain, err
 		}
 		reached := chain
 		if 0 < len(walked) {
@@ -1451,7 +1496,7 @@ func (self *evsSubscriber) owedChanges(ctx context.Context, key evsRefKey, mark 
 		// verified reseed since took away
 		return pinGap()
 	}
-	return raised, version, chain, false
+	return raised, version, chain, nil
 }
 
 // The ref's statements after version through throughVersion from GET .../log, verified and chained on from chain as a
