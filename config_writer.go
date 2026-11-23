@@ -712,9 +712,9 @@ func configHeadsEqual(a *ConfigHead, b *ConfigHead) bool {
 }
 
 // The plan's Signed ProjectionHeader at the client's tip: version tip+1, prev_chain A_tip, the tail's verdicts as this
-// device holds them, and the repos the base's own change shrinks at this device's clock. Signed only at the tip the plan
-// was made or kept at, judged under the follow lock it signs under: an entry the log applied since moves the tip, and
-// a base among them leaves the plan's fold, rows and pushes judged against a base no longer the newest, which api
+// device holds them, and the repos the base's own change shrinks at this device's clock. Signed only at the tip the
+// plan was made or kept at, judged under the follow lock it signs under: an entry the log applied since moves the tip,
+// and a base among them leaves the plan's fold, rows and pushes judged against a base no longer the newest, which api
 // refuses (403: config_version or folded_through below the newest base's, or pushes that walk from another head).
 // ErrConfigTipMoved there, so publish plans again at the new tip, keeping the plan where no base landed, as after
 // api's 409.

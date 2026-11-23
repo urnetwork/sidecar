@@ -19,8 +19,8 @@ import (
 )
 
 // Installs a hook on the writer's signing barrier for world's network, which runs pass with each pass's number, from
-// 1, and removes it at cleanup. A signing while a pass runs, a rival's that pass lands, is no pass: the barrier's key is
-// the network, which the rival shares. Answers the passes so far.
+// 1, and removes it at cleanup. A signing while a pass runs, a rival's that pass lands, is no pass: the barrier's key
+// is the network, which the rival shares. Answers the passes so far.
 func testSignStaleBarrier(t *testing.T, world *testWriterWorld, pass func(pass int)) func() int {
 	networkId := world.networkId.String()
 	var stateLock sync.Mutex
@@ -69,7 +69,7 @@ func TestASaveHeldAtItsSigningBarrierWhileARivalBaseLandsLandsAtThatBase(t *test
 	var landed *bridge.AuthPin
 	passes := testSignStaleBarrier(t, world, func(pass int) {
 		if pass == 1 {
-			pin := rival.land(world.ctx, client, testSignStaleRivalSave)
+			pin := rival.land(client, testSignStaleRivalSave)
 			landedLock.Lock()
 			landed = pin
 			landedLock.Unlock()

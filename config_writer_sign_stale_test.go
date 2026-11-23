@@ -87,8 +87,9 @@ func (self *testWriterWorld) signStaleRival() *testSignStaleRival {
 
 // The rival's base, published by publish once the rival's client stands at api's tip, and then applied by client, the
 // writer's under test: a base landing between that writer's plan and its signing. Answers the base's pin, nil where it
-// did not land, which the test is failed for. Runs inside a save, so it fails the test without stopping it.
-func (self *testSignStaleRival) land(ctx context.Context, client *sidecar.ConfigClient, publish func(ctx context.Context, writer *sidecar.ConfigWriter) (*bridge.AuthPin, error)) *bridge.AuthPin {
+// did not land, which the test is failed for. Runs inside a save, so it fails the test without stopping it, and on the
+// world's context, which carries none of the save's hooks.
+func (self *testSignStaleRival) land(client *sidecar.ConfigClient, publish func(ctx context.Context, writer *sidecar.ConfigWriter) (*bridge.AuthPin, error)) *bridge.AuthPin {
 	t := self.world.t
 	waitCtx, cancel := context.WithTimeout(self.world.ctx, 30*time.Second)
 	defer cancel()
@@ -101,7 +102,6 @@ func (self *testSignStaleRival) land(ctx context.Context, client *sidecar.Config
 		t.Errorf("the rival's client at %d: %v", tip.GetVersion(), err)
 		return nil
 	}
-	// the rival's own context: none of the save's hooks
 	pin, err := publish(waitCtx, self.writer)
 	if err != nil {
 		t.Errorf("the rival's base: %v", err)
@@ -154,10 +154,11 @@ func (self *testWriterWorld) baseHead(client *sidecar.ConfigClient) (*sidecar.Co
 	return head, base
 }
 
-// The brief's race: a rival writer's save lands its base, on a head pushed past the save's own, between the save's plan
-// and its signing. The save does not sign its stale plan, which api refused (403, config_version below the rival's base's)
-// before this change; it plans again, finds the rival's base names a head past its push with the fold it would publish,
-// and lands there, answering that base, its edit in force under the rival's: one edit, one push, no base of its own.
+// The race signBase lost: a rival writer's save lands its base, on a head pushed past the save's own, between the
+// save's plan and its signing. The save does not sign its stale plan, which api refused (403, config_version below the
+// rival's base's) before this change; it plans again, finds the rival's base names a head past its push with the fold
+// it would publish, and lands there, answering that base, its edit in force under the rival's: one edit, one push, no
+// base of its own.
 func TestABaseLandingBetweenASavesPlanAndItsSigningPlansTheSaveAgainAndLandsIt(t *testing.T) {
 	world := newTestWriterWorld(t)
 	world.started()
@@ -168,7 +169,7 @@ func TestABaseLandingBetweenASavesPlanAndItsSigningPlansTheSaveAgainAndLandsIt(t
 	var landed *bridge.AuthPin
 	heads.beforePushes = func(ctx context.Context, read int) {
 		if read == 1 {
-			landed = rival.land(ctx, client, testSignStaleRivalSave)
+			landed = rival.land(client, testSignStaleRivalSave)
 		}
 	}
 	writer := world.tipMovedWriter(client, heads, nil, nil)
@@ -212,7 +213,7 @@ func TestAFoldOvertakenBetweenItsPlanAndItsSigningLandsItsOwnBase(t *testing.T) 
 	var landed *bridge.AuthPin
 	heads.beforePushes = func(ctx context.Context, read int) {
 		if read == 1 {
-			landed = rival.land(ctx, client, testSignStaleRivalSave)
+			landed = rival.land(client, testSignStaleRivalSave)
 		}
 	}
 	writer := world.tipMovedWriter(client, heads, nil, nil)
@@ -255,7 +256,7 @@ func TestAFoldOvertakenBeforeEverySigningGivesUpWithTipMoved(t *testing.T) {
 	heads := world.signStaleHeads()
 	rivalPins := []*bridge.AuthPin{}
 	heads.beforePushes = func(ctx context.Context, read int) {
-		if pin := rival.land(ctx, client, testSignStaleRivalSave); pin != nil {
+		if pin := rival.land(client, testSignStaleRivalSave); pin != nil {
 			rivalPins = append(rivalPins, pin)
 		}
 	}
@@ -320,9 +321,9 @@ func TestAStatementLandingBetweenASavesPlanAndItsSigningKeepsThePlan(t *testing.
 	}
 }
 
-// The same race met at api, an adjacent case: a rival's save lands its base, on a head pushed past the save's, after the
-// save signed and before its base reached api, which answers 409. The save plans again and lands at the rival's base,
-// which names a head past its push with the fold it would publish. Before this change the save failed there with
+// The same race met at api, an adjacent case: a rival's save lands its base, on a head pushed past the save's, after
+// the save signed and before its base reached api, which answers 409. The save plans again and lands at the rival's
+// base, which names a head past its push with the fold it would publish. Before this change the save failed there with
 // ErrConfigWriterNothing, its head in force under the rival's base.
 func TestASaveWhoseBaseMeetsARivalBaseNamingAHeadPastItsPushLandsAtThatBase(t *testing.T) {
 	world := newTestWriterWorld(t)
@@ -384,7 +385,7 @@ func TestAConfirmedSaveOvertakenBetweenItsPlanAndItsSigningIsRefusedWhenItsRefMo
 	var landed *bridge.AuthPin
 	heads.beforePushes = func(ctx context.Context, read int) {
 		if read == 1 {
-			landed = rival.land(ctx, world.client, rival.aclSave(testAclSavePolicyB))
+			landed = rival.land(world.client, rival.aclSave(testAclSavePolicyB))
 		}
 	}
 	writer := world.tipMovedWriter(world.client, heads, nil, nil)
@@ -418,7 +419,7 @@ func TestAConfirmedSaveWhoseExactHeadARivalBasePublishedLandsAtThatBase(t *testi
 	var landed *bridge.AuthPin
 	heads.beforePushes = func(ctx context.Context, read int) {
 		if read == 1 {
-			landed = rival.land(ctx, world.client, func(ctx context.Context, writer *sidecar.ConfigWriter) (*bridge.AuthPin, error) {
+			landed = rival.land(world.client, func(ctx context.Context, writer *sidecar.ConfigWriter) (*bridge.AuthPin, error) {
 				return writer.PublishBase(ctx, false)
 			})
 		}
