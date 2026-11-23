@@ -2,8 +2,9 @@ package pushservice_test
 
 // §6.8's publisher (PROTO-M1-08) on T2's FakeRedis, with the push scripts' Go twins, a fake clock and a
 // fake resident send that decodes every frame as the client's dispatcher would and returns the pool
-// buffers it takes. Every wait is on the fake clock or on a call the publisher makes; a real-time timer
-// here only fails a test that would otherwise hang.
+// buffers it takes, keeping a ledger of every frame's buffer that tells, buffer by buffer, whether each
+// came back as the pool's ownership rules have it. Every wait is on the fake clock or on a call the
+// publisher makes; a real-time timer here only fails a test that would otherwise hang.
 
 import (
 	"context"
@@ -123,9 +124,34 @@ func decodeTestPushFrame(frame *connectprotocol.Frame) (*testPushMessage, error)
 	return message, nil
 }
 
+// How many shares of each frame's buffer the resident's send holds from the frame's hand-over until
+// checkPool: two, so a reference returned once too often leaves the buffer at one share rather than back
+// in the pool, where another owner could be handed it before the check reads it.
+const testPublisherFrameShareCount = 2
+
+// One frame the publisher handed the resident's send, as the send's ledger keeps it.
+type testPublisherFrame struct {
+	// what it carried
+	name   string
+	buffer []byte
+	// the send holds testPublisherFrameShareCount shares of the buffer; false when the publisher handed
+	// over a buffer it did not hold from the pool
+	held bool
+	// the send took it and returned the resident's reference, rather than refusing it, which leaves the
+	// publisher's reference to the publisher to return
+	taken bool
+}
+
 // The resident's send: decodes each frame, then takes it, returning its buffer to the pool, or refuses
 // it and leaves the buffer with the publisher, by the fates planned for it. A held send waits until the
 // test releases it.
+//
+// Its ledger holds the publisher to its own frames. Each frame's buffer must be one the publisher alone
+// holds from the pool, and the send holds shares of it until checkPool, which, once the publisher has
+// stopped, finds each frame's references all back but those shares. The pool's own counts cannot say
+// this: they are the process's, and a goroutine an earlier test left running moves them when it takes or
+// returns a buffer of its own, as the connect clients a Net test cancels without joining do after that
+// test has ended (tip-check at ad4cc180).
 type testPublisherSend struct {
 	t        testing.TB
 	messages chan *testPushMessage
@@ -137,6 +163,10 @@ type testPublisherSend struct {
 	fates     []bool
 	hold      chan struct{}
 	sendCount int
+	// every frame handed over since the last checkPool, in order
+	frames []*testPublisherFrame
+	// what the hand-overs since the last checkPool broke
+	poolFaults []string
 }
 
 func newTestPublisherSend(t testing.TB) *testPublisherSend {
@@ -175,10 +205,19 @@ func (self *testPublisherSend) sends() int {
 func (self *testPublisherSend) send(frame *connectprotocol.Frame, ack connect.AckFunction) bool {
 	message, err := decodeTestPushFrame(frame)
 	if err != nil {
+		self.holdFrame(frame.MessageBytes, "a frame no client reads")
 		self.t.Errorf("the resident got a frame no client reads: %v", err)
 		return false
 	}
 	message.ack = ack
+	// what the frame carried, for a fault's message
+	name := ""
+	if message.reset != nil {
+		name = fmt.Sprintf("a reset part of epoch %d", message.reset.Epoch)
+	} else {
+		name = fmt.Sprintf("the hint of seq %d", message.hint.Seq)
+	}
+	ledgerFrame := self.holdFrame(frame.MessageBytes, name)
 	var hold chan struct{}
 	func() {
 		self.stateLock.Lock()
@@ -201,9 +240,88 @@ func (self *testPublisherSend) send(frame *connectprotocol.Frame, ack connect.Ac
 	if !take {
 		return false
 	}
-	connect.MessagePoolReturn(frame.MessageBytes)
+	// the reference that was the publisher's is the resident's now, and it returns it at once, as a
+	// resident does once its client has the frame
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		ledgerFrame.taken = true
+	}()
+	if ledgerFrame.held {
+		connect.MessagePoolReturn(frame.MessageBytes)
+	}
 	self.messages <- message
 	return true
+}
+
+// Enters a frame the publisher hands over in the ledger, noting a fault unless its buffer is one the
+// publisher alone holds from the pool, and holds testPublisherFrameShareCount shares of the buffer: a
+// send borrows the buffer for the call, and the shares are how the ledger keeps it past the call.
+func (self *testPublisherSend) holdFrame(buffer []byte, name string) *testPublisherFrame {
+	frame := &testPublisherFrame{name: name, buffer: buffer}
+	pooled, shared := connect.MessagePoolCheck(buffer)
+	poolFault := ""
+	switch {
+	case !pooled:
+		poolFault = fmt.Sprintf("%s: handed over in a buffer the publisher did not hold from the pool", name)
+	case shared:
+		poolFault = fmt.Sprintf("%s: handed over in a buffer the publisher shares", name)
+	}
+	if pooled {
+		for range testPublisherFrameShareCount {
+			connect.MessagePoolShareReadOnly(buffer)
+		}
+		frame.held = true
+	}
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.frames = append(self.frames, frame)
+	if poolFault != "" {
+		self.poolFaults = append(self.poolFaults, poolFault)
+	}
+	return frame
+}
+
+// Returns the ledger's shares of every frame handed over since the last call and answers what the
+// publisher broke: each fault noted at a hand-over, then each frame whose references did not come back
+// exactly once each, the publisher's for a frame refused and the resident's for one taken, so that the
+// ledger's shares are the last. Call it once the publisher has stopped.
+func (self *testPublisherSend) checkPool() []string {
+	var frames []*testPublisherFrame
+	var poolFaults []string
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		frames, self.frames = self.frames, nil
+		poolFaults, self.poolFaults = self.poolFaults, nil
+	}()
+	for _, frame := range frames {
+		if !frame.held {
+			continue
+		}
+		fate := "refused, so the publisher's to return"
+		if frame.taken {
+			fate = "taken, the resident's reference returned"
+		}
+		if pooled, _ := connect.MessagePoolCheck(frame.buffer); !pooled {
+			// returned too often by at least the ledger's shares: back in the pool, where another owner
+			// may hold it now, so the ledger returns nothing more
+			poolFaults = append(poolFaults, fmt.Sprintf("%s (%s): back in the pool while the ledger held shares of it", frame.name, fate))
+			continue
+		}
+		for share := range testPublisherFrameShareCount {
+			last := connect.MessagePoolReturn(frame.buffer)
+			if last && share < testPublisherFrameShareCount-1 {
+				// the count ran out before the ledger's shares did: returning more would be a violation
+				poolFaults = append(poolFaults, fmt.Sprintf("%s (%s): returned %d time(s) more than it was held", frame.name, fate, testPublisherFrameShareCount-1-share))
+				break
+			}
+			if !last && share == testPublisherFrameShareCount-1 {
+				poolFaults = append(poolFaults, fmt.Sprintf("%s (%s): a reference never returned", frame.name, fate))
+			}
+		}
+	}
+	return poolFaults
 }
 
 // A publisher for one client on a FakeRedis and its clock, not yet started.
@@ -220,15 +338,17 @@ type testPublisherEnv struct {
 }
 
 // settings nil takes the defaults. Every buffer the publisher took from the pool is back once the test
-// has closed it, and nothing it did broke the pool's ownership rules.
+// has closed it, and nothing it did broke the pool's ownership rules: the send's ledger checks the
+// publisher's frames buffer by buffer once the publisher has stopped, whatever other goroutines of the
+// process take and return meanwhile, and the pool must have seen no ownership violation.
 func newTestPublisherEnv(t *testing.T, settings *pushservice.SidecarPublisherSettings) *testPublisherEnv {
 	t.Helper()
-	takenBefore, returnedBefore, _ := connect.MessagePoolCounts()
+	send := newTestPublisherSend(t)
 	violationsBefore := connect.MessagePoolViolationCount()
+	// registered first, so it runs after the publisher's Close below
 	t.Cleanup(func() {
-		takenAfter, returnedAfter, _ := connect.MessagePoolCounts()
-		if takenAfter-takenBefore != returnedAfter-returnedBefore {
-			t.Errorf("pool: %d buffers taken and %d returned", takenAfter-takenBefore, returnedAfter-returnedBefore)
+		for _, poolFault := range send.checkPool() {
+			t.Errorf("pool: %s", poolFault)
 		}
 		if connect.MessagePoolViolationCount() != violationsBefore {
 			t.Errorf("pool: %d ownership violations", connect.MessagePoolViolationCount()-violationsBefore)
@@ -259,7 +379,7 @@ func newTestPublisherEnv(t *testing.T, settings *pushservice.SidecarPublisherSet
 		writer:    writer,
 		settings:  settings,
 		clientId:  connect.NewId(),
-		send:      newTestPublisherSend(t),
+		send:      send,
 		publisher: publisher,
 	}
 }
@@ -392,6 +512,15 @@ func (self *testPublisherEnv) expectNoMessage() {
 		self.t.Fatalf("an unexpected frame: reset %v, hint %v", message.reset, message.hint)
 	default:
 	}
+}
+
+// What the publisher counted, read once it has stopped. It counts a frame once the send has answered,
+// after the send gave the test the frame, and an ack or a live write once its Redis call has answered,
+// after the test saw the call, so counts read as soon as the test has the last of them may lack it; Close
+// waits for the run, which has counted all it did by then.
+func (self *testPublisherEnv) closedStats() pushservice.SidecarPublisherStats {
+	self.publisher.Close()
+	return self.publisher.Stats()
 }
 
 // Starts the publisher and takes it through its first reset and the read after it, to idle.
@@ -538,14 +667,15 @@ func TestPublisherCoalescesATopicKeepingSeq(t *testing.T) {
 			t.Errorf("hint %d's ack is set: %t", index, message.ack != nil)
 		}
 	}
-	if stats := env.publisher.Stats(); stats.HintCount != 5 || stats.CoalescedCount != 2 || stats.BodyBoundCount != 0 {
-		t.Errorf("stats %+v", stats)
-	}
 	// the next read finds nothing past the last one sent
 	env.publisher.Kick()
 	env.passWindow()
 	env.awaitIdleRead()
 	env.expectNoMessage()
+	// read after the run's next read, by which it has counted the batch
+	if stats := env.publisher.Stats(); stats.HintCount != 5 || stats.CoalescedCount != 2 || stats.BodyBoundCount != 0 {
+		t.Errorf("stats %+v", stats)
+	}
 }
 
 // A batch longer than one read is read page after page and sent in seq order.
@@ -835,7 +965,7 @@ func TestPublisherAckScriptOncePerBatch(t *testing.T) {
 	if ackCount() != 2 || storedAck() != results[1].StreamId {
 		t.Errorf("after two batches: %d scripts, ack %q, want %s", ackCount(), storedAck(), results[1].StreamId)
 	}
-	if stats := env.publisher.Stats(); stats.AckCount != 2 || stats.AckRaisedCount != 2 {
+	if stats := env.closedStats(); stats.AckCount != 2 || stats.AckRaisedCount != 2 {
 		t.Errorf("stats %+v", stats)
 	}
 }
@@ -937,4 +1067,193 @@ func TestPublisherRefusesWhatItCannotRunOn(t *testing.T) {
 		return false
 	}, Redis: sidecartest.NewFakeRedis(t.Context(), nil, nil, nil, nil)})
 	unstarted.Close()
+}
+
+// Runs work on a goroutine of its own, as another owner of pool buffers in the process, and waits for it.
+func runTestOtherPoolOwner(t *testing.T, work func()) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		work()
+	}()
+	select {
+	case <-done:
+	case <-time.After(testPublisherTimeout):
+		t.Fatal("the other owner never finished")
+	}
+}
+
+// The pool check counts the publisher's frames alone: a buffer another goroutine took before the test
+// began and returns while the publisher runs, as a connect client an earlier test cancelled without
+// joining does, is no frame of the publisher's. The pool's counts, which the check read before, took the
+// return for the publisher's, so the test after a Net test failed under load with "4 buffers taken and 5
+// returned" (tip-check at ad4cc180).
+func TestPublisherPoolCheckSkipsAnotherOwnersLateReturn(t *testing.T) {
+	// what the earlier test's goroutine still holds as this test begins
+	earlier := connect.MessagePoolGet(64)
+	env := newTestPublisherEnv(t, nil)
+	env.startIdle(nil)
+	env.hint(sidecar.PushTopicTeam, 1, []byte("t"))
+	env.hint(sidecar.PushTopicDns, 2, []byte("d"))
+	env.awaitBatch(1, 2)
+	// the earlier goroutine ends while the publisher runs, returning what it held
+	runTestOtherPoolOwner(t, func() {
+		connect.MessagePoolReturn(earlier)
+	})
+	env.publisher.Close()
+	if sends := env.send.sends(); sends != 3 {
+		t.Errorf("%d frames, want the reset and two hints", sends)
+	}
+	for _, poolFault := range env.send.checkPool() {
+		t.Errorf("pool: %s", poolFault)
+	}
+}
+
+// Nor is a buffer another goroutine takes while the publisher runs and still holds when the test checks
+// the pool, which the pool's counts took for a frame the publisher never returned.
+func TestPublisherPoolCheckSkipsABufferAnotherOwnerHolds(t *testing.T) {
+	var later []byte
+	// registered before the env's, so it runs after the env has checked the pool
+	t.Cleanup(func() {
+		connect.MessagePoolReturn(later)
+	})
+	env := newTestPublisherEnv(t, nil)
+	env.startIdle(nil)
+	env.hint(sidecar.PushTopicTeam, 1, []byte("t"))
+	env.awaitBatch(1, 1)
+	runTestOtherPoolOwner(t, func() {
+		later = connect.MessagePoolGet(64)
+	})
+	env.publisher.Close()
+	for _, poolFault := range env.send.checkPool() {
+		t.Errorf("pool: %s", poolFault)
+	}
+}
+
+// The ledger finds each way a publisher can break the pool's ownership rules with a frame, the test
+// playing the publisher on a bare send: a refused frame never returned or returned twice, a taken frame
+// the publisher returns as well, and a frame handed over in a buffer the publisher shares or in one not
+// from the pool; and it finds nothing when the publisher keeps the rules.
+func TestPublisherPoolCheckFindsEachOwnershipFault(t *testing.T) {
+	cases := []struct {
+		name string
+		// the send takes the frame, or refuses it
+		take bool
+		// the buffer the publisher hands over in place of the one PushFrame gave it, nil for that one
+		before func(buffer []byte) []byte
+		// what the publisher does with the buffer it handed over once the send has answered
+		after func(buffer []byte)
+		// what the check finds, empty for nothing
+		poolFault string
+		// references the case leaves out, returned once the check has run so the pool is as it was
+		leftoverCount int
+	}{
+		{name: "taken", take: true},
+		{
+			name:  "refused and returned",
+			take:  false,
+			after: func(buffer []byte) { connect.MessagePoolReturn(buffer) },
+		},
+		{
+			name:          "refused and kept",
+			take:          false,
+			poolFault:     "a reference never returned",
+			leftoverCount: 1,
+		},
+		{
+			name: "refused and returned twice",
+			take: false,
+			after: func(buffer []byte) {
+				connect.MessagePoolReturn(buffer)
+				connect.MessagePoolReturn(buffer)
+			},
+			poolFault: "returned 1 time(s) more than it was held",
+		},
+		{
+			name:      "taken and returned by the publisher as well",
+			take:      true,
+			after:     func(buffer []byte) { connect.MessagePoolReturn(buffer) },
+			poolFault: "returned 1 time(s) more than it was held",
+		},
+		{
+			name:      "handed over shared",
+			take:      true,
+			before:    func(buffer []byte) []byte { return connect.MessagePoolShareReadOnly(buffer) },
+			after:     func(buffer []byte) { connect.MessagePoolReturn(buffer) },
+			poolFault: "handed over in a buffer the publisher shares",
+		},
+		{
+			name: "handed over in a buffer not from the pool",
+			take: true,
+			before: func(buffer []byte) []byte {
+				// a capacity of its length, which no pool class has
+				copied := make([]byte, len(buffer))
+				copy(copied, buffer)
+				connect.MessagePoolReturn(buffer)
+				return copied
+			},
+			poolFault: "handed over in a buffer the publisher did not hold from the pool",
+		},
+	}
+	for _, c := range cases {
+		send := newTestPublisherSend(t)
+		frame, err := pushservice.PushFrame(protocol.MessageType_PUSH_HINT, &protocol.PushHint{Seq: 1, Topic: sidecar.PushTopicTeam, Version: 1}, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.before != nil {
+			frame.MessageBytes = c.before(frame.MessageBytes)
+		}
+		send.planSends(c.take)
+		if taken := send.send(frame, nil); taken != c.take {
+			t.Errorf("%s: the send answered %t", c.name, taken)
+		}
+		if c.after != nil {
+			c.after(frame.MessageBytes)
+		}
+		poolFaults := send.checkPool()
+		switch {
+		case c.poolFault == "" && len(poolFaults) != 0:
+			t.Errorf("%s: the check found %q", c.name, poolFaults)
+		case c.poolFault != "" && (len(poolFaults) != 1 || !strings.Contains(poolFaults[0], c.poolFault)):
+			t.Errorf("%s: the check found %q, want one fault saying %q", c.name, poolFaults, c.poolFault)
+		}
+		if again := send.checkPool(); len(again) != 0 {
+			t.Errorf("%s: a second check found %q", c.name, again)
+		}
+		for range c.leftoverCount {
+			connect.MessagePoolReturn(frame.MessageBytes)
+		}
+	}
+}
+
+// The publisher counts a hint once the send has answered, so the test can hold a hint its counts lack:
+// here the send has given the test the hint and not yet answered. Tests that read the counts as soon as
+// they had their last hint failed under load with one hint short (HintCount 9 of 10); read once the
+// publisher has stopped, the counts hold every hint.
+func TestPublisherCountsAHintOnceTheSendHasAnswered(t *testing.T) {
+	env := newTestPublisherEnv(t, nil)
+	env.startIdle(nil)
+	env.hint(sidecar.PushTopicTeam, 1, []byte("t"))
+	release := env.send.holdNextSend()
+	env.publisher.Kick()
+	env.passWindow()
+	env.awaitCall("xrange")
+	select {
+	case message := <-env.send.holding:
+		if message.hint == nil || message.hint.Seq != 1 {
+			t.Fatalf("the held frame is reset %v, hint %v", message.reset, message.hint)
+		}
+	case <-time.After(testPublisherTimeout):
+		t.Fatal("no send")
+	}
+	if stats := env.publisher.Stats(); stats.HintCount != 0 {
+		t.Errorf("the hint was counted before the send answered: %+v", stats)
+	}
+	release(true)
+	env.awaitHints(1)
+	if stats := env.closedStats(); stats.HintCount != 1 {
+		t.Errorf("stats %+v", stats)
+	}
 }

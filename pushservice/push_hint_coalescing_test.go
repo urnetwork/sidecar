@@ -192,7 +192,7 @@ func TestPublisherKeepsDistinctGkmWorkHintsOfOneBatch(t *testing.T) {
 			t.Errorf("hint %d is %v, want %v", index, hint, want)
 		}
 	}
-	if stats := env.publisher.Stats(); stats.HintCount != 4 || stats.CoalescedCount != 0 || stats.BodyBoundCount != 0 {
+	if stats := env.closedStats(); stats.HintCount != 4 || stats.CoalescedCount != 0 || stats.BodyBoundCount != 0 {
 		t.Errorf("stats %+v", stats)
 	}
 
@@ -466,7 +466,7 @@ func TestPublisherCoalescesRepeatsOfOneGkmHint(t *testing.T) {
 	if !(hints[0].Version < hints[1].Version && hints[1].Version < hints[2].Version) {
 		t.Errorf("the versions do not rise: %d, %d, %d", hints[0].Version, hints[1].Version, hints[2].Version)
 	}
-	if stats := env.publisher.Stats(); stats.HintCount != 3 || stats.CoalescedCount != 1 || stats.BodyBoundCount != 0 {
+	if stats := env.closedStats(); stats.HintCount != 3 || stats.CoalescedCount != 1 || stats.BodyBoundCount != 0 {
 		t.Errorf("stats %+v", stats)
 	}
 }
@@ -534,7 +534,7 @@ func TestPublisherHoldsATopicToItsHintBodyCount(t *testing.T) {
 		t.Errorf("%d gkm hints carry their bytes, want %d", gkmBodyCount, settings.TopicHintBodyCount)
 	}
 	// six without their bytes: the sixth's earlier copy superseded, and five past the bound
-	if stats := env.publisher.Stats(); stats.HintCount != 10 || stats.CoalescedCount != 6 || stats.BodyBoundCount != 5 {
+	if stats := env.closedStats(); stats.HintCount != 10 || stats.CoalescedCount != 6 || stats.BodyBoundCount != 5 {
 		t.Errorf("stats %+v", stats)
 	}
 }

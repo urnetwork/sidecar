@@ -389,6 +389,9 @@ func TestPublisherRefreshesLiveAndItLapsesAfterLoss(t *testing.T) {
 		awaitSet()
 		next = next.Add(settings.LiveRefreshInterval)
 	}
+	// the run counts a write once SET has answered and then sets the next refresh's timer: once that is
+	// set, the last write is counted, and the clock moves on from it
+	awaitTimerAt(t, clock, next)
 	clock.Advance(settings.LiveRefreshInterval / 2)
 	if !live() {
 		t.Fatal("the marker lapsed under a live publisher")
