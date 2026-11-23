@@ -698,12 +698,18 @@ func (self *gkmGroupManager) resumeReformInFlow(ctx context.Context, state GkmAu
 	return self.finishReformInFlow(ctx, record)
 }
 
-// Step 1: the new group's id and MLS state, its GroupForm and the whole POST forms request.
+// Step 1: the new group's id and MLS state, its GroupForm and the whole POST forms request. The form is pinned at
+// state, so its signer rule is held there, where every member judges it (gkmJudgeFormSigner): a redraft after an
+// outrun drafts at a newer state than the call's first check, which may no longer allow this device, an owner-bound
+// repo's list having dropped it since, say (QD-1191).
 func (self *gkmGroupManager) draftReform(state GkmAuthView) (*gkmReformRecord, error) {
 	client := self.client
 	repo := state.Repo(self.repoId)
 	if repo == nil {
 		return nil, fmt.Errorf("%w: repo %s", ErrGkmNoRepo, self.repoId)
+	}
+	if err := GkmFormSignerAllowed(state, self.repoId, client.args.SidecarId); err != nil {
+		return nil, err
 	}
 	pins, err := client.repoPins(self.repoId)
 	if err != nil {
