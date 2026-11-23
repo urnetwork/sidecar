@@ -305,10 +305,15 @@ func TestEvsDropReaderLineageVersionAndCancelRules(t *testing.T) {
 	world := newEvsTestDropReadWorld(t, false)
 	writer := world.writer
 	server := world.server
+	// the table's entry names the DROP's push, as evs's always does: the cancel checks the statement at its version
+	dropStatement, err := ParseEvsStatementFormat2(world.statement)
+	if err != nil {
+		t.Fatal(err)
+	}
 	server.stateLock.Lock()
 	server.drops = []*protocol.EvsDropStatus{{
-		DropId: world.dropId.Bytes(), RefId: writer.world.refId.Bytes(), Version: world.version, State: protocol.EvsDropState_EVS_DROP_PENDING,
-		NotBeforeMs: writer.test.client.clock.Now().Add(DefaultEvsFormatSettings().DropWindow).UnixMilli(),
+		DropId: world.dropId.Bytes(), RefId: writer.world.refId.Bytes(), PushId: dropStatement.Push.GetPushId(), Version: world.version,
+		State: protocol.EvsDropState_EVS_DROP_PENDING, NotBeforeMs: writer.test.client.clock.Now().Add(DefaultEvsFormatSettings().DropWindow).UnixMilli(),
 	}}
 	server.stateLock.Unlock()
 	capture := writer.test.client.args.Transport.(*evsTestTransport).handler.(*evsTestDropCapture)
