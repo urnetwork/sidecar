@@ -731,7 +731,8 @@ func TestReseedBaseStaleCarriesADepositHeadToItsDepositorAlone(t *testing.T) {
 
 // The signature at the statement's own auth pin: a statement verifies under the key its signer held at the state it
 // pins, whatever the newest state holds, and under no other; a pin off evs's chain is refused, and one above evs's
-// state or below its retention answers 503.
+// state answers 503. One before what evs's state retains is taken on its signature alone
+// (reseed_unretained_test.go): here, its pin below the head's, the fence refuses it.
 func TestReseedKeepsTheSignatureAtTheStatementsOwnAuthPin(t *testing.T) {
 	fixture := newReseedFixture(t)
 	check := fixture.check
@@ -782,13 +783,12 @@ func TestReseedKeepsTheSignatureAtTheStatementsOwnAuthPin(t *testing.T) {
 	fixture.create(below, "h")
 	requireRefusal(t, fixture.reseed(fixture.signedBody(below, oldKey, check.signerId)), http.StatusPreconditionFailed, protocol.EvsRefusalCode_EVS_REFUSAL_GATE_CLOSED)
 
-	// a pin evs's state no longer retains: nothing verifies it, and nothing is refused for good
+	// a pin evs's state no longer retains, under the key the newest state's rows give the signer: no longer answered
+	// 503, and below the head's pin
 	check.authLog.Retain(2)
 	unretained := fixture.kept()
 	fixture.create(unretained, "i")
-	if recorder := fixture.reseed(fixture.signedBody(unretained, oldKey, check.signerId)); recorder.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status %d for a pin evs does not retain, want 503", recorder.Code)
-	}
+	requireRefusal(t, fixture.reseed(fixture.signedBody(unretained, newKey, check.signerId)), http.StatusPreconditionFailed, protocol.EvsRefusalCode_EVS_REFUSAL_GATE_CLOSED)
 	if fixture.head().Version() != 2 || len(fixture.head().Head.GetRefused()) != 0 {
 		t.Fatal("a refused re-seed changed the head")
 	}
