@@ -148,16 +148,22 @@ func (self *M8Api) Calls() map[string]int {
 
 // §5.4's gate as another approval-capable device's decision leaves it (the file header's gate row): each action's
 // effect run once under a use key drawn from its bytes, a recorded outcome answered again for the same bytes, and each
-// kind's Lookup kept. Safe for concurrent use.
+// kind's Lookup kept as Sidecar.RegisterEffectLookup keeps it, a registration replacing the kind's last and a removal
+// taking only the one it added, so a component's stale removal leaves a newer one standing. Safe for concurrent use.
 type M8Gate struct {
 	stateLock sync.Mutex
-	lookups   map[sidecar.SidecarActionKind]sidecar.SidecarEffectLookup
+	lookups   map[sidecar.SidecarActionKind]*m8GateLookup
 	outcomes  map[string]*sidecar.SidecarOutcome
 	actions   []*sidecar.SidecarAction
 }
 
+// One registered Lookup, compared by its entry so a stale removal leaves a newer one.
+type m8GateLookup struct {
+	lookup sidecar.SidecarEffectLookup
+}
+
 func newM8Gate() *M8Gate {
-	return &M8Gate{lookups: map[sidecar.SidecarActionKind]sidecar.SidecarEffectLookup{}, outcomes: map[string]*sidecar.SidecarOutcome{}}
+	return &M8Gate{lookups: map[sidecar.SidecarActionKind]*m8GateLookup{}, outcomes: map[string]*sidecar.SidecarOutcome{}}
 }
 
 // The key of the use an action's bytes are spent under.
@@ -202,14 +208,24 @@ func (self *M8Gate) Authorize(ctx context.Context, action *sidecar.SidecarAction
 }
 
 func (self *M8Gate) RegisterEffectLookup(kind sidecar.SidecarActionKind, lookup sidecar.SidecarEffectLookup) func() {
+	entry := &m8GateLookup{lookup: lookup}
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
-	self.lookups[kind] = lookup
+	self.lookups[kind] = entry
 	return func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
-		delete(self.lookups, kind)
+		if self.lookups[kind] == entry {
+			delete(self.lookups, kind)
+		}
 	}
+}
+
+// Whether a Lookup of kind is registered, so the gate would reserve its uses.
+func (self *M8Gate) HoldsLookup(kind sidecar.SidecarActionKind) bool {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.lookups[kind] != nil
 }
 
 // How many actions the gate was handed.
