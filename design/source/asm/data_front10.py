@@ -2438,3 +2438,32 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     "identity lookup under the gate prefix (686), following @@OD:340@@; a listen's grant expiry (687), following "
     "@@OD:74@@; write implying deposit (688), extending @@OD:333@@; edge clients' derived identities (689), "
     "extending @@OD:428@@ and @@OD:577@@; and a label drawn with its zone (690), extending @@OD:14@@. ")
+
+# The sixth late fold (dr15-late-fold, 2026-11-23): the answers the end-to-end integration phase raised after the fifth
+# late fold, QD-1176 to QD-1209, numbered as folded. Its first piece: a restarted peer reached at once.
+INDEX += [
+    (691, 'A restarted responder reached at once',
+     "connect's per-peer session recovers against a responder restarted under the same identity, §4.6's C21."),
+    (692, 'A lost peer session ends the Hello',
+     "connect reports a nack demotion, which ends the peer's Hello; an open refused after it is opened again."),
+    (693, 'An unasked HelloResult prompts a Hello',
+     'A HelloResult no Hello awaits, from a sidecar holding no Hello here, runs a fresh Hello at once.'),
+    (694, 'A replayed open after a restart',
+     'A listen_id is fresh at every Listen, so step 2 refuses a replayed open; the replay set stays in memory.'),
+]
+for _n, _note in [
+        (22, ' Extended by @@OD:691@@ and @@OD:692@@: C21 and C22.'),
+        (689, " Followed by @@OD:691@@: connect's session recovers against a restarted responder."),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 695))
+DATES.update({_n: '2026-11-22' for _n in range(691, 695)})
+_D690 = "and a label drawn with its zone (690), extending @@OD:14@@. "
+assert DECISIONS_INTRO.count(_D690) == 1, 'decisions lead moved'
+_D15 = ("A sixth late fold, on 2026-11-23, numbers as it folds them the answers the end-to-end integration phase raised "
+        "after that: a responder restarted under its identity reached at once (691), following @@OD:689@@, a lost peer "
+        "session ending the Hello (692) and an unasked HelloResult prompting one (693), adding C21 and C22 to "
+        "@@OD:22@@'s connect changes, and a replayed open refused at a fresh listen_id (694). ")
+DECISIONS_INTRO = DECISIONS_INTRO.replace(_D690, _D690 + _D15)

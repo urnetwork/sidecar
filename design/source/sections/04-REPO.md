@@ -180,7 +180,7 @@ Until the build's review phase moves the call sites (4.18), sidecar and server k
 
 ### 4.6 Connect changes (X9)
 
-Dispositions follow owner decisions 22, 85 (C14 into M4), 86 (C18) and 609 (C19 withdrawn, reversing owner decision 176), under D-REPO-5 (Q-REPO-2).
+Dispositions follow owner decisions 22, 85 (C14 into M4), 86 (C18), 609 (C19 withdrawn, reversing owner decision 176) and 691 and 692 (C21 and C22), under D-REPO-5 (Q-REPO-2). C21 corrects connect's own session recovery, so it is connect's default behavior rather than off by default; C21 and C22 are built on connect's `sidecar` branch, since this build commits to `sidecar` branches alone, and upstreaming them to connect's `main` is an owner step.
 
 | # | Change | Disposition |
 |---|---|---|
@@ -205,6 +205,8 @@ Dispositions follow owner decisions 22, 85 (C14 into M4), 86 (C18) and 609 (C19 
 | C18 | FriendsAndFamily flows to private destinations, which today admit only Network sources at the source's multi client (connect/ip_security.go:385-390; connect/ip_remote_multi_client.go:6691) and the provider (connect/ip.go:10307; connect/ip_security.go:567-576). The provider hands them to a C5 hook keyed on C13's `source_network_id`; the source admits only §17's alias-mapped destinations | M6 (owner decision 86); hooks only on sidecar-owned Required targets with a cross-network route grant; off in sdk providers |
 | C19 | A per-peer accounting mode for §6.10's remote-search windows, which withheld a marked pair's reports to each window's end and reported its bytes at a floor | Withdrawn (owner decision 609, which reverses owner decisions 176 and 188): the remote-search pair's contracts are accounted like any peer's, and C19's code leaves connect's `sidecar` branch |
 | C20 | `DohCache.ForwardDnssec(ctx, qType, domain)` sets EDNS0's DO bit on `Forward`'s query (connect/net_http_doh.go) and returns the raw response: generic, additive and off by default. Over it a device fetches MX, TLSA, DS and DNSKEY RRsets with their RRSIGs and validates them to its embedded root anchors, which is what §15.5's `strict_chain` rests on (§2.8 ext-3) | M7 (owner decision 269) |
+| C21 | Recovery against a responder restarted under the same identity (connect/transfer_encrypt.go): on an unknown-wrap nack the stale initiator drops its established epoch, marking every attempt it minted before the recovery attempt dropped, and its send sequences strip those attempts' handshake flights and proofs from any queued or retransmittable Pack before writing it again, the Pack keeping its place; a Required responder holding no established epoch takes a named ClientHello from the receive loop, and answers each attempt at most once, so a retransmitted ClientHello of an attempt it answered is dropped rather than resetting its TLS state, a second flight or identity proof of an attempt it never answered opens no epoch, and only TLS 1.3's one HelloRetryRequest ClientHello is fed again. Generic and wire-compatible, it reaches a client restarted under its kept identity (§5.9's connect identity, §13.6's derived one, an sdk device's) in under a second where it took about two minutes, whichever side speaks first (§6.9) | M1 (owner decision 691), on connect's `sidecar` branch; connect's regression restarts a responder under its kept keys and certificate |
+| C22 | `EncryptionEventPeerSessionLost`, an encryption event type appended to the enum: an admitted nack demotion whose nack names no epoch is reported once, outside the session lock and paced by `UnknownWrapNackRestartCooldown`, forged nacks included, since the peer then holds no session with this client and a caller ends what it keeps for the peer's earlier session, §6.4's Hello among it | M1 (owner decision 692), on connect's `sidecar` branch |
 
 ### 4.7 Module, dependencies, enforcement, consumption
 
@@ -408,7 +410,7 @@ The checkout holds documents only, on `main` (§4.3): at the root, README.md (it
 
 **D-REPO-4 (proposed).** Enforce §4.7 with `make check` and §4.9's v0 `make size` gate; ship no binding or C ABI. *Why:* no hosted CI exists, sidecar must be checked as the bindings build it, and a cgo file would enter gomobile's macOS slice.
 
-**D-REPO-5 (proposed).** X9 changes are generic, additive, off by default and wire-compatible, tested in connect and merged to connect `main` first. *Why:* connect serves every client.
+**D-REPO-5 (proposed).** X9 changes are generic, additive, off by default and wire-compatible, tested in connect and merged to connect `main` first; C21, which corrects connect's own session recovery, is on by default, and C21 and C22 reach `main` by the owner's upstreaming (owner decisions 691, 692). *Why:* connect serves every client.
 
 **D-REPO-6 (proposed).** Consumers wire sidecar and operator-core as §4.7 lists, the forks' replaces included, server's competition graph and sn's release gates take sidecar (owner decision 267), and branches follow §4.8, a Gn-out merging its gate's recorded commit set (owner decision 268). *Why:* the gates fail closed, pins must stay reachable (owner rule 4), and migration versions are positions.
 
