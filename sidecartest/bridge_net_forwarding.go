@@ -166,6 +166,12 @@ func (self *bridgeNetGkm) Wraps(ctx context.Context, repoId sidecar.Id, groupId 
 	return reply, nil
 }
 
+// sidecar.ForwarderGkm: none, so the Forwarder lists generations in the group its hand-off named, which no re-form
+// moved here.
+func (self *bridgeNetGkm) Forms(ctx context.Context, repoId sidecar.Id) (*sidecarprotocol.GkmFormsReply, error) {
+	return &sidecarprotocol.GkmFormsReply{}, nil
+}
+
 // A forwarding Delegation's X-Wing reader key from a label, the same on every run.
 func bridgeNetReaderKey(networkId sidecar.Id, label string) (hpke.PrivateKey, error) {
 	seed := sha256.Sum256(append(networkId.Bytes(), []byte("bridge net reader key "+label)...))
