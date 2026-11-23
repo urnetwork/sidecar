@@ -2441,7 +2441,8 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
 
 # The sixth late fold (dr15-late-fold, 2026-11-23): the answers the end-to-end integration phase raised after the fifth
 # late fold, QD-1176 to QD-1209, numbered as folded: a restarted peer reached at once (691-694), then the config log,
-# teams and access control (695-705).
+# teams and access control (695-705), then storage, group keys and mail (706-712) and DNS and certificates
+# (713-715).
 INDEX += [
     (691, 'A restarted responder reached at once',
      "connect's per-peer session recovers against a responder restarted under the same identity, §4.6's C21."),
@@ -2473,6 +2474,26 @@ INDEX += [
      'A read_only sidecar deposits only in an owner-bound repo it reads, for receipts, and reads alone elsewhere.'),
     (705, 'An approval fixes the statement type',
      'Readers void a bridge map filed under an approval naming cidrs, and a route under one naming a port or expiry.'),
+    (706, 'Unjudged evs statements',
+     "An evs reader keeps its own verdict to its ref pin and takes statements before its window unjudged on the chain."),
+    (707, 'A pin ahead of the reader',
+     'An evs reader meeting a statement pinned above its own state waits for its log to reach the pin, within a bound.'),
+    (708, "gkm's client retries a stale scope",
+     "gkm's client meets a 403 once under the call's own scope where its batch held a stronger role."),
+    (709, 'The re-form fence',
+     'A re-form closes the old group with a marker and a verdict recorded once; a stalled closing is taken over.'),
+    (710, "A personal network's group deposits",
+     "On a personal network group-create grants deposit to autogroup:member, so the member's devices deposit."),
+    (711, 'Receipts only in owner-bound repos',
+     'Ingest classes a reader that does not write as a receipt depositor only in an owner-bound repo.'),
+    (712, 'A deposit before the window',
+     'Ingest classes a deposit pinned before what it retains at its installed state, unjudged where no right holds.'),
+    (713, 'One order of a challenge name',
+     "certs admits one order of a set, or of a shared challenge name, at a time, and holds a name dns's cap refuses."),
+    (714, 'Copy rows at hosts with records',
+     "dns copies *'s records to any owner whose own rows hold no address or CNAME, so user records hide no address."),
+    (715, "No scope _mta-sts",
+     "A Team scope's zone publishes no _mta-sts until a scope publish exists; that publish is deferred."),
 ]
 for _n, _note in [
         (22, ' Extended by @@OD:691@@ and @@OD:692@@: C21 and C22.'),
@@ -2482,13 +2503,19 @@ for _n, _note in [
         (197, " Extended by @@OD:696@@: under a compiled state the posture takes a later writer's base."),
         (218, ' Followed by @@OD:705@@: an approval fixes the statement type.'),
         (318, " Refined by @@OD:695@@: the keys of b's rows with its tail re-applied, b's signer judged at S(b-1)."),
-        (688, " Refined by @@OD:704@@: a read_only sidecar's deposit is a receipt's, in an owner-bound repo only."),
+        (688, " Refined by @@OD:704@@: a read_only sidecar's deposit is a receipt's, in an owner-bound repo only."
+              ' Extended by @@OD:710@@: a personal network\'s groups take deposits from the member\'s devices.'),
+        (201, ' Extended by @@OD:709@@: a re-form fences the group it replaces.'),
+        (335, " Extended by @@OD:714@@: a host with records of its own keeps *'s addresses through a copy."),
+        (430, " Followed by @@OD:713@@: certs holds a set's further orders and a capped challenge name."),
+        (563, " Followed by @@OD:708@@: gkm's client retries a refused batch under the call's own role."),
+        (630, " Followed by @@OD:715@@: a Team scope's set holds no _mta-sts."),
 ]:
     _i = [r[0] for r in INDEX].index(_n)
     assert _note not in INDEX[_i][2], _n
     INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
-assert [r[0] for r in INDEX] == list(range(1, 706))
-DATES.update({_n: '2026-11-22' for _n in range(691, 706)})
+assert [r[0] for r in INDEX] == list(range(1, 716))
+DATES.update({_n: '2026-11-22' for _n in range(691, 716)})
 DATES[697] = '2026-11-23'
 _D690 = "and a label drawn with its zone (690), extending @@OD:14@@. "
 assert DECISIONS_INTRO.count(_D690) == 1, 'decisions lead moved'
@@ -2500,5 +2527,10 @@ _D15 = ("A sixth late fold, on 2026-11-23, numbers as it folds them the answers 
         "@@OD:197@@, a start's fork held (697), carried bridge blocks (698) and settings records (699), tagged "
         "credentials past their sponsor (700), extending @@OD:83@@, a key following its creator's role (701), the "
         "consented list (702) and every confirmation counting (703), following @@OD:126@@, a read-only sidecar's "
-        "deposits (704), refining @@OD:688@@, and an approval's statement type (705), following @@OD:218@@. ")
+        "deposits (704), refining @@OD:688@@, and an approval's statement type (705), following @@OD:218@@; then evs "
+        "statements pinned before a reader's window (706) or above its state (707), gkm's client retrying a stale "
+        "scope (708), following @@OD:563@@, the re-form fence (709), extending @@OD:201@@, a personal network's "
+        "group deposits (710), extending @@OD:688@@, receipts only in owner-bound repos (711) and a deposit before "
+        "the ingester's window (712); and one order of a challenge name (713), following @@OD:430@@, copy rows at "
+        "hosts with records (714), extending @@OD:335@@, and no scope _mta-sts (715), following @@OD:630@@. ")
 DECISIONS_INTRO = DECISIONS_INTRO.replace(_D690, _D690 + _D15)

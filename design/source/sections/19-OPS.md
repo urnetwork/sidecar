@@ -427,7 +427,8 @@ No operator copy holds slots or wraps, so a committed erasure is immediate at th
 what     the tables 19.7's groups create (columns they add to existing tables stay in the main dump), minus
          every table whose §2.8 ttl is <= 7 d, the list following that column (today tls_connection_record,
          mail_connection_record, dns_zone_journal, dns_custom_host_map, network_acl_ack, network_acl_share,
-         network_scim_change, service_debit_journal, service_usage_batch and admin_token_use, so an open share
+         network_scim_change, service_debit_journal, service_usage_batch, admin_token_use and
+         network_tls_custom_challenge, kept at most a challenge's hour (owner decision 680), so an open share
          invite is lost at a Postgres restore and is issued again), which no dump holds, so their published ttls
          hold in backups too; the main dump's exclude list names every table the groups create; beside them, the
          network, network_user (with its network_user_auth_* login rows) and network_client rows those tables
