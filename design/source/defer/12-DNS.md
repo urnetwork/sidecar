@@ -38,6 +38,16 @@ Stage: Review phase, once §13's issuance for receivers settles
 - **Held:** The review phase's two reconcile callers, at a receiver certificate's issuance and at a host-key change.
 - **To bring back:** The receivers' issuance path settles; then the zone's mail policy takes the per-key certificate condition, the two write paths call the zone's reconcile, and a test shows the record withheld while one receiver is uncertified.
 
+### dns-scope-mta-sts: A Team scope's MTA-STS publish
+Stage: Later, at the owner's call
+- **Deferred:** MTA-STS for a Team scope's mail: a scope system publish, `tls/443/mta-sts.<scope>` standing on a scope receiver's `smtp/25/mx.<scope>` listen, the receiver serving the scope's policy and the edge records' sync setting the scope's `*` for it, so that a scope's zone publishes `_mta-sts.<scope>.<net>.<root>` as the network's does (§12.7's scope set, §12.16, §13.9, §15.5; owner decision 715, the question's option 2).
+- **Why:** Nothing serves a scope's policy: the receiver answers MTA-STS only for the network's label and alias zones, and §13.9's system publish is `tls/443/mta-sts` on `smtp/25/mx` alone. A record pointing at a policy nothing serves fails every sender's fetch and may draw TLS-RPT reports to the network's rua.
+- **Launch instead:** A scope's zone publishes no `_mta-sts` until a scope publish exists (§12.7), and scope mail keeps DANE, `_25._tcp.mx.<scope>` TLSA in the signed zone, for its TLS, as burner mail does.
+- **Lost:** MTA-STS enforcement for senders that do not validate DANE when they mail a scope's addresses; such a sender delivers as to a domain that publishes no policy.
+- **Dark in code:** Nothing is built: the scope set's builder leaves the record out, and the zone's mail policy reconcile, which already handles scopes, finds none.
+- **Held:** Nothing: no task or track waits on it.
+- **To bring back:** The scope system publish above, across the sidecar's access control, sockets and mail and the server's edge records sync; then the scope set publishes `_mta-sts` as the network's does, under the same verification and certificate conditions, and a test shows a scope receiver serving its policy.
+
 ### dns-v1: §12's v1 set
 Stage: v1 (M6, M7, M8)
 - **Deferred:** §12.16's v1 row: aliases, custom domains in both CAA modes and Team scopes at M6; direct MX and strict-mode MX hosts at M7; scope mail hosts with §15 at M8.
