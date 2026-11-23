@@ -369,7 +369,9 @@ func TestEvsConfigFollowersOwnWalkNeverWaits(t *testing.T) {
 }
 
 // A subscriber whose follower lags hears a commit a faster device pushed under a base one ahead of it: the round that
-// reads what the hint moved waits for its log to reach the base, then verifies the statement and raises its change.
+// reads what the hint moved holds the ref and answers, never waiting on the round, while the ref's wait asks its log
+// to reach the base (evs_subscribe_pin_wait.go); once api serves the base the hold goes, and the next round verifies
+// the statement and raises its change.
 func TestEvsSubscriberWaitsForItsLogToReachAPinOneBaseAhead(t *testing.T) {
 	ahead := newEvsTestPinAheadWorld(t)
 	ahead.push(&evsTestChange{path: "docs/a", content: []byte("before the base")})
@@ -396,12 +398,16 @@ func TestEvsSubscriberWaitsForItsLogToReachAPinOneBaseAhead(t *testing.T) {
 		defer close(done)
 		subscriber.client.subscriber.runDue(ctx)
 	}()
-	if n := ahead.nextWait(t); n != pin.GetVersion() {
-		t.Fatalf("the round asked its log to reach %d, not the commit's pin %d", n, pin.GetVersion())
-	}
-	evsTestRequireWaiting(t, "the round", done)
-	ahead.publish()
 	evsTestAnswer(t, "the round", done)
+	if n := ahead.nextWait(t); n != pin.GetVersion() {
+		t.Fatalf("the ref's wait asked its log to reach %d, not the commit's pin %d", n, pin.GetVersion())
+	}
+	if change := listened.last(); change != nil {
+		t.Fatalf("the round raised %+v before its log reached the pin", change)
+	}
+	ahead.publish()
+	evsTestAwaitPinReleases(t, subscriber, 1)
+	subscriber.client.subscriber.runDue(ctx)
 	change := listened.last()
 	if change == nil || change.Version != version || len(change.Paths) != 1 || change.Paths[0] != "docs" || change.Gap {
 		t.Fatalf("the round raised %+v, not the commit at %d", change, version)

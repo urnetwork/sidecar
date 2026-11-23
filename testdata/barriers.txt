@@ -376,6 +376,8 @@ barrier evs.reseed.statement_put.after evsservice/reseed.go
 barrier evs.reseed.statement_put.before evsservice/reseed.go
 barrier evs.shred.step.after evsservice/shred.go
 barrier evs.shred.step.before evsservice/shred.go
+barrier evs.subscribe.pin_held evs_subscribe_pin_wait.go
+barrier evs.subscribe.pin_released evs_subscribe_pin_wait.go
 barrier evs.sweep.delete.after evsservice/sweep.go
 barrier evs.sweep.delete.before evsservice/sweep.go
 barrier gkm.ack_write.after gkmservice/acks.go
