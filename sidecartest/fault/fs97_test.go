@@ -169,8 +169,8 @@ func newFs97World(t *testing.T) *fs97World {
 	return newFs97WorldOn(t, nil)
 }
 
-// newFs97World, beforeDevice, when not nil, given the Net before the owner's device starts on it, as a schedule that
-// holds the device's own steps arms them.
+// As newFs97World, beforeDevice, when not nil, given the Net before the owner's device starts on it, so a schedule can
+// arm the device's own barriers.
 func newFs97WorldOn(t *testing.T, beforeDevice func(net *sidecartest.Net)) *fs97World {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), fs97Timeout)
