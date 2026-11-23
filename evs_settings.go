@@ -131,6 +131,12 @@ type EvsSettings struct {
 	PushRetryCount int
 	// The longest one wait between those attempts, whatever retry_after_ms says: 60 s.
 	PushRetryMaxWait time.Duration
+	// How long a call rides out the token exchange's invalid_scope, no scope it asked granted in the newest state api's
+	// gate holds, from the first such answer, before it ends with it: 5 s, §8.9's target for an entry to reach server
+	// gates, which a grant this device already acts on may not have reached at api (question
+	// evs-refusal-retry-followups-grant-gate-window). A write asks again ReadRetryWait apart (retryRefusingNothing), at
+	// most this long after its first refusal. Positive.
+	ExchangeScopeWaitTimeout time.Duration
 	// How many times one write builds its push again, under a new push id, after a refusal that asks for it
 	// (SEGMENT_STALE, SEGMENT_GONE, SLOT_STALE, GATE_CLOSED, BASE_STALE, TIME_STALE), or re-tokenizes it after 412
 	// PATH_EPOCH, the two counted together: 8.
@@ -389,6 +395,7 @@ func DefaultEvsSettings() *EvsSettings {
 		PushSlotBodiesByteCount:  DefaultEvsFormatSettings().SealSlotBodiesMaxByteCount,
 		PushRetryCount:           40,
 		PushRetryMaxWait:         60 * time.Second,
+		ExchangeScopeWaitTimeout: 5 * time.Second,
 		PushRebuildCount:         8,
 		RetokenReceiptMaxAge:     22 * time.Hour,
 		PathEpochDueWait:         10 * time.Second,

@@ -22,9 +22,11 @@
 // its wait, at most PushRetryCount times, and so is no answer at all, the lb's 502 or 504 among them: a drain cuts a
 // streamed segment PUT the lb cannot pass to another block, and the client sends the same bytes again (QD-758;
 // §22.8's lb drain row). SEGMENT_STALE, and any other refusal, goes back to the push sender, whose rebuild seals
-// afresh. A service token the exchange refused for good, as with its 400 invalid_scope or invalid_grant (§7.8), ends
-// the call after that one exchange, the exchange's answer its error, which no rebuild changes; the exchange's 429 and
-// 5xx, and no answer from it, go again as evs's own do (evsServiceTokenAnswer).
+// afresh. A service token the exchange refused for good, as with its 400 invalid_grant (§7.8), or that no enrolled
+// client can have, ends the call after that one try, its refusal the call's error, which no rebuild changes; the
+// exchange's invalid_scope goes again ReadRetryWait apart within ExchangeScopeWaitTimeout of its first, §8.9's 5 s for
+// a grant to reach api's gate, and ends the call after it; the exchange's 429 and 5xx, no answer from it, a keychain
+// still locked and no api yet go again as evs's own do (sidecarServiceTokenRefusalOf).
 //
 // On every leg. An EvsSealedWrite is not safe for concurrent use but by its own uploads.
 
@@ -414,13 +416,18 @@ func (self *EvsRepo) uploadSegment(ctx context.Context, segment *EvsSealedSegmen
 // id row, where a 503 whose outcome is unknown is resolved by the same request again. The lb's 502 or 504 is no
 // answer at all (evsErrorOfAnswer, QD-758). The last attempt's answer is answered at once, with no wait after it.
 //
-// An attempt whose service token could not be had sent nothing to evs, so the exchange's answer decides it. One the
-// exchange refused for good ends the call at once with that answer, as evs's own 403 SCOPE does, though api's gate
-// may hold a grant back as long as evs's (§8.9's 5 s). The exchange's 429 or 5xx goes again after its retry_after, the
-// read wait when it names none; one asking a longer wait than PushRetryMaxWait ends the call, since an attempt
-// before that wait is over would meet the same answer at api's cost. A failure with no answer from api goes again as
-// evs's no answer does.
+// An attempt whose service token could not be had sent nothing to evs, so why it could not decides it
+// (sidecarServiceTokenRefusalOf). One the exchange refused for good, or one no enrolled client can have, ends the call
+// at once with that refusal, as evs's own 403 SCOPE does. The exchange's invalid_scope goes again ReadRetryWait apart
+// until ExchangeScopeWaitTimeout has passed since this call's first, the last try at its end, and then ends the call:
+// a grant this device acts on reaches api's gate within §8.9's 5 s, which the call rides out, and a scope that was
+// never granted, or was taken away, costs api a try a second for that long, not PushRetryCount. The exchange's 429 or
+// 5xx goes again after its retry_after, the read wait when it names none; one asking a longer wait than
+// PushRetryMaxWait ends the call, since an attempt before that wait is over would meet the same answer at api's cost.
+// A failure with no answer from api, a keychain still locked and no api yet go again as evs's no answer does.
 func (self *EvsClient) retryRefusingNothing(ctx context.Context, call func() error) error {
+	// the first of the exchange's invalid_scope answers to this call, zero while none came
+	var scopeRefusedAt time.Time
 	for attempt := 0; ; attempt += 1 {
 		err := call()
 		if err == nil || ctx.Err() != nil || errors.Is(err, ErrEvsUnauthorized) || errors.Is(err, ErrEvsReplyInvalid) {
@@ -437,13 +444,27 @@ func (self *EvsClient) retryRefusingNothing(ctx context.Context, call func() err
 			if 0 < evsError.RetryAfter {
 				wait = evsError.RetryAfter
 			}
-		} else if refused, retryAfter := evsServiceTokenAnswer(err); refused {
-			return err
-		} else if 0 < retryAfter {
-			if self.settings.PushRetryMaxWait < retryAfter {
+		} else if errors.Is(err, errEvsNoServiceToken) {
+			refusal := sidecarServiceTokenRefusalOf(err)
+			switch {
+			case refusal.scopeRefused:
+				now := self.clock.Now()
+				if scopeRefusedAt.IsZero() {
+					scopeRefusedAt = now
+				}
+				left := scopeRefusedAt.Add(self.settings.ExchangeScopeWaitTimeout).Sub(now)
+				if left <= 0 {
+					return err
+				}
+				wait = min(wait, left)
+			case refusal.final:
 				return err
+			case 0 < refusal.retryAfter:
+				if self.settings.PushRetryMaxWait < refusal.retryAfter {
+					return err
+				}
+				wait = refusal.retryAfter
 			}
-			wait = retryAfter
 		}
 		select {
 		case <-ctx.Done():
@@ -451,29 +472,6 @@ func (self *EvsClient) retryRefusingNothing(ctx context.Context, call func() err
 		case <-self.clock.After(min(wait, self.settings.PushRetryMaxWait)):
 		}
 	}
-}
-
-// What the token exchange answered a call whose service token could not be had (errEvsNoServiceToken): whether it
-// refused for good, and the wait it asked for, zero for none. It refused for good where api answered anything but a
-// 429 or a 5xx, which refuse nothing, where SidecarApi would not send the request as given (ErrSidecarApiArgs), and
-// where api's 2xx was not the exchange's (ErrSidecarApiReply), since the same request meets the same answer however
-// long it waits (§7.8): invalid_scope where the newest state api's gate holds grants none of the scopes asked,
-// invalid_grant where that state no longer admits the client, restore_required in re-seed mode, invalid_request,
-// invalid_target, and invalid_dpop_proof once SidecarApi's own retry on api's clock is spent (QD-757). The wait is a
-// 429's or 5xx's retry_after_ms or Retry-After. Nothing else is refused here: no answer from api, a token keeper's own
-// state, such as a keychain still locked, and an error holding no failed exchange.
-func evsServiceTokenAnswer(err error) (refused bool, retryAfter time.Duration) {
-	if !errors.Is(err, errEvsNoServiceToken) {
-		return false, 0
-	}
-	var apiErr *SidecarApiError
-	if errors.As(err, &apiErr) {
-		if apiErr.Status == http.StatusTooManyRequests || apiErr.Status/100 == 5 {
-			return false, time.Duration(apiErr.RetryAfterMs) * time.Millisecond
-		}
-		return true, 0
-	}
-	return errors.Is(err, ErrSidecarApiArgs) || errors.Is(err, ErrSidecarApiReply), 0
 }
 
 // The day since the Unix epoch a receipt's upload falls on, as a new-objects item carries it.
