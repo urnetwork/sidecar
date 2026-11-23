@@ -85,6 +85,10 @@ type EvsSettings struct {
 	// may spend waiting on evs to take what it refused for now (429, PATH_EPOCH_DUE, a lease), and on
 	// P_r, before git hears `ng <ref> busy` or `remote outcome pending`: 3 min, the hook's own bound.
 	ReceiveWaitTimeout time.Duration
+	// The largest blob a new commit a git push brings may hold, which pre-receive refuses past it (DESIGN-DETAILS
+	// 8.2.8's pre-receive row), and the largest content an evs_write at a git-mode tip takes (evs_local_write.go):
+	// EvsFileMaxByteCount, §11.19's file bound, 2 GiB. Positive.
+	ReceiveBlobMaxByteCount int64
 	// The time an update may spend building, uploading and posting before git hears `ng <ref> too slow`: 30 min, a
 	// statement's own bound for a push in parts.
 	ReceivePublishTimeout time.Duration
@@ -133,7 +137,7 @@ type EvsSettings struct {
 	PushRetryMaxWait time.Duration
 	// How long a call rides out the token exchange's invalid_scope, no scope it asked granted in the newest state api's
 	// gate holds, from the first such answer, before it ends with it: 5 s, §8.9's target for an entry to reach server
-	// gates, which a grant this device already acts on may not have reached at api (question
+	// gates, which a grant this device already acts on may not have reached at api (QD-1226, question
 	// evs-refusal-retry-followups-grant-gate-window). A write asks again ReadRetryWait apart (retryRefusingNothing), a
 	// lease at its doubling wait and a delivery ReadRetryWait apart (evs_subscribe.go), each at most this long after its
 	// first refusal. Positive.
@@ -378,6 +382,7 @@ func DefaultEvsSettings() *EvsSettings {
 		GitCommandTimeout:        5 * time.Minute,
 		RefLockTimeout:           3 * time.Minute,
 		ReceiveWaitTimeout:       3 * time.Minute,
+		ReceiveBlobMaxByteCount:  EvsFileMaxByteCount,
 		ReceivePublishTimeout:    30 * time.Minute,
 		ReceiveRefCount:          4,
 		QueueFirstDelay:          250 * time.Millisecond,

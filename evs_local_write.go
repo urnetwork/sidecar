@@ -69,7 +69,7 @@ func (self *EvsRepo) WriteAtTip(ctx context.Context, args *EvsWriteAtTipArgs) (*
 		return nil, fmt.Errorf("%w: a removal with content", ErrEvsWriteInvalid)
 	case !args.Remove && args.Content == nil:
 		return nil, fmt.Errorf("%w: a write with no content", ErrEvsWriteInvalid)
-	case evsLocalReceiveBlobMaxByteCount < int64(len(args.Content)):
+	case self.client.settings.ReceiveBlobMaxByteCount < int64(len(args.Content)):
 		return nil, fmt.Errorf("%w: content past §11.19's file bound", ErrEvsWriteInvalid)
 	case args.Mode != 0 && !evsFileModeValid(args.Mode):
 		return nil, fmt.Errorf("%w: mode %o is no file's", ErrEvsWriteInvalid, args.Mode)

@@ -7,7 +7,8 @@
 //	pre-receive    refuses the whole push, printing why, for an update of a ref outside refs/heads/ and refs/tags/;
 //	               one bringing a new commit (8.2.3's C) whose committer is no client of this sidecar, printing
 //	               both config values and naming `ur evs import`; and a new commit or tree that is not canonical, a
-//	               tree the reader refuses or a blob over 2 GiB. It reads the quarantined objects.
+//	               tree the reader refuses or a blob past ReceiveBlobMaxByteCount, §11.19's 2 GiB. It reads the
+//	               quarantined objects.
 //	proc-receive   git's protocol, version 1 and no atomic, each update answered on its own, ReceiveRefCount at once
 //
 //	a shared ref   refused before any evs write as `ng <r> <reason>`: a name only branches and tags reach, a reserved
@@ -61,9 +62,6 @@ import (
 
 	"github.com/urnetwork/sidecar/protocol"
 )
-
-// The largest blob a new commit may bring (DESIGN-DETAILS 8.2.8's pre-receive row): §11.19's file bound.
-const evsLocalReceiveBlobMaxByteCount = 2 * 1024 * 1024 * 1024
 
 // The refs only the local tier names, never a client (plan-EVS1-ref-name-bytes#3(2)).
 var evsLocalReservedBranchNames = [][]byte{[]byte("erasure"), []byte("ur/index"), []byte("ur/lfs")}
@@ -189,8 +187,9 @@ func (self *EvsGitReceiver) preReceive(ctx context.Context, session *EvsGitRecei
 				if err != nil {
 					return refuse("%s: commit %s names a blob it does not bring", gitRef, oid)
 				}
-				if evsLocalReceiveBlobMaxByteCount < size {
-					return refuse("%s: commit %s brings a blob of %d bytes, past 2 GiB", gitRef, oid, size)
+				if self.settings.ReceiveBlobMaxByteCount < size {
+					return refuse("%s: commit %s brings a blob of %d bytes, past the %d a file may hold", gitRef, oid, size,
+						self.settings.ReceiveBlobMaxByteCount)
 				}
 			}
 		}
