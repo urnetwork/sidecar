@@ -9,7 +9,7 @@
 //	invited    d's SidecarAdmit carries SIDECAR_CAPABILITY_INVITED and d is M's first admission, revoked
 //	           ones included, that is neither ephemeral nor read_only (plan-ACL-invited-consent-evidence)
 //	genesis    d signed the network's Genesis
-//	confirmed  M's consented device signed OwnerConfirm{d}, or the AdmissionConfirm{d} rows keep
+//	confirmed  M's consented device signed an OwnerConfirm{d} or an AdmissionConfirm{d} the rows keep
 //
 // Consent rests on what M's consented devices signed when they signed it, so the build replays every
 // clause in log order: a signer counts at position p only if it was consented for M before p, is not
@@ -17,6 +17,12 @@
 // signed at p. A consent resting on what P signed therefore returns only through M's own OwnerConfirm or
 // AdmissionConfirm from a consented device outside P, and an admin's AdmissionConfirm restores all but
 // owner-bound reads (§7.9's lift).
+//
+// The confirmed clause reads the row's history, SidecarRow.confirmations, never its newest-of-each fields: each
+// confirmation that took effect is an event of its own at its own entry, lifting a park or not (QD-1208), so a later
+// confirmation of the same kind, an admin's AdmissionConfirm or one P voids, hides no earlier one that still counts,
+// and only the owner's consent moves owner-bound access (owner decision 126). A confirmation of a kind no rule writes
+// consents nothing.
 //
 // On every leg, the sidecar_http page Worker's included: root Id, no connect type.
 
@@ -37,8 +43,8 @@ const (
 	aclConsentGenesis aclConsentClause = iota + 1
 	aclConsentInvited
 	aclConsentScoped
-	aclConsentOwnerConfirm
-	aclConsentAdmissionConfirm
+	// one ConfirmationRow, an OwnerConfirm or an AdmissionConfirm alike
+	aclConsentConfirmed
 )
 
 // One clause that may consent a sidecar, at the position of the entry that carried it.
@@ -46,6 +52,8 @@ type aclConsentEvent struct {
 	sidecarIndex int32
 	position     uint64
 	clause       aclConsentClause
+	// a confirmed event's signer, as its ConfirmationRow keeps it; empty for the other clauses
+	signer []byte
 }
 
 // Whether a sidecar_id signer was M's consented device, not read_only, before position, with what it
@@ -111,10 +119,9 @@ func (self *AclState) consentEventHolds(event aclConsentEvent) bool {
 			}
 		}
 		return false
-	case aclConsentOwnerConfirm:
-		return self.consentSignerCounts(row.GetOwnerConfirmSigner(), sidecar.memberId, event.position)
-	case aclConsentAdmissionConfirm:
-		return self.consentSignerCounts(row.GetConfirmSigner(), sidecar.memberId, event.position)
+	case aclConsentConfirmed:
+		// either kind counts alike: its signer M's consented device before its entry, outside every cascade
+		return self.consentSignerCounts(event.signer, sidecar.memberId, event.position)
 	}
 	return false
 }
@@ -159,11 +166,14 @@ func (self *AclState) replayConsent() {
 		if 0 < len(row.GetAdmissionSigners()) {
 			events = append(events, aclConsentEvent{sidecarIndex: index, position: admittedAt, clause: aclConsentScoped})
 		}
-		if 0 < len(row.GetOwnerConfirmSigner()) {
-			events = append(events, aclConsentEvent{sidecarIndex: index, position: row.GetOwnerConfirmedAt(), clause: aclConsentOwnerConfirm})
-		}
-		if 0 < len(row.GetConfirmSigner()) {
-			events = append(events, aclConsentEvent{sidecarIndex: index, position: row.GetConfirmedAt(), clause: aclConsentAdmissionConfirm})
+		// every confirmation the history keeps, not only the newest of each kind (QD-1208)
+		for _, confirmation := range row.GetConfirmations() {
+			switch confirmation.GetKind() {
+			case configConfirmAdmission, configConfirmOwner:
+				events = append(events, aclConsentEvent{
+					sidecarIndex: index, position: confirmation.GetAt(), clause: aclConsentConfirmed, signer: confirmation.GetSigner(),
+				})
+			}
 		}
 	}
 	slices.SortStableFunc(events, func(a aclConsentEvent, b aclConsentEvent) int {

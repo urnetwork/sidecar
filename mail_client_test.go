@@ -141,6 +141,15 @@ func (self *mailClientTestParts) ingestor(repoId Id, args *MailIngestArgs) (*Mai
 	return newMailIngestor(repoId, source.repo, source.store, args), nil
 }
 
+// The watch of the repo's stand-in, whose wake a test calls as the hint of a change of the repo.
+func (self *mailClientTestParts) watch(ctx context.Context, repoId Id, wake func()) (func(), error) {
+	source := self.world.ingest
+	if group := self.world.groups[repoId]; group != nil {
+		source = group
+	}
+	return source.repo.Watch(ctx, wake)
+}
+
 // Explicit group and member stores for exercising reference reconciliation through the normal component.
 func (self *mailClientTestParts) groupRefs(groupId, mailboxId Id) (*MailGroupRefs, error) {
 	group := self.world.groups[groupId]
@@ -271,11 +280,23 @@ func TestMailComponentIngestsSharedMailAndReconcilesMemberReferences(t *testing.
 		// Start from the current signed group and membership rows on each restart.
 		client := world.newClient()
 		client.setNetworkRow(testMailIngestNetwork())
+		// mailcfg read on the real clock, so its follower arms nothing on the test's
+		if _, err := client.syncedConfig(ctx); err != nil {
+			t.Fatal(err)
+		}
+		clock := newTestConfigClock()
+		client.clock = clock
 		binding, _, err := client.bound()
 		if err != nil {
 			t.Fatal(err)
 		}
-		client.passGroupInboxes(&mailComponentRun{ctx: ctx}, binding)
+		// the look starts the group's goroutine, whose first pass comes at its start; the generation's end joins it
+		runCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		run := &mailComponentRun{ctx: runCtx, cancel: cancel}
+		client.passGroupInboxes(run, binding)
+		testAwaitMailGroupPass(t, client, clock)
+		client.stopRun(run)
 	}
 	reconcile()
 	month := MailYearMonthOf(testMailIngestReceiveMillis)
