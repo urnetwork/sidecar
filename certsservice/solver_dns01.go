@@ -114,9 +114,15 @@ func NewCertsDnsSolver(dns CertsDns, settings *CertsSettings, clock sidecar.Cloc
 	return &CertsDnsSolver{dns: dns, settings: settings, clock: clock, names: map[string]*certsDnsChallenge{}}
 }
 
-// The name whose _acme-challenge label a challenge writes: its identifier, a wildcard's base included.
+// The name whose _acme-challenge label a DNS name's challenge writes: the name, a wildcard's base
+// included. Admission holds the same names (queue.go).
+func certsChallengeNameOf(dnsName string) string {
+	return strings.TrimPrefix(strings.ToLower(dnsName), "*.")
+}
+
+// The name whose _acme-challenge label a challenge writes: its identifier's.
 func certsChallengeName(challenge acme.Challenge) string {
-	return strings.TrimPrefix(strings.ToLower(challenge.Identifier.Value), "*.")
+	return certsChallengeNameOf(challenge.Identifier.Value)
 }
 
 // Waits timeout on the solver's clock, or until ctx ends.

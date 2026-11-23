@@ -268,34 +268,48 @@ func TestCertsAriRenewalSkipsTheNameBackoff(t *testing.T) {
 	}
 }
 
-// Two orders sharing names admitted to LE in one pass, sent one at a time: one for the network's pair
-// alone and one whose set holds a live alias's pair beside it, as a network's devices order around an
-// alias's start. They are two sets, so both are admitted (one set's second order waits for its first,
-// QD-1189). The first fails there, and the second, not yet sent, waits out the backoff the first set on
-// their shared names, queued again with LE never asked; the next pass takes both to GTS.
+// Two orders sharing names under way at LE at once, as two passes at once may leave them, since a pass
+// admits one order of a set or a challenge name at a time (QD-1189, QD-1203), taken up in one pass and
+// sent one at a time: the first fails there, and the second, not yet sent, waits out the backoff the first
+// set on their shared names, queued again with LE never asked; the passes after take them to GTS, one at
+// a time.
 func TestCertsOrderAdmittedBeforeAFailureWaitsOutTheBackoff(t *testing.T) {
 	settings := testSettings()
 	settings.OrderConcurrency = 1
 	run := newTestRun(t, settings)
 	first := run.device("k9backoff08")
-	aliasSet, err := sidecar.TlsIdentifierSet(testRoot, "k9backoff08", "", []string{"k9backoff08-alias"})
-	if err != nil {
-		t.Fatal(err)
-	}
 	firstId := run.accept(first)
-	secondId := run.accept(newTestDeviceOf(t, first.networkId, aliasSet))
+	secondId := run.accept(newTestDeviceOf(t, first.networkId, first.identifierSet))
+	// the first under way by this pass's admission, the second by another pass's at once
+	if admitted := run.admit(); len(admitted.Admitted) != 1 || admitted.Admitted[0].Cert.CertId != firstId {
+		t.Fatalf("admitted %+v", admitted)
+	}
+	if moved, err := run.store.TransitionCert(run.ctx, &certsservice.CertsTransition{
+		CertId:  secondId,
+		From:    []sidecar.TlsCertState{sidecar.TlsCertStateQueued},
+		To:      sidecar.TlsCertStateOrdering,
+		At:      run.clock.Now(),
+		Ca:      certsservice.CertsCaLetsEncrypt,
+		Profile: settings.Cas[certsservice.CertsCaLetsEncrypt].Profile,
+	}); err != nil || !moved {
+		t.Fatalf("the other pass's admission: %v, %v", moved, err)
+	}
 	run.acme.script(testAuthorizationRefused(first.identifierSet))
 	report := run.runOrders()
 	both := []sidecar.Id{firstId, secondId}
-	if len(report.Admitted) != 2 || len(report.Requeued) != 2 || !slices.Contains(report.Requeued, firstId) || !slices.Contains(report.Requeued, secondId) {
+	if len(report.Resumed) != 2 || len(report.Requeued) != 2 || !slices.Contains(report.Requeued, firstId) || !slices.Contains(report.Requeued, secondId) {
 		t.Fatalf("report %+v", report)
 	}
 	if orders := run.acme.ordered(); len(orders) != 1 || orders[0].Ca != certsservice.CertsCaLetsEncrypt {
 		t.Fatalf("orders %+v", orders)
 	}
 	report = run.runOrders()
-	if len(report.Issued) != 2 {
+	if !slices.Equal(report.Issued, []sidecar.Id{firstId}) || testWaitReasons(report.Waiting)[secondId] != certsservice.CertsWaitSetUnderWay {
 		t.Fatalf("the next pass: %+v", report)
+	}
+	report = run.runOrders()
+	if !slices.Equal(report.Issued, []sidecar.Id{secondId}) {
+		t.Fatalf("the pass after: %+v", report)
 	}
 	for _, certId := range both {
 		if row := run.row(certId); row.State != sidecar.TlsCertStateIssued || row.Ca != string(certsservice.CertsCaGts) {

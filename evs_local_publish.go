@@ -896,7 +896,7 @@ func (self *evsGitPublishUpdate) judgeMoved(ctx context.Context, moved *EvsGitHe
 	if err != nil {
 		return nil, false, err
 	}
-	walked, err := repo.client.verifier.walk(repo.repoId, self.refId, moved.BaseVersion, chain, statements, head.Version)
+	walked, err := repo.client.verifier.walk(ctx, repo.repoId, self.refId, moved.BaseVersion, chain, statements, head.Version)
 	if err != nil {
 		return nil, false, err
 	}

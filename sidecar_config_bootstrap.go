@@ -136,6 +136,8 @@ func (self *SidecarConfigFollower) firstOwnerGenesis(ctx context.Context, networ
 	if err != nil {
 		return nil, err
 	}
+	// its state is the bootstrap's own, which no follower moves: a pin above it is withheld at once (QD-1202)
+	evsArgs.ConfigWait = nil
 	evs, err := NewEvsClient(evsArgs)
 	if err != nil {
 		return nil, err

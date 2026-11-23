@@ -265,7 +265,7 @@ func (self *walkedTestReader) verify(reply *readTestReply, pin uint64, chain []b
 		Named:       map[uint64]bool{1: true},
 		Since:       since,
 	}
-	verified, more, err := self.client.Verifier().VerifyPath(head, epochs, reply.paths[0])
+	verified, more, err := self.client.Verifier().VerifyPath(self.fixture.ctx, head, epochs, reply.paths[0])
 	if err == nil && len(more) != 0 {
 		return nil, fmt.Errorf("epochs %v asked again", more)
 	}

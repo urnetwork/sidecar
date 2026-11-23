@@ -90,6 +90,9 @@ const (
 	// Another order of its identifier set is under way at a CA, whose challenges hold the set's
 	// _acme-challenge names (QD-1189); a renewal waits on it too.
 	CertsWaitSetUnderWay CertsWaitReason = "set_under_way"
+	// An order of another set that shares one of its _acme-challenge names is under way at a CA, as the
+	// network's pair alone and a set with a live alias's pair beside it share theirs (QD-1203).
+	CertsWaitNameUnderWay CertsWaitReason = "name_under_way"
 	// Its CSR no longer parses, or its predecessor's CA is unknown: it fails rather than waits.
 	CertsWaitUnusable CertsWaitReason = "unusable"
 )

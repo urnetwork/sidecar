@@ -5,8 +5,9 @@
 //
 // A set has one order under way at a time (QD-1189): its next order waits, a renewal too, asking no CA and
 // spending nothing, until that one ends, and then goes as a repeated set when it issued or as a new one
-// when it failed; other networks' sets go in the same pass; a pass reads every row under way, a batch at
-// a time, and one that cannot read them admits nothing. On Pebble, two devices of each of two networks
+// when it failed; two sets that share a challenge name take turns the same way (QD-1203), while other
+// networks' sets and a scope's go in the same pass; a pass reads every row under way, a batch at a time,
+// and one that cannot read them admits nothing. On Pebble, two devices of each of two networks
 // make one CA order, spend one unit of the budget and write their name once a network in the first pass,
 // and the other two issue as repeated sets in the next.
 package certsservice_test
@@ -595,5 +596,56 @@ func TestOneSetOneOrderAPassOnPebble(t *testing.T) {
 	}
 	if names := pebble.Dns.Names(); len(names) != 0 {
 		t.Fatalf("challenges left at %v", names)
+	}
+}
+
+// Two sets that share a challenge name have one order under way at a time too (QD-1203): the network's
+// pair alone and a set with a live alias's pair beside it both validate at _acme-challenge.<net>.<root>,
+// so a pass admits the first and holds the second by that name, whether the first was admitted in the
+// same pass or an earlier one; once the first has issued the second goes, a new set of its own.
+func TestSetsSharingAChallengeNameOrderOneAtATime(t *testing.T) {
+	certs := newTestCerts(t, nil)
+	first := newTestDevice(t, "shared-name")
+	aliasSet, err := sidecar.TlsIdentifierSet(testRoot, "shared-name", "", []string{"shared-name-alias"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstId := certs.accept(first)
+	aliasId := certs.accept(newTestDeviceOf(t, first.networkId, aliasSet))
+	report := certs.admit()
+	if len(report.Admitted) != 1 || report.Admitted[0].Cert.CertId != firstId ||
+		testWaitReasons(report.Waiting)[aliasId] != certsservice.CertsWaitNameUnderWay {
+		t.Fatalf("the first pass: %+v", report)
+	}
+	// the next pass reads the name from the row under way
+	report = certs.admit()
+	if len(report.Admitted) != 0 || testWaitReasons(report.Waiting)[aliasId] != certsservice.CertsWaitNameUnderWay {
+		t.Fatalf("the next pass: %+v", report)
+	}
+	certs.issue(firstId, "5e7a03")
+	report = certs.admit()
+	if len(report.Admitted) != 1 || report.Admitted[0].Cert.CertId != aliasId || report.Admitted[0].Kind != certsservice.CertsOrderNewSet {
+		t.Fatalf("once the first issued: %+v", report)
+	}
+}
+
+// A scope's set validates at a name of its own, _acme-challenge.<scope>.<net>.<root>, which the network's
+// pair does not share, so a scope device's order goes in the same pass as the network's.
+func TestScopeSetOrdersBesideItsNetworksSet(t *testing.T) {
+	certs := newTestCerts(t, nil)
+	network := newTestDevice(t, "scoped-net")
+	scopeSet, err := sidecar.TlsIdentifierSet(testRoot, "scoped-net", "team-a", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	networkId := certs.accept(network)
+	scopeId := certs.accept(newTestDeviceOf(t, network.networkId, scopeSet))
+	report := certs.admit()
+	admittedIds := []sidecar.Id{}
+	for _, admission := range report.Admitted {
+		admittedIds = append(admittedIds, admission.Cert.CertId)
+	}
+	if !slices.Equal(admittedIds, []sidecar.Id{networkId, scopeId}) || len(report.Waiting) != 0 {
+		t.Fatalf("report %+v", report)
 	}
 }

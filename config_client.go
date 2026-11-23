@@ -392,6 +392,22 @@ func (self *ConfigClient) WithheldSince() time.Time {
 // device's rows-only pass moves nothing here: it answers once the full pass confirms n.
 func (self *ConfigClient) WaitFor(ctx context.Context, n uint64) (*ConfigState, error) {
 	self.noteHint(n)
+	return self.waitApplied(ctx, n)
+}
+
+// Waits as WaitFor does for a position n this device holds no proof api serves: the authorization pin of a statement
+// evs served, which its reader judges at that pin once the log reaches it (QD-1202). It asks a follow now where n is
+// past what either log applied, as a hint would, but records no hint, so a pin nobody proved, such as one a forged
+// statement names, never counts api as withholding it (checkWithheld).
+func (self *ConfigClient) WaitForPin(ctx context.Context, n uint64) (*ConfigState, error) {
+	if self.appliedPosition() < n {
+		self.requestFollow()
+	}
+	return self.waitApplied(ctx, n)
+}
+
+// Waits until the log has applied position n, or ctx ends, or the client closes, or a fork stops the log.
+func (self *ConfigClient) waitApplied(ctx context.Context, n uint64) (*ConfigState, error) {
 	for {
 		position, changed := self.position.Get()
 		if n <= position {
