@@ -12,7 +12,7 @@
   "num": 2,
   "code": "TRUST",
   "words": 9282,
-  "code_words": 21691,
+  "code_words": 21806,
   "ceiling": 3000,
   "over": 6282,
   "over_pct": 209.4
@@ -29,17 +29,17 @@
  {
   "num": 4,
   "code": "REPO",
-  "words": 8606,
+  "words": 8933,
   "code_words": 2314,
   "ceiling": 2800,
-  "over": 5806,
-  "over_pct": 207.4
+  "over": 6133,
+  "over_pct": 219.0
  },
  {
   "num": 5,
   "code": "CORE",
   "words": 11163,
-  "code_words": 8601,
+  "code_words": 8653,
   "ceiling": 3500,
   "over": 7663,
   "over_pct": 218.9
@@ -47,74 +47,74 @@
  {
   "num": 6,
   "code": "PROTO",
-  "words": 9285,
-  "code_words": 4173,
+  "words": 9761,
+  "code_words": 4188,
   "ceiling": 3800,
-  "over": 5485,
-  "over_pct": 144.3
+  "over": 5961,
+  "over_pct": 156.9
  },
  {
   "num": 7,
   "code": "TEAM",
-  "words": 12877,
-  "code_words": 15106,
+  "words": 13481,
+  "code_words": 15387,
   "ceiling": 3500,
-  "over": 9377,
-  "over_pct": 267.9
+  "over": 9981,
+  "over_pct": 285.2
  },
  {
   "num": 8,
   "code": "ACL",
-  "words": 13264,
-  "code_words": 5350,
+  "words": 13391,
+  "code_words": 5396,
   "ceiling": 3800,
-  "over": 9464,
-  "over_pct": 249.1
+  "over": 9591,
+  "over_pct": 252.4
  },
  {
   "num": 9,
   "code": "SOCK",
-  "words": 6464,
+  "words": 6600,
   "code_words": 1823,
   "ceiling": 3000,
-  "over": 3464,
-  "over_pct": 115.5
+  "over": 3600,
+  "over_pct": 120.0
  },
  {
   "num": 10,
   "code": "KEYS",
-  "words": 11856,
-  "code_words": 9649,
+  "words": 11895,
+  "code_words": 10163,
   "ceiling": 4500,
-  "over": 7356,
-  "over_pct": 163.5
+  "over": 7395,
+  "over_pct": 164.3
  },
  {
   "num": 11,
   "code": "EVS",
-  "words": 22805,
-  "code_words": 56135,
+  "words": 22883,
+  "code_words": 56446,
   "ceiling": 5000,
-  "over": 17805,
-  "over_pct": 356.1
+  "over": 17883,
+  "over_pct": 357.7
  },
  {
   "num": 12,
   "code": "DNS",
-  "words": 6711,
-  "code_words": 2124,
+  "words": 6752,
+  "code_words": 2270,
   "ceiling": 3000,
-  "over": 3711,
-  "over_pct": 123.7
+  "over": 3752,
+  "over_pct": 125.1
  },
  {
   "num": 13,
   "code": "TLS",
-  "words": 10619,
+  "words": 10811,
   "code_words": 1421,
   "ceiling": 3800,
-  "over": 6819,
-  "over_pct": 179.4
+  "over": 7011,
+  "over_pct": 184.5
  },
  {
   "num": 14,
@@ -128,11 +128,11 @@
  {
   "num": 15,
   "code": "MAIL",
-  "words": 11351,
+  "words": 11638,
   "code_words": 2356,
   "ceiling": 4500,
-  "over": 6851,
-  "over_pct": 152.2
+  "over": 7138,
+  "over_pct": 158.6
  },
  {
   "num": 16,
@@ -146,11 +146,11 @@
  {
   "num": 17,
   "code": "BRIDGE",
-  "words": 9870,
-  "code_words": 6402,
+  "words": 10001,
+  "code_words": 6574,
   "ceiling": 3800,
-  "over": 6070,
-  "over_pct": 159.7
+  "over": 6201,
+  "over_pct": 163.2
  },
  {
   "num": 18,
@@ -165,7 +165,7 @@
   "num": 19,
   "code": "OPS",
   "words": 10685,
-  "code_words": 11117,
+  "code_words": 11127,
   "ceiling": 3500,
   "over": 7185,
   "over_pct": 205.3

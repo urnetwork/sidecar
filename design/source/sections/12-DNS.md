@@ -188,6 +188,10 @@ System records (TTLs per 12.6; writer dns unless noted; last column, the owning 
 @                  TXT "v=spf1 -all"                                              §14.6
 <empty non-term.>  a copy of *'s records, which it blocks (RFC 4592 §2.2),        §12
                    kept while it has children and no own records, in the same writes: blog for _sip._tcp.blog
+<host>             a copy of *'s records where the host's own rows hold no A,     §12
+                   AAAA or CNAME, so a user's TXT, MX or SRV there no longer hides the edge's addresses;
+                   the edge answers the host's own RRsets first and the copy's for the types it lacks, and a
+                   host with a CNAME takes none (owner decision 714)
 _acme-challenge    TXT, <= 2 values; also under a live alias; writer certs        §13
 <host>             CAA canary during a strong-mode probe (12.8), TTL 60,          §13.8
                    with a copy of *'s records where <host> has none; writer certs
@@ -206,12 +210,17 @@ _dmarc             TXT "v=DMARC1; p=reject; sp=reject; np=reject; adkim=s; aspf=
 _mta-sts           TXT "v=STSv1; id=<n>"                                          §15; mail on, verified
 _smtp._tls         TXT "v=TLSRPTv1; rua=mailto:<report_token>@rpt.bringyour.com"  §15
 ; a copy is one row that dnsedge answers with *'s current records and TTLs, so writes to * and
-; health drops (12.6) reach it with no further write
+; health drops (12.6) reach it with no further write; every writer's transaction plans one at each owner
+; below @ that * covers and whose own rows hold no A, AAAA or CNAME, so * keeps answering wherever an
+; owner exists for another reason (owner decision 714)
 ; from M5 a label's draw writes this set with mail off, the null MX at @ and *, @'s SPF and _dmarc, in the
 ; draw's transaction, so every label has its zone and its spoofing records from the moment it exists,
 ; a label only read included (12.5; owner decision 690)
 ; an alias zone and each Team scope <scope>.<net>.<root> (owner decisions 40, 58) repeat this set,
-; with their own mx host and TLSA
+; with their own mx host and TLSA, but a scope's set holds no _mta-sts until a scope publish exists,
+; since no receiver serves a scope's MTA-STS policy (§13.9's system publish is tls/443/mta-sts on
+; smtp/25/mx alone), scope mail keeping DANE for its TLS, as burner mail does (owner decision 715;
+; DESIGN-DEFER.md's dns-scope-mta-sts entry)
 ; _mta-sts is published only for a network with network_verified, the zone's mail policy carrying it
 ; for no other, and a verification change reconciles the zone where it is written, at api's verification
 ; update (a sign-in, a client's auth, a payment) and at the zone's next write, so one no writer makes,
@@ -265,7 +274,7 @@ User records:
 | `POST /network/dns/label-reclaim` | Network, DNS permission | after a Postgres restore only: re-binds an ownerless `retiring` name (12.5) to the caller's network, given `("urnetwork-sidecar-v1/label-reclaim", name, network_id, nonce)` signed by the key of a CT-logged certificate naming it, the nonce being the restore's incident id (§19.10) |
 | `GET /dns/zone` | service token, aud `dns` (§7.8); any admitted sidecar of the network | the label, allocated on first need, the alias, the zone version, and the caller's own view: the RRsets and custom-host states (state, CAA mode, readiness, pending interfaces) of the owners on whose `dns:<host>` it holds publish or admin, by §8's gate; never `GET /network/dns`'s whole body, which stays with the read roles §7.5 gives no Member |
 | `POST /dns/label-reclaim` | service token, aud `dns` | `POST /network/dns/label-reclaim`'s tuple and signature for a sidecar, the token's network equal to the tuple's `network_id` |
-| `POST /dns/internal/acme-challenge`, `/dns/internal/caa-canary`; `GET /dns/internal/ready?serial=` | internal: certs | challenges at most 2 values a name, TTL 60, ≤ 10 per name per hour, gone after 1 h, at `_acme-challenge` owners and a custom domain's `<acme_token>.acme.<root>` (step 3); canaries per the probe (below); ready long-polls ≤ 25 s and answers `stale`, `ready` or `canary_failing` (12.6) |
+| `POST /dns/internal/acme-challenge`, `/dns/internal/caa-canary`; `GET /dns/internal/ready?serial=` | internal: certs | challenges at most 2 values a name, TTL 60, ≤ 10 per name per hour (`dns_challenges_per_name_hour`), a write past them answered 429 with a Retry-After in seconds, when the name's oldest write in the window leaves it, to which certs holds the name's orders (§13.8; owner decision 713), gone after 1 h, at `_acme-challenge` owners and a custom domain's `<acme_token>.acme.<root>` (step 3); canaries per the probe (below); ready long-polls ≤ 25 s and answers `stale`, `ready` or `canary_failing` (12.6) |
 | `GET /dns/internal/custom-host-map?applied=`; `POST /dns/internal/custom-host-map/applied` | internal: each lb interface's `lbmap` (§19.5 W1), naming its interface, which the API holds to the lb inventory | the newest custom-host map (version, digest, hosts), long-polled ≤ 25 s until it differs from `applied`; then the version the caller's interface loaded, with its nginx master, or a failed render, test or reload (§13.4) |
 | `POST /dns/internal/route-probes` | internal: dns edges | each lb interface's route-probe result for the custom-host version it reported (12.6, §13.4) |
 | `GET /dns/internal/journal`, `/dns/internal/snapshot`; `POST /dns/internal/reload-diff` | internal: dns edges | the feed (12.6); after a reload across a restore, `{root, replaced_serial, serial, rrsets: [(owner, type)]}`, the RRsets that differ between the replaced snapshot and the new one, which 12.6's restore step maps to networks through `dns_label` |
@@ -408,6 +417,6 @@ func (self *UpgradeMux) SetLocalZone(localZone LocalZone)
 Milestones and the v0 and v1 sets are §23.4's.
 - **v0:** renewal and census (M0); labels, `dns_label` and api's `GET /sidecar/label` (M2); `ur tun`'s resolver (M4) and C14's seam, dark on app paths until §18's app hosts (M8; owner decision 85); the moved root signed without a DS, labels, edge, challenge, SPF, DMARC, null MX and user records, routes, gates, quotas, suspension, label reclaim and the restore step, the canary and its pages (M5); mail records, `b`, `mx`, TLSA and the DS (M7); replying burners' selectors and label copies, the reverse zones' PTRs (M9).
 - **v1:** aliases, custom domains in both CAA modes, Team scopes (M6); direct MX and strict-mode MX hosts (M7); scope mail hosts with §15 (M8).
-- **Later:** [the PSL application](DESIGN-DEFER.md#dns-psl-listing) once eligible, then §14.6's cut-over; [bring-your-own NS](DESIGN-DEFER.md#dns-bring-your-own-ns); [HTTPS/SVCB](DESIGN-DEFER.md#dns-https-svcb-records).
+- **Later:** [the PSL application](DESIGN-DEFER.md#dns-psl-listing) once eligible, then §14.6's cut-over; [bring-your-own NS](DESIGN-DEFER.md#dns-bring-your-own-ns); [HTTPS/SVCB](DESIGN-DEFER.md#dns-https-svcb-records); [a Team scope's MTA-STS publish](DESIGN-DEFER.md#dns-scope-mta-sts) (owner decision 715).
 - **Deferred:** DESIGN-DEFER.md holds an entry for each Later item, linked above, and for [this section's v1 set](DESIGN-DEFER.md#dns-v1) (owner decision 587).
 - **Blocking:** §19's dns edge hosts block M5; the soak blocks the DS and M7's DANE; §13.4's generated split map blocks M6's custom hosts; HE's reverse delegation blocks M9's PTRs.

@@ -176,6 +176,21 @@ var x9Rows = []x9Row{
 		marker: "ForwardDnssec", markerKind: x9MarkerName,
 		defaultOffTests: []string{"TestDohForwardQuerySetsNoDoBit", "TestDohForwardAnswersAsBeforeDnssec"},
 	},
+	{
+		// owner decision 691 (QD-1176), on connect's sidecar branch; upstreaming it to connect's main is the owner's
+		id: "C21", disposition: x9Lands, milestone: 1, task: "connect-restarted-responder (connect 65eb58f2)",
+		marker: "handshakeRecordStale", markerKind: x9MarkerName,
+		defaultOffNotNeeded: "on by default by owner decision 691: it corrects connect's own session recovery against a responder " +
+			"restarted under the same identity, so no client keeps the old behavior; connect's " +
+			"TestRestartedResponderUnderSameIdentityIsReachedAtOnce and TestRestartedResponderNeverMeetsADroppedAttemptsHandshake pin the new one",
+	},
+	{
+		// owner decision 692 (QD-1185), on connect's sidecar branch; upstreaming it to connect's main is the owner's
+		id: "C22", disposition: x9Lands, milestone: 1, task: "connect-restarted-responder (connect adcf9ba8); consumed by the sidecar's Subprotocol",
+		marker: "EncryptionEventPeerSessionLost", markerKind: x9MarkerName,
+		defaultOffNotNeeded: "an encryption event type appended to the enum, so earlier values keep their numbers, and seen only by " +
+			"a caller that registers for encryption events; TestNackDemotionReportsThePeerSessionLost pins when it fires",
+	},
 }
 
 // The row with that id, or nil.
@@ -852,7 +867,7 @@ func TestX9ReadyForMain(t *testing.T) {
 
 // Every row of §4.6 is in the table once, with the fields its disposition needs.
 func TestX9RowsAreSection46(t *testing.T) {
-	want := []string{"C1", "C2", "C3", "C4", "C5", "C6a", "C6b", "C7", "C8", "C9", "C10", "C11", "C12", "C13", "C14", "C15", "C16", "C17", "C18", "C19", "C20"}
+	want := []string{"C1", "C2", "C3", "C4", "C5", "C6a", "C6b", "C7", "C8", "C9", "C10", "C11", "C12", "C13", "C14", "C15", "C16", "C17", "C18", "C19", "C20", "C21", "C22"}
 	got := []string{}
 	for _, row := range x9Rows {
 		got = append(got, row.id)

@@ -31,9 +31,12 @@
 // verdict, so CORE-M2-03's alarms and ACL's AclFollower need no second follower. A fork stops the log: the client
 // raises head_alarm with both pins and reports it to HeadStopState, which stops sealing in shared groups while
 // rotations, Removes and revocations go on (§6.4), and every wait on a position returns it (WaitFor), though it leaves
-// the position where it was. A base whose rows do not compile from its head is such a fork, so a rows mismatch
-// installs nothing. A reader that cannot fetch an entry it has proof of, a hint naming a position api does not serve,
-// treats itself as withheld.
+// the position where it was. A fork a start meets (a new device's walk from 1, a joining device's full pass, a restart
+// at api's newest base) stops the client too, though the start publishes nothing (QD-1209): the client holds it beside
+// its logs, so the follows stop at it and its head_alarm is raised once; a head or rows api withheld, a run refused
+// and a page below the pin are no fork, and the next follow starts again. A base whose rows do not compile from its
+// head is such a fork, so a rows mismatch installs nothing. A reader that cannot fetch an entry it has proof of, a
+// hint naming a position api does not serve, treats itself as withheld.
 //
 // What it keeps across restarts is config_client_store.go's, in §5.9's authlog/.
 //
@@ -219,14 +222,17 @@ type ConfigClient struct {
 	starting atomic.Pointer[ConfigLog]
 	// a joining device's rows-only log (the file header's rows-only pass), nil outside one and once a base is confirmed
 	unconfirmed atomic.Pointer[ConfigLog]
+	// the fork a start met, nil until one does (QD-1209): held beside the logs, since a start publishes nothing, the
+	// first only, and set by the follower alone (holdStartFork)
+	startFork atomic.Pointer[ConfigForkError]
 	// the Genesis this client trusts, once a start or the store read it: whose config repo a joining device's key client
 	// is asked about
 	genesis atomic.Pointer[bridge.Genesis]
 	// the newest position the confirmed log applied, which WaitFor watches
 	position *MonitorValue[uint64]
-	// the fork that stopped either log as the newest follow left it, nil while they follow: its change wakes WaitFor as
-	// the position's does, since a fork leaves the position where it was. Set on the way out of every follow
-	// (noteStopped), the one applier of either log
+	// the fork that stopped this client (Fork) as the newest follow left it, nil while it follows: its change wakes
+	// WaitFor as the position's does, since a fork leaves the position where it was. Set on the way out of every follow
+	// (noteStopped), the one applier of either log and the one start
 	stopped *MonitorValue[*ConfigForkError]
 
 	stateLock sync.Mutex
@@ -377,8 +383,8 @@ func (self *ConfigClient) UnconfirmedPin() *bridge.AuthPin {
 }
 
 // The fork that stopped the log, nil while it follows: a joining device's rows-only log forks it as the confirmed log
-// does, since what a rows-only verifier refuses as a fork every full reader refuses too. Safe for concurrent use: each
-// log's fork is read under that log's lock.
+// does, since what a rows-only verifier refuses as a fork every full reader refuses too, and so does a fork a start met,
+// which no log holds (QD-1209). Safe for concurrent use: each log's fork is read under that log's lock.
 func (self *ConfigClient) Fork() *ConfigForkError {
 	for _, log := range []*ConfigLog{self.configLog.Load(), self.unconfirmed.Load()} {
 		if log == nil {
@@ -388,7 +394,7 @@ func (self *ConfigClient) Fork() *ConfigForkError {
 			return fork
 		}
 	}
-	return nil
+	return self.startFork.Load()
 }
 
 // When api began serving less than this device holds proof of, zero while it serves all of it.
@@ -398,10 +404,10 @@ func (self *ConfigClient) WithheldSince() time.Time {
 	return self.withheldSince
 }
 
-// Waits until the log has applied position n, or ctx ends, or the client closes, or a fork stops either log, which it
-// returns: the follow that records a fork wakes every wait as it ends. A follow runs at once if n is past the newest
-// hint, since whoever waits knows of an entry api holds (CORE-M2-02's act after its post). A joining device's rows-only
-// pass moves nothing here: it answers once the full pass confirms n.
+// Waits until the log has applied position n, or ctx ends, or the client closes, or a fork stops the client (Fork),
+// which it returns: the follow that records a fork, or whose start meets one, wakes every wait as it ends. A follow runs
+// at once if n is past the newest hint, since whoever waits knows of an entry api holds (CORE-M2-02's act after its
+// post). A joining device's rows-only pass moves nothing here: it answers once the full pass confirms n.
 func (self *ConfigClient) WaitFor(ctx context.Context, n uint64) (*ConfigState, error) {
 	self.noteHint(n)
 	return self.waitApplied(ctx, n)
@@ -418,10 +424,10 @@ func (self *ConfigClient) WaitForPin(ctx context.Context, n uint64) (*ConfigStat
 	return self.waitApplied(ctx, n)
 }
 
-// Waits until the log has applied position n, or ctx ends, or the client closes, or a fork stops either log. A fork
+// Waits until the log has applied position n, or ctx ends, or the client closes, or a fork stops the client. A fork
 // leaves the position where it was, so the wait watches the fork the follows note beside it, and wakes on whichever
-// moves. It reads the fork the logs hold, never older than the one noted, since a follow under way, whose callbacks
-// may wait here too, can have recorded one its end has not noted yet.
+// moves. It reads the fork the client holds (Fork), never older than the one noted, since a follow under way, whose
+// callbacks may wait here too, can have recorded one its end has not noted yet.
 func (self *ConfigClient) waitApplied(ctx context.Context, n uint64) (*ConfigState, error) {
 	for {
 		position, changed := self.position.Get()
@@ -547,7 +553,7 @@ func (self *ConfigClient) takeConfigKeyWait() <-chan struct{} {
 }
 
 // One follow: pages of entries after this device's pin until api has no more, each applied as §7.9's apply row says.
-// A fork it records wakes every wait as it ends.
+// A fork it records, or its start meets, wakes every wait as it ends, and stops every follow after it.
 func (self *ConfigClient) follow(ctx context.Context) error {
 	self.followLock.Lock()
 	defer self.followLock.Unlock()
@@ -571,9 +577,9 @@ func (self *ConfigClient) follow(ctx context.Context) error {
 	return err
 }
 
-// Moves what the waits watch beside the position to the fork that stopped either log, waking every wait once a follow
-// recorded one: the position a fork leaves where it was wakes none. Under followLock, on the way out of each follow,
-// the one applier of either log, so no fork a follow records goes unseen.
+// Moves what the waits watch beside the position to the fork that stopped this client (Fork), waking every wait once a
+// follow recorded one or its start met one: the position a fork leaves where it was wakes none. Under followLock, on
+// the way out of each follow, the one applier of either log and the one start, so no fork a follow finds goes unseen.
 func (self *ConfigClient) noteStopped() {
 	self.stopped.Set(self.Fork())
 }
@@ -648,7 +654,8 @@ func (self *ConfigClient) watchConfigKey(configRepoId Id) bool {
 // A joining device's follow, under followLock (the file header's two passes): the full pass first, which, once it
 // confirms a base, ends the joining and follows on as any reader does; else the rows-only pass, while the keychain holds
 // no generation of the config repo or a rows-only log is held already. Answers the full pass's error, a withheld head
-// among them, so the follower retries at its retry interval as well as when the config key arrives.
+// among them, so the follower retries at its retry interval as well as when the config key arrives. A fork the full
+// pass's start meets ends the follow there, the rows-only pass not run (QD-1209).
 func (self *ConfigClient) followJoining(ctx context.Context) error {
 	configRepoId, known := self.configRepoId()
 	held := false
@@ -656,6 +663,11 @@ func (self *ConfigClient) followJoining(ctx context.Context) error {
 		held = self.watchConfigKey(configRepoId)
 	}
 	confirmErr := self.confirm(ctx)
+	if self.startFork.Load() != nil {
+		// the fork stops this client as a held log's does: no rows-only pass takes the log past it, or hands the key
+		// client a state there that a full reader refuses
+		return confirmErr
+	}
 	if !self.joining() {
 		self.takeConfigKeyWait()
 		if confirmErr != nil {
@@ -938,10 +950,12 @@ func (self *ConfigClient) start(ctx context.Context, log *ConfigLog, projection 
 	if atBase {
 		retained := &ConfigRetained{SignedGenesis: signedGenesis, Entries: projection.Entries, Rows: map[[sha256.Size]byte][]byte{}}
 		if err := started.restore(retained, self.pageRowsSource(ctx, projection), floor); err != nil {
+			self.holdStartFork(err, projection.Entries)
 			return nil, nil, refused(err)
 		}
 	} else if _, err := started.ApplyRun(projection.Entries, self.pageRowsSource(ctx, projection)); err != nil {
 		self.onApplyError(started, err)
+		self.holdStartFork(err, projection.Entries)
 		return nil, nil, err
 	}
 	// the pages after the first, until the log holds the floor
@@ -953,10 +967,13 @@ func (self *ConfigClient) start(ctx context.Context, log *ConfigLog, projection 
 		}
 		if _, err := started.ApplyRun(next.Entries, self.pageRowsSource(ctx, next)); err != nil {
 			self.onApplyError(started, err)
+			self.holdStartFork(err, next.Entries)
 			return nil, nil, err
 		}
 		last = next
 	}
+	// a start below the floor, or at another A_n there, is a page below the pin or a run refused, never a held fork: the
+	// next follow starts again
 	if err := started.checkFloor(floor); err != nil {
 		return nil, nil, refused(err)
 	}
@@ -970,6 +987,45 @@ func (self *ConfigClient) start(ctx context.Context, log *ConfigLog, projection 
 		}()
 	}
 	return started, last, nil
+}
+
+// Holds the fork a start met, the first one (QD-1209). The start publishes nothing, but Fork answers the fork from now
+// on, so the follows stop at it, as at a held log's fork, and every wait returns it; the head_alarm the start raised
+// is the one it gets. An error that is no fork (configStartFork) holds nothing, and the next follow starts again. For
+// the follower, under followLock.
+func (self *ConfigClient) holdStartFork(err error, entries [][]byte) {
+	if fork := configStartFork(err, entries); fork != nil {
+		self.startFork.CompareAndSwap(nil, fork)
+	}
+}
+
+// The fork a start's err is, as a held log's fork carries it, or nil when err is none (QD-1209). An entry's fork is its
+// own ConfigForkError. A restore whose anchor does not link (ErrConfigFork, config_replay.go's StartAtBase) is placed
+// at the newest base of entries, the page the start anchored on, with the digest api's entry gives it there and what
+// did not hold. A head or rows api withheld, a run refused and a page below the pin are no fork: the next follow reads
+// them again.
+func configStartFork(err error, entries [][]byte) *ConfigForkError {
+	if !errors.Is(err, ErrConfigFork) || errors.Is(err, ErrConfigHeadUnavailable) || errors.Is(err, ErrConfigRowsUnavailable) {
+		return nil
+	}
+	fork := &ConfigForkError{}
+	if errors.As(err, &fork) {
+		return fork
+	}
+	fork = &ConfigForkError{Reason: fmt.Sprintf("a start's anchor: %v", err)}
+	for i := len(entries) - 1; 0 <= i; i -= 1 {
+		entry := &bridge.AuthEntry{}
+		if proto.Unmarshal(entries[i], entry) != nil || (entry.GetKind() != bridge.AuthEntryKindBase && 0 < i) {
+			continue
+		}
+		// the newest base, or the page's first entry where none parses as one
+		fork.N, fork.Entry = entry.GetN(), bytes.Clone(entries[i])
+		if chain, err := bridge.AuthChainDigest(entry.GetN(), entry.GetPrevChain(), entry.GetKind(), entry.GetTimeMs(), entry.GetBody()); err == nil {
+			fork.RemoteChain = chain
+		}
+		break
+	}
+	return fork
 }
 
 // Installs log as the one this client follows, after it applied verdicts on before: the log is kept in authlog/
@@ -1206,7 +1262,9 @@ func (self *configClientRowsSource) Rows(networkId Id, rowsSha256 []byte) ([]byt
 			return rows, nil
 		}
 	}
-	return nil, fmt.Errorf("api served no rows at %x", rowsSha256)
+	// withheld, as a run's prefetch calls rows it cannot fetch: a start's anchor that wraps this as its fork holds none
+	// (configStartFork), and the next follow reads the page again
+	return nil, fmt.Errorf("%w: api served no rows at %x", ErrConfigRowsUnavailable, rowsSha256)
 }
 
 // The base's head, read and checked (CheckConfigBase), and remembered as verified. A head this device verified before

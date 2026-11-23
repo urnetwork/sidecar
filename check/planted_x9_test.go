@@ -175,12 +175,14 @@ func TestX9ReadyForMainRefusesAMarkerWithNoDefaultOffTest(t *testing.T) {
 	wantFindings(t, fixture.open().x9ReadyForMainFindings(t, 0))
 }
 
-// Plants C3, C11 and C12, which M1 lands, with their default-off tests where they need one.
+// Plants C3, C11, C12, C21 and C22, which M1 lands, with their default-off tests where they need one: C21 and C22
+// need none, their rows saying why.
 func plantM1ConnectRows(fixture *fixture) {
 	fixture.writeSibling("connect/subprotocol.go", "package connect\n\ntype SubprotocolListenerOption struct{}\n\nfunc WithSubprotocolControlSource() SubprotocolListenerOption {\n\treturn SubprotocolListenerOption{}\n}\n")
 	plantConnectTests(fixture, "subprotocol_source_test.go", "TestSourceRuleOptInsAreOffByDefault", "TestSubprotocolControlSourceDroppedWithoutOptIn", "TestDefaultClientP2pRouteAcceptsAnySource")
 	fixture.writeSibling("connect/api/bringyour.yml", "paths:\n  /sidecar/bind:\n    post: {}\n")
 	fixture.writeSibling("connect/SUBPROTOCOL.md", "The sidecar's one subprotocol is 21842.\n")
+	fixture.writeSibling("connect/transfer_encrypt.go", "package connect\n\ntype EncryptionEventType int\n\nconst EncryptionEventPeerSessionLost EncryptionEventType = 1\n\ntype peerEncryptionSession struct{}\n\nfunc (self *peerEncryptionSession) handshakeRecordStale() bool {\n\treturn false\n}\n")
 }
 
 // A renamed marker reads as a row not landed, so a row due by the gate fails.

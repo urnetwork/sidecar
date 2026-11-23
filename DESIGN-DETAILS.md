@@ -2859,6 +2859,13 @@ message DelegationRow {
 }
 
 // sidecar/protocol/bridge/bridge.proto
+message BridgeState {
+  // 1-9 as today
+  bytes base_signer_identity_public_key = 10;  // the Ed25519 key the judge verified the state's newest base under,
+                                       // its signer's identity key at S(b-1); empty before base 1 and where a
+                                       // compile two or more bases behind its log's tip finds no kept entry of
+                                       // the base (owner decision 696, 4.2.5)
+}
 message BridgeIdentity {
   // 1-5 as today
   bytes forward_delegation_id = 6;     // the subject's forwarding Delegation live at the state, 32 B; empty none
@@ -3020,7 +3027,7 @@ Links are unchanged: a window client carries a full client graph, and the iOS tu
 
 #### 4.2.5 Verification
 
-**What tier 1 checks, and what it does with each entry.** The posture verifies, as landed: the chain from its pin; a base's Signed header under a config writer named in the rows it holds (the previous base's, or for its first base the base's own, as a cold gate starts); `rows_sha256` over the rows as they stream to the store; and each statement's signature under its signer's identity key in those rows. A base's `tail_verdicts` it stores and does not read: verdicts reach it only as a compiled state. Then, by SignedType:
+**What tier 1 checks, and what it does with each entry.** The posture verifies, as landed: the chain from its pin; a base's Signed header under a config writer named in the rows it holds (the previous base's, or for its first base the base's own, as a cold gate starts), and, under a compiled state whose run holds the base, also under a config writer's key in the base's own rows, the key the state's `identities` name for the signer, or the state's `base_signer_identity_public_key`, the key the judge verified the base under at S(b-1), which covers a writer admitted after those rows whom no rule lets reach this host, one revoked since and one the tail promoted, the posture trusting tier 2 for that key as it does for verdicts, and its manifest keeping the key a base verified under so a restart takes it again; between states, a base whose signer the rows held do not name waits for a compile, as a base of another config head does (owner decision 696); `rows_sha256` over the rows as they stream to the store; and each statement's signature under its signer's identity key in those rows. A base's `tail_verdicts` it stores and does not read: verdicts reach it only as a compiled state. Then, by SignedType:
 
 ```text
 applied as a denial, at once   SidecarRevoke, MemberRevoke, Suspend, GrantRevoke, BridgeWithdraw (as landed)
@@ -3034,7 +3041,7 @@ narrowing, not applied         any of the above that the posture cannot check: i
 alarm clock; never pending)      class is short, or (a DelegationRevoke) it names no forwarding Delegation in the
                                  state; and every AuthorityProposal, AuthorityCosign, RecoveryRebind, AdminSet,
                                  BridgeEgress and TICK, and every BASE whose config_head_sha256 differs from
-                                 the stored base's
+                                 the stored base's or whose signer the stored rows do not name (decision 696)
 opening or neutral             everything else, Unsuspend included: wants a compile, starts no clock
 wrong network, broken chain    not an entry of this log: head_alarm (fork), nothing applied, pin unmoved
 ```
@@ -3871,7 +3878,7 @@ L is defined by one recurrence so that the writer and every reader compute it fr
 
 **The ring.** `ProjectionRows.ring` holds the ids that took effect among the 4,096 entries through ft; a verifier's ring at n is that, plus the tail's entries with verdict 1 or 2, plus what it judged since, trimmed to the 4,096 before n. The replay row's "before the retention point" clause is what makes this exact without the ring reaching further: a statement applied at m0 carries at <= m0 - 1, so a copy landing after the retention point has passed m0 fails the `at` rule before the ring is asked. The ring is therefore the same set at every verifier for every position it is asked at.
 
-**Confirmations.** `SidecarRow.confirmations` keeps every AdmissionConfirm and OwnerConfirm that took effect, with its signer, entry and whether it lifted a park, for the sidecar's life; fields 5-8 stay the newest of each. The cascade reads the history: "whose park such a sidecar's AdmissionConfirm lifted" is a confirmation with `lifted_park` by a signer then in P from since_n on; "a confirmation of a device then unparked and consented on other signatures adding none" is one with `lifted_park` false whose device's consent (§8.5) also rests on a signature outside P; "whose consent rests only on such a sidecar's OwnerConfirm" is a device every consent basis of which, admission signers, invite, genesis and confirmations alike, lies in P or in a key of a binding P voids. P is a pure function of rows, so api, evs, gkm, a new device and a long-running reader build it alike.
+**Confirmations.** `SidecarRow.confirmations` keeps every AdmissionConfirm and OwnerConfirm that took effect, with its signer, entry and whether it lifted a park, for the sidecar's life; fields 5-8 stay the newest of each. §8.5's consent replay counts every confirmation the history keeps, each as its own event judged at its own position, never only the newest of each kind, so a later confirmation of a kind never hides an earlier one, and the cascade's consent clause reads the same replay (owner decision 703). The cascade reads the history: "whose park such a sidecar's AdmissionConfirm lifted" is a confirmation with `lifted_park` by a signer then in P from since_n on; "a confirmation of a device then unparked and consented on other signatures adding none" is one with `lifted_park` false whose device's consent (§8.5) also rests on a signature outside P; "whose consent rests only on such a sidecar's OwnerConfirm" is a device every consent basis of which, admission signers, invite, genesis and confirmations alike, lies in P or in a key of a binding P voids. P is a pure function of rows, so api, evs, gkm, a new device and a long-running reader build it alike.
 
 **BASE records in folds.** A fold's `ConfigRecord`s include the BASE entries in (after, ft], kind 1, body the Signed ProjectionHeader, so the head holds every entry's body and a reader holding the genesis recomputes A_1..A_ft from the head alone (A_n = SHA-256(... u64be(n) || A_{n-1} || u32be(kind) || i64be(time_ms) || SHA-256(body))). Compile ignores them; the head check compares them like any record. This closes the far-behind reader's gap (5.5) and gives the new device's anchor a chain it can verify to its first retained entry.
 
@@ -3921,9 +3928,11 @@ ApplyBase(V, base e at n)                        -- a verifier already standing 
 StartAtBase(V, b)                                -- a new device, a cold gate, or a reader that fell behind
   fetch entry 0 (the Signed Genesis; A_0 must equal the invite's or the bundle's), entries r(b)..tip, rows(b)
   chain A_k forward from entry r(b)'s prev_chain; every link must hold                           else FORK
-  h := parse base b; require sha256(rows) = h.rows_sha256 and h's signer is a config writer in rows(b)
-          whose identity key in rows(b) verifies h's signature; tail cap; ft rule against the previous base if held
-  if V is a full reader (anchor):
+  h := parse base b; require sha256(rows) = h.rows_sha256 and h's signer is a config writer at S(b-1) as the
+          reader rebuilds it, rows(b) with the tail re-applied by bits, or S(0) when no base precedes b, and its
+          identity key there verifies h's signature (owner decision 695); tail cap; ft rule against the previous
+          base if held
+  if V is a full reader (anchor), each push's signer judged under the identity keys of that rebuilt S(b-1):
       head := open(h.config_head_sha256); require head.genesis = A_0; head on the config repo's chain from
               genesis (evs; config_pushes at api); head's fold records equal every held entry in [r(b), ft];
               recompute A_1..A_{r(b)-1} from the genesis through the head's records, BASEs included, and require
@@ -3933,6 +3942,8 @@ StartAtBase(V, b)                                -- a new device, a cold gate, o
   for k in ft+1..b-1: S := Reapply(S, e_k, bits[k]); V[k] := bits[k]
   ring := rows.ring + {applied tail ids}; retentionPoint := r(b); held := r(b)
   for k in b+1..tip: Apply(e_k) as a long-running reader (Judge, then effect)
+  a FORK met here, an entry's or an anchor that does not link, is held as a long-running reader holds one: the
+      client publishes nothing and stops, never starting again at the next follow (5.5; owner decision 697)
 
 WriterPublishBase(W, head)                       -- a config writer at S(tip), TEAM-M2-09
   ft := tip if folding, else prev.folded_through; require tip - ft <= 4096 (else fold through tip first)
@@ -4069,6 +4080,13 @@ behind (a phone off for weeks) misses; it restarts as StartAtBase at the newest 
                                (BASE records in folds), and a rows-only one trusts the base's signer as a cold gate
                                does, with the floor rule refusing any run that ends below its last pin; a mismatch
                                is head_alarm (fork), never a silent restart
+a start that forks             a new device's walk from 1, a joining device's full pass or a far-behind restart at
+(owner decision 697)           the newest base that meets a fork (an entry's, or a restore anchor that does not
+                               link) holds it as a long-running reader holds a log's fork: the client keeps it
+                               beside its logs and publishes nothing, Fork() and its waits return it, its follows
+                               stop at it and head_alarm is raised once; a refused run, a page below the pin and a
+                               withheld head still start again at the next follow; the fork is held in memory, so
+                               a process restart walks again and forks once more
 a verifier holding an off-log  it forks at the activation as 7.9's precedence row says, so it checks no base's bits;
 veto                           once the log reverses the activation it applies the base
 site loss (TEAM-M3-02)         devices upload the verbatim entries they keep, the rows of their bases (the new
@@ -10330,7 +10348,12 @@ JudgeBridgeBody(before, e at k)                  -- ConfigLogSettings.BridgeBody
      the seal or padding fails    -> Refused{seal}, which is the reader's alarm
   body.approval is unset          -> Standing        -- whether a standing grant covers it is the compile's (12.2.4)
   else  facts, err := before.CheckBridgeApproval(e, body, body.approval)   -- as landed, on `before` itself: action,
-                                                        match, quorum and the spend check on before's AclState
+                                                        match, quorum and the spend check on before's AclState;
+                                                        the body held to its action: a route's prefixes in its
+                                                        cidrs, a map's target port and expiry where it sets
+                                                        them, a map void under an action naming cidrs and a
+                                                        route under one naming a target port or expiry
+                                                        (owner decision 705)
         err -> Refused{err}  |  ok -> Approved{approval_id, rule_id, uses, not_after_ms}
   the verdict rides the BridgeLogStatement the state's fold then holds (Approval), as SignerAdmin does
 
