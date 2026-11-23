@@ -43,6 +43,8 @@ barrier bridge_file.egress.after bridge_file.go
 barrier bridge_file.egress.before bridge_file.go
 barrier bridge_file.rule.after bridge_file.go
 barrier bridge_file.rule.before bridge_file.go
+barrier bridge_file.standing.after bridge_file.go
+barrier bridge_file.standing.before bridge_file.go
 barrier bridge_forward.compile.hand bridge_forward_compile.go
 barrier bridge_forward.compile.head bridge_forward_compile.go
 barrier bridge_forward.compile.judge bridge_forward_compile.go
