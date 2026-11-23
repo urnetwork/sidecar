@@ -2440,7 +2440,8 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     "extending @@OD:428@@ and @@OD:577@@; and a label drawn with its zone (690), extending @@OD:14@@. ")
 
 # The sixth late fold (dr15-late-fold, 2026-11-23): the answers the end-to-end integration phase raised after the fifth
-# late fold, QD-1176 to QD-1209, numbered as folded. Its first piece: a restarted peer reached at once.
+# late fold, QD-1176 to QD-1209, numbered as folded: a restarted peer reached at once (691-694), then the config log,
+# teams and access control (695-705).
 INDEX += [
     (691, 'A restarted responder reached at once',
      "connect's per-peer session recovers against a responder restarted under the same identity, §4.6's C21."),
@@ -2450,20 +2451,54 @@ INDEX += [
      'A HelloResult no Hello awaits, from a sidecar holding no Hello here, runs a fresh Hello at once.'),
     (694, 'A replayed open after a restart',
      'A listen_id is fresh at every Listen, so step 2 refuses a replayed open; the replay set stays in memory.'),
+    (695, "A base's signer at a start",
+     "A reader starting at a base judges its signer, and reads the anchor's head, at S(b-1) rebuilt from b's rows and tail."),
+    (696, "A later writer's base at the posture",
+     "Under a compiled state the posture takes a base's signer key from the state, which carries the key its base verified under."),
+    (697, "A start's fork held",
+     'A ConfigClient whose start meets a fork holds it and stops, as a long-running reader stops at a fork.'),
+    (698, 'A carried bridge block',
+     "A reader keeps a carried BridgeBlock it holds unjudged, and an admin's next head re-signs one whose signer is gone."),
+    (699, 'Carried settings records',
+     'A reader keeps a carried ServiceSettings or VersioningRules record it holds unjudged; no writer re-signs them.'),
+    (700, 'Tagged credentials outlive sponsors',
+     "A team's tagged clients are minted on its owner of record, taken only as an active tagged client's credential."),
+    (701, "A key follows its creator's role",
+     "A tagged or pre-approved auth key enrolls only while its creator's current role holds the keys permission."),
+    (702, 'The consented list follows consent',
+     "An owner-bound repo's consented_sidecar_ids lists exactly its owner's consented devices, entry by entry."),
+    (703, 'Every confirmation counts',
+     "§8.5's consent replay counts every confirmation a device's row keeps, not the newest of each kind."),
+    (704, "A read-only sidecar's deposits",
+     'A read_only sidecar deposits only in an owner-bound repo it reads, for receipts, and reads alone elsewhere.'),
+    (705, 'An approval fixes the statement type',
+     'Readers void a bridge map filed under an approval naming cidrs, and a route under one naming a port or expiry.'),
 ]
 for _n, _note in [
         (22, ' Extended by @@OD:691@@ and @@OD:692@@: C21 and C22.'),
         (689, " Followed by @@OD:691@@: connect's session recovers against a restarted responder."),
+        (83, " Extended by @@OD:700@@: a tagged agent's api credential outlives its sponsor."),
+        (126, ' Followed by @@OD:702@@ and @@OD:703@@: the consented list and every confirmation.'),
+        (197, " Extended by @@OD:696@@: under a compiled state the posture takes a later writer's base."),
+        (218, ' Followed by @@OD:705@@: an approval fixes the statement type.'),
+        (318, " Refined by @@OD:695@@: the keys of b's rows with its tail re-applied, b's signer judged at S(b-1)."),
+        (688, " Refined by @@OD:704@@: a read_only sidecar's deposit is a receipt's, in an owner-bound repo only."),
 ]:
     _i = [r[0] for r in INDEX].index(_n)
     assert _note not in INDEX[_i][2], _n
     INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
-assert [r[0] for r in INDEX] == list(range(1, 695))
-DATES.update({_n: '2026-11-22' for _n in range(691, 695)})
+assert [r[0] for r in INDEX] == list(range(1, 706))
+DATES.update({_n: '2026-11-22' for _n in range(691, 706)})
+DATES[697] = '2026-11-23'
 _D690 = "and a label drawn with its zone (690), extending @@OD:14@@. "
 assert DECISIONS_INTRO.count(_D690) == 1, 'decisions lead moved'
 _D15 = ("A sixth late fold, on 2026-11-23, numbers as it folds them the answers the end-to-end integration phase raised "
         "after that: a responder restarted under its identity reached at once (691), following @@OD:689@@, a lost peer "
         "session ending the Hello (692) and an unasked HelloResult prompting one (693), adding C21 and C22 to "
-        "@@OD:22@@'s connect changes, and a replayed open refused at a fresh listen_id (694). ")
+        "@@OD:22@@'s connect changes, and a replayed open refused at a fresh listen_id (694); then a base's signer "
+        "judged at a start (695), refining @@OD:318@@, a later writer's base at the posture (696), extending "
+        "@@OD:197@@, a start's fork held (697), carried bridge blocks (698) and settings records (699), tagged "
+        "credentials past their sponsor (700), extending @@OD:83@@, a key following its creator's role (701), the "
+        "consented list (702) and every confirmation counting (703), following @@OD:126@@, a read-only sidecar's "
+        "deposits (704), refining @@OD:688@@, and an approval's statement type (705), following @@OD:218@@. ")
 DECISIONS_INTRO = DECISIONS_INTRO.replace(_D690, _D690 + _D15)
