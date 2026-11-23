@@ -276,13 +276,14 @@ func (self *testUrFollowWorld) daemon(sidecars ...*sidecar.Sidecar) *testUrDaemo
 	})
 }
 
-// Saves a config head holding a block of 100.<second>.0.0/16, signed by the network's owner, and lands its base.
+// Saves a config head holding a block of 100.<second>.0.0/16, signed by the network's owner, and lands its base, in
+// place of the block the bootstrap drew; where it drew this very block, signed alike, the head holds it already.
 func (self *testUrFollowWorld) saveBlock(network *sidecartest.AdmissionNet, second byte) {
 	self.t.Helper()
 	signed := network.Sign(network.Owner(), bridge.SignedType_SIGNED_BRIDGE_BLOCK, &bridge.BridgeBlock{
 		Ipv4Prefix: &bridge.BridgeIpv4Prefix{Address: 100<<24 | uint32(second)<<16, Length: 16},
 	})
-	network.SaveHead(func(head *sidecar.ConfigHead) (*sidecar.ConfigHead, error) {
+	network.SaveHeadIfAny(func(head *sidecar.ConfigHead) (*sidecar.ConfigHead, error) {
 		return head.WithFile(sidecar.ConfigHeadBridgeBlockPath, signed)
 	})
 }

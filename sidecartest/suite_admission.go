@@ -894,8 +894,22 @@ func (self *AdmissionNet) FoldIfAny(fold bool) *bridge.AuthPin {
 // A config head edit makes from the current one, saved by the writer with its base; the base's pin.
 func (self *AdmissionNet) SaveHead(edit func(head *sidecar.ConfigHead) (*sidecar.ConfigHead, error)) *bridge.AuthPin {
 	self.t.Helper()
+	pin := self.SaveHeadIfAny(edit)
+	if pin == nil {
+		self.t.Fatal("a head with nothing new to publish")
+	}
+	return pin
+}
+
+// SaveHead, but nil when the writer has nothing new to publish: the edit leaves the head as it is, as a block the
+// bootstrap drew and the edit writes again, signed alike, and there is no tail to fold.
+func (self *AdmissionNet) SaveHeadIfAny(edit func(head *sidecar.ConfigHead) (*sidecar.ConfigHead, error)) *bridge.AuthPin {
+	self.t.Helper()
 	self.catchUpFollower()
 	pin, err := self.writer.SaveHead(self.ctx, edit)
+	if errors.Is(err, sidecar.ErrConfigWriterNothing) {
+		return nil
+	}
 	if err != nil {
 		self.t.Fatalf("a head: %v", self.waitError(err))
 	}

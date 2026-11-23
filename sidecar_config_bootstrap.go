@@ -1,7 +1,9 @@
 //go:build !ios_extension && !sidecar_http
 
 // The first CLI device runs §7.9's bootstrap from its config follower. A sealed draft retains the
-// repo, Genesis time and exact first push until EVS activates the config repo and accepts that push.
+// repo, Genesis time and exact first push until EVS activates the config repo and accepts that push,
+// with the first head's files a retry cannot draw again: the network's first bridge block and a Team's
+// starter, whose atom and rule ids are random.
 
 package sidecar
 
@@ -31,9 +33,25 @@ type sidecarFirstConfigDraft struct {
 	TimeMillis    int64
 	Team          bool              `json:",omitempty"`
 	PolicyFiles   map[string][]byte `json:",omitempty"`
-	Chain         [sha256.Size]byte
-	SignedPush    []byte
-	Payload       []byte
+	// The first head's bridge/block as BootstrapNetwork drew it, kept with the push that seals it; none beside a push
+	// kept before the bootstrap drew one, whose head holds no block.
+	BridgeBlock []byte `json:",omitempty"`
+	Chain       [sha256.Size]byte
+	SignedPush  []byte
+	Payload     []byte
+}
+
+// The head the kept push sealed, from the head a retry drew: its bridge block, or none, and a Team's starter files.
+func (self *sidecarFirstConfigDraft) restoreHead(head *ConfigHead) (*ConfigHead, error) {
+	head, err := head.WithFile(ConfigHeadBridgeBlockPath, self.BridgeBlock)
+	if err != nil {
+		return nil, err
+	}
+	if !self.Team {
+		return head, nil
+	}
+	// Its randomized atom and rule ids are already in the signed push.
+	return restoreFirstAclFiles(head, self.PolicyFiles)
 }
 
 // Keeps the candidate before any POST that may win the race at the API.
@@ -134,12 +152,13 @@ func (self *SidecarConfigFollower) firstOwnerGenesis(ctx context.Context, networ
 		Publisher: running.sidecarApi, Projection: running.sidecarApi,
 		First: &ConfigFirstHead{
 			Initialize: func(ctx context.Context, genesis *ConfigState, head *ConfigHead) (*ConfigHead, error) {
+				if len(draft.SignedPush) != 0 {
+					return draft.restoreHead(head)
+				}
+				// kept with the push Prepare seals it in
+				draft.BridgeBlock = head.File(ConfigHeadBridgeBlockPath)
 				if !draft.Team {
 					return head, nil
-				}
-				if len(draft.SignedPush) != 0 {
-					// Its randomized atom and rule ids are already in the signed push.
-					return restoreFirstAclFiles(head, draft.PolicyFiles)
 				}
 				quota, err := running.sidecarApi.Limits(ctx)
 				if err != nil {
