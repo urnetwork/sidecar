@@ -37,10 +37,11 @@
 //	             consented device or the invited clause, which TEAM's configAdvanceConsents lists at the entry that
 //	             consents it (AclState.listConsentedOwnerDevices), so a member's second device reads its vault from
 //	             its admission on, between bases included (owner decision 355), at every reader, gate and api alike.
-//	             The same step drops a listed device at the entry that ends its consent, revoked, parked, its consent
-//	             voided by a compromise cascade, its member gone or ephemeral, an OwnerConfirm's listing of a device
-//	             that entry leaves unconsented among them, and lists it again at the entry whose confirmation by the
-//	             owner's consented device, or whose lift of its park, consents it again. So gkm's rows-only form and
+//	             The same step drops a listed device at the entry that ends its consent, its revocation, its park, the
+//	             compromise revocation whose cascade voids what its consent rested on or its member's removal, and at
+//	             an OwnerConfirm whose fold listed a device that entry leaves unconsented; an ephemeral device's id,
+//	             which no clause consents, leaves at the first entry the step runs at, wherever rows hold one. It lists
+//	             a dropped device again at the entry from which its consent holds again. So gkm's rows-only form and
 //	             members checks and evs's client-side drop check, which read the list beside the device's row, refuse
 //	             what AclState's readers refuse, which judge consented(d, M) beside it too, and a reader judging a
 //	             past act, a GroupForm, a commit or a DROP, reads the list at the act's own pin
