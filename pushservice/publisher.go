@@ -9,9 +9,13 @@
 // ResetPartVersionCount) under one epoch,
 // unique to the run, the last complete (D-PROTO-20). Then each event on the client's n, which reaches it
 // as a Kick, has it wait HintCoalesceTimeout, read the stream past the last entry it sent, and send the
-// entries in seq order as PushHints: every hint of a topic but the batch's last of it keeps its seq and
-// loses its bytes, so the client sees no gap. A topic Topics leaves out goes as its seq alone, which a
-// client counts and applies nothing from.
+// entries in seq order as PushHints, a topic's superseded hints coalesced (§6.8): a hint that a later one
+// of its topic in the batch repeats, the same kind and the same bytes, keeps its seq and loses its
+// bytes, so the client sees no gap and takes the later one. A hint is superseded only by one that says
+// what it says, so distinct hints of a topic each keep their bytes, as a client's per-client gkm work
+// hints for two groups or two late asks must: the newest TopicHintBodyCount of a topic, past which the
+// older ones lose their bytes as well, their owners' recovery covering them. A topic Topics leaves out
+// goes as its seq alone, which a client counts and applies nothing from.
 //
 // Whatever shows the stream moved on without it sends a reset instead of the batch: a first entry whose
 // seq does not follow the last one sent, which a trim or the keys' hourly restart leaves (reading 5), an
@@ -94,9 +98,11 @@ type SidecarPublisherStats struct {
 	// resets sent whole, and their parts
 	ResetCount     uint64
 	ResetPartCount uint64
-	// hints sent, and those of them sent without their bytes
+	// hints sent, those of them sent without their bytes, and of those the ones no later hint of their
+	// batch repeated, past their topic's TopicHintBodyCount
 	HintCount      uint64
 	CoalescedCount uint64
+	BodyBoundCount uint64
 	// reads that found the stream moved on, and batches past QueueByteCount: each sent a reset instead
 	GapCount      uint64
 	OverflowCount uint64
@@ -118,6 +124,7 @@ type sidecarPublisherStats struct {
 	resetPartCount   atomic.Uint64
 	hintCount        atomic.Uint64
 	coalescedCount   atomic.Uint64
+	bodyBoundCount   atomic.Uint64
 	gapCount         atomic.Uint64
 	overflowCount    atomic.Uint64
 	sendRefusedCount atomic.Uint64
@@ -253,6 +260,7 @@ func (self *SidecarPublisher) Stats() SidecarPublisherStats {
 		ResetPartCount:   self.stats.resetPartCount.Load(),
 		HintCount:        self.stats.hintCount.Load(),
 		CoalescedCount:   self.stats.coalescedCount.Load(),
+		BodyBoundCount:   self.stats.bodyBoundCount.Load(),
 		GapCount:         self.stats.gapCount.Load(),
 		OverflowCount:    self.stats.overflowCount.Load(),
 		SendRefusedCount: self.stats.sendRefusedCount.Load(),
@@ -320,6 +328,14 @@ type publisherPosition struct {
 type publisherHint struct {
 	streamId string
 	hint     *protocol.PushHint
+}
+
+// What makes two hints of a batch the same one, the later superseding the earlier: their topic, their
+// owner's MessageType and their bytes.
+type publisherHintKey struct {
+	topic string
+	kind  uint32
+	hint  string
 }
 
 // One Start's state, which only the run's goroutine touches.
@@ -578,21 +594,41 @@ func (self *publisherRun) sendHints() error {
 		}
 	}
 
-	// every hint of a topic but the batch's last of it loses its bytes; a topic the client is not told
-	// goes as its seq alone
-	lastTopicIndexes := map[string]int{}
-	for index, item := range batch {
-		lastTopicIndexes[item.hint.Topic] = index
-	}
-	for index, item := range batch {
-		switch {
-		case !self.topicAdmitted(item.hint.Topic):
+	// §6.8's coalescing, from the batch's end so the newest of each hint is the one kept: a hint a later
+	// one repeats is superseded and loses its bytes; a distinct one keeps them, up to its topic's newest
+	// TopicHintBodyCount, and loses them past it or past the format's bytes. A topic the client is not
+	// told goes as its seq alone
+	settings := self.publisher.settings
+	topicBodyCounts := map[string]int{}
+	keptHintKeys := map[publisherHintKey]bool{}
+	for index := len(batch) - 1; 0 <= index; index -= 1 {
+		item := batch[index]
+		if !self.topicAdmitted(item.hint.Topic) {
 			item.hint = &protocol.PushHint{Seq: item.hint.Seq}
-		case lastTopicIndexes[item.hint.Topic] != index || self.publisher.settings.Format.MaxHintByteCount < len(item.hint.Hint):
-			if 0 < len(item.hint.Hint) {
-				item.hint.Hint = nil
-				self.publisher.stats.coalescedCount.Add(1)
+			continue
+		}
+		if len(item.hint.Hint) == 0 {
+			// nothing to coalesce, and no body against the bound
+			continue
+		}
+		kept := false
+		if len(item.hint.Hint) <= settings.Format.MaxHintByteCount {
+			key := publisherHintKey{topic: item.hint.Topic, kind: item.hint.Kind, hint: string(item.hint.Hint)}
+			switch {
+			case keptHintKeys[key]:
+				// superseded: a later hint of the batch says the same
+			case topicBodyCounts[item.hint.Topic] < settings.TopicHintBodyCount:
+				keptHintKeys[key] = true
+				topicBodyCounts[item.hint.Topic] += 1
+				kept = true
+			default:
+				// distinct, but older than its topic's newest TopicHintBodyCount
+				self.publisher.stats.bodyBoundCount.Add(1)
 			}
+		}
+		if !kept {
+			item.hint.Hint = nil
+			self.publisher.stats.coalescedCount.Add(1)
 		}
 	}
 

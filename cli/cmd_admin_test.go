@@ -160,9 +160,9 @@ func (self *testUrAdminMembersTarget) signMemberRevoke(ctx context.Context, memb
 	return &sidecar.MemberRevocation{Entry: &bridge.AuthPin{Version: 42}}, nil
 }
 
-// ur admin members remove: the plan on the terminal; a no runs nothing; a yes runs the server's denial once, then the
-// daemon signs the MemberRevoke; and a member the server denied already, as SCIM's active=false does, still gets its
-// MemberRevoke.
+// ur admin members remove: the plan on the terminal; a no runs nothing; a yes runs the server's denial once, saying
+// what it ended, a pre-approved key's still-admitting bundle among it, then the daemon signs the MemberRevoke; and a
+// member the server denied already, as SCIM's active=false does, still gets its MemberRevoke.
 func TestAdminMembersRemoveDeniesThenSigns(t *testing.T) {
 	deviceId, agentId, repoId := sidecar.NewId(), sidecar.NewId(), sidecar.NewId()
 	target := &testUrAdminMembersTarget{plan: &sidecar.MemberRevokePlan{
@@ -194,13 +194,29 @@ func TestAdminMembersRemoveDeniesThenSigns(t *testing.T) {
 	if len(*runs) != 1 || (*runs)[0].command.Path != "/network/member-remove" || len(target.signs) != 1 || target.signs[0] != memberId {
 		t.Fatalf("a yes: %d runs, signs %v", len(*runs), target.signs)
 	}
-	if !strings.Contains(stdout.String(), "landed at 42") {
+	if !strings.Contains(stdout.String(), "landed at 42") || !strings.Contains(stdout.String(), "1 client(s) deactivated, 0 auth key(s) revoked") {
 		t.Errorf("the output: %s", stdout.String())
+	}
+	if strings.Contains(stdout.String(), urAdminMemberRemoveBundleNote) {
+		t.Errorf("a removal that revoked no pre-approved key says its bundle still admits: %s", stdout.String())
+	}
+
+	// a removal that revoked a pre-approved key says that its bundle still admits, in ur's own words, never the
+	// server's note
+	answer = `{"member_id":"x","signature_owed":true,"revoked_auth_key_count":2,"bundle_still_admits":true,"note":"synthetic server note"}`
+	stdout.Reset()
+	tty = &testTty{lines: []string{"yes"}}
+	if code := cli.main(context.Background(), []string{"ur", "admin", "members", "remove", memberId.String()}); code != urExitOk {
+		t.Fatalf("a yes revoking a pre-approved key: exit %d: %s", code, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "2 auth key(s) revoked") || !strings.Contains(stdout.String(), urAdminMemberRemoveBundleNote) ||
+		strings.Contains(stdout.String(), "synthetic server note") {
+		t.Errorf("the output of a removal revoking a pre-approved key: %s", stdout.String())
 	}
 
 	answer = `{"error":{"message":"` + urAdminNoSuchMember + `"}}`
 	tty = &testTty{lines: []string{"yes"}}
-	if code := cli.main(context.Background(), []string{"ur", "admin", "members", "remove", memberId.String()}); code != urExitOk || len(target.signs) != 2 {
+	if code := cli.main(context.Background(), []string{"ur", "admin", "members", "remove", memberId.String()}); code != urExitOk || len(target.signs) != 3 {
 		t.Fatalf("a member denied already: exit %d, signs %v", code, target.signs)
 	}
 

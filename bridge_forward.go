@@ -72,7 +72,9 @@ const (
 	ForwarderAlarmCompileOverBudget = "compile_over_budget"
 	// A compile the heap ceiling has deferred for CompileDeferredAlarmTimeout.
 	ForwarderAlarmCompileDeferred = "compile_deferred"
-	// A generation's key the forwarding reader key has no wrap for yet.
+	// A generation a compile wants whose key has not opened, whether or not gkm lists it (QD-1210): no wrap has reached
+	// the forwarding reader key yet, gkm lists no such generation to this component, or the config's GroupForms or a
+	// listing do not lead to it.
 	ForwarderAlarmConfigKeyWaiting = "config_key_waiting"
 	// The forwarding client's credential lapsed.
 	ForwarderAlarmForwardClientLapsed = "forward_client_lapsed"
@@ -460,10 +462,11 @@ type forwarderHint struct {
 	zeroSeq  uint64
 }
 
-// How long a generation's key has been missing.
+// How long a generation's key has been missing, and why, as config_key_waiting's detail says it.
 type forwarderKeyWait struct {
 	since     time.Time
 	alarmedAt time.Time
+	cause     string
 }
 
 // The Forwarder (the file's comment).
