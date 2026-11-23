@@ -71,6 +71,8 @@ type mailIngestTestRepo struct {
 	wake           func()
 	watchCount     int
 	watchStopCount int
+	// the next Watch answers this and makes no watch, once: a subscription evs refused
+	failWatch error
 	// the listings of its depositors, one a pass that reads the deposits
 	depositorsCount int
 	// whether a slot still holds its key; nil holds every one
@@ -190,6 +192,10 @@ func (self *mailIngestTestRepo) Erasures(ctx context.Context, afterVersion uint6
 func (self *mailIngestTestRepo) Watch(ctx context.Context, wake func()) (func(), error) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
+	if err := self.failWatch; err != nil {
+		self.failWatch = nil
+		return nil, err
+	}
 	self.watchCount += 1
 	watchId := self.watchCount
 	self.wake = wake

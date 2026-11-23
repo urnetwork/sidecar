@@ -7,14 +7,17 @@
 // client's in-memory stand-ins, its clock a test's: a group's message is listed in the member's view at its hint, the
 // clock moved by MinPassInterval gaps alone; a reference to a message another writer ingested follows the group's
 // hint, raising IDLE's hint; a burst of hints is one pass; a hint that never came is caught at the component's next
-// look; and of two groups with room for one watch, one holds it, the other is caught at the looks, and the
-// generation's end stops the watch and joins both goroutines.
+// look; a watch evs refused is asked for again at the next look's pass; and of two groups with room for one watch,
+// one holds it, the other is caught at the looks, and the generation's end stops the watch and joins both
+// goroutines.
 
 package sidecar
 
 import (
 	"context"
+	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -254,6 +257,51 @@ func TestMailGroupMissedHintIsCaughtAtTheNextLook(t *testing.T) {
 	}
 	if _, watchCount, watchStopCount, _ := group.repo.watching(); watchCount != 1 || watchStopCount != 0 {
 		t.Errorf("the look made %d watches and stopped %d", watchCount, watchStopCount)
+	}
+}
+
+// A watch evs refused is asked for again: the group's goroutine, its subscription refused at its first pass, keeps
+// its place and goes on at the component's looks, a deposit no hint can announce taken at the next one, whose pass
+// takes the subscription, so the hint of the deposit after it brings its pass, with no second goroutine started.
+// Before, a subscription refused at the goroutine's start stood refused for the generation's life, the group's mail
+// waiting for the looks, CheckInterval apart.
+func TestMailGroupRefusedWatchIsAskedForAgainAtTheNextLook(t *testing.T) {
+	world := newMailGroupHintTestWorld(t, "team")
+	group := world.group()
+	func() {
+		group.repo.stateLock.Lock()
+		defer group.repo.stateLock.Unlock()
+		group.repo.failWatch = errors.New("the subscription is refused")
+	}()
+	world.look()
+	world.awaitPassAndGap()
+	inbox := world.inbox(group.repoId)
+	if wake, watchCount, _, _ := group.repo.watching(); wake != nil || watchCount != 0 {
+		t.Fatalf("a refused watch stands, %d made", watchCount)
+	}
+	if !slices.ContainsFunc(world.log.snapshot(), func(line string) bool { return strings.Contains(line, "no watch yet") }) {
+		t.Errorf("the refusal was not logged: %v", world.log.snapshot())
+	}
+	missed := group.depositMessage(testMailIngestMessage("Unannounced", "Taken at the look"))
+	world.look()
+	world.awaitPassAndGap()
+	if world.inbox(group.repoId) != inbox {
+		t.Fatal("the look started the group afresh")
+	}
+	if listed := world.listed(group.repoId); len(listed) != 1 || listed[missed.id] != 1 {
+		t.Fatalf("the member's view lists %v after the look, log %v", listed, world.log.snapshot())
+	}
+	if wake, watchCount, _, _ := group.repo.watching(); wake == nil || watchCount != 1 {
+		t.Fatalf("the look's pass made %d watches", watchCount)
+	}
+	deposit := group.depositMessage(testMailIngestMessage("Announced", "Shared at its hint"))
+	world.hint(group)
+	testAwaitMailGroupPass(t, world.client, world.clock)
+	if listed := world.listed(group.repoId); len(listed) != 2 || listed[deposit.id] != 1 {
+		t.Fatalf("the member's view lists %v at the hint, log %v", listed, world.log.snapshot())
+	}
+	if moved := world.clock.Now().Sub(time.UnixMilli(testConfigStartMs)); world.client.settings.CheckInterval <= moved {
+		t.Errorf("the clock moved %s, past CheckInterval %s", moved, world.client.settings.CheckInterval)
 	}
 }
 

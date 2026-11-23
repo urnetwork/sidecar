@@ -12,17 +12,21 @@
 //	          holding a subscription to the repo's refs as the mailbox's ingestor holds one to the mailbox's
 //	          (MailIngestor.Run), so each change a hint brings wakes a pass over that group alone: a group's message
 //	          is ingested and referenced at its hint (§15.7: "on a §11 hint, any reader takes the deposits"), where it
-//	          waited for the component's next look before, CheckInterval at worst
+//	          waited for the component's next look before, CheckInterval at worst. The subscription is taken at the
+//	          goroutine's first pass, before the pass reads the repo, and one evs refused is asked for again at each
+//	          later pass until one stands, so a refusal at a bad moment does not leave the group to the looks for the
+//	          generation's life
 //	pass      a group's pass reads its roles afresh and touches the repo only where they still hold: its ingest
 //	          first, then its member's references, so a message the ingest wrote is referenced in the same pass, and
 //	          references it added or removed drop the mailbox view's kept months and raise IDLE's hint
-//	bounds    a group's passes are MinPassInterval apart at least, and one that failed, or that left a deposit whose
-//	          pin this device's state has yet to reach, goes again after RetryInterval, as the mailbox's ingestor's
-//	          do (MailIngestSettings, mailRunPasses), so a burst of hints is one pass; at most GroupWatchMaxCount
-//	          groups hold a subscription, the first by id, and one without takes one once there is room
+//	bounds    a group's passes are MinPassInterval apart at least, and one that failed, that could not tell its roles,
+//	          or that left a deposit whose pin this device's state has yet to reach, goes again after RetryInterval,
+//	          as the mailbox's ingestor's do (MailIngestSettings, mailRunPasses), so a burst of hints is one pass; at
+//	          most GroupWatchMaxCount groups have a place to subscribe from, the first by id, and one without takes
+//	          one once there is room
 //	fallback  the component's look, every CheckInterval and at each change it hears of, wakes every group's
 //	          goroutine it did not just start, so a hint that never came is caught there, as is every change of a
-//	          group past GroupWatchMaxCount or whose subscription evs refused
+//	          group past GroupWatchMaxCount or whose subscription evs has refused so far
 //
 // A group's goroutine ends with its roles, with a binding of another EvsClient or engine, whose look starts the group
 // afresh, and with the generation, whose end joins it. Its ingestor is built again for each binding the component
@@ -57,7 +61,7 @@ type mailGroupInbox struct {
 	// the binding's EvsClient and engine it was made over
 	evs    *EvsClient
 	engine *AclEngine
-	// whether it holds a subscription to the repo's refs
+	// whether it has one of GroupWatchMaxCount's places, so it subscribes to the repo's refs
 	watched bool
 	ctx     context.Context
 	cancel  context.CancelFunc
@@ -67,6 +71,8 @@ type mailGroupInbox struct {
 	done chan struct{}
 
 	// Touched only by its goroutine.
+	// what ends its subscription to the repo's refs, nil while none stands
+	stopWatch func()
 	// the ingestor, and the binding it was built over
 	ingestor        *MailIngestor
 	ingestorBinding *MailBinding
@@ -151,7 +157,8 @@ func (self *MailClient) mailGroupRoles(ctx context.Context, binding *MailBinding
 // The component's look at the group repos: each group with a role gets its goroutine, started where none runs and
 // making its first pass at its start, and every other one is woken, the hints' fallback; one whose group has no role
 // left, made over another binding's EvsClient or engine, or that has ended, is ended and joined, and the group then
-// started afresh. One without a subscription is started again with one once fewer than GroupWatchMaxCount hold one.
+// started afresh. One without a place to subscribe from is started again with one once fewer than GroupWatchMaxCount
+// have one.
 func (self *MailClient) passGroupInboxes(run *mailComponentRun, binding *MailBinding) {
 	roles, _, ok := self.mailGroupRoles(run.ctx, binding)
 	if !ok || run.ctx.Err() != nil {
@@ -238,35 +245,26 @@ func (self *MailClient) stopGroupInboxes(run *mailComponentRun) {
 	}
 }
 
-// One group's passes until its goroutine is ended: a subscription to the repo's refs where it holds one, each change
-// of which wakes it, then mailRunPasses over passGroupInbox at MinPassInterval's gap.
+// One group's passes until its goroutine is ended: mailRunPasses over passGroupInbox at MinPassInterval's gap, each
+// change of the repo's refs waking it once its subscription stands, which ends with the goroutine.
 func (self *MailClient) runGroupInbox(run *mailComponentRun, inbox *mailGroupInbox) {
 	defer close(inbox.done)
-	if inbox.watched {
-		binding, parts, err := self.bound()
-		if err != nil || binding.Evs != inbox.evs || binding.Engine != inbox.engine {
-			// another binding's: the component's next look starts the group afresh
-			return
+	defer func() {
+		if inbox.stopWatch != nil {
+			inbox.stopWatch()
+			inbox.stopWatch = nil
 		}
-		stop, err := parts.watch(inbox.ctx, inbox.groupId, inbox.Wake)
-		if err != nil {
-			if inbox.ctx.Err() != nil {
-				return
-			}
-			self.log.Warningf("[mail]group %s: no watch, its passes come at the component's looks alone: %v", inbox.groupId, err)
-		} else {
-			defer stop()
-		}
-	}
+	}()
 	mailRunPasses(inbox.ctx, self.clock, self.settings.Ingest.MinPassInterval, inbox.wake, func() time.Duration {
 		return self.passGroupInbox(run, inbox)
 	})
 }
 
-// One pass over the group alone: its roles read afresh at the installed state, then its ingest where it ingests and
-// its member's references where it references, each failure logged. Answers mailRunPasses' wait: after a step that
-// failed or a deposit left pending, the ingest's retry wait, as the mailbox's ingestor waits; otherwise none, the
-// hints and the component's looks bringing the next.
+// One pass over the group alone: its subscription taken where it has a place and none stands, its roles read afresh
+// at the installed state, then its ingest where it ingests and its member's references where it references, each
+// failure logged. Answers mailRunPasses' wait: after a step that failed, roles that could not be told or a deposit
+// left pending, the ingest's retry wait, as the mailbox's ingestor waits; otherwise none, the hints and the
+// component's looks bringing the next.
 func (self *MailClient) passGroupInbox(run *mailComponentRun, inbox *mailGroupInbox) time.Duration {
 	ctx := inbox.ctx
 	binding, parts, err := self.bound()
@@ -274,9 +272,27 @@ func (self *MailClient) passGroupInbox(run *mailComponentRun, inbox *mailGroupIn
 		// another binding's: the component's next look ends this goroutine
 		return 0
 	}
+	if inbox.watched && inbox.stopWatch == nil {
+		// before the pass reads the repo, so a change it misses brings the next pass; one evs refused is asked for
+		// again at the next pass, which the component's next look brings at the latest
+		stop, err := parts.watch(ctx, inbox.groupId, inbox.Wake)
+		switch {
+		case err == nil:
+			inbox.stopWatch = stop
+		case ctx.Err() != nil:
+			return 0
+		default:
+			self.log.Warningf("[mail]group %s: no watch yet, its passes come at the component's looks until one stands: %v", inbox.groupId, err)
+		}
+	}
 	roles, mailboxId, ok := self.mailGroupRoles(ctx, binding)
-	if !ok || ctx.Err() != nil {
+	if ctx.Err() != nil {
 		return 0
+	}
+	if !ok {
+		// mailcfg unread, or the binding or the state moving under the read: tried again as a failed ingest is, so
+		// the change a hint brought waits for no look
+		return self.settings.Ingest.retryWait()
 	}
 	role := roles[inbox.groupId]
 	retry := false
