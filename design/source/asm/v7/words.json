@@ -56,10 +56,10 @@
  {
   "num": 7,
   "code": "TEAM",
-  "words": 13883,
+  "words": 13885,
   "code_words": 15509,
   "ceiling": 3500,
-  "over": 10383,
+  "over": 10385,
   "over_pct": 296.7
  },
  {
@@ -173,11 +173,11 @@
  {
   "num": 20,
   "code": "QUOTA",
-  "words": 5731,
+  "words": 5856,
   "code_words": 5021,
   "ceiling": 2500,
-  "over": 3231,
-  "over_pct": 129.2
+  "over": 3356,
+  "over_pct": 134.2
  },
  {
   "num": 21,

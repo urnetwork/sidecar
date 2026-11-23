@@ -440,11 +440,11 @@ Progress at this update (2026-11-23), in `server/sidecare2e` and `server/sidecar
   - a personal network's second device got no vault scope at the token exchange;
   - group mail answered delivered was lost at ingest (QD-1196);
   - a key rotation racing a re-form stranded a device on the old group (QD-1186 to QD-1188).
-- **Decisions.** QD-1170 to QD-1221 were recorded under the owner's standing acceptance of recommended options, each
+- **Decisions.** QD-1170 to QD-1223 were recorded under the owner's standing acceptance of recommended options, each
   in `.stack/decisions/RESOLUTIONS.md`, and design-records tracks have folded them all into DESIGN.md:
   `dr14-late-fold` QD-1170 to QD-1175 as owner decisions 685 to 690, `dr15-late-fold` QD-1176 to QD-1209 as 691 to
   715 (QD-1195, a one-time landing allowance, as an unnumbered owner instruction), and `dr16-late-fold` QD-1210 to
-  QD-1221 as 716 to 722:
+  QD-1223 as 716 to 723:
   - a forwarding role alarms a config generation it cannot open, and a listing off its chain (716);
   - a team member's removal ends the auth keys and API keys it made, so a re-join revives none (717);
   - topic `sock` is a raised clock (718);
@@ -455,9 +455,12 @@ Progress at this update (2026-11-23), in `server/sidecare2e` and `server/sidecar
   - the account message outbox records a send's outcome on a context made after the send, so a slow send is not
     sent twice (721);
   - an evs statement before a reader's window still meets the refs-table rules that need no right at its pin
-    (722).
-- **Still to do in this phase:** the queued fix tracks (`.stack/scratch/lanes/pending-fix-tracks.json`) and the plan's
-  step 5, a nightly leg that runs a bounded e2e subset and the sidecar-related server packages' own tests.
+    (722);
+  - a Team's earnings and payout-sent mail reach its Owners and Billing admins too, and its billing mail names the
+    Team and its subscription (723).
+- **Still to do in this phase:** the queued fix tracks (`.stack/scratch/lanes/pending-fix-tracks.json`), among them
+  `team-billing-mail-copy`, which builds 723's Team copy, and the plan's step 5, a nightly leg that runs a bounded
+  e2e subset and the sidecar-related server packages' own tests.
 
 Then come:
 
