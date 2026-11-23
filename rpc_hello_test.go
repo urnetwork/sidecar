@@ -3,7 +3,8 @@
 // §6.4's Hello between two dispatchers, each with an identity of its own: the exchange that opens both
 // gates, the identity check's refusals one at a time beside a twin that passes, the pin's first use
 // surviving a restart, generations, the floor, feature bits, two Hellos crossing, and a fresh Hello run on a
-// HelloResult nothing awaited from a peer this side holds no Hello with. A pair delivers
+// HelloResult nothing awaited from a peer this side holds no Hello with, one between such HelloResults that come
+// together. A pair delivers
 // each side's sends to the other's inline handler as connect would, under the C15 key its binding
 // names, on clocks the test moves.
 
@@ -958,7 +959,10 @@ func TestHelloVectors(t *testing.T) {
 // (QD-1197). The restarted gate holds a Hello this side does not, so the restarted peer's opens to this side met INVALID
 // under it, which QD-1185 reads as the listener's own, until HelloCacheTimeout. This side runs one fresh Hello at once,
 // which EnsureHello joins, and the restarted peer's open is accepted. Under a Hello that stands, an unasked HelloResult
-// runs none: the call behind it on the peer's worker finds no fresh Hello started.
+// runs none. The peer answers a Hello from its reply queue's sender and a call from its handler's goroutine, so its
+// answer to the replay could reach this side after the call's, which left the count read after the call short of it,
+// and after the restart below, where it started a fresh Hello beside the replay's answer: the call goes only once that
+// answer is in this side's queue, ahead of the call's answer.
 func TestUnaskedHelloResultRunsAFreshHello(t *testing.T) {
 	pair := newTestRpcPair(t)
 	calleeIdentity := newTestRpcIdentity()
@@ -982,8 +986,21 @@ func TestUnaskedHelloResultRunsAFreshHello(t *testing.T) {
 		return count
 	}
 
-	// under the Hello that stands, the callee's answer to the replay runs nothing
+	// under the Hello that stands, the callee's answer to the replay runs nothing. The answer goes into the caller's
+	// queue before the call goes, so the caller's worker for the callee takes it before the call's answer, and once
+	// the call returns the count holds it and nothing of it is left for the restart
+	replayAnswered := make(chan struct{}, 1)
+	caller.setDeliver(func(from *testRpcSide, to *testRpcSide, envelope *protocol.Envelope) *protocol.Envelope {
+		if from != callee || envelope.Type != uint32(protocol.MessageType_HELLO_RESULT) || envelope.RequestId != earlierHello.RequestId {
+			return envelope
+		}
+		to.subprotocol.receive(connect.SourceId(from.clientId), envelope, from.peerTo(to))
+		replayAnswered <- struct{}{}
+		return nil
+	})
 	replay(callee)
+	testAwait(t, replayAnswered, "answer to the replayed Hello")
+	caller.setDeliver(nil)
 	if response, err := caller.subprotocol.Call(t.Context(), Id(callee.clientId), testCallType, []byte("x"), nil); err != nil || string(response) != "x!" {
 		t.Fatalf("%q, %v", response, err)
 	}
@@ -1013,4 +1030,69 @@ func TestUnaskedHelloResultRunsAFreshHello(t *testing.T) {
 		t.Fatalf("the restarted callee's open: %v", err)
 	}
 	stream.Close()
+}
+
+// Two HelloResults no Hello of this side's awaits come from a peer restarted under its identity before the fresh Hello
+// the first starts has its answer, as the replay's answer and a late one from before the restart can (QD-1197).
+// Finding no Hello standing or in flight and starting one are one step on this side's worker for the peer, so the
+// second finds the first's Hello in flight and starts nothing: one fresh Hello goes, and only it is counted. Before,
+// the check and the start were two steps, and each answer passed the check before the first's Hello was registered,
+// so each was counted and each started a goroutine for that one Hello. The restarted peer's answer to the fresh Hello
+// is held until both unasked answers are in this side's queue, so the second is taken while no Hello stands, whatever
+// the scheduler does.
+func TestUnaskedHelloResultsTogetherStartOneFreshHello(t *testing.T) {
+	pair := newTestRpcPair(t)
+	calleeIdentity := newTestRpcIdentity()
+	callee := pair.addClient(connect.NewId(), calleeIdentity, nil)
+	caller := pair.add(nil, nil)
+	if err := caller.subprotocol.EnsureHello(t.Context(), Id(callee.clientId)); err != nil {
+		t.Fatal(err)
+	}
+	earlierHello := testFirstSent(caller.sent(), protocol.MessageType_HELLO)
+	restarted := testRestartRpcSide(pair, callee, calleeIdentity)
+	caller.losePeerSession(restarted.clientId)
+
+	// the restarted callee's HelloResults come to the test rather than the caller: its answers to the replays, then
+	// its answer to the fresh Hello; any past those is delivered as sent, for the counts below to show
+	unaskedAnswers := make(chan *protocol.Envelope, 2)
+	freshAnswers := make(chan *protocol.Envelope, 1)
+	caller.setDeliver(func(from *testRpcSide, to *testRpcSide, envelope *protocol.Envelope) *protocol.Envelope {
+		if from != restarted || envelope.Type != uint32(protocol.MessageType_HELLO_RESULT) {
+			return envelope
+		}
+		answers := freshAnswers
+		if envelope.RequestId == earlierHello.RequestId {
+			answers = unaskedAnswers
+		}
+		select {
+		case answers <- envelope:
+			return nil
+		default:
+			return envelope
+		}
+	})
+	for range 2 {
+		restarted.subprotocol.receive(connect.SourceId(caller.clientId), proto.Clone(earlierHello).(*protocol.Envelope), caller.peerTo(restarted))
+	}
+	firstUnasked := testAwait(t, unaskedAnswers, "answer to the first replayed Hello")
+	secondUnasked := testAwait(t, unaskedAnswers, "answer to the second replayed Hello")
+
+	// the first starts the fresh Hello, whose answer then goes into the caller's queue behind the second
+	caller.subprotocol.receive(connect.SourceId(restarted.clientId), firstUnasked, restarted.peerTo(caller))
+	caller.subprotocol.receive(connect.SourceId(restarted.clientId), secondUnasked, restarted.peerTo(caller))
+	freshAnswer := testAwait(t, freshAnswers, "answer to the fresh Hello")
+	caller.subprotocol.receive(connect.SourceId(restarted.clientId), freshAnswer, restarted.peerTo(caller))
+	// joins the fresh Hello, which ends once its answer, taken after both unasked ones, verifies
+	if err := caller.subprotocol.EnsureHello(t.Context(), Id(restarted.clientId)); err != nil {
+		t.Fatal(err)
+	}
+	if unasked := caller.subprotocol.stats.helloUnaskedCount.Load(); unasked != 1 {
+		t.Errorf("%d fresh Hellos on two unasked HelloResults, want 1", unasked)
+	}
+	if hellos := testSentOfType(caller, protocol.MessageType_HELLO); len(hellos) != 2 {
+		t.Errorf("%d Hellos, want the first and one fresh", len(hellos))
+	}
+	if _, ok := caller.subprotocol.PeerIdentity(Id(restarted.clientId)); !ok {
+		t.Error("no Hello stands with the restarted callee")
+	}
 }

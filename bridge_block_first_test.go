@@ -1,6 +1,6 @@
 //go:build !ios_extension && !sidecar_http
 
-// §17.4's first block row on the test network: WithFirstBridgeBlock draws for a head that holds no block, signed by a
+// §17.4's first block row on the test network: WithBridgeBlock draws for a head that holds no block, signed by a
 // writer whose block every reader takes, an Owner's or Admin's device, and by no Network or IT admin's, whose block
 // readers refuse; it keeps a block a head holds, refused or not; and the first CLI device's draft gives a retry back the
 // block its kept push sealed, or none for a draft kept before the bootstrap drew one.
@@ -82,7 +82,7 @@ func TestFirstBridgeBlockIsAnOwnersOrAdminsWritersAlone(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		head, err := WithFirstBridgeBlock(state, blank, testFirstBlockSign(c.device), random)
+		head, err := WithBridgeBlock(state, nil, blank, testFirstBlockSign(c.device), random)
 		if err != nil {
 			t.Fatalf("%s: %v", c.name, err)
 		}
@@ -111,15 +111,15 @@ func TestFirstBridgeBlockIsAnOwnersOrAdminsWritersAlone(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		head, err := WithFirstBridgeBlock(state, holding, testFirstBlockSign(team.owner), iotest.ErrReader(errors.New("no draw")))
+		head, err := WithBridgeBlock(state, holding, holding, testFirstBlockSign(team.owner), iotest.ErrReader(errors.New("no draw")))
 		if err != nil || !bytes.Equal(head.File(ConfigHeadBridgeBlockPath), record) {
 			t.Errorf("%s: the head's block changed: %v", name, err)
 		}
 	}
-	if _, err := WithFirstBridgeBlock(nil, blank, testFirstBlockSign(team.owner), nil); err == nil {
+	if _, err := WithBridgeBlock(nil, nil, blank, testFirstBlockSign(team.owner), nil); err == nil {
 		t.Error("a draw with no state")
 	}
-	if _, err := WithFirstBridgeBlock(state, blank, nil, nil); err == nil {
+	if _, err := WithBridgeBlock(state, nil, blank, nil, nil); err == nil {
 		t.Error("a draw with no signer")
 	}
 }

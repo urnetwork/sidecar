@@ -299,7 +299,8 @@ func TestCertsDnsSolverWaitsOnTheCanary(t *testing.T) {
 	}
 }
 
-// Past 10 writes a name an hour the route refuses, and the wait fails at once rather than retrying; the
+// Past 10 writes a name an hour the route refuses, and the wait fails at once rather than retrying, with
+// the refusal of its own that names the name and how long until it takes a write again (QD-1204); the
 // order's cleanup takes the name out, since a write was sent there.
 func TestCertsDnsSolverWriteRefusedPastTheCap(t *testing.T) {
 	world := newTestSolver(t)
@@ -308,14 +309,20 @@ func TestCertsDnsSolverWriteRefusedPastTheCap(t *testing.T) {
 		if _, err := world.dns.WriteAcmeChallenge(world.ctx, name, []string{"value"}); err != nil {
 			t.Fatalf("write %d: %v", index, err)
 		}
+		world.clock.Advance(time.Minute)
 	}
 	challenge := testChallenge(name, "token", false)
 	if err := world.solver.Present(world.ctx, challenge); err != nil {
 		t.Fatal(err)
 	}
 	err := world.solver.Wait(world.ctx, challenge)
-	if !errors.Is(err, certsservice.ErrCertsDnsWriteRefused) {
+	var rateLimit *certsservice.CertsDnsWriteRateLimitError
+	if !errors.Is(err, certsservice.ErrCertsDnsWriteRefused) || !errors.Is(err, certsservice.ErrCertsDnsWriteRateLimited) || !errors.As(err, &rateLimit) {
 		t.Fatalf("an eleventh write in the hour: %v", err)
+	}
+	// the first write, ten minutes back, leaves the hour in fifty
+	if rateLimit.Name != name || rateLimit.RetryAfter != 50*time.Minute {
+		t.Fatalf("the refusal named %q, %v", rateLimit.Name, rateLimit.RetryAfter)
 	}
 	if writeCount, _, readyCount := world.dns.Counts(); writeCount != 11 || readyCount != 0 {
 		t.Fatalf("the refusal was retried or waited on: %d writes, ready asked %d", writeCount, readyCount)
