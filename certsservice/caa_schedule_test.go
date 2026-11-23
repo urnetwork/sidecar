@@ -1,8 +1,10 @@
 // certs' CAA checks on scripted parts (TLS-M6-04; §12.8, FS-32 on T2): a resolver standing for the recursive and
 // the customer's authoritative servers, which may flatten the ALIAS target's CAA into the host's answers; the dns
 // canary route, which keeps the canary standing at its owner; and the custom-host rows, which apply a verdict as
-// model.DnsCustomHostResultInTx does. Every wait is on the fake clock, which each pass is driven through. Names are
-// under .example: root.example stands for <root>, customer.example for a Team's verified domain.
+// model.DnsCustomHostResultInTx does. Every wait is on the fake clock, which each pass is driven through, in a
+// synctest bubble: a test that runs a pass runs in one, and the clock moves only once every goroutine in it is
+// blocked again. Names are under .example: root.example stands for <root>, customer.example for a Team's verified
+// domain.
 
 package certsservice_test
 
@@ -13,40 +15,15 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/certsservice"
-	"github.com/urnetwork/sidecar/sidecartest"
 )
 
 // The customer's pin (RFC 8657), the set every walk here finds unless a test says otherwise.
 const testCaaPin = `0 issue "ca.example; accounturi=https://ca.example/acme/acct/1"`
-
-// Runs function on its own goroutine, moving clock to each timer it sets, until it returns.
-func testCaaDrive[T any](clock *sidecartest.FakeClock, function func() T) T {
-	done := make(chan T, 1)
-	go func() {
-		done <- function()
-	}()
-	for {
-		select {
-		case result := <-done:
-			return result
-		default:
-		}
-		pending, added := clock.WatchTimers()
-		if 0 < len(pending) {
-			clock.AdvanceTo(pending[0])
-			continue
-		}
-		select {
-		case result := <-done:
-			return result
-		case <-added:
-		}
-	}
-}
 
 // One canary as the route keeps it.
 type testCaaCanary struct {
@@ -156,6 +133,8 @@ func (self *testCaaDns) log() ([]*testCaaPublish, []string, int) {
 // name's own records, or the CAA of the ALIAS target they flatten.
 type testCaaNetwork struct {
 	dns *testCaaDns
+	// set before a pass: called at each authoritative query before it is answered, with no lock held
+	onQuery func(name string)
 
 	stateLock sync.Mutex
 	lookups   map[string]*sidecar.TlsCaaAnswer
@@ -206,6 +185,9 @@ func (self *testCaaNetwork) LookupCaa(ctx context.Context, name string) (*sideca
 }
 
 func (self *testCaaNetwork) AuthoritativeCaa(ctx context.Context, name string, nameservers []string) (map[string][]string, error) {
+	if self.onQuery != nil {
+		self.onQuery(name)
+	}
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	self.queryCounts[name] += 1
@@ -354,8 +336,12 @@ type testCaaWorld struct {
 	store    *testCaaStore
 	settings *certsservice.CertsCaaSettings
 	deps     *certsservice.CertsCaaDeps
+	// set before a pass: called each time the driver begins to wait for the bubble, before it moves the clock
+	onSettle func()
 }
 
+// Made in the bubble of a test that runs a pass, so its context and channels are the bubble's and a probe waiting on
+// the clock is durably blocked there.
 func newTestCaaWorld(t *testing.T) *testCaaWorld {
 	t.Helper()
 	certs := newTestCerts(t, nil)
@@ -392,21 +378,49 @@ func (self *testCaaWorld) addHost(host string, ownerLabel string, state string, 
 	})
 }
 
+// Runs function on its own goroutine, moving the clock to each timer the pass sets, until it returns. The clock moves
+// only once every other goroutine in the bubble is durably blocked: waiting on a timer or on another goroutine, or
+// returned. A goroutine the scheduler has not run yet is not blocked, so no probe is between two of its reads of the
+// clock when it moves, and each sees only its own waits pass, however its goroutine is scheduled. Moving it as soon
+// as any timer is set would let one owner's windows pass under another owner's probe that the scheduler holds
+// between two such reads, past its ProbeTimeout (TestCertsCaaChecksClockWaitsForAHeldProbe).
+func (self *testCaaWorld) drive(function func()) {
+	self.t.Helper()
+	returned := make(chan struct{})
+	go func() {
+		defer close(returned)
+		function()
+	}()
+	for {
+		if self.onSettle != nil {
+			self.onSettle()
+		}
+		synctest.Wait()
+		select {
+		case <-returned:
+			return
+		default:
+		}
+		pending := self.certs.clock.PendingTimers()
+		if len(pending) == 0 {
+			self.t.Fatalf("the pass is blocked with no timer set")
+		}
+		self.certs.clock.AdvanceTo(pending[0])
+	}
+}
+
 // One pass from cursor, driven through the fake clock.
 func (self *testCaaWorld) run(cursor *certsservice.CertsCaaCursor) *certsservice.CertsCaaReport {
 	self.t.Helper()
-	type outcome struct {
-		report *certsservice.CertsCaaReport
-		err    error
-	}
-	result := testCaaDrive(self.certs.clock, func() outcome {
-		report, err := self.certs.service.RunCaaChecks(self.certs.ctx, self.deps, cursor)
-		return outcome{report: report, err: err}
+	var report *certsservice.CertsCaaReport
+	var err error
+	self.drive(func() {
+		report, err = self.certs.service.RunCaaChecks(self.certs.ctx, self.deps, cursor)
 	})
-	if result.err != nil {
-		self.t.Fatal(result.err)
+	if err != nil {
+		self.t.Fatal(err)
 	}
-	return result.report
+	return report
 }
 
 // The verdict a report holds for host, failing the test when it holds none.
@@ -456,85 +470,193 @@ func TestCertsCaaChecksRunNothingWithoutTheirParts(t *testing.T) {
 }
 
 func TestCertsCaaChecksScanDueHostsByWindow(t *testing.T) {
-	world := newTestCaaWorld(t)
-	now := world.certs.clock.Now()
-	// app's newest chain reaches half its life in an hour; www's has passed it, open below on the first scan
-	world.addHost("app.customer.example", "web", sidecar.DnsCustomHostStateActive, now.Add(1*time.Hour))
-	world.addHost("www.customer.example", "www", sidecar.DnsCustomHostStateActive, now.Add(-1*time.Hour))
-	first := world.run(nil)
-	if len(first.Verdicts) != 1 || first.Verdicts[0].Host != "www.customer.example" {
-		t.Fatalf("first scan %+v", first.Verdicts)
-	}
-	world.certs.clock.Advance(2 * time.Hour)
-	second := world.run(first.Next)
-	if len(second.Verdicts) != 1 || second.Verdicts[0].Host != "app.customer.example" || second.Verdicts[0].Outcome != certsservice.CertsCaaOutcomeChecked {
-		t.Fatalf("second scan %+v", second.Verdicts)
-	}
-	// each chain's recheck is judged once
-	world.certs.clock.Advance(2 * time.Hour)
-	if third := world.run(second.Next); len(third.Verdicts) != 0 {
-		t.Fatalf("third scan judged again: %+v", third.Verdicts)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		world := newTestCaaWorld(t)
+		now := world.certs.clock.Now()
+		// app's newest chain reaches half its life in an hour; www's has passed it, open below on the first scan
+		world.addHost("app.customer.example", "web", sidecar.DnsCustomHostStateActive, now.Add(1*time.Hour))
+		world.addHost("www.customer.example", "www", sidecar.DnsCustomHostStateActive, now.Add(-1*time.Hour))
+		first := world.run(nil)
+		if len(first.Verdicts) != 1 || first.Verdicts[0].Host != "www.customer.example" {
+			t.Fatalf("first scan %+v", first.Verdicts)
+		}
+		world.certs.clock.Advance(2 * time.Hour)
+		second := world.run(first.Next)
+		if len(second.Verdicts) != 1 || second.Verdicts[0].Host != "app.customer.example" || second.Verdicts[0].Outcome != certsservice.CertsCaaOutcomeChecked {
+			t.Fatalf("second scan %+v", second.Verdicts)
+		}
+		// each chain's recheck is judged once
+		world.certs.clock.Advance(2 * time.Hour)
+		if third := world.run(second.Next); len(third.Verdicts) != 0 {
+			t.Fatalf("third scan judged again: %+v", third.Verdicts)
+		}
+	})
 }
 
 func TestCertsCaaChecksCarryADueHostWithNoVerdictThenDropIt(t *testing.T) {
-	world := newTestCaaWorld(t)
-	world.settings.RetryMaxTryCount = 2
-	world.addHost("app.customer.example", "web", sidecar.DnsCustomHostStateActive, world.certs.clock.Now())
-	// neither of the provider's servers answers a query
-	world.network.silent["ns1.provider.example"] = true
-	world.network.silent["ns2.provider.example"] = true
-	first := world.run(nil)
-	if first.InconclusiveCount != 1 || len(first.Next.Retries) != 1 || first.Next.Retries[0].TryCount != 1 {
-		t.Fatalf("first pass %+v, retries %+v", first, first.Next.Retries)
-	}
-	second := world.run(first.Next)
-	if second.InconclusiveCount != 1 || len(second.Next.Retries) != 0 || second.DroppedCount != 1 {
-		t.Fatalf("second pass %+v, retries %+v", second, second.Next.Retries)
-	}
-	// its standing is untouched, and every canary was deleted
-	if row := world.store.row("app.customer.example"); row.state != sidecar.DnsCustomHostStateActive || !row.chainOk {
-		t.Errorf("row %+v", row)
-	}
-	publishes, deletes, _ := world.dns.log()
-	if len(publishes) != 2 || len(deletes) != 2 {
-		t.Errorf("%d publishes, %d deletes", len(publishes), len(deletes))
-	}
+	synctest.Test(t, func(t *testing.T) {
+		world := newTestCaaWorld(t)
+		world.settings.RetryMaxTryCount = 2
+		world.addHost("app.customer.example", "web", sidecar.DnsCustomHostStateActive, world.certs.clock.Now())
+		// neither of the provider's servers answers a query
+		world.network.silent["ns1.provider.example"] = true
+		world.network.silent["ns2.provider.example"] = true
+		first := world.run(nil)
+		if first.InconclusiveCount != 1 || len(first.Next.Retries) != 1 || first.Next.Retries[0].TryCount != 1 {
+			t.Fatalf("first pass %+v, retries %+v", first, first.Next.Retries)
+		}
+		second := world.run(first.Next)
+		if second.InconclusiveCount != 1 || len(second.Next.Retries) != 0 || second.DroppedCount != 1 {
+			t.Fatalf("second pass %+v, retries %+v", second, second.Next.Retries)
+		}
+		// its standing is untouched, and every canary was deleted
+		if row := world.store.row("app.customer.example"); row.state != sidecar.DnsCustomHostStateActive || !row.chainOk {
+			t.Errorf("row %+v", row)
+		}
+		publishes, deletes, _ := world.dns.log()
+		if len(publishes) != 2 || len(deletes) != 2 {
+			t.Errorf("%d publishes, %d deletes", len(publishes), len(deletes))
+		}
+	})
 }
 
 func TestCertsCaaChecksPageThePendingHosts(t *testing.T) {
-	world := newTestCaaWorld(t)
-	world.settings.PendingBatchCount = 2
-	for _, label := range []string{"a", "b", "c"} {
-		world.addHost(label+".customer.example", label, sidecar.DnsCustomHostStatePending, time.Time{})
-	}
-	first := world.run(nil)
-	if len(first.Verdicts) != 2 || !first.More || first.Next.AfterPendingHost != "b.customer.example" {
-		t.Fatalf("first pass %+v, next %+v", first.Verdicts, first.Next)
-	}
-	second := world.run(first.Next)
-	if len(second.Verdicts) != 1 || second.Verdicts[0].Host != "c.customer.example" || second.Next.AfterPendingHost != "" {
-		t.Fatalf("second pass %+v, next %+v", second.Verdicts, second.Next)
-	}
-	for _, label := range []string{"a", "b", "c"} {
-		if row := world.store.row(label + ".customer.example"); row == nil || row.state != sidecar.DnsCustomHostStateActive {
-			t.Errorf("%s: %+v", label, row)
+	synctest.Test(t, func(t *testing.T) {
+		world := newTestCaaWorld(t)
+		world.settings.PendingBatchCount = 2
+		for _, label := range []string{"a", "b", "c"} {
+			world.addHost(label+".customer.example", label, sidecar.DnsCustomHostStatePending, time.Time{})
 		}
-	}
+		first := world.run(nil)
+		if len(first.Verdicts) != 2 || !first.More || first.Next.AfterPendingHost != "b.customer.example" {
+			t.Fatalf("first pass %+v, next %+v", first.Verdicts, first.Next)
+		}
+		second := world.run(first.Next)
+		if len(second.Verdicts) != 1 || second.Verdicts[0].Host != "c.customer.example" || second.Next.AfterPendingHost != "" {
+			t.Fatalf("second pass %+v, next %+v", second.Verdicts, second.Next)
+		}
+		for _, label := range []string{"a", "b", "c"} {
+			if row := world.store.row(label + ".customer.example"); row == nil || row.state != sidecar.DnsCustomHostStateActive {
+				t.Errorf("%s: %+v", label, row)
+			}
+		}
+	})
 }
 
+// Two hosts behind one ALIAS target, so one canary owner, and a third behind another.
+func (self *testCaaWorld) addOneOwnerHosts() {
+	self.addHost("app.customer.example", "web", sidecar.DnsCustomHostStatePending, time.Time{})
+	self.addHost("www.customer.example", "web", sidecar.DnsCustomHostStatePending, time.Time{})
+	self.addHost("api.customer.example", "api", sidecar.DnsCustomHostStatePending, time.Time{})
+}
+
+// The hosts a report holds verdicts for, in its order.
+func testCaaVerdictHosts(report *certsservice.CertsCaaReport) []string {
+	hosts := []string{}
+	for _, verdict := range report.Verdicts {
+		hosts = append(hosts, verdict.Host)
+	}
+	return hosts
+}
+
+// One probe a target at a time (§12.8): web's two hosts are probed one after the other, and api's beside the first,
+// so the pass takes two windows, each host's probe queries it in each of its window's 21 rounds, both ends included,
+// and dns never refuses a canary as busy.
 func TestCertsCaaChecksProbeOneOwnerAtATime(t *testing.T) {
-	world := newTestCaaWorld(t)
-	// two hosts behind one ALIAS target, and a third behind another
-	world.addHost("app.customer.example", "web", sidecar.DnsCustomHostStatePending, time.Time{})
-	world.addHost("www.customer.example", "web", sidecar.DnsCustomHostStatePending, time.Time{})
-	world.addHost("api.customer.example", "api", sidecar.DnsCustomHostStatePending, time.Time{})
-	report := world.run(nil)
-	if len(report.Verdicts) != 3 || report.InconclusiveCount != 0 {
-		t.Fatalf("%+v, %d with none", report.Verdicts, report.InconclusiveCount)
-	}
-	publishes, deletes, busyCount := world.dns.log()
-	if busyCount != 0 || len(publishes) != 3 || len(deletes) != 3 {
-		t.Errorf("%d publishes, %d deletes, %d refused busy", len(publishes), len(deletes), busyCount)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		world := newTestCaaWorld(t)
+		world.addOneOwnerHosts()
+		start := world.certs.clock.Now()
+		report := world.run(nil)
+		if len(report.Verdicts) != 3 || report.InconclusiveCount != 0 {
+			t.Fatalf("verdicts for %v, %d with none", testCaaVerdictHosts(report), report.InconclusiveCount)
+		}
+		publishes, deletes, busyCount := world.dns.log()
+		if busyCount != 0 || len(publishes) != 3 || len(deletes) != 3 {
+			t.Errorf("%d publishes, %d deletes, %d refused busy", len(publishes), len(deletes), busyCount)
+		}
+		if elapsed := world.certs.clock.Now().Sub(start); elapsed != 2*world.settings.ProbeWindow {
+			t.Errorf("the pass took %v", elapsed)
+		}
+		for _, host := range []string{"app.customer.example", "www.customer.example", "api.customer.example"} {
+			if count := world.network.queries(host); count != 21 {
+				t.Errorf("%s was queried %d times", host, count)
+			}
+		}
+	})
+}
+
+// One query of a probe, held until the check unlocks it, and the clock's time when it was.
+type testCaaHold struct {
+	lock sync.Mutex
+	time time.Time
+}
+
+// The driver's own check. api's probe is held at each of its queries, as a goroutine the scheduler has not run yet
+// is: from its first, which every schedule reaches, to its last, after which it ends its window and reads ready,
+// where TestCertsCaaChecksProbeOneOwnerAtATime once found it past its ProbeTimeout under load. Meanwhile web's
+// timers fall due, and one the check sets. Held on a mutex, the probe is not durably blocked, so the clock stays at
+// its round until it waits again: it keeps its window's times and has its verdict, and the pass takes its two
+// windows. A driver that moves the clock on any pending timer fires the check's timer under the first hold.
+func TestCertsCaaChecksClockWaitsForAHeldProbe(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		world := newTestCaaWorld(t)
+		world.addOneOwnerHosts()
+		// a signal stands once the driver has begun to wait for the bubble
+		settles := make(chan struct{}, 1)
+		world.onSettle = func() {
+			select {
+			case settles <- struct{}{}:
+			default:
+			}
+		}
+		holds := make(chan *testCaaHold, 1)
+		world.network.onQuery = func(name string) {
+			if name != "api.customer.example" {
+				return
+			}
+			hold := &testCaaHold{time: world.certs.clock.Now()}
+			hold.lock.Lock()
+			holds <- hold
+			// locked again: this waits for the check's unlock, on a mutex, which synctest.Wait does not count as
+			// durably blocked
+			hold.lock.Lock()
+		}
+		go func() {
+			for {
+				var hold *testCaaHold
+				select {
+				case hold = <-holds:
+				case <-world.certs.ctx.Done():
+					return
+				}
+				// due with the pass's next round, so the held probe's schedule is the pass's own
+				moved := world.certs.clock.After(world.settings.ProbeInterval)
+				select {
+				case <-settles:
+					// the driver waits for the bubble, which it cannot end while the probe is held
+					if now := world.certs.clock.Now(); !now.Equal(hold.time) {
+						t.Errorf("the clock moved from %s to %s under the held probe", hold.time, now)
+					}
+				case movedTime := <-moved:
+					t.Errorf("the clock moved from %s to %s under the held probe", hold.time, movedTime)
+				}
+				hold.lock.Unlock()
+			}
+		}()
+		start := world.certs.clock.Now()
+		report := world.run(nil)
+		if verdict := testCaaVerdict(t, report, "api.customer.example"); !verdict.Pass {
+			t.Errorf("the held probe: %+v", verdict)
+		}
+		if len(report.Verdicts) != 3 || report.InconclusiveCount != 0 {
+			t.Errorf("verdicts for %v, %d with none", testCaaVerdictHosts(report), report.InconclusiveCount)
+		}
+		if count := world.network.queries("api.customer.example"); count != 21 {
+			t.Errorf("the held probe queried %d times", count)
+		}
+		if elapsed := world.certs.clock.Now().Sub(start); elapsed != 2*world.settings.ProbeWindow {
+			t.Errorf("the pass took %v", elapsed)
+		}
+	})
 }

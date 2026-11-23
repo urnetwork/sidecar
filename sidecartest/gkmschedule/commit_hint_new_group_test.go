@@ -51,10 +51,7 @@ func newHintedReformWorld(t *testing.T, config bool) *hintedReformWorld {
 	ctx, cancel := context.WithTimeout(world.Ctx, 30*time.Second)
 	t.Cleanup(cancel)
 	world.Ctx = ctx
-	// one gkm instance in the first's place, KeyDelivery and probing its stores once, made only once the first has
-	// probed: every instance shares the world's settings, and its probe loop reads them after each probe, so a change
-	// before the first probe has ended races that read
-	awaitStoreProbe(t, world)
+	// one gkm instance in the first's place, KeyDelivery and probing its stores once
 	world.Reconfigure(func(settings *gkmservice.GkmServiceSettings) {
 		settings.DraftMls = false
 		settings.StoreProbeInterval = 0

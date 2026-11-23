@@ -173,10 +173,12 @@ type NetResident struct {
 	cancel    context.CancelFunc
 	// frames the client has acked, each Send's, the publisher's among them
 	acks *sidecar.MonitorValue[uint64]
+	// closes once Close has joined the resident's client and stopped its publisher
+	closed chan struct{}
 
 	stateLock sync.Mutex
 	publisher *pushservice.SidecarPublisher
-	closed    bool
+	closing   bool
 }
 
 // Starts clientId's resident on the exchange, a connect client of id ControlId whose frames need no
@@ -206,6 +208,7 @@ func (self *Net) AddResident(clientId connect.Id) (*NetResident, error) {
 		},
 		cancel: cancel,
 		acks:   sidecar.NewMonitorValue[uint64](0),
+		closed: make(chan struct{}),
 	}
 	added := func() bool {
 		exchange.stateLock.Lock()
@@ -218,7 +221,8 @@ func (self *Net) AddResident(clientId connect.Id) (*NetResident, error) {
 	}()
 	if !added {
 		cancel()
-		client.Cancel()
+		// joined though it never ran, since NewClientWithTag started its workers
+		self.joinClient(clientTag, client)
 		return nil, fmt.Errorf("%w: %s already has one", errNetResident, clientId)
 	}
 
@@ -232,6 +236,8 @@ func (self *Net) AddResident(clientId connect.Id) (*NetResident, error) {
 	}()
 	go func() {
 		defer exchange.workers.Done()
+		// an exchange worker of its own, none of the client's callbacks, so Close's join here waits on nothing of its
+		// own
 		<-ctx.Done()
 		resident.Close()
 	}()
@@ -322,7 +328,7 @@ func (self *NetResident) StartPublisher(settings *pushservice.SidecarPublisherSe
 	started := func() bool {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
-		if self.closed || self.publisher != nil {
+		if self.closing || self.publisher != nil {
 			return false
 		}
 		self.publisher = publisher
@@ -349,18 +355,28 @@ func (self *NetResident) StartPublisher(settings *pushservice.SidecarPublisherSe
 }
 
 // Kills the resident: its client leaves the exchange, its publisher stops, and frames the client sends
-// ControlId go nowhere until another resident starts. The client goes first, so a publisher's send in
-// flight is refused at once rather than waiting out its timeout. Safe to call more than once.
+// ControlId go nowhere until another resident starts. Returns once the resident's client has joined its
+// workers, within NetSettings.ClientCloseTimeout past which it is reported (Net.closeFailed), and its
+// publisher has stopped, so nothing of the resident's runs on. The client goes first, so a publisher's send
+// in flight is refused at once rather than waiting out its timeout. Safe to call more than once, a later
+// call returning once the first has. Never call it from one of the resident client's own callbacks, an ack
+// among them, whose return the join waits for (connect's CODESTYLE, goroutine lifecycle): such a caller
+// hands it to another goroutine.
 func (self *NetResident) Close() {
-	publisher := func() *pushservice.SidecarPublisher {
+	first, publisher := func() (bool, *pushservice.SidecarPublisher) {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
-		if self.closed {
-			return nil
+		if self.closing {
+			return false, nil
 		}
-		self.closed = true
-		return self.publisher
+		self.closing = true
+		return true, self.publisher
 	}()
+	if !first {
+		<-self.closed
+		return
+	}
+	defer close(self.closed)
 	exchange := self.net.exchange
 	func() {
 		exchange.stateLock.Lock()
@@ -370,7 +386,7 @@ func (self *NetResident) Close() {
 		}
 	}()
 	self.cancel()
-	self.netClient.Client.Cancel()
+	self.net.joinClient(self.netClient.Name, self.netClient.Client)
 	if publisher == nil {
 		return
 	}

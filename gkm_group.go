@@ -1667,16 +1667,18 @@ const (
 // bring its delivery. One follow-up runs a repo at a time, an ask made meanwhile
 // following on in it. The follow-ups of an ask end once its first is a ResyncInterval old, from when the resyncs ask,
 // or a LateAskInterval old where that is longer, so a lost hint is asked again once at least: neither the follow-up
-// nor an ask its last sync makes starts another past that age. None runs without hints attached, where the caller's
-// syncs ask.
-func (self *GkmGroupClient) followLateAsk(repoId Id, since time.Time) {
+// nor an ask its last sync makes starts another past that age. An ask is judged at now, when it was made, the time
+// the late asks hold it by (GkmLateAsks.Ask), and not by the clock once its answer is back: a slow answer would carry
+// an ask made within the hour past that age, and it would start no follow-up. None runs without hints attached,
+// where the caller's syncs ask.
+func (self *GkmGroupClient) followLateAsk(repoId Id, since time.Time, now time.Time) {
 	ctx := func() context.Context {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		return self.hintsCtx
 	}()
 	followAge := max(self.settings.ResyncInterval, self.settings.LateAskInterval)
-	if ctx == nil || self.settings.LateAskInterval <= 0 || followAge <= self.clock.Now().Sub(since) {
+	if ctx == nil || self.settings.LateAskInterval <= 0 || followAge <= now.Sub(since) {
 		return
 	}
 	testHookBarrier(gkmBarrierLateAskFollow, gkmPathId(repoId))

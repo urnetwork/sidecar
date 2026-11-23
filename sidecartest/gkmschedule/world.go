@@ -321,9 +321,22 @@ func (self *FsKeysWorld) RestartEngine() {
 }
 
 // gkm's settings changed by change, on a new instance over the same stores: a schedule that pages epochs at a smaller
-// bound, say.
+// bound, say. change edits a copy, its nested settings copied too, which the new instance takes, so the standing
+// instance, whose probe loop reads its settings until it has closed, sees no write, and a change need not wait for
+// its probe.
 func (self *FsKeysWorld) Reconfigure(change func(settings *gkmservice.GkmServiceSettings)) {
-	change(self.engineSettings)
+	settings := *self.engineSettings
+	settings.CommitSecondsBuckets = slices.Clone(settings.CommitSecondsBuckets)
+	if settings.Place != nil {
+		place := *settings.Place
+		settings.Place = &place
+	}
+	if settings.Prices != nil {
+		prices := *settings.Prices
+		settings.Prices = &prices
+	}
+	change(&settings)
+	self.engineSettings = &settings
 	self.RestartEngine()
 }
 

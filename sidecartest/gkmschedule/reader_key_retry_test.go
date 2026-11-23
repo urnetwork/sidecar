@@ -9,6 +9,7 @@ package gkmschedule
 
 import (
 	"bytes"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -274,116 +275,153 @@ func deliverySignerAt(t *testing.T, world *FsKeysWorld, device *FsKeysDevice, ge
 // each LateAskInterval for that hour, every ask but the hour's last taken into the one follow-up the first started,
 // and the follow-up ends at its next wake. Neither the ask its last sync makes nor one a sync makes after it starts
 // another, so from then on the reader asks only at the syncs other things bring. The reader's intake resyncs a day
-// apart here, so no resync of its own asks within the hour.
+// apart here, so no resync of its own asks within the hour. An ask is as old as it was when made, so the same holds
+// where each follow-up's answer reaches its flow only once the clock has passed the next wake, as under load, where
+// the pre-fix flow judged the hour's last follow-up ask, made at 59 minutes, by the clock at 60, and so took it into
+// no follow-up.
 func TestLateAskFollowUpsEndOnceTheFirstAskIsAResyncIntervalOld(t *testing.T) {
 	if !sidecartest.HooksLinked {
 		t.Skip("the follow-up's barriers need sidecar_testhooks")
 	}
-	pending := newPendingDeliveryWorld(t, false, false)
-	world := pending.world
-	probeStoresOnce(t, world)
-	reader := pending.reader
-	askLock := sync.Mutex{}
-	askCount := 0
-	asked := make(chan struct{}, 128)
-	// each ask told once gkm has answered it, so the clock moves under no request gkm is still serving, whose
-	// deadline the move would end
-	reader.Transport.Respond = func(request *http.Request) *http.Response {
-		recorder := httptest.NewRecorder()
-		world.Engine.Handler().ServeHTTP(recorder, request)
-		if request.Method == http.MethodGet && request.URL.Query().Get("want") != "" {
-			askLock.Lock()
-			askCount += 1
-			askLock.Unlock()
-			asked <- struct{}{}
-		}
-		return recorder.Result()
-	}
-	awaitAsk := func(label string) {
-		t.Helper()
-		select {
-		case <-asked:
-		case <-world.Ctx.Done():
-			t.Fatalf("the reader never asked %s", label)
-		}
-	}
-	key, err := pending.granter.Client.RotateRepo(world.Ctx, world.RepoId)
-	if err != nil {
-		t.Fatal(err)
-	}
-	reader.PublishReaderKey()
-	followLock := sync.Mutex{}
-	followCount := 0
-	ended := make(chan struct{}, 8)
-	remove, err := sidecartest.InstallTestHooks(nil, func(name string, key string) {
-		switch name {
-		case "gkm.late-ask.follow":
-			followLock.Lock()
-			followCount += 1
-			followLock.Unlock()
-		case "gkm.late-ask.follow.end":
-			ended <- struct{}{}
-		}
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer remove()
-	hintsSettings := sidecar.DefaultGkmSettings()
-	hintsSettings.ResyncInterval = 24 * time.Hour
-	hints, err := sidecar.NewGkmHints(world.Ctx, &sidecar.GkmHintsArgs{Settings: hintsSettings, Clock: world.Clock})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(hints.Close)
-	reader.Client.AttachHints(world.Ctx, hints)
+	for _, late := range []bool{false, true} {
+		func() {
+			pending := newPendingDeliveryWorld(t, false, false)
+			world := pending.world
+			probeStoresOnce(t, world)
+			reader := pending.reader
+			settings := sidecar.DefaultGkmSettings()
+			interval := settings.LateAskInterval
+			reAskCount := int(settings.ResyncInterval / interval)
+			askLock := sync.Mutex{}
+			askCount := 0
+			// each ask told once gkm has answered it, so the clock moves under no request gkm is still serving, whose
+			// deadline the move would end, with what lets the answer on to the asking flow, nil where nothing holds
+			// it: late holds each follow-up's answer until the test lets it go
+			asked := make(chan chan struct{}, 128)
+			reader.Transport.Respond = func(request *http.Request) *http.Response {
+				recorder := httptest.NewRecorder()
+				world.Engine.Handler().ServeHTTP(recorder, request)
+				if request.Method == http.MethodGet && request.URL.Query().Get("want") != "" {
+					askLock.Lock()
+					askCount += 1
+					// the follow-ups' asks come between the test's first sync's and its sync's after the hour
+					held := late && 1 < askCount && askCount <= reAskCount+1
+					askLock.Unlock()
+					var answer chan struct{}
+					if held {
+						answer = make(chan struct{})
+					}
+					asked <- answer
+					if answer != nil {
+						select {
+						case <-answer:
+						case <-world.Ctx.Done():
+						}
+					}
+				}
+				return recorder.Result()
+			}
+			awaitAsk := func(label string) chan struct{} {
+				t.Helper()
+				select {
+				case answer := <-asked:
+					return answer
+				case <-world.Ctx.Done():
+					t.Fatalf("late %t: the reader never asked %s", late, label)
+					return nil
+				}
+			}
+			letAnswer := func(answer chan struct{}) {
+				if answer != nil {
+					close(answer)
+				}
+			}
+			key, err := pending.granter.Client.RotateRepo(world.Ctx, world.RepoId)
+			if err != nil {
+				t.Fatal(err)
+			}
+			reader.PublishReaderKey()
+			repoKey := hex.EncodeToString(world.RepoId.Bytes())
+			followLock := sync.Mutex{}
+			followCount := 0
+			ended := make(chan struct{}, 8)
+			remove, err := sidecartest.InstallTestHooks(nil, func(name string, barrierKey string) {
+				if barrierKey != repoKey {
+					return
+				}
+				switch name {
+				case "gkm.late-ask.follow":
+					followLock.Lock()
+					followCount += 1
+					followLock.Unlock()
+				case "gkm.late-ask.follow.end":
+					ended <- struct{}{}
+				}
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer remove()
+			hintsSettings := sidecar.DefaultGkmSettings()
+			hintsSettings.ResyncInterval = 24 * time.Hour
+			hints, err := sidecar.NewGkmHints(world.Ctx, &sidecar.GkmHintsArgs{Settings: hintsSettings, Clock: world.Clock})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(hints.Close)
+			reader.Client.AttachHints(world.Ctx, hints)
 
-	settings := sidecar.DefaultGkmSettings()
-	interval := settings.LateAskInterval
-	reAskCount := int(settings.ResyncInterval / interval)
-	askedAt := world.Clock.Now()
-	if err := reader.Client.SyncRepo(world.Ctx, world.RepoId); err == nil {
-		t.Fatal("the reader synced a key before any delivery")
-	}
-	awaitAsk("at its first sync")
-	for index := 1; index <= reAskCount; index += 1 {
-		awaitTimerAt(t, world, askedAt.Add(time.Duration(index)*interval))
-		world.Clock.Advance(interval)
-		awaitAsk(fmt.Sprintf("at follow-up %d", index))
-	}
-	awaitTimerAt(t, world, askedAt.Add(time.Duration(reAskCount+1)*interval))
-	world.Clock.Advance(interval)
-	select {
-	case <-ended:
-	case <-world.Ctx.Done():
-		t.Fatal("the follow-up never ended")
-	}
-	// a sync past the hour asks again, and taking the group's flow after the hour's last ask, finds its ask counted
-	if err := reader.Client.SyncRepo(world.Ctx, world.RepoId); err != nil && !errors.Is(err, sidecar.ErrGkmKeyMissing) {
-		t.Fatalf("the sync after the hour: %v", err)
-	}
-	awaitAsk("at the sync after the hour")
-	if held, _ := reader.Client.RepoKeyHeld(world.RepoId); held {
-		t.Fatal("the reader holds a key no holder delivered")
-	}
-	askLock.Lock()
-	asks := askCount
-	askLock.Unlock()
-	followLock.Lock()
-	follows := followCount
-	followLock.Unlock()
-	if asks != reAskCount+2 {
-		t.Errorf("%d asks, want the first, %d follow-ups' and the sync's after the hour", asks, reAskCount)
-	}
-	if follows != reAskCount {
-		t.Errorf("%d asks would start a follow-up, want the %d of the hour before its last", follows, reAskCount)
-	}
-	if world.WrapRecipients(key.Generation())[reader.SidecarId()] {
-		t.Error("a delivery stood with no holder told")
-	}
-	select {
-	case <-ended:
-		t.Error("a second follow-up ended")
-	default:
+			askedAt := world.Clock.Now()
+			if err := reader.Client.SyncRepo(world.Ctx, world.RepoId); err == nil {
+				t.Fatalf("late %t: the reader synced a key before any delivery", late)
+			}
+			awaitAsk("at its first sync")
+			// the last follow-up ask's answer, held where late, which its flow takes once the clock has passed the
+			// next wake
+			var answer chan struct{}
+			for index := 1; index <= reAskCount; index += 1 {
+				awaitTimerAt(t, world, askedAt.Add(time.Duration(index)*interval))
+				world.Clock.Advance(interval)
+				letAnswer(answer)
+				answer = awaitAsk(fmt.Sprintf("at follow-up %d", index))
+			}
+			awaitTimerAt(t, world, askedAt.Add(time.Duration(reAskCount+1)*interval))
+			world.Clock.Advance(interval)
+			letAnswer(answer)
+			select {
+			case <-ended:
+			case <-world.Ctx.Done():
+				t.Fatalf("late %t: the follow-up never ended", late)
+			}
+			// a sync past the hour asks again, and taking the group's flow after the hour's last ask, finds its ask
+			// counted
+			if err := reader.Client.SyncRepo(world.Ctx, world.RepoId); err != nil && !errors.Is(err, sidecar.ErrGkmKeyMissing) {
+				t.Fatalf("late %t: the sync after the hour: %v", late, err)
+			}
+			awaitAsk("at the sync after the hour")
+			if held, _ := reader.Client.RepoKeyHeld(world.RepoId); held {
+				t.Fatalf("late %t: the reader holds a key no holder delivered", late)
+			}
+			askLock.Lock()
+			asks := askCount
+			askLock.Unlock()
+			followLock.Lock()
+			follows := followCount
+			followLock.Unlock()
+			if asks != reAskCount+2 {
+				t.Errorf("late %t: %d asks, want the first, %d follow-ups' and the sync's after the hour", late, asks, reAskCount)
+			}
+			if follows != reAskCount {
+				t.Errorf("late %t: %d asks would start a follow-up, want the %d of the hour before its last", late, follows, reAskCount)
+			}
+			if world.WrapRecipients(key.Generation())[reader.SidecarId()] {
+				t.Errorf("late %t: a delivery stood with no holder told", late)
+			}
+			select {
+			case <-ended:
+				t.Errorf("late %t: a second follow-up ended", late)
+			default:
+			}
+		}()
 	}
 }
