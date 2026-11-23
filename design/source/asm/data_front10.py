@@ -2603,3 +2603,46 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     _D719, _D719 + "Its second piece numbers who a team's security notices and billing mail reach, and the network "
     "they name (720), the account message outbox recording a send's outcome after the send (721), and unjudged evs "
     "statements held to the refs table's rules that need no right at their pin (722), refining @@OD:706@@. ")
+
+# The same fold's third piece: the two answers recorded while it ran, QD-1222 and QD-1223, which extend 720 (723).
+INDEX += [
+    (723, "A Team's earnings mail and its copy",
+     "A Team's earnings and payout-sent mail reach its Owners and Billing admins too, and its billing mail names the "
+     'Team and its subscription.'),
+]
+for _n, _note in [
+        (720, " Extended by @@OD:723@@: a Team's earnings and payout-sent mail reach the same members, and its billing "
+              'mail names the Team.'),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 724))
+DATES[723] = '2026-11-23'
+_D722 = "that need no right at their pin (722), refining @@OD:706@@. "
+assert DECISIONS_INTRO.count(_D722) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D722, _D722 + "Its third piece numbers the two answers recorded while it ran, a Team's earnings and payout-sent "
+    "mail and the Team its billing mail names (723), extending @@OD:720@@. ")
+
+# The same fold's fourth piece: two more answers recorded while it ran, QD-1224 and QD-1225 (724, 725).
+INDEX += [
+    (724, "The test Net joins its clients",
+     "sidecartest's Net joins the connect clients it ends within a settings bound, so nothing it ran outlives "
+     '`Net.Close`.'),
+    (725, 'The abuse notice names its network',
+     "The abuse action notice names the network it is about, read at delivery, as the security notices do."),
+]
+for _n, _note in [
+        (720, ' Extended by @@OD:725@@: the abuse action notice names its network too.'),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 726))
+DATES.update({_n: '2026-11-23' for _n in range(724, 726)})
+_D723 = "and the Team its billing mail names (723), extending @@OD:720@@. "
+assert DECISIONS_INTRO.count(_D723) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D723, _D723 + "Its fourth piece numbers two more recorded while it ran, the test harness's Net joining the "
+    "connect clients it ends (724) and the abuse action notice naming its network (725), extending @@OD:720@@. ")

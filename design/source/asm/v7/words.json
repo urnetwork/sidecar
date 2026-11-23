@@ -56,11 +56,11 @@
  {
   "num": 7,
   "code": "TEAM",
-  "words": 13883,
+  "words": 13892,
   "code_words": 15509,
   "ceiling": 3500,
-  "over": 10383,
-  "over_pct": 296.7
+  "over": 10392,
+  "over_pct": 296.9
  },
  {
   "num": 8,
@@ -173,26 +173,26 @@
  {
   "num": 20,
   "code": "QUOTA",
-  "words": 5731,
+  "words": 5856,
   "code_words": 5021,
   "ceiling": 2500,
-  "over": 3231,
-  "over_pct": 129.2
+  "over": 3356,
+  "over_pct": 134.2
  },
  {
   "num": 21,
   "code": "ABUSE",
-  "words": 6146,
+  "words": 6167,
   "code_words": 1403,
   "ceiling": 2500,
-  "over": 3646,
-  "over_pct": 145.8
+  "over": 3667,
+  "over_pct": 146.7
  },
  {
   "num": 22,
   "code": "TEST",
   "words": 7823,
-  "code_words": 41706,
+  "code_words": 41761,
   "ceiling": 2500,
   "over": 5323,
   "over_pct": 212.9
