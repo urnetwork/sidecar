@@ -129,6 +129,8 @@ type BridgeCompiled struct {
 	Alarms []BridgeAlarm
 	// The block in force, the next compile's PreviousBlock; the previous one when this one was refused.
 	Block *bridge.BridgeBlock
+	// The Signed record Block came from, the next compile's PreviousBlockRecord; nil for none.
+	BlockRecord []byte
 	// Every sidecar the state names in a link of this network, an entry's or an exit's, ascending: the targets
 	// Sidecar.SignWindowDelegation signs for.
 	LinkTargets []Id
@@ -388,9 +390,9 @@ func CompileBridgeState(view BridgeConfigView, local *BridgeCompileLocal, settin
 	selfState := compiler.acl.sidecarState(compiler.self)
 	compiler.selfDenied = selfState == nil || selfState.hardDeny(compiler.t) != 0
 
-	// a refused compile changes nothing: the next one reads at the block held before it
+	// a refused compile changes nothing: the next one reads at the block held before it, and its record
 	refused := func(err error) (*BridgeCompiled, error) {
-		compiler.compiled.Block = local.PreviousBlock
+		compiler.compiled.Block, compiler.compiled.BlockRecord = local.PreviousBlock, local.PreviousBlockRecord
 		return compiler.compiled, err
 	}
 	compiler.readBlock()
@@ -422,18 +424,19 @@ func (self *bridgeCompiler) wait(wait BridgeCompileWait) {
 	}
 }
 
-// Step 1: the block, judged at the state the head's base lands on, with the previous block kept on a refusal; the
-// previous prefix compiles while t is before its drain_until.
+// Step 1: the block, judged at the state the head's base lands on, with the previous block kept on a refusal, and kept
+// unjudged from a head carrying the record it came from (QD-1205); the previous prefix compiles while t is before its
+// drain_until.
 func (self *bridgeCompiler) readBlock() {
-	block, err := self.local.PreviousBlock, error(nil)
+	block, record, err := self.local.PreviousBlock, self.local.PreviousBlockRecord, error(nil)
 	if head := self.view.Head(); head != nil {
-		block, err = ReadBridgeBlock(head, self.baseState(), self.local.PreviousBlock)
+		block, record, err = readBridgeBlockHeld(head, self.baseState(), self.local.PreviousBlock, self.local.PreviousBlockRecord)
 	}
 	if err != nil {
 		self.alarm(SidecarBridgeAlarmBlockRefused, 0, Id{}, "the head's block is refused; the previous one stands")
 	}
 	self.block = block
-	self.compiled.Block = block
+	self.compiled.Block, self.compiled.BlockRecord = block, record
 	if block == nil {
 		return
 	}

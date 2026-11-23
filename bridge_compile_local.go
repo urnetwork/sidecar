@@ -46,6 +46,9 @@ type BridgeCompileLocal struct {
 	Bindings BridgeBindingView
 	// The block last compiled, nil for none: D-BRIDGE-16's "keeps the previous block".
 	PreviousBlock *bridge.BridgeBlock
+	// The Signed record PreviousBlock came from, which a head carrying it byte for byte keeps without its signer judged
+	// again (QD-1205); nil judges every head's record.
+	PreviousBlockRecord []byte
 	// <net>.<root> and the alias zone where one is chosen (§12.9): the network's label is the host's label table's
 	// (dns_resolve.go), not the config's, so the host hands it in. Empty while labels are not served.
 	NameZones []string

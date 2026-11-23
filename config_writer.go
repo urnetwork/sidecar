@@ -24,11 +24,12 @@
 // edit the head, which saves with the fold where it is and lands as a base.
 //
 // A head that holds no bridge block, an older network's or one bootstrapped before the bridge shipped, gets the
-// network's first from this writer's next head, whatever saves it, through FirstBridgeBlock (§17.4's first block row).
+// network's first from this writer's next head, whatever saves it, and a block whose signer no longer stands is signed
+// again there, through BridgeBlock (§17.4's first block row; QD-1205).
 //
-// It signs heads, bases and that first block only; statements are CORE's acts (C-01). The clock, the delay's randomness
-// and the block's draw come through ConfigWriterSettings, so a test steers all three. Every leg, no connect type. Safe
-// for concurrent use; one publish runs at a time.
+// It signs heads, bases and that block only; statements are CORE's acts (C-01). The clock, the delay's randomness and
+// the block's draw come through ConfigWriterSettings, so a test steers all three. Every leg, no connect type. Safe for
+// concurrent use; one publish runs at a time.
 
 package sidecar
 
@@ -160,7 +161,7 @@ type ConfigWriterSettings struct {
 	PublishTimeout time.Duration
 	// The fold delay's randomness, a fraction in [0, 1). Nil is crypto/rand.
 	Random func() float64
-	// The first bridge block's draw (ConfigWriterArgs.FirstBridgeBlock). Nil is crypto/rand's reader.
+	// The first bridge block's draw (ConfigWriterArgs.BridgeBlock). Nil is crypto/rand's reader.
 	BridgeBlockRandom io.Reader
 	// The clock; nil is real time.
 	Clock Clock
@@ -187,10 +188,12 @@ func DefaultConfigWriterSettings() *ConfigWriterSettings {
 // below the one asked. BridgeBodyJudge.Fold is one.
 type ConfigBridgeFold func(previous *ConfigHead, state *ConfigState, foldedThrough uint64, entryTimeMs func(n uint64) (int64, bool)) (*BridgeLedgerFold, error)
 
-// The network's first bridge block on a head a writer's plan is about to save (§17.4's first block row): head with a
-// bridge/block sign signed, drawn with random, where head holds none and readers at state take sign's block, and head
-// itself otherwise. WithFirstBridgeBlock is one.
-type ConfigFirstBridgeBlock func(state *ConfigState, head *ConfigHead, sign ConfigSignFunction, random io.Reader) (*ConfigHead, error)
+// The network's bridge block on a head a writer's plan is about to save (§17.4's first block row; QD-1205): head with
+// the network's first block drawn with random where it holds none, or with the block inForce carries signed again
+// where that block's signer no longer stands, each signed by sign and only where readers at state take sign's block;
+// head itself otherwise. inForce is the head the newest base names when the plan stands on it, nil while a newer head
+// waits for its base. WithBridgeBlock is one.
+type ConfigBridgeBlock func(state *ConfigState, inForce *ConfigHead, head *ConfigHead, sign ConfigSignFunction, random io.Reader) (*ConfigHead, error)
 
 // What a ConfigWriter runs on.
 type ConfigWriterArgs struct {
@@ -205,10 +208,10 @@ type ConfigWriterArgs struct {
 	// The bridge ledger's fold. Nil folds no bridge statement: a fold stops below the first one, or keeps the previous
 	// fold where §7.9's fold rule does not allow that, so no head this writer saves misses its ledger.
 	BridgeFold ConfigBridgeFold
-	// The first bridge block a head that holds none gets from this writer's next head, which the follower's writers
-	// take (WithFirstBridgeBlock). Nil adds none: no writer runs on the ios_extension legs, which link no block draw, and
-	// a network's block then waits for a writer that has one.
-	FirstBridgeBlock ConfigFirstBridgeBlock
+	// The bridge block this writer's next head draws where a head holds none, or signs again where its signer no longer
+	// stands, which the follower's writers take (WithBridgeBlock). Nil does neither: no writer runs on the ios_extension
+	// legs, which link no block draw, and a network's block then waits for a writer that has one.
+	BridgeBlock ConfigBridgeBlock
 }
 
 // One device's config writer.
@@ -448,16 +451,22 @@ func (self *ConfigWriter) plan(ctx context.Context, previous *configWriterPlan, 
 		return nil, err
 	}
 
-	// the head: the current one with the edit, the network's first bridge block where it holds none, the bridge ledger
-	// and the fold, saved when any changes it
+	// the head: the current one with the edit, the network's bridge block where it holds none or its signer no longer
+	// stands, the bridge ledger and the fold, saved when any changes it
 	next := head
 	if edit != nil {
 		if next, err = edit(next); err != nil {
 			return nil, err
 		}
 	}
-	if self.args.FirstBridgeBlock != nil {
-		if next, err = self.args.FirstBridgeBlock(state, next, self.args.Sign, self.settings.BridgeBlockRandom); err != nil {
+	if self.args.BridgeBlock != nil {
+		// the head read is the one the newest base names, whose records every reader judged there, unless a newer one
+		// waits for its base
+		var inForce *ConfigHead
+		if version == base.GetConfigVersion() {
+			inForce = head
+		}
+		if next, err = self.args.BridgeBlock(state, inForce, next, self.args.Sign, self.settings.BridgeBlockRandom); err != nil {
 			return nil, err
 		}
 	}

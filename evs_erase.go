@@ -9,7 +9,9 @@
 //	          path epoch 1 for life) through POST .../slots/delete: the erased list of (slot id, key index) in its
 //	          payload, which erased_sha256 binds, and no change: it creates nothing on the erasure ref. evs commits
 //	          it, then rewrites each named slot without its keys before its 200; NOTHING_TO_ERASE, once recorded,
-//	          means every named key is gone already, and counts done
+//	          means every named key is gone already, and counts done. An erasure's first build reads the erasure
+//	          ref's head through evs's head cache, held to this device's own pushes (evs_read.go's own pushes row):
+//	          each ERASE it commits is noted, so the next one is based on it
 //	note      the erasure's note rides the push's sealed metadata, EvsSealedMetadata.erasure_note, sealed under the
 //	          eraser's generation with the rest of it (QD-682; question evs1-m2-30-erasure-note-format; EVS-FORMAT.md's
 //	          erasure notes): erasure id 16 B | complete u8, 1 when this ERASE ends the erasure | the caller's note
@@ -170,6 +172,8 @@ func (self *EvsRepo) Erase(ctx context.Context, args *EvsEraseArgs) (*EvsEraseRe
 		reply, err := self.postErase(ctx, attempt)
 		switch {
 		case err == nil:
+			// the next ERASE's first build, through evs's head cache, is held to it (the file header's erase row)
+			self.client.epochs.noteCommitted(self.repoId, EvsErasureRefId(self.repoId), reply.GetVersion())
 			return &EvsEraseResult{PushId: pushId, Version: reply.GetVersion()}, nil
 		case IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_NOTHING_TO_ERASE):
 			return &EvsEraseResult{PushId: pushId}, nil
