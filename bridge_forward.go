@@ -120,6 +120,9 @@ type ForwarderSettings struct {
 	FollowRetryInterval time.Duration
 	// The longest one read of gkm, of a head or of a binding runs inside a compile: 30 s.
 	FetchTimeout time.Duration
+	// The most GroupForms of the config repo a compile reads to follow a re-form of its group: 1000, evs's
+	// GroupFormMaxCount. A list past it is not followed, and generations stay listed in the group held.
+	ConfigFormMaxCount int
 	// How long a client id stays among a subject's after it stopped being current, the most kept a subject, and the
 	// most bindings fetched after one compile: 7 days (QD-161), 16 and 64.
 	BindingRetainTimeout time.Duration
@@ -156,6 +159,7 @@ func DefaultForwarderSettings(hostClass ForwarderHostClass) *ForwarderSettings {
 		FollowTimeout:                    60 * time.Second,
 		FollowRetryInterval:              10 * time.Second,
 		FetchTimeout:                     30 * time.Second,
+		ConfigFormMaxCount:               1000,
 		BindingRetainTimeout:             7 * 24 * time.Hour,
 		BindingMaxCount:                  16,
 		BindingFetchMaxCount:             64,
@@ -183,8 +187,8 @@ func (self *ForwarderSettings) Validate() error {
 		return fmt.Errorf("%w: a forwarder's compile estimate", errInvalidSettings)
 	case self.CompileHeapCeilingByteCount < 0:
 		return fmt.Errorf("%w: a forwarder's heap ceiling is negative", errInvalidSettings)
-	case self.CompileApplyRunCount <= 0 || self.FollowPageMaxCount <= 0 || self.HeadCacheCount <= 0:
-		return fmt.Errorf("%w: a forwarder's run, page or cache count", errInvalidSettings)
+	case self.CompileApplyRunCount <= 0 || self.FollowPageMaxCount <= 0 || self.HeadCacheCount <= 0 || self.ConfigFormMaxCount <= 0:
+		return fmt.Errorf("%w: a forwarder's run, page, cache or form count", errInvalidSettings)
 	case self.FollowInterval <= 0 || self.KeyWaitAlarmInterval <= 0 || self.CompileDeferredAlarmTimeout <= 0:
 		return fmt.Errorf("%w: a forwarder's follow or alarm interval", errInvalidSettings)
 	case self.FollowTimeout <= 0 || self.FollowRetryInterval <= 0 || self.FetchTimeout <= 0:
@@ -377,6 +381,9 @@ type ForwarderGkm interface {
 	Generations(ctx context.Context, repoId Id, groupId Id, since uint64) (*protocol.GkmGenerationsReply, error)
 	// A recipient's deliveries of one generation.
 	Wraps(ctx context.Context, repoId Id, groupId Id, generation uint64, query *GkmWrapsQuery) (*protocol.GkmWrapsReply, error)
+	// The repo's Signed GroupForms, oldest first (QD-156), which a re-form of the config's group is followed by
+	// (bridge_forward_keys.go).
+	Forms(ctx context.Context, repoId Id) (*protocol.GkmFormsReply, error)
 }
 
 // What a Forwarder is built over.
@@ -387,7 +394,8 @@ type ForwarderArgs struct {
 	// The anchor a hand-off carried (4.2.6's C7): the sink is set pending with it while it is legacy, and a genesis
 	// api serves must hash to its genesis_sha256. Required.
 	Pending *bridge.Pending
-	// The config repo and its group at gkm, from the hand-off.
+	// The config repo and the group at gkm the hand-off named, which the repo's GroupForms lead on from past a re-form
+	// (bridge_forward_keys.go).
 	ConfigRepoId  Id
 	ConfigGroupId Id
 	// GET /network/config/projection with the forwarding client's token. Required.
