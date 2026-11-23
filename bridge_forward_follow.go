@@ -15,6 +15,8 @@
 //	rows/<rows_sha256 hex>        a base's ProjectionRows, verbatim; the newest compiled base's and any newer kept
 //	head/<v, 20 digits>-<sha hex> a verified config head's files, the newest HeadCacheCount kept
 //	gen/<g, 20 digits>            RK_g with its Signed GenRotate (bridge_forward_keys.go)
+//	groups                        the config repo's groups a re-form led the Forwarder through, 16 bytes each, the
+//	                              last the one it lists generations in; absent before one (bridge_forward_keys.go)
 //	compiled                      the newest compile the sink took (bridge_forward_compile.go)
 //	bindings.json                 the binding cache (bridge_compile_local.go)
 //
