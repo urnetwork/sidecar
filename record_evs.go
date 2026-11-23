@@ -1355,6 +1355,8 @@ func (self *RecordEvsStreams) Erase(ctx context.Context, repoId Id, erase *Recor
 	if err != nil {
 		return nil, recordEvsRefusal(err)
 	}
+	// this device's push on the erasure ref, which its reads of the ref are held to (evs_read.go's own pushes row)
+	self.client.epochs.noteCommitted(repoId, journal.RefId, reply.GetVersion())
 	self.notify(repoId)
 	return &RecordStreamCommit{Version: reply.GetVersion(), TimeMillis: journal.TimeMs}, nil
 }

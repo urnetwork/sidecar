@@ -15,7 +15,10 @@
 //	         consumer's generation pin from EnsureWritable, and consumed_through the caller's, the highest version at
 //	         or below which its read left nothing unconsumed (EvsHead.consumed_through, never falling). A deposit
 //	         already gone answers PATH_CONFLICT, which an ingester takes as consumed. One deposit's entries share a
-//	         slot, so an ingester consumes a deposit's entries together
+//	         slot, so an ingester consumes a deposit's entries together. The first plan reads through evs's head
+//	         cache, held to this device's own pushes (evs_read.go's own pushes row): each CONSUME it commits is noted,
+//	         so a CONSUME right after another reads the entries the first removed as gone and leaves them out, where
+//	         its push would have been refused PATH_CONFLICT and rebuilt
 //
 // A CONSUME whose answer was lost goes again under its push id, which evs answers with the commit it made. Its
 // statement and payload are journaled in the sealed store before it is sent, so one cut short by a crash goes again
@@ -298,9 +301,13 @@ func (self *EvsRepo) resumeConsume(ctx context.Context, refId Id) error {
 	if err != nil {
 		return fmt.Errorf("%w: a CONSUME journal's push id", ErrSidecarStoreFailed)
 	}
-	_, err = self.postPushAs(ctx, pushId, &protocol.EvsPushRequest{Statement: journal.Statement, Payload: journal.Payload}, evsScopeWrite)
+	reply, err := self.postPushAs(ctx, pushId, &protocol.EvsPushRequest{Statement: journal.Statement, Payload: journal.Payload}, evsScopeWrite)
 	if !evsAnswered(err) {
 		return err
+	}
+	if err == nil {
+		// this device's push, which its reads of the ref are held to (evs_read.go's own pushes row)
+		self.client.epochs.noteCommitted(self.repoId, refId, reply.GetVersion())
 	}
 	return self.client.args.Store.Remove(name)
 }
@@ -464,6 +471,8 @@ func (self *EvsRepo) Consume(ctx context.Context, args *EvsConsumeArgs) (*EvsCon
 		}
 		switch {
 		case err == nil:
+			// the next CONSUME's first plan, through evs's head cache, is held to it (the file header's consume row)
+			self.client.epochs.noteCommitted(self.repoId, refId, reply.GetVersion())
 			return &EvsConsumeResult{PushId: pushId, Version: reply.GetVersion()}, nil
 		case rebuild < self.client.settings.PushRebuildCount && (evsNeedsRebuild(err) || evsCreationConflict(err)):
 			// a deposit consumed meanwhile, or what a rebuild answers: read again and consume what stands
