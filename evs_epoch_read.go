@@ -410,8 +410,9 @@ type evsListedDirectory struct {
 	rows        map[string]*evsListedRow
 }
 
-// The client's path-epoch state beside its ref epochs: the listing cache, and the overdue alarm's and the mapper's
-// bookkeeping (evs_epoch.go). Under its own lock, never held across I/O.
+// The client's path-epoch state beside its ref epochs: the listing cache, the overdue alarm's and the mapper's
+// bookkeeping (evs_epoch.go), and what this device's own pushes hold its reads to (evs_read.go's own pushes row).
+// Under its own lock, never held across I/O.
 type evsClientEpochs struct {
 	stateLock sync.Mutex
 	// (repo, ref, directory) to its newest cached listings by head version, oldest first in order
