@@ -32,7 +32,13 @@ type evsTestRetainedWorld struct {
 
 func newEvsTestRetainedWorld(t *testing.T) *evsTestRetainedWorld {
 	t.Helper()
-	net := newTestConfigNet(t)
+	return newEvsTestRetainedWorldOn(t, newTestConfigNet(t))
+}
+
+// newEvsTestRetainedWorld's world on net, whose log its readers judge against: a ConfigClient's world's, say, which
+// follows net through api's projection (evs_read_pin_ahead_test.go).
+func newEvsTestRetainedWorldOn(t *testing.T, net *testConfigNet) *evsTestRetainedWorld {
+	t.Helper()
 	writer := net.admitMemberDevice("evs writer")
 	repoId := net.createRepo("evs unretained")
 	world := newEvsTestWorld(t)
@@ -280,8 +286,9 @@ func TestEvsForgedStatementPinnedBeforeTwoBasesRefused(t *testing.T) {
 }
 
 // A statement pinned off the reader's chain before what it retains, where the reader still holds a base's chain value
-// there, is refused as a fork whatever its signature; one pinned ahead of the reader's state waits, with no alarm; one
-// pinned before the window where the reader holds no chain value is taken on its signature, which must verify.
+// there, is refused as a fork whatever its signature; one pinned ahead of the reader's state, which has no log to wait
+// on (EvsClientArgs.ConfigWait, QD-1202), is withheld with no alarm; one pinned before the window where the reader holds
+// no chain value is taken on its signature, which must verify.
 func TestEvsStatementPinOffTheChainOrAheadStillRefused(t *testing.T) {
 	retained := newEvsTestRetainedWorld(t)
 	written := retained.net.log.Pin()
@@ -307,13 +314,13 @@ func TestEvsStatementPinOffTheChainOrAheadStillRefused(t *testing.T) {
 
 	offChain := proto.Clone(firstBase).(*bridge.AuthPin)
 	offChain.Chain[0] ^= 0xff
-	_, err := verifier.VerifyStatement(statementAt("off the chain", offChain, genuine), retained.repoId, retained.world.refId)
+	_, err := verifier.VerifyStatement(t.Context(), statementAt("off the chain", offChain, genuine), retained.repoId, retained.world.refId)
 	if !errors.Is(err, ErrEvsStatementRefused) || !errors.Is(err, ErrGkmAuthOffChain) {
 		t.Errorf("a pin off the chain before the window: %v", err)
 	}
 
 	ahead := &bridge.AuthPin{Version: state.Pin().GetVersion() + 1, Chain: make([]byte, sha256.Size)}
-	_, err = verifier.VerifyStatement(statementAt("ahead", ahead, genuine), retained.repoId, retained.world.refId)
+	_, err = verifier.VerifyStatement(t.Context(), statementAt("ahead", ahead, genuine), retained.repoId, retained.world.refId)
 	if !errors.Is(err, ErrGkmAuthAhead) {
 		t.Errorf("a pin ahead of the state: %v", err)
 	}
@@ -323,11 +330,11 @@ func TestEvsStatementPinOffTheChainOrAheadStillRefused(t *testing.T) {
 	if _, err := state.StateAt(unknown); !errors.Is(err, ErrConfigPinNotRetained) {
 		t.Fatalf("the reader judges position %d: %v", unknown.GetVersion(), err)
 	}
-	if _, err := verifier.VerifyStatement(statementAt("unknown", unknown, genuine), retained.repoId, retained.world.refId); err != nil {
+	if _, err := verifier.VerifyStatement(t.Context(), statementAt("unknown", unknown, genuine), retained.repoId, retained.world.refId); err != nil {
 		t.Errorf("a genuine statement at a pin the reader cannot place: %v", err)
 	}
 	forged := &evsTestSigner{sidecarId: retained.writer.sidecarId, privateKey: newEvsTestSigner("forger").privateKey}
-	if _, err := verifier.VerifyStatement(statementAt("forged", unknown, forged), retained.repoId, retained.world.refId); !errors.Is(err, ErrEvsStatementRefused) {
+	if _, err := verifier.VerifyStatement(t.Context(), statementAt("forged", unknown, forged), retained.repoId, retained.world.refId); !errors.Is(err, ErrEvsStatementRefused) {
 		t.Errorf("a forged statement at a pin the reader cannot place: %v", err)
 	}
 }

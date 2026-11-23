@@ -66,6 +66,12 @@ type EvsFileStatementFunction func(ctx context.Context, signedType bridge.Signed
 // The newest verified config state, which statements are judged at (§7.9, §8.12), or nil before one verifies.
 type EvsConfigFunction func() GkmAuthView
 
+// Waits until the authorization log whose state an EvsConfigFunction gives has applied position n, or ctx ends
+// (ConfigClient.WaitForPin): what a reader asks of a statement pinned above the newest state it holds, so it judges
+// the statement at its own pin once its log is there (QD-1202). n is a pin evs served, not yet verified, so it is no
+// proof api serves n. An error, or an answer while the state still lies below n, leaves the statement withheld.
+type EvsConfigWaitFunction func(ctx context.Context, n uint64) error
+
 // What an EvsClient runs on.
 type EvsClientArgs struct {
 	NetworkId Id
@@ -88,6 +94,11 @@ type EvsClientArgs struct {
 	Store SidecarStore
 	// Nil: no state verifies, so every read refuses.
 	Config EvsConfigFunction
+	// Waits for Config's log to reach a statement's pin above the state Config gives, within
+	// EvsSettings.AuthPinWaitTimeout and the read's ctx, after which the statement is judged at its own pin (QD-1202).
+	// Nil, on a leg or for a client whose Config no follower moves, withholds such a statement at once,
+	// ErrConfigPinAhead.
+	ConfigWait EvsConfigWaitFunction
 	// Nil until CORE-M2-02: every create, delete and restore refuses.
 	FileStatement EvsFileStatementFunction
 	// This device's epoch pin for a §10 group it is a leaf of (KEYS-M2-23's HeadCheckGroupSource.GroupHead), which a

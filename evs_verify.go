@@ -16,6 +16,15 @@
 // reader's, stands only on a walk whose chain reaches the head the reader verifies and pins. I-16 is unchanged: no pin
 // falls, and the walk's authorization pins only rise (evsCheckWalkRules).
 //
+// A pin above the newest state the reader holds waits (QD-1202, as §10.9's judged row has it for gkm: one above my tip
+// waits until I reach it, one I cannot reach being withheld): the device's log is behind a faster writer's, so the
+// reader asks its log to reach the pin (EvsClientArgs.ConfigWait, ConfigClient.WaitForPin), within
+// EvsSettings.AuthPinWaitTimeout and the read's ctx, then judges the statement at its own pin in the state it reached.
+// Past the bound the statement is withheld, ErrConfigPinAhead under ErrEvsStatementRefused, which alarms nothing: a
+// pin no state of the log reaches still refuses, and nothing is judged at a state it was not signed under. The config
+// follower's own reads of the config repo (evs_config_head.go) never wait, since they run on the follow the wait
+// would wait on (withholdingAhead).
+//
 // A head below the pin is refused and raises head_alarm's fork with both RefHeads as evidence, unless a verified
 // EvsReseed covers it (§11.13, §19.10), which lowers the pin and is kept as a loss. A head at the pin's version with
 // another chain is the same fork. The pin a head is judged against is the one its read asked at (EvsHeadRead.ask):
@@ -128,7 +137,7 @@ type evsFormat2Reader interface {
 	// A path's reply in a drop's state, drop_pending or dropped: DESIGN-DETAILS 10.2.3's H0 to H7 and its verdict
 	// (evs_drop_verify.go), the path verified as VerifyPath verifies a version asked for by number, with the drop's
 	// state on it where the drop stands; errEvsDropBodyMissing where the reply left out a body this device lacks.
-	verifyDropPath(verifier *EvsVerifier, head *EvsVerifiedHead, epochs *EvsPathEpochs, reply *protocol.EvsReadPathReply) (*EvsVerifiedPath, error)
+	verifyDropPath(ctx context.Context, verifier *EvsVerifier, head *EvsVerifiedHead, epochs *EvsPathEpochs, reply *protocol.EvsReadPathReply) (*EvsVerifiedPath, error)
 	// The ref versions of the DROP bodies this device keeps for a ref, which a read names in held_drops.
 	heldDrops(client *EvsClient, repoId Id, refId Id) []uint64
 }
@@ -148,11 +157,21 @@ func (self *EvsClient) format2Reader() evsFormat2Reader {
 // The verifying reader of one EvsClient.
 type EvsVerifier struct {
 	client *EvsClient
+	// a statement pinned above the reader's state is withheld at once, never waited for (withholdingAhead)
+	withholdAhead bool
 }
 
 // The verifier of client's reads.
 func newEvsVerifier(client *EvsClient) *EvsVerifier {
 	return &EvsVerifier{client: client}
+}
+
+// This verifier, withholding at once a statement pinned above the reader's state rather than waiting for its log to
+// reach the pin: for the config follower's own reads of the config repo, a base's head (evs_config_head.go), which run
+// on the follow, under its followLock, that the wait would wait on. A base's head holds no push pinned at or past the
+// base, whose chain value covers that head, so its reader loses nothing by not waiting.
+func (self *EvsVerifier) withholdingAhead() *EvsVerifier {
+	return &EvsVerifier{client: self.client, withholdAhead: true}
 }
 
 // One statement as the walk verified it: its parse, its version and C at that version.
@@ -293,9 +312,13 @@ func evsRepoAdmin(state GkmAuthView, repo *protocol.AclRepo, sidecarId Id) bool 
 // retained rows that admit its signer give it (evsUnjudgedSignerKey), and refused where none admits the signer at its
 // pin. Where it sits is the caller's, as for any statement: one at or below the ref's pin is what this device verified
 // when it was new, the walk holding it to the pin's chain where it walks it, and one above the pin stands only on a
-// walk whose chain reaches the head the reader verifies and pins. Only a pin off the chain, one ahead of the state,
-// and a signature that does not verify refuse.
-func (self *EvsVerifier) VerifyStatement(statementBytes []byte, repoId Id, refId Id) (*EvsStatement, error) {
+// walk whose chain reaches the head the reader verifies and pins. Only a pin off the chain, one ahead of every state
+// the reader's log reaches in time, and a signature that does not verify refuse.
+//
+// An auth pin above the newest state waits for the reader's log to reach it, within EvsSettings.AuthPinWaitTimeout
+// and ctx (QD-1202; awaitPin), and the statement is then judged at its own pin in the state reached; one still above
+// it answers ErrConfigPinAhead as before. A verifier that withholds ahead (withholdingAhead) never waits.
+func (self *EvsVerifier) VerifyStatement(ctx context.Context, statementBytes []byte, repoId Id, refId Id) (*EvsStatement, error) {
 	statement, err := ParseEvsStatement(statementBytes)
 	var unsupported error
 	if errors.Is(err, ErrEvsFormatUnsupported) {
@@ -316,8 +339,15 @@ func (self *EvsVerifier) VerifyStatement(statementBytes []byte, repoId Id, refId
 		return nil, err
 	}
 	state, err := newest.At(push.GetAuth())
+	if errors.Is(err, ErrGkmAuthAhead) {
+		// this device's log is behind the signer's: the statement is judged at its own pin once the log reaches it,
+		// and withheld as before where it does not in time
+		newest = self.awaitPin(ctx, newest, push.GetAuth().GetVersion())
+		state, err = newest.At(push.GetAuth())
+	}
 	switch {
 	case errors.Is(err, ErrGkmAuthNotRetained):
+		// two bases may have passed the pin while the log caught up: unjudged, as for any pin before the window
 		return self.takeUnjudged(newest, statement, unsupported)
 	case err != nil:
 		return nil, fmt.Errorf("%w: its authorization pin: %w", ErrEvsStatementRefused, err)
@@ -348,6 +378,31 @@ func (self *EvsVerifier) VerifyStatement(statementBytes []byte, repoId Id, refId
 		return nil, err
 	}
 	return statement, nil
+}
+
+// The newest state once the reader's log has reached position n, a statement's pin above newest (QD-1202): asked of
+// EvsClientArgs.ConfigWait within EvsSettings.AuthPinWaitTimeout on the client's clock, and within ctx, then read
+// again, for the caller to judge the statement in. Where this verifier withholds ahead, no wait is wired or the bound is
+// not positive it waits for nothing; a wait that fails, times out or ends with ctx leaves whatever state then stands,
+// whose At answers ErrConfigPinAhead as before. It holds no lock while it waits.
+func (self *EvsVerifier) awaitPin(ctx context.Context, newest GkmAuthView, n uint64) GkmAuthView {
+	wait := self.client.args.ConfigWait
+	timeout := self.client.settings.AuthPinWaitTimeout
+	if self.withholdAhead || wait == nil || timeout <= 0 {
+		return newest
+	}
+	waitCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stop := self.client.clock.AfterFunc(timeout, cancel)
+	defer stop()
+	if err := wait(waitCtx, n); err != nil && self.client.log.V(1).Enabled() {
+		self.client.log.Infof("[evs]the wait for the config log to reach a statement's pin %d: %v", n, err)
+	}
+	state, err := self.config()
+	if err != nil {
+		return newest
+	}
+	return state
 }
 
 // A statement whose auth pin newest no longer retains, taken unjudged (QD-1178; VerifyStatement's header): its
@@ -604,14 +659,14 @@ func (self *EvsVerifier) VerifyHead(ctx context.Context, read *EvsHeadRead) (*Ev
 			return nil, err
 		}
 		if gap {
-			return self.judgeHead(self.gapHead(verified, read))
+			return self.judgeHead(self.gapHead(ctx, verified, read))
 		}
 		statements = paged
 	}
 	if byteCount > self.client.settings.CatchUpByteCount {
-		return self.judgeHead(self.gapHead(verified, read))
+		return self.judgeHead(self.gapHead(ctx, verified, read))
 	}
-	walked, err := self.walk(read.RepoId, read.RefId, read.FromVersion, read.FromChain, statements, head.GetVersion())
+	walked, err := self.walk(ctx, read.RepoId, read.RefId, read.FromVersion, read.FromChain, statements, head.GetVersion())
 	if err != nil {
 		return nil, err
 	}
@@ -665,7 +720,7 @@ func (self *EvsVerifier) alarmHeadAgainst(verified *EvsVerifiedHead, mine *EvsPi
 // chain to the head is not checked, since C before the first of them is not known here. One pinned before what the
 // reader retains is checked on its signature alone (QD-1178), as evs's word the gap already is: a reply carrying none
 // of them would be taken as the head alone.
-func (self *EvsVerifier) gapHead(verified *EvsVerifiedHead, read *EvsHeadRead) (*EvsVerifiedHead, error) {
+func (self *EvsVerifier) gapHead(ctx context.Context, verified *EvsVerifiedHead, read *EvsHeadRead) (*EvsVerifiedHead, error) {
 	verified.Gap = true
 	verified.Statements = nil
 	verified.FromVersion = verified.Version
@@ -685,7 +740,7 @@ func (self *EvsVerifier) gapHead(verified *EvsVerifiedHead, read *EvsHeadRead) (
 		if statement.GetVersion() != first+uint64(i) {
 			return nil, fmt.Errorf("%w: the window's statements skip a version", ErrEvsChainBroken)
 		}
-		parsed, err := self.VerifyStatement(statement.GetStatement(), read.RepoId, read.RefId)
+		parsed, err := self.VerifyStatement(ctx, statement.GetStatement(), read.RepoId, read.RefId)
 		if err != nil {
 			return nil, err
 		}
@@ -709,7 +764,7 @@ func (self *EvsVerifier) Walk(ctx context.Context, repoId Id, refId Id, fromVers
 	if err != nil {
 		return nil, err
 	}
-	return self.walk(repoId, refId, fromVersion, fromChain, statements, throughVersion)
+	return self.walk(ctx, repoId, refId, fromVersion, fromChain, statements, throughVersion)
 }
 
 // The whole log of a verified head. Its signed statements must reach that head's chain.
@@ -729,8 +784,9 @@ func (self *EvsVerifier) walkToHead(ctx context.Context, head *EvsVerifiedHead) 
 	return walked, nil
 }
 
-// The statements from fromVersion + 1 to throughVersion, each verified, chained from fromChain, in order.
-func (self *EvsVerifier) walk(repoId Id, refId Id, fromVersion uint64, fromChain [sha256.Size]byte, statements []*protocol.EvsReadStatement, throughVersion uint64) ([]*EvsVerifiedStatement, error) {
+// The statements from fromVersion + 1 to throughVersion, each verified, chained from fromChain, in order: one pinned
+// above the reader's state waiting, within the bound and ctx, for the log to reach its pin (VerifyStatement).
+func (self *EvsVerifier) walk(ctx context.Context, repoId Id, refId Id, fromVersion uint64, fromChain [sha256.Size]byte, statements []*protocol.EvsReadStatement, throughVersion uint64) ([]*EvsVerifiedStatement, error) {
 	walked := []*EvsVerifiedStatement{}
 	chain := fromChain
 	expected := fromVersion + 1
@@ -742,11 +798,12 @@ func (self *EvsVerifier) walk(repoId Id, refId Id, fromVersion uint64, fromChain
 		if read.GetVersion() != expected || throughVersion < read.GetVersion() {
 			return nil, fmt.Errorf("%w: a statement at version %d where %d was due", ErrEvsChainBroken, read.GetVersion(), expected)
 		}
-		statement, err := self.VerifyStatement(read.GetStatement(), repoId, refId)
+		statement, err := self.VerifyStatement(ctx, read.GetStatement(), repoId, refId)
 		if err != nil {
-			// a format-2 construct, no config, and a pin this device's state is behind prove nothing against the
-			// signer: only a failed signature, shape or rule alarms, a signer no retained row admits at a pin before the
-			// window among them; such a pin is otherwise taken unjudged (QD-1178) and refuses nothing here
+			// a format-2 construct, no config, and a pin this device's state is still behind once the wait ends prove
+			// nothing against the signer: only a failed signature, shape or rule alarms, a signer no retained row admits
+			// at a pin before the window among them; such a pin is otherwise taken unjudged (QD-1178) and refuses
+			// nothing here
 			quiet := errors.Is(err, ErrEvsFormatUnsupported) || errors.Is(err, ErrEvsNoConfig) ||
 				errors.Is(err, ErrGkmAuthAhead) || errors.Is(err, ErrGkmAuthNotRetained)
 			if !quiet {

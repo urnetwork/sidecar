@@ -62,6 +62,7 @@ package sidecar
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -172,12 +173,12 @@ type EvsPathEpochs struct {
 // path's floor; each walked statement after it under tp(X, e(w)), a rooted one by the absence proofs evs sent for
 // that epoch. A rooted statement of an epoch the request did not name, with no proof, adds that epoch to the epochs
 // answered, which the reader asks once more naming; of one it named, it refuses.
-func (self *EvsVerifier) VerifyPath(head *EvsVerifiedHead, epochs *EvsPathEpochs, reply *protocol.EvsReadPathReply) (*EvsVerifiedPath, []uint64, error) {
+func (self *EvsVerifier) VerifyPath(ctx context.Context, head *EvsVerifiedHead, epochs *EvsPathEpochs, reply *protocol.EvsReadPathReply) (*EvsVerifiedPath, []uint64, error) {
 	dropState := reply.GetState() == protocol.EvsReadPathState_EVS_READ_PATH_DROP_PENDING ||
 		reply.GetState() == protocol.EvsReadPathState_EVS_READ_PATH_DROPPED
 	if reader := self.client.format2Reader(); dropState && reader != nil {
 		// a version a DROP lists, judged by the drop's own checks (evs_drop_verify.go; EVS2-M10-22)
-		verified, err := reader.verifyDropPath(self, head, epochs, reply)
+		verified, err := reader.verifyDropPath(ctx, self, head, epochs, reply)
 		return verified, nil, err
 	}
 	collected := reply.GetState() == protocol.EvsReadPathState_EVS_READ_PATH_COLLECTED && self.client.format2Reader() != nil
@@ -225,11 +226,11 @@ func (self *EvsVerifier) VerifyPath(head *EvsVerifiedHead, epochs *EvsPathEpochs
 		if reply.GetVersion() != nil {
 			return nil, nil, fmt.Errorf("%w: a removal beside a version", ErrEvsEntryRefused)
 		}
-		if err := self.verifyRemoval(head, epochs, reply, verified); err != nil {
+		if err := self.verifyRemoval(ctx, head, epochs, reply, verified); err != nil {
 			return nil, nil, err
 		}
 	case reply.GetVersion() != nil:
-		if err := self.verifyVersion(head, epochs, reply.GetVersion(), reply.GetStatement(), reply.GetProof(), verified); err != nil {
+		if err := self.verifyVersion(ctx, head, epochs, reply.GetVersion(), reply.GetStatement(), reply.GetProof(), verified); err != nil {
 			if errors.Is(err, ErrEvsVersionIgnored) {
 				// format 2's ignored rows: the version alarmed, and its path reads as holding none
 				return &EvsVerifiedPath{TokenPath: tokenPath, Absent: true, Ignored: true}, nil, nil
@@ -243,14 +244,14 @@ func (self *EvsVerifier) VerifyPath(head *EvsVerifiedHead, epochs *EvsPathEpochs
 			return nil, nil, fmt.Errorf("%w: collected answered for a version whose content is kept", ErrEvsObjectMissing)
 		}
 		if verified.Entry.GetKind() == uint32(protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY) {
-			if err := self.verifyDeltas(head, epochs, reply, verified); err != nil {
+			if err := self.verifyDeltas(ctx, head, epochs, reply, verified); err != nil {
 				return nil, nil, err
 			}
 		}
 	case len(reply.GetStatement()) != 0 && len(reply.GetNames().GetNames()) == 0 && len(reply.GetDeltas()) == 0 &&
 		len(reply.GetDeltaProofs()) == 0 && len(reply.GetProof()) == 0:
 		// the statement alone, of a version or removal evs could not place: its epoch is the reader's to name
-		statement, err := self.VerifyStatement(reply.GetStatement(), head.RepoId, head.RefId)
+		statement, err := self.VerifyStatement(ctx, reply.GetStatement(), head.RepoId, head.RefId)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -277,7 +278,7 @@ func (self *EvsVerifier) VerifyPath(head *EvsVerifiedHead, epochs *EvsPathEpochs
 
 // The statement committed at version: from the walk when it holds it, which then must name pushId, else the
 // statement evs sent beside the reply, verified on its own.
-func (self *EvsVerifier) statementAt(head *EvsVerifiedHead, version uint64, pushId []byte, sent []byte) (*EvsStatement, error) {
+func (self *EvsVerifier) statementAt(ctx context.Context, head *EvsVerifiedHead, version uint64, pushId []byte, sent []byte) (*EvsStatement, error) {
 	if head.Version < version || version == 0 {
 		return nil, fmt.Errorf("%w: a version past the head", ErrEvsEntryRefused)
 	}
@@ -290,7 +291,7 @@ func (self *EvsVerifier) statementAt(head *EvsVerifiedHead, version uint64, push
 	if len(sent) == 0 {
 		return nil, fmt.Errorf("%w: no statement for a version below the walk", ErrEvsEntryRefused)
 	}
-	statement, err := self.VerifyStatement(sent, head.RepoId, head.RefId)
+	statement, err := self.VerifyStatement(ctx, sent, head.RepoId, head.RefId)
 	if err != nil {
 		return nil, err
 	}
@@ -340,11 +341,11 @@ func evsTokenPathOfStatement(epochs *EvsPathEpochs, statement *EvsStatement) (Ev
 // Checks a version: its statement, its entry hash to that statement's change of exactly the path's token path in the
 // statement's epoch, its push and base, format 1's shape, and the refs table over the change with its entry, which a
 // creates-only stream's write on a base needs (VerifyPayloadRefRules).
-func (self *EvsVerifier) verifyVersion(head *EvsVerifiedHead, epochs *EvsPathEpochs, version *protocol.EvsIndexVersion, sent []byte, proofs []*protocol.EvsMerkleProof, verified *EvsVerifiedPath) error {
+func (self *EvsVerifier) verifyVersion(ctx context.Context, head *EvsVerifiedHead, epochs *EvsPathEpochs, version *protocol.EvsIndexVersion, sent []byte, proofs []*protocol.EvsMerkleProof, verified *EvsVerifiedPath) error {
 	if version.GetElided() || len(version.GetEntryVersion()) == 0 {
 		return fmt.Errorf("%w: an elided version", ErrEvsEntryRefused)
 	}
-	statement, err := self.statementAt(head, version.GetCommitVersion(), version.GetPushId(), sent)
+	statement, err := self.statementAt(ctx, head, version.GetCommitVersion(), version.GetPushId(), sent)
 	if err != nil {
 		return err
 	}
@@ -402,9 +403,9 @@ func (self *EvsVerifier) verifyVersion(head *EvsVerifiedHead, epochs *EvsPathEpo
 
 // Checks a removal: its statement removes the path's token path in its epoch, or a prefix holding it, at the
 // marker's versions.
-func (self *EvsVerifier) verifyRemoval(head *EvsVerifiedHead, epochs *EvsPathEpochs, reply *protocol.EvsReadPathReply, verified *EvsVerifiedPath) error {
+func (self *EvsVerifier) verifyRemoval(ctx context.Context, head *EvsVerifiedHead, epochs *EvsPathEpochs, reply *protocol.EvsReadPathReply, verified *EvsVerifiedPath) error {
 	removal := reply.GetRemoval()
-	statement, err := self.statementAt(head, removal.GetRemovalVersion(), removal.GetPushId(), reply.GetStatement())
+	statement, err := self.statementAt(ctx, head, removal.GetRemovalVersion(), removal.GetPushId(), reply.GetStatement())
 	if err != nil {
 		return err
 	}
@@ -446,7 +447,7 @@ func (self *EvsVerifier) verifyRemoval(head *EvsVerifiedHead, epochs *EvsPathEpo
 // list, one under changes_root by the delta's entry of delta_proofs, one a delta in order (QD-681). A reply carries
 // either no delta proofs, which stands only where every walked delta's list is inline, or one a delta; a rooted
 // statement's delta with no proof fails closed rather than take the delta on evs's word.
-func (self *EvsVerifier) verifyDeltas(head *EvsVerifiedHead, epochs *EvsPathEpochs, reply *protocol.EvsReadPathReply, verified *EvsVerifiedPath) error {
+func (self *EvsVerifier) verifyDeltas(ctx context.Context, head *EvsVerifiedHead, epochs *EvsPathEpochs, reply *protocol.EvsReadPathReply, verified *EvsVerifiedPath) error {
 	verified.Names = reply.GetNames()
 	verified.NamesThrough = reply.GetNamesThrough()
 	deltaProofs := reply.GetDeltaProofs()
@@ -483,7 +484,7 @@ func (self *EvsVerifier) verifyDeltas(head *EvsVerifiedHead, epochs *EvsPathEpoc
 		if i < len(deltaProofs) {
 			proofs = deltaProofs[i].GetProof()
 		}
-		if err := self.verifyVersion(head, epochs, delta, nil, proofs, deltaPath); err != nil {
+		if err := self.verifyVersion(ctx, head, epochs, delta, nil, proofs, deltaPath); err != nil {
 			return err
 		}
 		if deltaPath.Entry.GetKind() != uint32(protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY) {

@@ -432,7 +432,10 @@ func (self *EvsConfigHeadReader) readWithTurn(ctx context.Context, version uint6
 			err = self.judgeAtAnchor(anchor, refId, statements[trustedVersion-replay.version:version-replay.version], trustedVersion, trustedChain)
 		} else {
 			judged := read[trustedVersion-replay.version : version-replay.version]
-			_, err = client.verifier.walk(repo.repoId, refId, trustedVersion, trustedChain, judged, version)
+			// a pin above the state is withheld, never waited for (QD-1202): the follower reads a base's head on its own
+			// follow, and no push of that head is pinned at or past the base; CurrentConfigHeadTip verified the tip's
+			// head first, its wait reaching every pin below it
+			_, err = client.verifier.withholdingAhead().walk(ctx, repo.repoId, refId, trustedVersion, trustedChain, judged, version)
 		}
 		if err != nil {
 			// what proves nothing against a signer withholds; anything else is a push no config writer validly signed

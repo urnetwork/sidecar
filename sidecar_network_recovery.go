@@ -137,6 +137,8 @@ func (self *networkRecovery) ReadRecoveryHead(ctx context.Context, top *EvsRepoK
 	}
 	// The reader raises EVS pins during replay. Keep those private until the code's genesis signature also checks.
 	args.Store = newSearchMemoryStore()
+	// its state is the recovery's own, which no follower moves: a pin above it is withheld at once (QD-1202)
+	args.ConfigWait = nil
 	client, err := NewEvsClient(args)
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: %w", ErrConfigHeadUnavailable, err)

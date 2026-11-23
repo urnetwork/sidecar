@@ -18,10 +18,14 @@
 // a new set and perhaps one of the name's ten writes an hour. A queued row whose set has a row ordering or
 // waiting_dns waits, a renewal too, since it writes the same names; once that order has ended the row
 // goes, as a repeated set when the order issued. The budget's unit is then the set's first certificate,
-// as §13.8's Budget reads. A pass reads every row under way, a batch at a time, before it reads the
-// queue, and counts each row it admits as under way from then: the order pass admits only while it has
-// taken up fewer rows under way than OrderResumeCount (run.go), so there are few to read. Two passes at
-// once, which the order chain's one task makes rare, may still each admit a row of one set, as before.
+// as §13.8's Budget reads. Two sets that share a challenge name are held the same way (QD-1203), as the
+// network's pair alone and a set with a live alias's pair beside it are around the alias's start or
+// retirement, a device renewing its stored set until it orders anew: a queued row also waits while an
+// order under way holds one of its challenge names, its CSR's DNS names with a leading *. trimmed. A
+// pass reads every row under way, a batch at a time, before it reads the queue, and counts each row it
+// admits as under way from then: the order pass admits only while it has taken up fewer rows under way
+// than OrderResumeCount (run.go), so there are few to read. Two passes at once, which the order chain's
+// one task makes rare, may still each admit a row of one set, as before.
 
 package certsservice
 
@@ -82,13 +86,43 @@ func certsSetOrderTimes(rows []*sidecar.TlsCertRecord, now time.Time) []time.Tim
 	return times
 }
 
+// What the orders under way hold, each with one such row's id: their identifier sets, and their
+// challenge names (certsChallengeNameOf), whose _acme-challenge names their challenges write. A pass's
+// own, not safe for concurrent use.
+type certsUnderWay struct {
+	setCertIds  map[string]sidecar.Id
+	nameCertIds map[string]sidecar.Id
+}
+
+// Holds row's set, and the challenge names of names, its CSR's.
+func (self *certsUnderWay) hold(row *sidecar.TlsCertRecord, names []string) {
+	self.setCertIds[string(row.IdentifierSetSha256)] = row.CertId
+	for _, name := range names {
+		self.nameCertIds[certsChallengeNameOf(name)] = row.CertId
+	}
+}
+
+// Why row, whose CSR names names, waits on an order under way: its set's, then one sharing a challenge
+// name. Empty when none holds it.
+func (self *certsUnderWay) waitReason(row *sidecar.TlsCertRecord, names []string) CertsWaitReason {
+	if _, held := self.setCertIds[string(row.IdentifierSetSha256)]; held {
+		return CertsWaitSetUnderWay
+	}
+	for _, name := range names {
+		if _, held := self.nameCertIds[certsChallengeNameOf(name)]; held {
+			return CertsWaitNameUnderWay
+		}
+	}
+	return ""
+}
+
 // One pass from after afterCertId. A store or budget error ends the pass with what it has done, and the
 // rows it did not reach stay queued for the next; one reading the rows under way admits none.
 func (self *CertsService) Admit(ctx context.Context, afterCertId sidecar.Id) (*CertsAdmitReport, error) {
 	callCtx, cancel := self.callContext(ctx)
 	defer cancel()
 	report := &CertsAdmitReport{}
-	underWaySetCertIds, err := self.underWaySetCertIds(callCtx)
+	underWay, err := self.readUnderWay(callCtx)
 	if err != nil {
 		return report, err
 	}
@@ -100,37 +134,39 @@ func (self *CertsService) Admit(ctx context.Context, afterCertId sidecar.Id) (*C
 		report.NextCertId = rows[len(rows)-1].CertId
 	}
 	for _, row := range rows {
-		if err := self.admitRow(callCtx, row, underWaySetCertIds, report); err != nil {
+		if err := self.admitRow(callCtx, row, underWay, report); err != nil {
 			return report, err
 		}
 	}
 	return report, nil
 }
 
-// The identifier sets with a row under way at a CA (ordering, waiting_dns), each with one such row's id,
-// read whole, UnderWayBatchCount rows at a time.
-func (self *CertsService) underWaySetCertIds(ctx context.Context) (map[string]sidecar.Id, error) {
-	underWay := []sidecar.TlsCertState{sidecar.TlsCertStateOrdering, sidecar.TlsCertStateWaitingDns}
-	setCertIds := map[string]sidecar.Id{}
+// What the rows under way at a CA (ordering, waiting_dns) hold, read whole, UnderWayBatchCount rows at a
+// time.
+func (self *CertsService) readUnderWay(ctx context.Context) (*certsUnderWay, error) {
+	states := []sidecar.TlsCertState{sidecar.TlsCertStateOrdering, sidecar.TlsCertStateWaitingDns}
+	underWay := &certsUnderWay{setCertIds: map[string]sidecar.Id{}, nameCertIds: map[string]sidecar.Id{}}
 	afterCertId := sidecar.Id{}
 	for {
-		rows, err := self.store.ListInStates(ctx, underWay, afterCertId, self.settings.UnderWayBatchCount)
+		rows, err := self.store.ListInStates(ctx, states, afterCertId, self.settings.UnderWayBatchCount)
 		if err != nil {
 			return nil, err
 		}
 		for _, row := range rows {
-			setCertIds[string(row.IdentifierSetSha256)] = row.CertId
+			// admission took the row, so its CSR parsed; one that no longer does holds its set alone
+			names, _ := certsCsrNames(row.Csr)
+			underWay.hold(row, names)
 		}
 		if len(rows) < self.settings.UnderWayBatchCount {
-			return setCertIds, nil
+			return underWay, nil
 		}
 		afterCertId = rows[len(rows)-1].CertId
 	}
 }
 
-// Admits row to the first CA the policy opens, or notes why it waits. underWaySetCertIds holds the sets
-// with an order under way, and takes row's once row is admitted.
-func (self *CertsService) admitRow(ctx context.Context, row *sidecar.TlsCertRecord, underWaySetCertIds map[string]sidecar.Id, report *CertsAdmitReport) error {
+// Admits row to the first CA the policy opens, or notes why it waits. underWay holds what the orders
+// under way hold, and takes row's once row is admitted.
+func (self *CertsService) admitRow(ctx context.Context, row *sidecar.TlsCertRecord, underWay *certsUnderWay, report *CertsAdmitReport) error {
 	now := self.clock.Now()
 	names, err := certsCsrNames(row.Csr)
 	if err != nil || len(names) == 0 {
@@ -149,16 +185,16 @@ func (self *CertsService) admitRow(ctx context.Context, row *sidecar.TlsCertReco
 		return nil
 	}
 
-	// one order of a set at a time, a renewal's too (the file header): a row that waits on its set asks no
-	// CA, budget or name for anything, and its wait has no time, since only the other order's end frees it
-	setKey := string(row.IdentifierSetSha256)
-	if _, held := underWaySetCertIds[setKey]; held {
-		report.Waiting = append(report.Waiting, &CertsWait{CertId: row.CertId, Reason: CertsWaitSetUnderWay})
+	// one order of a set, or of a challenge name, at a time, a renewal's too (the file header): a row that
+	// waits on one asks no CA, budget or name for anything, and its wait has no time, since only the other
+	// order's end frees it
+	if reason := underWay.waitReason(row, names); reason != "" {
+		report.Waiting = append(report.Waiting, &CertsWait{CertId: row.CertId, Reason: reason})
 		return nil
 	}
 	admit := func(ca CertsCa, kind CertsOrderKind, replaces *sidecar.TlsCertRecord) error {
 		// held from the move's try on: a row another pass moved first is under way there
-		underWaySetCertIds[setKey] = row.CertId
+		underWay.hold(row, names)
 		return self.admitTo(ctx, row, ca, kind, replaces, report)
 	}
 
