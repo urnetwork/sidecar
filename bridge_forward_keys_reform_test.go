@@ -1,7 +1,8 @@
 // The Forwarder's generation keys past a re-form of the config's group (plan-KEYS-reform-ladder rules 7 and 8;
 // bridge_forward_keys.go's comment): the new group's ladder and claims resolve through the repo's GroupForms and open,
 // after a site loss too and two re-forms behind, a copy the forms do not carry is refused, and only a verified chain
-// from the group held moves the group the Forwarder lists in.
+// from the group held moves the group the Forwarder lists in; and what a generation that does not open raises
+// (QD-1210): config_key_waiting whether or not gkm lists it, and head_alarm (fork) for a listing off the held chain.
 
 package sidecar
 
@@ -11,8 +12,10 @@ import (
 	"crypto/sha256"
 	"net/http"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -188,17 +191,19 @@ func (self *testForwarderReformGkm) rotateIn(recipients ...testForwarderRecipien
 		self.world.t.Fatal("no re-form to rotate in: the world's group rotates by world.rotate")
 	}
 	generation := uint64(len(self.generationsOf(groupId))) + 1
-	signed := self.world.genRotateIn(groupId, self.world.net.configRepoId(), generation)
-	func() {
-		self.stateLock.Lock()
-		defer self.stateLock.Unlock()
-		group := self.groups[groupId]
-		group.generations = append(group.generations, signed)
-	}()
+	self.claimIn(groupId, self.world.genRotateIn(groupId, self.world.net.configRepoId(), generation))
 	for _, recipient := range recipients {
 		self.wrapIn(groupId, generation, recipient)
 	}
 	return generation
+}
+
+// A Signed GenRotate as a re-formed group's next generation, whatever it says.
+func (self *testForwarderReformGkm) claimIn(groupId Id, signed *bridge.Signed) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	group := self.groups[groupId]
+	group.generations = append(group.generations, signed)
 }
 
 // A DelegationWrap in groupId of a generation it holds, to one Delegation's reader key, signed by the owner's device:
@@ -263,6 +268,12 @@ func (self *testForwarderWorld) groupForm(groupId Id, previousGroupId Id, genera
 // generation's bodies under, chained to the one below as world.rotate chains them.
 func (self *testForwarderWorld) genRotateIn(groupId Id, repoId Id, generation uint64) *bridge.Signed {
 	self.t.Helper()
+	return self.genRotateOver(groupId, repoId, generation, testConfigSealKey(generation-1).repoKey)
+}
+
+// genRotateIn chained to parentRepoKey as the generation below's key, past generation 1.
+func (self *testForwarderWorld) genRotateOver(groupId Id, repoId Id, generation uint64, parentRepoKey []byte) *bridge.Signed {
+	self.t.Helper()
 	repoKey := testConfigSealKey(generation).repoKey
 	state := self.net.log.State()
 	holders := sha256.Sum256([]byte("forwarder test holders"))
@@ -272,16 +283,15 @@ func (self *testForwarderWorld) genRotateIn(groupId Id, repoId Id, generation ui
 		Auth: state.Pin(), TimeMs: state.TimeMs(), HoldersSha256: holders[:],
 	}
 	if 1 < generation {
-		parentKey := testConfigSealKey(generation - 1).repoKey
 		linkKey, err := gkmDeriveKey(repoKey, repoId, EvsKeyPurposeLink, generation, nil)
 		if err != nil {
 			self.t.Fatal(err)
 		}
-		genLink, err := gkmSeal(linkKey, parentKey, gkmGenLinkAad(repoId, generation, GkmCauseSchedule))
+		genLink, err := gkmSeal(linkKey, parentRepoKey, gkmGenLinkAad(repoId, generation, GkmCauseSchedule))
 		if err != nil {
 			self.t.Fatal(err)
 		}
-		rotate.ParentCommitment, rotate.Genlink = gkmCommitment(repoId, generation-1, parentKey), genLink
+		rotate.ParentCommitment, rotate.Genlink = gkmCommitment(repoId, generation-1, parentRepoKey), genLink
 	}
 	signed, err := SignGenRotate(rotate, gkmForwardSigner(self.net.owner))
 	if err != nil {
@@ -297,6 +307,25 @@ func (self *testForwarderWorld) postRouteSealedTo(label string, generation uint6
 	body := testBridgeSubnet(testBridgePrefix(10, 9, byte(generation), 0, 24), "site "+label)
 	route := self.net.bridgeRouteAt(self.peer, testBridgeRuleId("sealed "+label), body, generation)
 	self.net.mustPost(self.peer, bridge.SignedType_SIGNED_BRIDGE_ROUTE, route)
+}
+
+// The standing alarm of a reason in a status, nil for none.
+func testForwarderAlarm(status ForwarderStatus, reason string) *BridgeAlarm {
+	for _, alarm := range status.Alarms {
+		if alarm.Reason == SidecarBridgeAlarm(reason) {
+			return &alarm
+		}
+	}
+	return nil
+}
+
+// Advances the clock through a waiting compile's retries until KeyWaitAlarmInterval has passed since the first, as
+// TestAMissingWrapAlarmsConfigKeyWaitingWhileOlderBodiesCompile does.
+func (self *testForwarderWorld) advancePastKeyWaitAlarm(forwarder *Forwarder) {
+	self.t.Helper()
+	for _, wait := range []time.Duration{30 * time.Second, time.Minute, 2 * time.Minute, 4 * time.Minute, 8 * time.Minute} {
+		self.advance(forwarder, wait)
+	}
 }
 
 // The generations a status's compile waited for, ascending.
@@ -662,5 +691,110 @@ func TestAForwarderTwoReformsBehindFollowsTheChainToTheNewest(t *testing.T) {
 	}
 	if !slices.Equal(world.storedGroups(), []Id{oldGroupId, middleGroupId, newestGroupId}) {
 		t.Errorf("the groups record: %v", world.storedGroups())
+	}
+}
+
+// A generation a body is sealed to that gkm lists to this component nowhere waits as one no wrap reached does
+// (QD-1210): its compile retries, config_key_waiting is raised once it has waited KeyWaitAlarmInterval, saying gkm lists
+// no such generation, and the claim and its wrap, once they arrive, open it and clear the alarm. Before, a generation
+// gkm did not list waited for nothing and raised no alarm.
+func TestAWantedGenerationGkmDoesNotListRaisesConfigKeyWaiting(t *testing.T) {
+	world := newTestForwarderWorld(t)
+	world.rotate(world.recipient())
+	world.bind(world.peer)
+	world.postRouteSealedTo("unclaimed", 2)
+	world.publish()
+	forwarder := world.forwarder()
+	if status := forwarder.Status(); !slices.Equal(testForwarderGenerationWaits(status), []uint64{2}) || len(status.Alarms) != 0 {
+		t.Fatalf("with generation 2 unclaimed: %+v", status)
+	}
+	for _, wait := range []time.Duration{30 * time.Second, time.Minute, 2 * time.Minute, 4 * time.Minute} {
+		world.advance(forwarder, wait)
+	}
+	if testForwarderAlarmStands(forwarder.Status(), ForwarderAlarmConfigKeyWaiting) {
+		t.Fatal("config_key_waiting before its interval")
+	}
+	world.advance(forwarder, 8*time.Minute)
+	if alarm := testForwarderAlarm(forwarder.Status(), ForwarderAlarmConfigKeyWaiting); alarm == nil || !strings.Contains(alarm.Detail, "config generation 2 ") || !strings.Contains(alarm.Detail, "gkm lists no gen/2") {
+		t.Fatalf("after the interval: %+v", alarm)
+	}
+
+	world.rotate(world.recipient())
+	world.advance(forwarder, world.settings.CompileRetryMaxInterval)
+	status := forwarder.Status()
+	if forwarder.RepoKeyAt(2) == nil || testForwarderAlarmStands(status, ForwarderAlarmConfigKeyWaiting) || len(testForwarderGenerationWaits(status)) != 0 {
+		t.Fatalf("after the claim: %+v", status)
+	}
+}
+
+// A re-form the Forwarder cannot follow, its newest form not verifying, leaves the new group's claim wanted and
+// unlisted: config_key_waiting is raised once the claim has waited KeyWaitAlarmInterval, its detail naming the form
+// that does not verify, and once gkm serves the form as signed the Forwarder follows it, opens the claim and clears the
+// alarm.
+func TestAReformTheForwarderCannotFollowRaisesConfigKeyWaiting(t *testing.T) {
+	world := newTestForwarderWorld(t)
+	gkm := newTestForwarderReformGkm(world)
+	world.rotate(world.recipient())
+	world.bind(world.peer)
+	forwarder := world.forwarder()
+	reformedGroupId := testConfigId("re-formed config group")
+	gkm.reform(reformedGroupId)
+	gkm.rotateIn(world.recipient())
+	signature := func() []byte {
+		gkm.stateLock.Lock()
+		defer gkm.stateLock.Unlock()
+		newest := gkm.forms[len(gkm.forms)-1]
+		signature := newest.GetSignature()
+		newest.Signature = bytes.Clone(signature)
+		newest.Signature[0] ^= 1
+		return signature
+	}()
+	world.postRouteSealedTo("claimed", 2)
+	world.hint(forwarder)
+	world.advancePastKeyWaitAlarm(forwarder)
+	if alarm := testForwarderAlarm(forwarder.Status(), ForwarderAlarmConfigKeyWaiting); alarm == nil || !strings.Contains(alarm.Detail, reformedGroupId.String()) || !strings.Contains(alarm.Detail, "does not verify") || forwarder.RepoKeyAt(2) != nil {
+		t.Fatalf("with the newest form not verifying: %+v", alarm)
+	}
+
+	func() {
+		gkm.stateLock.Lock()
+		defer gkm.stateLock.Unlock()
+		gkm.forms[len(gkm.forms)-1].Signature = signature
+	}()
+	world.advance(forwarder, world.settings.CompileRetryMaxInterval)
+	status := forwarder.Status()
+	if key := forwarder.RepoKeyAt(2); key == nil || key.GroupId() != reformedGroupId || testForwarderAlarmStands(status, ForwarderAlarmConfigKeyWaiting) {
+		t.Fatalf("once the form verifies: key %v, status %+v", key, status)
+	}
+}
+
+// A re-formed group's claim that does not chain from the generation the Forwarder holds below it is off its chain:
+// the listing stops there and raises head_alarm (fork), as a conflicting GenRotate is a fork (QD-1210), the claim opens
+// nothing though a wrap of it reaches the forwarding reader key, and config_key_waiting follows once it has waited
+// KeyWaitAlarmInterval, naming the break.
+func TestAListingOffTheHeldChainRaisesHeadAlarmFork(t *testing.T) {
+	world := newTestForwarderWorld(t)
+	gkm := newTestForwarderReformGkm(world)
+	world.rotate(world.recipient())
+	world.bind(world.peer)
+	forwarder := world.forwarder()
+	reformedGroupId := testConfigId("re-formed config group")
+	gkm.reform(reformedGroupId)
+	gkm.claimIn(reformedGroupId, world.genRotateOver(reformedGroupId, world.net.configRepoId(), 2, bytes.Repeat([]byte{0xee}, gkmRepoKeyByteCount)))
+	gkm.wrapIn(reformedGroupId, 2, world.recipient())
+	world.postRouteSealedTo("off the chain", 2)
+	world.hint(forwarder)
+	forks := func() int {
+		return world.count(func(event string) bool { return event == "head_alarm "+string(SidecarHeadAlarmFork) })
+	}
+	if forks() == 0 || forwarder.RepoKeyAt(2) != nil {
+		t.Fatalf("an off-chain claim: %d forks raised, generation 2's key %v", forks(), forwarder.RepoKeyAt(2))
+	}
+	world.advancePastKeyWaitAlarm(forwarder)
+	if alarm := testForwarderAlarm(forwarder.Status(), ForwarderAlarmConfigKeyWaiting); alarm == nil || !strings.Contains(alarm.Detail, "does not chain from the generation below it") || forwarder.RepoKeyAt(2) != nil {
+		t.Fatalf("after the interval: %+v", alarm)
+	}
+	if len(world.stored(forwarderGenerationPrefix)) != 1 {
+		t.Errorf("the store holds %v", world.stored(forwarderGenerationPrefix))
 	}
 }
