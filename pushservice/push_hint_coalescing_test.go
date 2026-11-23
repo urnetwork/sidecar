@@ -83,7 +83,8 @@ func (self *testPublisherEnv) awaitBatch(first uint64, count int) []*protocol.Pu
 }
 
 // A gkm hint intake on the client's side (gkm_hints.go), its handlers recording the wakes they take and
-// its resyncs, on a clock that never moves, so no hourly resync runs.
+// its resyncs, on a clock that never moves, so no hourly resync runs. subscribe nil subscribes to
+// nothing, and the test hands it notices itself.
 type testGkmIntake struct {
 	hints *sidecar.GkmHints
 
@@ -94,9 +95,9 @@ type testGkmIntake struct {
 	lowPasses chan int
 }
 
-func newTestGkmIntake(t *testing.T) *testGkmIntake {
+func newTestGkmIntake(t *testing.T, subscribe sidecar.GkmSubscribeFunction) *testGkmIntake {
 	t.Helper()
-	hints, err := sidecar.NewGkmHints(t.Context(), &sidecar.GkmHintsArgs{Clock: sidecartest.NewFakeClock(sidecartest.DefaultClockStart())})
+	hints, err := sidecar.NewGkmHints(t.Context(), &sidecar.GkmHintsArgs{Subscribe: subscribe, Clock: sidecartest.NewFakeClock(sidecartest.DefaultClockStart())})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,20 +125,27 @@ func newTestGkmIntake(t *testing.T) *testGkmIntake {
 }
 
 // Hands the intake each hint as the client's push machine hands a subscriber a hint above the version it
-// holds (push_state.go's pushMachine.hint), then waits until the pass that took key-packages-low's wake,
-// which a test sends last, has finished, so every wake and any resync the notices asked for has run.
+// holds (push_state.go's pushMachine.hint), then settles.
 func (self *testGkmIntake) take(t *testing.T, hints []*protocol.PushHint) (wakes []*sidecar.GkmHintWake, resyncCount int) {
 	t.Helper()
 	for _, hint := range hints {
 		self.hints.Receive(sidecar.PushNotice{Topic: hint.Topic, Version: hint.Version, Kind: hint.Kind, Hint: slices.Clone(hint.Hint)})
 	}
+	return self.settle(t, testPublisherTimeout)
+}
+
+// Waits until the pass that took key-packages-low's wake, which a test sends last, has finished, so every
+// wake and any resync the notices before it asked for has run, and answers them. timeout, real time,
+// only fails a test that would otherwise hang.
+func (self *testGkmIntake) settle(t *testing.T, timeout time.Duration) (wakes []*sidecar.GkmHintWake, resyncCount int) {
+	t.Helper()
 	var lowPassCount int
 	select {
 	case lowPassCount = <-self.lowPasses:
-	case <-time.After(testPublisherTimeout):
+	case <-time.After(timeout):
 		t.Fatal("the intake never took key-packages-low's wake")
 	}
-	guard := time.After(testPublisherTimeout)
+	guard := time.After(timeout)
 	for {
 		passCount, changed := self.hints.Passes()
 		if lowPassCount < passCount {
@@ -185,36 +193,179 @@ func TestPublisherKeepsDistinctGkmWorkHintsOfOneBatch(t *testing.T) {
 		t.Errorf("stats %+v", stats)
 	}
 
-	wakes, resyncCount := newTestGkmIntake(t).take(t, hints)
+	wakes, resyncCount := newTestGkmIntake(t, nil).take(t, hints)
 	if resyncCount != 0 {
 		t.Errorf("the intake resynced %d times", resyncCount)
 	}
-	type wakeKey struct {
-		kind      protocol.GkmHintKind
-		groupId   sidecar.Id
-		recipient string
-	}
-	got := map[wakeKey]bool{}
-	for _, wake := range wakes {
-		key := wakeKey{kind: wake.Kind, recipient: wake.Recipient}
-		if wake.GroupId != nil {
-			key.groupId = *wake.GroupId
-		}
-		got[key] = true
-	}
-	for _, want := range []wakeKey{
+	expectGkmWakes(t, wakes, []testGkmWakeKey{
 		{kind: protocol.GkmHintKind_GKM_HINT_WRAP_PENDING, groupId: groupId, recipient: recipient},
 		{kind: protocol.GkmHintKind_GKM_HINT_WRAP_PENDING, groupId: otherGroupId, recipient: recipient},
 		{kind: protocol.GkmHintKind_GKM_HINT_PENDING, groupId: groupId},
 		{kind: protocol.GkmHintKind_GKM_HINT_KEY_PACKAGES_LOW},
-	} {
-		if !got[want] {
-			t.Errorf("no wake of %v: %d wakes", want, len(wakes))
+	})
+}
+
+// What a wake names: its kind, group and recipient, which the intake coalesces wakes by.
+type testGkmWakeKey struct {
+	kind      protocol.GkmHintKind
+	groupId   sidecar.Id
+	recipient string
+}
+
+// Fails unless wakes are want, one wake each.
+func expectGkmWakes(t *testing.T, wakes []*sidecar.GkmHintWake, want []testGkmWakeKey) {
+	t.Helper()
+	keyCounts := map[testGkmWakeKey]int{}
+	for _, wake := range wakes {
+		key := testGkmWakeKey{kind: wake.Kind, recipient: wake.Recipient}
+		if wake.GroupId != nil {
+			key.groupId = *wake.GroupId
+		}
+		keyCounts[key] += 1
+	}
+	for _, key := range want {
+		if keyCounts[key] != 1 {
+			t.Errorf("%d wakes of %v, want 1", keyCounts[key], key)
 		}
 	}
-	if len(wakes) != 4 {
-		t.Errorf("%d wakes, want 4", len(wakes))
+	if len(wakes) != len(want) {
+		t.Errorf("%d wakes, want %d", len(wakes), len(want))
 	}
+}
+
+// How long the Net test waits for any one step before it fails: the Net's push tests' bound, since a
+// whole Net is slower than a fake resident under load. Real time, only ever a failure's bound.
+const testPublisherNetTimeout = 45 * time.Second
+
+// The same two late asks end to end on T2's Net (Q-TEST-1): written by an owner's hint writer on the
+// Net's FakeRedis, read by the client's resident's own publisher, which the Net's key-event callback
+// kicks, sent from ControlId over the connect transport to the client's PushClient, and taken by a
+// GkmHints intake subscribed on the client's Subprotocol, which wakes each ask's delivery by its group
+// and recipient and asks no resync.
+func TestPublisherDistinctGkmWorkHintsReachTheClientsIntake(t *testing.T) {
+	ctx := t.Context()
+	net := sidecartest.NewNet(ctx, nil)
+	t.Cleanup(net.Close)
+	// The push's start refetch is refused, so its retry comes only when the test moves the Net's clock to
+	// it, after the test has subscribed: a versions page read after the hints are written would show gkm
+	// at their version and the client would take them as stale.
+	refused, err := net.Faults().Add(&sidecartest.FaultPlan{Op: sidecartest.FaultOpHttp, KeyPrefix: "/sidecar/sync/versions", Result: sidecartest.FailBeforeApply})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sidecars, _, err := net.AddSubprotocolSidecars("laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	laptop := sidecars[0]
+	cores := make(chan sidecar.PushNotice, 16)
+	removeCore, err := laptop.Subprotocol().Subscribe(sidecar.PushTopicCore, func(notice sidecar.PushNotice) {
+		select {
+		case cores <- notice:
+		default:
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer removeCore()
+	intake := newTestGkmIntake(t, laptop.Subprotocol().Subscribe)
+	resident, err := net.AddResident(laptop.ClientId())
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-refused:
+	case <-time.After(testPublisherNetTimeout):
+		t.Fatal("the push's start refetch never reached the api")
+	}
+	// The Net's clock stands where it stood at the refusal, so the retry's timer is at a time known here.
+	// Once it is set, the clock goes to it, the nearest timer the sidecar sets within RetryMaxInterval, and
+	// on until the retried page's core notice: the client then holds every version the owners wrote, gkm
+	// none.
+	netClock := net.Clock()
+	retryTime := netClock.Now().Add(sidecar.DefaultPushClientSettings().RetryMinInterval)
+	guard := time.After(testPublisherNetTimeout)
+	for {
+		pending, added := netClock.WatchTimers()
+		if slices.ContainsFunc(pending, retryTime.Equal) {
+			break
+		}
+		select {
+		case <-added:
+		case <-guard:
+			t.Fatalf("no retry timer at %s: %v", retryTime, pending)
+		}
+	}
+	stepLimit := netClock.Now().Add(sidecar.DefaultPushClientSettings().RetryMaxInterval)
+	for refetched := false; !refetched; {
+		pending, added := netClock.WatchTimers()
+		if 0 < len(pending) && !pending[0].After(stepLimit) {
+			netClock.AdvanceTo(pending[0])
+			continue
+		}
+		select {
+		case notice := <-cores:
+			refetched = notice.Resync
+		case <-added:
+		case <-guard:
+			t.Fatal("the push's retried refetch never came")
+		}
+	}
+
+	settings := pushservice.DefaultSidecarPublisherSettings()
+	publisherClock := sidecartest.NewFakeClock(netClock.Now())
+	if _, err := resident.StartPublisher(settings, publisherClock); err != nil {
+		t.Fatal(err)
+	}
+	// its reset, of an empty ver, reaches the client before any hint is written
+	awaitCtx, awaitCancel := context.WithTimeout(ctx, testPublisherNetTimeout)
+	defer awaitCancel()
+	if err := resident.AwaitAcked(awaitCtx, 1); err != nil {
+		t.Fatal(err)
+	}
+	writer, err := net.HintWriter()
+	if err != nil {
+		t.Fatal(err)
+	}
+	groupId, otherGroupId := sidecar.NewId(), sidecar.NewId()
+	recipient := testGkmRecipient(sidecar.NewId())
+	for _, body := range [][]byte{
+		testGkmHintBody(t, protocol.GkmHintKind_GKM_HINT_WRAP_PENDING, &groupId, recipient),
+		testGkmHintBody(t, protocol.GkmHintKind_GKM_HINT_WRAP_PENDING, &otherGroupId, recipient),
+		testGkmHintBody(t, protocol.GkmHintKind_GKM_HINT_KEY_PACKAGES_LOW, nil, ""),
+	} {
+		hint := &sidecar.ClientHint{Topic: sidecar.PushTopicGkm, Version: uint64(publisherClock.Now().UnixMicro()), Kind: uint32(protocol.MessageType_GKM_HINT), Body: body}
+		if _, err := writer.HintClient(ctx, laptop.ClientId(), hint); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The publisher waits out its window after the reset on its own clock, which only the test moves, so
+	// the read past it takes all three hints as one batch.
+	windowTime := publisherClock.Now().Add(settings.HintCoalesceTimeout)
+	windowGuard := time.After(testPublisherNetTimeout)
+	for {
+		pending, added := publisherClock.WatchTimers()
+		if slices.ContainsFunc(pending, windowTime.Equal) {
+			break
+		}
+		select {
+		case <-added:
+		case <-windowGuard:
+			t.Fatalf("no window timer at %s: %v", windowTime, pending)
+		}
+	}
+	publisherClock.Advance(settings.HintCoalesceTimeout)
+
+	wakes, resyncCount := intake.settle(t, testPublisherNetTimeout)
+	if resyncCount != 0 {
+		t.Errorf("the intake resynced %d times", resyncCount)
+	}
+	expectGkmWakes(t, wakes, []testGkmWakeKey{
+		{kind: protocol.GkmHintKind_GKM_HINT_WRAP_PENDING, groupId: groupId, recipient: recipient},
+		{kind: protocol.GkmHintKind_GKM_HINT_WRAP_PENDING, groupId: otherGroupId, recipient: recipient},
+		{kind: protocol.GkmHintKind_GKM_HINT_KEY_PACKAGES_LOW},
+	})
 }
 
 // One late ask's hint repeated in a batch, as gkm sends it again to a holder its first reached, is one
