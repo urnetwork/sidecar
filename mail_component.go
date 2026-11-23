@@ -12,6 +12,8 @@
 //	follow    mailcfg, through MailConfig, which follows its repo itself once built
 //	send      on a locally enabled, consented prover host, prepare the release keys and drain the member's outbox
 //	ingest    the member's mailbox: one MailIngestor running while the generation lives (MAIL-M7-15)
+//	groups    each group repo this device ingests or references a goroutine of its own, its passes brought by the
+//	          repo's hints, as the mailbox's ingest's are, and by each pass, the fallback (mail_component_group.go)
 //	receive   once mail is on, the receive settings say receive, and policy grants this device the listen on
 //	          smtp/25/mx, one receiver (mail_receiver.go) with its sessions (mail_session.go) on the legs that build
 //	          them (mail_component_receive.go): started once, retrying its listen itself, ended with the generation or
@@ -37,7 +39,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
@@ -108,9 +109,8 @@ type mailComponentRun struct {
 	ingestRepoId Id
 	ingestCancel context.CancelFunc
 	ingestor     *MailIngestor
-	// Written only by this generation's pass. An r/ checkpoint belongs to a particular member mailbox.
-	groupMailboxId Id
-	groupRefs      map[Id]*MailGroupRefs
+	// each group repo's goroutine, by repo (mail_component_group.go)
+	groupInboxes map[Id]*mailGroupInbox
 	// the receiver running, what ends it, and what closes its parts after
 	receiver       *MailReceiver
 	receiverCancel context.CancelFunc
@@ -227,10 +227,12 @@ func (self *MailClient) runGeneration(run *mailComponentRun) {
 	}
 }
 
-// Stops what run started: its MTA-STS publish, its ingestor and its receiver, whose parts close after.
+// Stops what run started: its MTA-STS publish, its sender, its group repos' goroutines, which it joins, its ingestor
+// and its receiver, whose parts close after.
 func (self *MailClient) stopRun(run *mailComponentRun) {
 	self.stopMtaSts(run)
 	self.replaceSmtp(run, nil)
+	self.stopGroupInboxes(run)
 	ingestCancel, receiverCancel, receiverClose := func() (context.CancelFunc, context.CancelFunc, func()) {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
@@ -507,82 +509,6 @@ func (self *MailClient) ingestArgs(run *mailComponentRun, binding *MailBinding) 
 	}
 }
 
-// A writer ingests once into the group's own ref. A listed member with read access adds only a reference
-// to their own writable mailbox. Each pass rechecks the signed address and rights before touching either.
-func (self *MailClient) passGroupInboxes(run *mailComponentRun, binding *MailBinding) {
-	state := binding.Engine.State()
-	if state == nil || !slices.ContainsFunc(state.Rows().GetRepos(), AclRepoIsInbox) {
-		run.groupRefs = nil
-		return
-	}
-	config, err := self.syncedConfig(run.ctx)
-	if err != nil {
-		return
-	}
-	addresses, err := config.Addresses()
-	if err != nil {
-		return
-	}
-	active, parts, err := self.bound()
-	if err != nil || active.Engine != binding.Engine || active.Evs != binding.Evs {
-		return
-	}
-	memberId, member := mailMemberOf(state, self.sidecarId)
-	mailboxId, _ := self.mailboxId()
-	subject := AclSidecarSubject(self.sidecarId)
-	now := self.clock.Now()
-	mailboxWritable := member && mailboxId != (Id{}) && state.EvsAccess(subject, mailboxId, AclTokenAudienceEvs, now).Rights.Has(AclEvsWrite)
-	if mailboxId != run.groupMailboxId {
-		run.groupMailboxId, run.groupRefs = mailboxId, nil
-	}
-	next := map[Id]*MailGroupRefs{}
-	ingested := map[Id]bool{}
-	for _, address := range addresses {
-		if run.ctx.Err() != nil || binding.Engine.State() != state {
-			return
-		}
-		if !address.Known || (address.Kind != protocol.MailAddressKind_MAIL_ADDRESS_GROUP && address.Kind != protocol.MailAddressKind_MAIL_ADDRESS_ADMIN) {
-			continue
-		}
-		groupId := address.MailboxRepoId
-		row := state.Repo(groupId)
-		role := protocol.RepoInbox_REPO_INBOX_GROUP
-		if address.Kind == protocol.MailAddressKind_MAIL_ADDRESS_ADMIN {
-			role = protocol.RepoInbox_REPO_INBOX_ADMIN
-		}
-		if row.GetInbox() != role || !mailRepoStands(row) {
-			continue
-		}
-		rights := state.EvsAccess(subject, groupId, AclTokenAudienceEvs, now).Rights
-		if rights.Has(AclEvsWrite) && !ingested[groupId] {
-			ingested[groupId] = true
-			ingestor, err := parts.ingestor(groupId, self.ingestArgs(run, binding))
-			if err == nil {
-				_, err = ingestor.Ingest(run.ctx)
-			}
-			if err != nil {
-				self.log.Warningf("[mail]group ingest %s: %v", groupId, err)
-			}
-		}
-		if !mailboxWritable || !rights.Has(AclEvsRead) || !slices.Contains(address.MemberIds, memberId) || next[groupId] != nil {
-			continue
-		}
-		refs := run.groupRefs[groupId]
-		if refs == nil {
-			refs, err = parts.groupRefs(groupId, mailboxId)
-			if err != nil {
-				self.log.Warningf("[mail]group references %s: %v", groupId, err)
-				continue
-			}
-		}
-		next[groupId] = refs
-		if _, err := refs.Sync(run.ctx); err != nil {
-			self.log.Warningf("[mail]group references %s: %v", groupId, err)
-		}
-	}
-	run.groupRefs = next
-}
-
 // Drops the view's kept month where the mailbox's ingest wrote, so the next list reads it afresh, and raises IDLE's
 // hint.
 func (self *MailClient) invalidateMonth(repoId Id, month MailYearMonth) {
@@ -752,8 +678,8 @@ func (self *MailClient) stopReceiver(run *mailComponentRun) {
 }
 
 // An app's wake (§15.6 step 5; owner decision 197): the mailbox's ingest runs now, and nothing listens for it, so a
-// wake only resyncs mail a receiver took; the send watch reads or/ now too (mail_send_result.go). Nothing while no
-// generation runs them.
+// wake only resyncs mail a receiver took; the send watch reads or/ now too (mail_send_result.go), and the pass it
+// brings wakes each group repo's goroutine. Nothing while no generation runs them.
 func (self *MailClient) Resync() {
 	ingestor := func() *MailIngestor {
 		self.stateLock.Lock()

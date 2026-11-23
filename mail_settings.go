@@ -57,6 +57,11 @@ type MailSettings struct {
 	// How often it looks while the Sidecar holds nothing to bind yet: no evs component, or no verified state, which
 	// land without telling mail.
 	UnboundCheckInterval time.Duration
+	// The most group repos whose hints the component watches at once (mail_component_group.go). Each watch is a
+	// subscription to its repo's refs, and evs lets a device subscribe to 500 repos (§20.4's evs_repos_per_client), so
+	// groups take at most 64 of them and leave the rest to the config repo, the mailbox and what else the device
+	// follows. A group past it is ingested and referenced at the component's looks alone, CheckInterval apart.
+	GroupWatchMaxCount int
 	// The longest the component's opener of a designation's services waits for the config repo's key of the
 	// generation they are sealed to, which its GkmClient may fetch (mail_indexer.go): past it that designation reads
 	// unknown for that look. 10 s, the config follower's own wait for a config key (RepoKeyTimeout).
@@ -87,6 +92,7 @@ func DefaultMailSettings() *MailSettings {
 		AddressScanMaxCount:         4096,
 		CheckInterval:               5 * time.Minute,
 		UnboundCheckInterval:        30 * time.Second,
+		GroupWatchMaxCount:          64,
 		IndexerKeyTimeout:           10 * time.Second,
 	}
 }
@@ -96,7 +102,8 @@ func (self *MailSettings) valid() bool {
 	return self != nil && self.Config != nil && self.Ingest != nil && self.Store != nil && self.Receive != nil && self.Imap != nil &&
 		self.Send.valid() && self.Outbox.valid() && self.Forward.valid() && self.Vault != nil && self.Codes.valid() && self.Burner.valid() &&
 		0 < self.ReadMaxByteCount && 0 < self.ReadHeaderValueMaxByteCount && 0 < self.ReadHeaderMaxCount &&
-		0 < self.AddressScanMaxCount && 0 < self.CheckInterval && 0 < self.UnboundCheckInterval && 0 < self.IndexerKeyTimeout
+		0 < self.AddressScanMaxCount && 0 < self.CheckInterval && 0 < self.UnboundCheckInterval && 0 < self.GroupWatchMaxCount &&
+		0 < self.IndexerKeyTimeout
 }
 
 // §18.4's values for an app host of profile (MAIL-M8-04): the profile, which listens only while the app is open and
