@@ -745,7 +745,8 @@ barrier sidecar.authorize.after sidecar_gate.go
 barrier sidecar.authorize.before sidecar_gate.go
 barrier sidecar.core_sync.accepted push_poll.go
 barrier sidecar.drop.applied state_drop_apply.go
-barrier sidecar.generation.repost sidecar_generation.go
+barrier sidecar.generation.repost.after sidecar_generation.go
+barrier sidecar.generation.repost.before sidecar_generation.go
 barrier sidecar.generation.start.after sidecar_generation.go
 barrier sidecar.generation.start.before sidecar_generation.go
 barrier sidecar.generation.stop.after sidecar_generation.go

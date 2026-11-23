@@ -137,7 +137,7 @@ type DaemonMailSendReply struct {
 type DaemonMailSendRecipient struct {
 	// As the caller named it, lowercase.
 	Address string `json:"address"`
-	// MailSendOutcome's word: delivered, unknown, member_refused, refused, internet_waits or failed.
+	// MailSendOutcome's word: delivered, queued, unknown, refused, internet_refused, internet_waits or failed.
 	Outcome string `json:"outcome"`
 }
 
