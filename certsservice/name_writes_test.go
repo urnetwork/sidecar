@@ -10,6 +10,7 @@
 package certsservice_test
 
 import (
+	"context"
 	"fmt"
 	"math/big"
 	"slices"
@@ -241,6 +242,10 @@ func TestCertsNameWritesRefusalNamingNoNameHoldsEveryName(t *testing.T) {
 	}
 }
 
+// How long one order pass on Pebble may take before the test fails: a pass takes well under a second,
+// so a Pebble that stops answering fails the test in seconds, not at the package's timeout.
+const testNameWritesPassTimeout = 20 * time.Second
+
 // On Pebble, with the network's _acme-challenge name at its ten writes in the fake dns's hour: an order of
 // a set with a live alias's pair beside the network's sends its newOrder, its write at the network's name
 // is refused, and the refusal reaches the order pass through the solver and acmez naming that name and
@@ -248,8 +253,20 @@ func TestCertsNameWritesRefusalNamingNoNameHoldsEveryName(t *testing.T) {
 // queues again held by that name alone: the next pass sends it no newOrder, while a set of the alias's
 // pair alone, whose name holds writes, orders and issues. Once the hold has ended the next newOrder goes
 // and, the window still full, is refused and held again: one newOrder a refusal, never one a pass.
+//
+// When acmez takes the alias's wildcard before either of the network's names, the refused order has had
+// Pebble start validating it when the network's write is refused, and acmez's cleanup then deactivates
+// its authorization mid-validation. At tip-check be60f4c3 that deactivation reached Pebble while the
+// validation ran, Pebble's validation authority being slow under load, and wedged it
+// (sidecartest/pebble.go): the next pass's newOrder never answered, and the test hung two hours. Pebble
+// shuffles an order's authorizations, so that came about in some runs alone; here it lists them in
+// their names' order, the alias's wildcard first, and holds its lookups until the harness holds the
+// deactivation for the validation, so the refused pass meets it every time. Each pass has its own
+// deadline.
 func TestCertsNameWritesHoldOnPebble(t *testing.T) {
-	pebble := sidecartest.StartPebble(t, nil)
+	pebbleSettings := sidecartest.DefaultPebbleSettings()
+	pebbleSettings.SortedAuthorizations = true
+	pebble := sidecartest.StartPebble(t, pebbleSettings)
 	settings := testAcmeSettings(pebble, nil)
 	settings.NameWritesHold = 5 * time.Hour
 	ctx := testAcmeContext(t)
@@ -278,15 +295,53 @@ func TestCertsNameWritesHoldOnPebble(t *testing.T) {
 	}
 	certId := certs.accept(device)
 
+	type testPass struct {
+		report *certsservice.CertsOrdersReport
+		err    error
+	}
+	startPass := func() chan testPass {
+		passes := make(chan testPass, 1)
+		go func() {
+			passCtx, cancel := context.WithTimeout(ctx, testNameWritesPassTimeout)
+			defer cancel()
+			report, err := service.RunOrders(passCtx, sidecar.Id{})
+			passes <- testPass{report: report, err: err}
+		}()
+		return passes
+	}
+	endPass := func(passes chan testPass) *certsservice.CertsOrdersReport {
+		t.Helper()
+		select {
+		case pass := <-passes:
+			if pass.err != nil {
+				t.Fatal(pass.err)
+			}
+			return pass.report
+		case <-time.After(2 * testNameWritesPassTimeout):
+			t.Fatal("an order pass outlived its deadline")
+			return nil
+		}
+	}
 	runOrders := func() *certsservice.CertsOrdersReport {
 		t.Helper()
-		report, err := service.RunOrders(ctx, sidecar.Id{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return report
+		return endPass(startPass())
 	}
-	report := runOrders()
+
+	_, releaseLookups := pebble.HoldLookups(t)
+	refusedPass := startPass()
+	select {
+	case <-pebble.AuthorizationHeld():
+	case pass := <-refusedPass:
+		writeCount, removeCount, readyCount := pebble.Dns.Counts()
+		t.Fatalf(
+			"the refused pass ended with no deactivation held for the alias's validation: %+v, %v, %d orders, dns %d writes %d removes %d ready",
+			pass.report, pass.err, acme.orderCount(), writeCount, removeCount, readyCount,
+		)
+	case <-time.After(testNameWritesPassTimeout):
+		t.Fatal("the refused pass held no deactivation for the alias's validation")
+	}
+	releaseLookups()
+	report := endPass(refusedPass)
 	if !slices.Equal(report.Admitted, []sidecar.Id{certId}) || !slices.Equal(report.Requeued, []sidecar.Id{certId}) || acme.orderCount() != 1 {
 		t.Fatalf("the refused pass: %+v, %d orders", report, acme.orderCount())
 	}
