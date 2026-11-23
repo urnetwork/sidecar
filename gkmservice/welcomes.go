@@ -3,11 +3,14 @@
 // gkm/<group_id>/welcome/<n> it points to, on the group's repo's cluster, which no other route serves.
 //
 // A pointer is answered only where the token reaches its group: r, rw or admin on the repo whose GroupForms name
-// it, honored by the newest verified state, as every group read is. A client whose repos span several tokens
-// (§7.8's 64 scopes) asks once with each. A pointer whose Welcome is not there, which only a crash between the two
-// writes leaves (KEYS-M2-14 writes the Welcome first), is passed over; the reconciler removes a pointer at its
-// recipient's first ack past its epoch, at most 90 days (gkm-5, KEYS-M2-16), and a device holding several pointers
-// for one group takes the one with the highest epoch above the newest it reached and skips the rest.
+// it, the strongest of them it holds asked of the newest verified state with each weaker right of its role and
+// honored only whole, as every group read is (QD-975), so a deleted repo's standing admin, whom the state gives admin
+// alone (QD-880), is served none of that repo's. A group the token does not reach is left out of the reply, not
+// refused, and a client whose repos span several tokens (§7.8's 64 scopes) asks once with each. A pointer whose
+// Welcome is not there, which only a crash between the two writes leaves (KEYS-M2-14 writes the Welcome first), is
+// passed over; the reconciler removes a pointer at its recipient's first ack past its epoch, at most 90 days (gkm-5,
+// KEYS-M2-16), and a device holding several pointers for one group takes the one with the highest epoch above the
+// newest it reached and skips the rest.
 //
 // POST /gkm/groups/<id>/welcome/<n> (KEYS-M2-14) writes them: a Welcome is written only after its epoch object, by
 // that epoch's uploader, so a 409's loser never has one (§10.6's Welcomes row, KF6), at gkm/<group_id>/welcome/<n>
@@ -52,7 +55,9 @@ func (self *GkmEngine) serveWelcomes(request *GkmRequest) {
 	}
 	reply := &protocol.GkmWelcomesReply{}
 	now := request.Now()
-	candidateRepoIds := request.scopes.reposWith(gkmRepoAccessRights)
+	// the route's row, r, rw or admin, as the guard holds every group read to it
+	rowRights := request.route.Scope.rights()
+	candidateRepoIds := request.scopes.reposWith(rowRights)
 	for _, info := range infos {
 		if self.settings.WelcomesReplyMaxCount <= len(reply.GetWelcomes()) {
 			break
@@ -93,8 +98,15 @@ func (self *GkmEngine) serveWelcomes(request *GkmRequest) {
 			// this token does not reach the group: another of the client's tokens may
 			continue
 		}
-		right := gkmStrongestRight(request.scopes.repoIdRights[repoId] & gkmRepoAccessRights)
-		switch self.deps.AuthState.HonorScope(request.Principal, repoId, right, now) {
+		// AuthorizeRepo's set (QD-975): the strongest right the token holds of the row's with each weaker right of its
+		// role the row takes, honored only whole, so a deleted repo's standing admin (QD-880) is refused here too
+		right := gkmStrongestRight(request.scopes.repoIdRights[repoId] & rowRights)
+		if right == 0 {
+			// none of the row's rights on this repo: refused unasked, as AuthorizeRepo refuses it
+			continue
+		}
+		rights := right | gkmImpliedRights(right)&rowRights
+		switch self.deps.AuthState.HonorScope(request.Principal, repoId, rights, now) {
 		case GkmAuthAllowed:
 		case GkmAuthDenied:
 			continue
