@@ -19,8 +19,11 @@
 // calls), and on the same interval writes that count, from the admission's start, to {nvb_<cluster>} as the
 // process's HddPutReport with a 15 s ttl, from which the hdd loop sets §19.8's
 // urnetwork_filecluster_hdd_puts{cluster}. A report that does not land loses nothing but timing, since the next
-// carries the count from the start. The report names no network or repo, and the count is one atomic add.
-// Safe for concurrent use.
+// carries the count from the start. Close writes the report once more, as of the close, so the segments stored
+// since the last interval reach the loop: only a process killed before its report, or a close that outlives
+// CloseReportTimeout, loses them. Every report carries the count from the start, which the loop rates the rise
+// of since the report it last saw, so a report written again counts nothing twice. The report names no network
+// or repo, and the count is one atomic add. Safe for concurrent use.
 
 package evsservice
 
@@ -90,16 +93,21 @@ type HddAdmissionSettings struct {
 	Weights *WriteBudgetSettings
 	// The ttl of the process's PUT report: 15 s, three intervals, as {nvb_}'s other 5 s figures (§19.6).
 	PutReportTtl time.Duration
+	// How long Close waits, on the host's clock, for the goroutine to end and then for the last PUT report to be
+	// written: 2 s, as the write budget's close, a report being two Redis calls of milliseconds. What is not
+	// written by then is lost, as a killed process's last interval is. Not positive: Close writes no last report.
+	CloseReportTimeout time.Duration
 }
 
 func DefaultHddAdmissionSettings() *HddAdmissionSettings {
 	return &HddAdmissionSettings{
-		Interval:      5 * time.Second,
-		AdmissionLine: 0.5,
-		WindowSpan:    1 * time.Minute,
-		RetryAfter:    5 * time.Second,
-		Weights:       DefaultWriteBudgetSettings(),
-		PutReportTtl:  15 * time.Second,
+		Interval:           5 * time.Second,
+		AdmissionLine:      0.5,
+		WindowSpan:         1 * time.Minute,
+		RetryAfter:         5 * time.Second,
+		Weights:            DefaultWriteBudgetSettings(),
+		PutReportTtl:       15 * time.Second,
+		CloseReportTimeout: 2 * time.Second,
 	}
 }
 
@@ -118,6 +126,9 @@ type HddAdmission struct {
 	startMs   int64
 	// segments the cluster stored for the process since startMs
 	putCount atomic.Int64
+	// closed as the goroutine returns; nil when none was started (a test's)
+	runDone   chan struct{}
+	closeOnce sync.Once
 
 	stateLock sync.Mutex
 	// upload bytes by network, the open interval's last
@@ -134,14 +145,18 @@ type hddNetworkBytes struct {
 }
 
 // The admission for one segment cluster, its goroutine started. host.Redis carries {nvb_<cluster>}, host.Quota
-// the weights, host.Metrics the refusals, host.Clock its intervals. settings may be nil for the defaults. Close
-// ends it.
+// the weights, host.Metrics the refusals, host.Clock its intervals and Close's bound. settings may be nil for the
+// defaults. Close ends it.
 func NewHddAdmission(ctx context.Context, host *sidecar.ServiceHost, clusterId string, settings *HddAdmissionSettings) (*HddAdmission, error) {
 	self, err := newHddAdmission(ctx, host, clusterId, settings)
 	if err != nil {
 		return nil, err
 	}
-	go self.run()
+	self.runDone = make(chan struct{})
+	go func() {
+		defer close(self.runDone)
+		self.run()
+	}()
 	return self, nil
 }
 
@@ -178,9 +193,35 @@ func newHddAdmission(ctx context.Context, host *sidecar.ServiceHost, clusterId s
 	return self, nil
 }
 
-// Ends the goroutine. Admit goes on answering from the last figures.
+// Ends the goroutine, then writes the process's PUT report as of now, so the segments stored since the last
+// interval reach the hdd loop (the file header). It writes once the goroutine has returned, so no interval's
+// report lands after the last, and the wait and the write together take at most CloseReportTimeout on the host's
+// clock, a Redis that never answers included: when the bound passes with the goroutine still running, nothing is
+// written, and the loop loses the last interval as it would a killed process's. Admit goes on answering from the
+// last figures. Safe more than once: only the first call reports, and a call meanwhile returns once it has.
 func (self *HddAdmission) Close() {
-	self.cancel()
+	self.closeOnce.Do(func() {
+		self.cancel()
+		if self.settings.CloseReportTimeout <= 0 {
+			return
+		}
+		// the last report outlives the admission's ctx, ended above, and its parent's, which a host may end before
+		// it closes the admission, keeping their values
+		reportCtx, reportCancel := context.WithCancel(context.WithoutCancel(self.ctx))
+		defer reportCancel()
+		stop := self.clock.AfterFunc(self.settings.CloseReportTimeout, reportCancel)
+		defer stop()
+		if self.runDone != nil {
+			select {
+			case <-self.runDone:
+			case <-reportCtx.Done():
+				// a tick still running may yet write its own report, which the last must not precede
+				return
+			}
+		}
+		// one that does not land is lost, as a killed process's last interval is
+		writeHddPutReport(reportCtx, self.redis, self.clusterId, self.putReport(), self.settings.PutReportTtl)
+	})
 }
 
 // Every interval until Close, rereads the weights of the networks seen, then ticks on them, so no weight a tick
@@ -227,18 +268,22 @@ func (self *HddAdmission) CountPut() {
 	self.putCount.Add(1)
 }
 
-// One interval: writes the process's PUT report, reads the figures, closes the open interval into the window,
-// and sets who is refused. A read that fails keeps the last figures, which the key's own ttl ends: once it finds
-// none, no one is refused.
-func (self *HddAdmission) tick(ctx context.Context) {
-	report := &HddPutReport{
+// The process's PUT report as of now: what the cluster stored for it since its start.
+func (self *HddAdmission) putReport() *HddPutReport {
+	return &HddPutReport{
 		ProcessId: self.processId,
 		StartMs:   self.startMs,
 		TimeMs:    self.clock.Now().UnixMilli(),
 		PutCount:  self.putCount.Load(),
 	}
+}
+
+// One interval: writes the process's PUT report, reads the figures, closes the open interval into the window,
+// and sets who is refused. A read that fails keeps the last figures, which the key's own ttl ends: once it finds
+// none, no one is refused.
+func (self *HddAdmission) tick(ctx context.Context) {
 	// one that does not land costs the loop only timing: the next carries the count from the start
-	writeHddPutReport(ctx, self.redis, self.clusterId, report, self.settings.PutReportTtl)
+	writeHddPutReport(ctx, self.redis, self.clusterId, self.putReport(), self.settings.PutReportTtl)
 
 	figures, err := readHddFigures(ctx, self.redis, self.clusterId)
 	readOk := err == nil
