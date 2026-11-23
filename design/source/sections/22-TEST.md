@@ -41,6 +41,9 @@ func (self *Net) AddSidecar(name string, settings *sidecar.SidecarSettings) *Tes
 func (self *Net) AddEngines(host *sidecar.ServiceHost) // fakes (T2: conditional-write Blobs, Redis), server stores (T3)
 func (self *Net) SetLink(a connect.Id, b connect.Id, link *LinkConditions) // loss, partition, TransportType
 func (self *Net) Capture() *PrivacyCapture
+func (self *Net) Close() // ends every sidecar and engine and joins each connect client it ran, by CloseAndWait
+	// within NetSettings.ClientCloseTimeout, a join that times out failing or reporting, so nothing it ran still
+	// runs into the next test; a close from a client's own callback goes to another goroutine (owner decision 724)
 
 // empty without build tag sidecar_testhooks, and make check fails a release leg that links it
 func testHookSecret(kind string, secret []byte) // at every key creation, derivation and unwrap; never an AEAD
