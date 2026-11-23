@@ -686,7 +686,7 @@ func TestPhoneReachedByHintElseWake(t *testing.T) {
 			select {
 			case event := <-pendingEvents:
 				got = append(got, *event.ApprovalId)
-			case <-time.After(testSidecarOnlineTimeout):
+			case <-time.After(devices.net.settings.SidecarOnlineTimeout):
 				t.Fatalf("approval_pending raised for %v of %v", got, approvalIds)
 			}
 		}
