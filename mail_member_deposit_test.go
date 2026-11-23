@@ -181,8 +181,11 @@ func newMailMemberDepositTestWorld(t *testing.T) *mailMemberDepositTestWorld {
 	world.boEngine = NewAclEngine(world.boLaptop, nil, nil, nil)
 	world.install()
 	state := world.repos.state()
-	if !state.MaySend(AclSidecarSubject(world.device), aclTestNow).Allowed || state.MaySend(AclSidecarSubject(world.boLaptop), aclTestNow).Allowed {
-		t.Fatal("the send grant marks other devices than ann's")
+	if !state.MaySend(AclSidecarSubject(world.device), aclTestNow).Allowed {
+		t.Fatal("the send grant marks no device of ann's")
+	}
+	if state.MaySend(AclSidecarSubject(world.boLaptop), aclTestNow).Allowed {
+		t.Fatal("the send grant marks bo's laptop")
 	}
 	if rights := state.EvsAccess(AclSidecarSubject(world.boLaptop), world.boMailbox, AclTokenAudienceEvs, aclTestNow).Rights; !rights.Has(AclEvsRead | AclEvsWrite) {
 		t.Fatalf("bo's laptop holds %b in bo's mailbox", rights)
@@ -255,9 +258,10 @@ func (self *mailMemberDepositTestWorld) ingestBo() *MailIngestPass {
 	return self.bo.ingest(ingestor)
 }
 
-// The client world's parts with Send's authority over ann's engine, built as Send builds it, and deposits that land in
-// ann's or bo's deposit refs as the sending device's, pinned at the state its engine holds, as evs hands a reader a
-// deposit push. A deposit the exchange would mint no repo:<id>:deposit for is refused, as evs's gate refuses one.
+// The client world's parts with Send's authority over ann's engine, built as Send builds it but on the test's clock,
+// and deposits that land in ann's or bo's deposit refs as the sending device's, pinned at the state its engine holds,
+// as evs hands a reader a deposit push. A deposit the exchange would mint no repo:<id>:deposit for is refused, as evs's
+// gate refuses one.
 type mailMemberDepositTestParts struct {
 	*mailClientTestParts
 	members   *mailMemberDepositTestWorld
