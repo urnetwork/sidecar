@@ -404,18 +404,19 @@ func (x *BridgeRouteRow) GetRouteRuleIds() [][]byte {
 // DeviceLocalRpc.SetBridgeState carries this, or it stays in process; auth only rises, and verified
 // entries apply on top.
 type BridgeState struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	Auth            *AuthPin               `protobuf:"bytes,1,opt,name=auth,proto3" json:"auth,omitempty"`                                                                               // the newest verified state; ApplyDeltas chains from it
-	GenesisSha256   []byte                 `protobuf:"bytes,2,opt,name=genesis_sha256,json=genesisSha256,proto3" json:"genesis_sha256,omitempty"`                                        // the anchor (§7.9)
-	HasDocument     bool                   `protobuf:"varint,3,opt,name=has_document,json=hasDocument,proto3" json:"has_document,omitempty"`                                             // that state's rows: enforcing{doc} or enforcing{nodoc}
-	Rules           []byte                 `protobuf:"bytes,4,opt,name=rules,proto3" json:"rules,omitempty"`                                                                             // this device's compiled block, routes, maps and hook rules
-	Names           map[string]uint32      `protobuf:"bytes,5,rep,name=names,proto3" json:"names,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"fixed32,2,opt,name=value"` // client name -> overlay IPv4 (§7.7, 17.4), versioned with rules
-	NameZones       []string               `protobuf:"bytes,6,rep,name=name_zones,json=nameZones,proto3" json:"name_zones,omitempty"`                                                    // <net>.<root>, and the alias zone where one is chosen (§12.9)
-	Identities      []*BridgeIdentity      `protobuf:"bytes,7,rep,name=identities,proto3" json:"identities,omitempty"`                                                                   // the subjects its rules let reach this host (17.9), ~64 B each
-	ShareKeys       []*BridgeShareKey      `protobuf:"bytes,8,rep,name=share_keys,json=shareKeys,proto3" json:"share_keys,omitempty"`                                                    // the shares this host serves (17.9)
-	DaemonListeners []string               `protobuf:"bytes,9,rep,name=daemon_listeners,json=daemonListeners,proto3" json:"daemon_listeners,omitempty"`                                  // rule 0 (17.6): the daemon's listener binds, host:port
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	state                       protoimpl.MessageState `protogen:"open.v1"`
+	Auth                        *AuthPin               `protobuf:"bytes,1,opt,name=auth,proto3" json:"auth,omitempty"`                                                                                         // the newest verified state; ApplyDeltas chains from it
+	GenesisSha256               []byte                 `protobuf:"bytes,2,opt,name=genesis_sha256,json=genesisSha256,proto3" json:"genesis_sha256,omitempty"`                                                  // the anchor (§7.9)
+	HasDocument                 bool                   `protobuf:"varint,3,opt,name=has_document,json=hasDocument,proto3" json:"has_document,omitempty"`                                                       // that state's rows: enforcing{doc} or enforcing{nodoc}
+	Rules                       []byte                 `protobuf:"bytes,4,opt,name=rules,proto3" json:"rules,omitempty"`                                                                                       // this device's compiled block, routes, maps and hook rules
+	Names                       map[string]uint32      `protobuf:"bytes,5,rep,name=names,proto3" json:"names,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"fixed32,2,opt,name=value"`           // client name -> overlay IPv4 (§7.7, 17.4), versioned with rules
+	NameZones                   []string               `protobuf:"bytes,6,rep,name=name_zones,json=nameZones,proto3" json:"name_zones,omitempty"`                                                              // <net>.<root>, and the alias zone where one is chosen (§12.9)
+	Identities                  []*BridgeIdentity      `protobuf:"bytes,7,rep,name=identities,proto3" json:"identities,omitempty"`                                                                             // the subjects its rules let reach this host (17.9), ~64 B each
+	ShareKeys                   []*BridgeShareKey      `protobuf:"bytes,8,rep,name=share_keys,json=shareKeys,proto3" json:"share_keys,omitempty"`                                                              // the shares this host serves (17.9)
+	DaemonListeners             []string               `protobuf:"bytes,9,rep,name=daemon_listeners,json=daemonListeners,proto3" json:"daemon_listeners,omitempty"`                                            // rule 0 (17.6): the daemon's listener binds, host:port
+	BaseSignerIdentityPublicKey []byte                 `protobuf:"bytes,10,opt,name=base_signer_identity_public_key,json=baseSignerIdentityPublicKey,proto3" json:"base_signer_identity_public_key,omitempty"` // the key the newest base verified under, Ed25519, 32 B (QD-1200):
+	unknownFields               protoimpl.UnknownFields
+	sizeCache                   protoimpl.SizeCache
 }
 
 func (x *BridgeState) Reset() {
@@ -507,6 +508,13 @@ func (x *BridgeState) GetShareKeys() []*BridgeShareKey {
 func (x *BridgeState) GetDaemonListeners() []string {
 	if x != nil {
 		return x.DaemonListeners
+	}
+	return nil
+}
+
+func (x *BridgeState) GetBaseSignerIdentityPublicKey() []byte {
+	if x != nil {
+		return x.BaseSignerIdentityPublicKey
 	}
 	return nil
 }
@@ -3684,7 +3692,7 @@ const file_protocol_bridge_bridge_proto_rawDesc = "" +
 	"\n" +
 	"advertiser\x18\x02 \x01(\fR\n" +
 	"advertiser\x12$\n" +
-	"\x0eroute_rule_ids\x18\x03 \x03(\fR\frouteRuleIds\"\xe7\x03\n" +
+	"\x0eroute_rule_ids\x18\x03 \x03(\fR\frouteRuleIds\"\xad\x04\n" +
 	"\vBridgeState\x12.\n" +
 	"\x04auth\x18\x01 \x01(\v2\x1a.urnetwork.sidecar.AuthPinR\x04auth\x12%\n" +
 	"\x0egenesis_sha256\x18\x02 \x01(\fR\rgenesisSha256\x12!\n" +
@@ -3698,7 +3706,9 @@ const file_protocol_bridge_bridge_proto_rawDesc = "" +
 	"identities\x12@\n" +
 	"\n" +
 	"share_keys\x18\b \x03(\v2!.urnetwork.sidecar.BridgeShareKeyR\tshareKeys\x12)\n" +
-	"\x10daemon_listeners\x18\t \x03(\tR\x0fdaemonListeners\x1a8\n" +
+	"\x10daemon_listeners\x18\t \x03(\tR\x0fdaemonListeners\x12D\n" +
+	"\x1fbase_signer_identity_public_key\x18\n" +
+	" \x01(\fR\x1bbaseSignerIdentityPublicKey\x1a8\n" +
 	"\n" +
 	"NamesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
