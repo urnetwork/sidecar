@@ -608,11 +608,10 @@ func TestCertsAcmeRateLimitReachesTheHold(t *testing.T) {
 // fallback past LE, and an ephemeral sidecar's first CA (D-TLS-7).
 func TestCertsAcmeGtsWithEab(t *testing.T) {
 	macKey := base64.RawURLEncoding.EncodeToString([]byte("a synthetic EAB MAC key, 32 by.."))
-	gts := sidecartest.StartPebble(t, &sidecartest.PebbleSettings{
-		NonceRejectPercent: 5,
-		RequireEab:         true,
-		EabKeys:            map[string]string{"kid-test-1": macKey},
-	})
+	gtsSettings := sidecartest.DefaultPebbleSettings()
+	gtsSettings.RequireEab = true
+	gtsSettings.EabKeys = map[string]string{"kid-test-1": macKey}
+	gts := sidecartest.StartPebble(t, gtsSettings)
 	settings := testSettings()
 	settings.Cas[certsservice.CertsCaGts].DirectoryUrl = gts.DirectoryUrl
 	settings.AcmePollInterval = 50 * time.Millisecond
