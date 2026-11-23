@@ -170,7 +170,9 @@ func restartIdentityRead(t *testing.T, stream *sidecar.SubprotocolStream, deadli
 // does at every start, and waits for the restarted generation's dispatcher. Answers when the start began.
 func restartSubprotocolSidecar(t *testing.T, net *Net, subprotocolSidecar *SubprotocolSidecar, authority *FakeAuthority, whileStopped func()) time.Time {
 	t.Helper()
-	subprotocolSidecar.stop()
+	if err := subprotocolSidecar.stop(); err != nil {
+		t.Fatal(err)
+	}
 	whileStopped()
 	attached := make(chan struct{})
 	func() {

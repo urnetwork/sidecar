@@ -28,8 +28,8 @@ type NetPlatform interface {
 	// platform routes to the client and its controller takes the client's control, so a peer's contract to it can be
 	// issued. The waits are in real time, bounded by the platform's own settings, since connect's timers are real (X9).
 	OpenClient(ctx context.Context, name string, settings *connect.ClientSettings) (*NetPlatformClient, error)
-	// Ends what the platform runs. The Net calls it once, after canceling every client the platform opened and closing
-	// what each one's Close closes.
+	// Ends what the platform runs. The Net calls it once, after closing every client the platform opened, closing what
+	// each one's Close closes, and joining the client.
 	Close()
 }
 
@@ -119,17 +119,26 @@ func (self *netExchange) openPlatformClient(platform NetPlatform, name string, s
 	}()
 	if closed {
 		// the Net closed while the platform opened it: nothing will close it later
-		platformClient.Client.Cancel()
-		cancel()
-		if platformClient.Close != nil {
-			platformClient.Close()
-		}
+		self.closePlatformClient(&netPlatformClient{netClient: netClient, cancel: cancel, close: platformClient.Close})
 		return nil, errNetClosed
 	}
 	return netClient, nil
 }
 
-// Cancels every platform client, closes what the platform opened beside each, then the platform. Runs once, from close.
+// Closes a platform client and what the platform opened beside it, then joins the client within
+// NetSettings.ClientCloseTimeout, reporting it past that (Net.closeFailed).
+func (self *netExchange) closePlatformClient(platformClient *netPlatformClient) {
+	platformClient.netClient.Client.Close()
+	platformClient.cancel()
+	if platformClient.close != nil {
+		platformClient.close()
+	}
+	name := fmt.Sprintf("%q (%s) on the platform", platformClient.netClient.Name, platformClient.netClient.ClientId)
+	self.net.joinClient(name, platformClient.netClient.Client)
+}
+
+// Closes and joins every platform client, each after what the platform opened beside it has closed, then closes the
+// platform. Runs once, from close.
 func (self *netExchange) closePlatform() {
 	var platformClients []*netPlatformClient
 	func() {
@@ -139,11 +148,7 @@ func (self *netExchange) closePlatform() {
 		self.platformClients = nil
 	}()
 	for _, platformClient := range platformClients {
-		platformClient.netClient.Client.Cancel()
-		platformClient.cancel()
-		if platformClient.close != nil {
-			platformClient.close()
-		}
+		self.closePlatformClient(platformClient)
 	}
 	// a platform never built is never built now
 	self.platformOnce.Do(func() {
