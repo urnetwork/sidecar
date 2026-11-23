@@ -748,12 +748,9 @@ func AclLog(state *ConfigState) []AclLogEntry {
 	return entries
 }
 
-// A host's existing general config writer, or the stock ref dedicated to confirmed ACL saves.
+// A host's existing general config writer, or the stock ref dedicated to confirmed saves (ConfirmedWriter).
 func (self *ConfigClient) aclPolicyWriter() *ConfigWriter {
-	if writer := self.Writer(); writer != nil {
-		return writer
-	}
-	return self.confirmedAclWriter
+	return self.ConfirmedWriter()
 }
 
 // This network's config writer, its verified state and its current head: what a save plans on.

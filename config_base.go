@@ -102,6 +102,10 @@ type ConfigHeadCheck struct {
 	// ConfigHeadAnchorReader judges the signers of the head's pushes (QD-814), since this reader holds no state at
 	// their pins. Nil leaves each push to the reader's judgment at its own pin, which withholds an anchor's head.
 	Anchor ConfigHeadAnchor
+	// Without Previous: S(n-1) as this reader rebuilt it, at which it judges the head's BridgeBlock as one a head first
+	// holds, since it cannot tell a carried record from a new one (QD-1205); a block whose signer no longer stands there
+	// is then held by none here. Nil holds none.
+	AnchorState *ConfigState
 	// With Previous: the bridge ledger's check of the head (CheckBridgeLedgerFold, DESIGN-DETAILS 12.2.3), which
 	// CheckConfigBase calls, an error being ErrConfigHeadMismatch's fork, or ErrConfigHeadUnavailable's wait. Nil
 	// checks no ledger: a reader with no BridgeBodyJudge.
@@ -119,6 +123,9 @@ type ConfigHeadFacts struct {
 	// base gives holds beside the records, so the next base's check knows a record it carries (QD-1207)
 	settingsRecordSha256        []byte
 	versioningRulesRecordSha256 []byte
+	// SHA-256 of the Signed BridgeBlock readers hold from this base on (configBridgeBlockRecordHeld), nil for none: what
+	// the state the base gives holds, which a block's refusal never forks (D-BRIDGE-16; QD-1205)
+	bridgeBlockRecordSha256 []byte
 }
 
 // Where a ConfigLog takes a base's rows and its config head's check from. A full reader's source opens the config
@@ -373,7 +380,7 @@ func (self *ConfigLog) stateFromBase(previous *ConfigState, kept *configKeptEntr
 	state.threshold = header.GetThreshold()
 	state.settings = configRowsSettingsOrDefault(rows.GetSettings())
 	state.headSettings, state.headSettingsKnown, state.headVersioningRules = nil, false, nil
-	state.headSettingsRecordSha256, state.headVersioningRulesRecordSha256 = nil, nil
+	state.headSettingsRecordSha256, state.headVersioningRulesRecordSha256, state.bridgeBlockRecordSha256 = nil, nil, nil
 	next.membersOwned, next.sidecarsOwned, next.delegationsOwned, next.keysOwned, next.proposalsOwned = true, true, true, true, true
 	next.indexersOwned = true
 	// every row came from these rows, so the builder owns them all
@@ -399,12 +406,12 @@ func (self *ConfigLog) stateFromBase(previous *ConfigState, kept *configKeptEntr
 
 // Holds what a full reader's head check found on the state a base's rows give: the head's ServiceSettings, to which
 // the rows' settings must compile (DESIGN-DETAILS 5.2.3), and its VersioningRules, each beside its Signed bytes' hash,
-// which the next base's check reads to know a record its head carries (QD-1207). A rows-only reader opens no head, so
-// its head-only settings are unknown and it holds no record.
+// which the next base's check reads to know a record its head carries (QD-1207), and the BridgeBlock readers hold
+// (QD-1205). A rows-only reader opens no head, so its head-only settings are unknown and it holds no record.
 func (self *ConfigLog) holdHeadFacts(state *ConfigState, rows *bridge.ProjectionRows, facts *ConfigHeadFacts) error {
 	if self.rowsOnly {
 		state.headSettings, state.headSettingsKnown, state.headVersioningRules = nil, false, nil
-		state.headSettingsRecordSha256, state.headVersioningRulesRecordSha256 = nil, nil
+		state.headSettingsRecordSha256, state.headVersioningRulesRecordSha256, state.bridgeBlockRecordSha256 = nil, nil, nil
 		return nil
 	}
 	if facts == nil {
@@ -418,6 +425,7 @@ func (self *ConfigLog) holdHeadFacts(state *ConfigState, rows *bridge.Projection
 	state.headSettings, state.headSettingsKnown, state.headVersioningRules = facts.Settings, true, facts.VersioningRules
 	state.headSettingsRecordSha256 = bytes.Clone(facts.settingsRecordSha256)
 	state.headVersioningRulesRecordSha256 = bytes.Clone(facts.versioningRulesRecordSha256)
+	state.bridgeBlockRecordSha256 = bytes.Clone(facts.bridgeBlockRecordSha256)
 	return nil
 }
 

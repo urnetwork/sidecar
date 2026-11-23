@@ -48,20 +48,20 @@ func TestConfirmedAclPublicationRetryKeepsItsCommittedHead(t *testing.T) {
 	// A later disjoint head and a different chain at the same version both require fresh consent.
 	for _, v := range []uint64{4, 3} {
 		ref.tip.Version, ref.tip.Chain = v, sha256.Sum256([]byte("another config head"))
-		if _, err := writer.plan(t.Context(), committed, false, nil, approved); !errors.Is(err, ErrConfigHeadConflict) {
+		if _, err := writer.plan(t.Context(), committed, &configWriterRequest{expected: approved}); !errors.Is(err, ErrConfigHeadConflict) {
 			t.Fatalf("publication retry at %d accepted a different config ref: %v", v, err)
 		}
 	}
 	// A newly required fold would send a second EVS push within this one approval.
 	ref.tip.Version, ref.tip.Chain = committed.configVersion, committed.headChain
-	if _, err := writer.plan(t.Context(), committed, true, nil, approved); !errors.Is(err, ErrConfigHeadConflict) {
+	if _, err := writer.plan(t.Context(), committed, &configWriterRequest{fold: true, expected: approved}); !errors.Is(err, ErrConfigHeadConflict) {
 		t.Fatalf("publication retry with another required fold: %v", err)
 	}
 
 	// A new auth-log statement alone can re-sign the identical projection plan.
 	committed.previousN = base.GetVersion()
 	net.admitMember(net.owner, testConfigId("member after approval"), bridge.MemberRole_MEMBER_ROLE_MEMBER)
-	plan, err := writer.plan(t.Context(), committed, false, nil, approved)
+	plan, err := writer.plan(t.Context(), committed, &configWriterRequest{expected: approved})
 	if err != nil || plan != committed {
 		t.Fatalf("unrelated auth entry discarded the already committed config plan: %v", err)
 	}

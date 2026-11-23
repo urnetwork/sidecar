@@ -276,6 +276,8 @@ type testConfigHeadReader struct {
 	settings  map[[sha256.Size]byte]*protocol.ServiceSettings
 	// a head to answer for every version instead, as a forger's
 	forged *ConfigHead
+	// a bridge/block record every head holds, nil for none
+	blockRecord []byte
 }
 
 func newTestConfigHeadReader(net *testConfigNet) *testConfigHeadReader {
@@ -328,6 +330,9 @@ func (self *testConfigHeadReader) ReadConfigHead(ctx context.Context, configVers
 	files := map[string][]byte{ConfigHeadGenesisPath: self.net.signedGenesis}
 	if settings := self.settings[[sha256.Size]byte(configHeadSha256)]; settings != nil {
 		files[ConfigHeadServiceSettingsPath] = self.net.sign(self.net.owner, bridge.SignedType_SIGNED_SERVICE_SETTINGS, settings)
+	}
+	if self.blockRecord != nil {
+		files[ConfigHeadBridgeBlockPath] = self.blockRecord
 	}
 	head, err := NewConfigHead(files)
 	if err != nil {

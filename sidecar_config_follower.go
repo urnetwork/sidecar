@@ -782,7 +782,8 @@ func (self *SidecarConfigFollower) startClient(networkId Id, genesisChain [sha25
 			}
 			context.AfterFunc(client.ctx, writer.Close)
 		} else {
-			// Only aclSaveContext can select this writer. It never registers a general
+			// Only a person's confirmed save selects this writer (ConfigClient.ConfirmedWriter): an ACL save, `ur bridge
+			// block`, and a revocation's own flow re-signing the bridge block (QD-1205). It never registers a general
 			// config writer or starts a periodic fold. A confirmed save performs its own fold.
 			client.confirmedAclWriter = newConfigWriter(client.ctx, args)
 		}

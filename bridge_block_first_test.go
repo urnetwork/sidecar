@@ -82,7 +82,7 @@ func TestFirstBridgeBlockIsAnOwnersOrAdminsWritersAlone(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		head, err := WithBridgeBlock(state, nil, blank, testFirstBlockSign(c.device), random)
+		head, err := WithBridgeBlock(state, blank, testFirstBlockSign(c.device), random)
 		if err != nil {
 			t.Fatalf("%s: %v", c.name, err)
 		}
@@ -111,15 +111,15 @@ func TestFirstBridgeBlockIsAnOwnersOrAdminsWritersAlone(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		head, err := WithBridgeBlock(state, holding, holding, testFirstBlockSign(team.owner), iotest.ErrReader(errors.New("no draw")))
+		head, err := WithBridgeBlock(state, holding, testFirstBlockSign(team.owner), iotest.ErrReader(errors.New("no draw")))
 		if err != nil || !bytes.Equal(head.File(ConfigHeadBridgeBlockPath), record) {
 			t.Errorf("%s: the head's block changed: %v", name, err)
 		}
 	}
-	if _, err := WithBridgeBlock(nil, nil, blank, testFirstBlockSign(team.owner), nil); err == nil {
+	if _, err := WithBridgeBlock(nil, blank, testFirstBlockSign(team.owner), nil); err == nil {
 		t.Error("a draw with no state")
 	}
-	if _, err := WithBridgeBlock(state, nil, blank, nil, nil); err == nil {
+	if _, err := WithBridgeBlock(state, blank, nil, nil); err == nil {
 		t.Error("a draw with no signer")
 	}
 }

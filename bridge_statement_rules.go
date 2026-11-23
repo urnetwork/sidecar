@@ -243,6 +243,57 @@ func readBridgeBlockHeld(head *ConfigHead, state *ConfigState, previous *bridge.
 	return block, head.File(ConfigHeadBridgeBlockPath), nil
 }
 
+// The SHA-256 of the BridgeBlock record a full reader holds once it reads a base's head at state, the state the base
+// lands on, having held the record whose hash is held before, nil for none (ConfigState's; QD-1205): the head's record
+// where it is that one, byte for byte, its signer not judged again, or where it is another whose signer stands at state
+// as ReadBridgeBlock asks and that passes CheckBridgeBlock; held otherwise, since a head that drops the block or holds
+// one readers refuse leaves them the block they held (D-BRIDGE-16). Base 1 lands on S(0), which holds no row: its
+// record is held where the genesis owner's device signed it, the one device there, which base 1's rows admit as an
+// Owner's, so every reader of base 1 holds the block the bootstrap drew (§17.4's first block row). Never an error: a
+// block forks nothing.
+func configBridgeBlockRecordHeld(head *ConfigHead, state *ConfigState, held []byte) []byte {
+	recordSha256 := head.recordSha256(ConfigHeadBridgeBlockPath)
+	if recordSha256 == nil || configHeadRecordCarried(held, recordSha256) {
+		return bytes.Clone(held)
+	}
+	signed, message, err := head.signedRecord(ConfigHeadBridgeBlockPath, bridge.SignedType_SIGNED_BRIDGE_BLOCK)
+	if err != nil || signed == nil || CheckBridgeBlock(message.(*bridge.BridgeBlock)) != nil {
+		return bytes.Clone(held)
+	}
+	if state.base == nil && state.genesis != nil {
+		purpose, _ := ConfigStatementPurpose(bridge.SignedType_SIGNED_BRIDGE_BLOCK)
+		if !bytes.Equal(signed.GetSignerId(), state.genesis.GetOwnerSidecarId()) || len(signed.GetKeyId()) != 0 ||
+			bridge.VerifySigned(signed, purpose, bridge.SignedType_SIGNED_BRIDGE_BLOCK, bridge.SignedKeyAlgEd25519, state.genesis.GetOwnerIdentityPublicKey()) != nil {
+			return bytes.Clone(held)
+		}
+		return recordSha256
+	}
+	if configHeadRecordSignedByAdmin(state, signed, bridge.SignedType_SIGNED_BRIDGE_BLOCK) != nil {
+		return bytes.Clone(held)
+	}
+	return recordSha256
+}
+
+// The block readers of state's newest base hold from head, the head that base names, for a reader holding no block of
+// its own, a filer's view: head's record, its signer not judged again, where it is the one state holds
+// (ConfigState's bridge block record), so a record whose signer stopped standing after every reader took it is still
+// the block (QD-1205); any other as ReadBridgeBlock judges it with no block before, so a record readers refuse gives
+// none. A rows-only state holds no record, and judges each.
+func readBridgeBlockInForce(head *ConfigHead, state *ConfigState) (*bridge.BridgeBlock, error) {
+	if head == nil || state == nil || !configHeadRecordCarried(state.bridgeBlockRecordSha256, head.recordSha256(ConfigHeadBridgeBlockPath)) {
+		return ReadBridgeBlock(head, state, nil)
+	}
+	_, message, err := head.signedRecord(ConfigHeadBridgeBlockPath, bridge.SignedType_SIGNED_BRIDGE_BLOCK)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrBridgeBlockRefused, err)
+	}
+	block := message.(*bridge.BridgeBlock)
+	if err := CheckBridgeBlock(block); err != nil {
+		return nil, err
+	}
+	return block, nil
+}
+
 // What a reader made of one statement at body level.
 type BridgeDisposition int
 
