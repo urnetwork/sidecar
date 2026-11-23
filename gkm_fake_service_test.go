@@ -93,6 +93,9 @@ type gkmFakeStore struct {
 	routeRefusals map[string]int
 	// how many more times a planted refusal answers past its first
 	routeRefusalCounts map[string]int
+	// a status gkm answers once to every item of a device's next call of a batch route, in place of acting on them, by
+	// "<sidecar label>:<route>": a check of gkm's own refusing each item, as gkmservice's tests hold them
+	itemRefusals map[string]int
 	// gkm stopped: every call fails as a transport would (KF7)
 	down bool
 	// the lb's own answer a test planted at a route, a 502 or 504, once each (QD-876): in place of gkm acting, both of
@@ -137,6 +140,7 @@ func newGkmFakeStore(t *testing.T, clock sidecar.Clock) *gkmFakeStore {
 		lbAfterStatuses:    map[string][]int{},
 		routeRefusals:      map[string]int{},
 		routeRefusalCounts: map[string]int{},
+		itemRefusals:       map[string]int{},
 		groupInfos:         map[sidecar.Id]*protocol.GkmGroupInfoObject{},
 		routeHooks:         map[string]func(){},
 		groupOwnerRepoIds:  map[sidecar.Id]sidecar.Id{},
@@ -185,6 +189,14 @@ func (self *gkmFakeStore) refuseTimes(route string, status int, count int) {
 	defer self.stateLock.Unlock()
 	self.routeRefusals[route] = status
 	self.routeRefusalCounts[route] = count - 1
+}
+
+// Has gkm answer status to every item of the next call of route by the device labelled label, in place of acting on
+// them: a batch route's per-item refusal, as gkm's 409 to a STAGED delivery once its generation is claimed.
+func (self *gkmFakeStore) refuseItemsOnce(label string, route string, status int) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.itemRefusals[label+":"+route] = status
 }
 
 // Has the lb answer status, its own 502 or 504, once at the next call of route: in place of gkm acting when before,
@@ -546,6 +558,13 @@ func (self *gkmFakeApi) UploadWraps(ctx context.Context, repoId sidecar.Id, grou
 	reply := &protocol.GkmWrapBatchReply{}
 	err := self.call("UploadWraps", func() error {
 		store := self.store
+		if status, ok := store.itemRefusals[self.label+":UploadWraps"]; ok {
+			delete(store.itemRefusals, self.label+":UploadWraps")
+			for range batch.GetDeliveries() {
+				reply.Results = append(reply.Results, &protocol.GkmWrapResult{Status: uint32(status)})
+			}
+			return nil
+		}
 		for _, deliveryBytes := range batch.GetDeliveries() {
 			body, wrapType, _, err := gkmFakeDeliveryBody(deliveryBytes)
 			if err != nil {
