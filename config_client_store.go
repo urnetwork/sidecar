@@ -58,7 +58,8 @@ type configClientDocument struct {
 	VerifiedHeads []*configClientHeadRecord `json:"verified_heads,omitempty"`
 }
 
-// A config head this device verified: its hash, version and the ServiceSettings it held, deterministically encoded.
+// A config head this device verified: its hash, version and the ServiceSettings and VersioningRules it held,
+// deterministically encoded, each beside its Signed bytes' hash (QD-1207).
 type configClientHeadRecord struct {
 	ConfigHeadSha256 []byte                        `json:"config_head_sha256"`
 	ConfigVersion    uint64                        `json:"config_version"`
@@ -66,6 +67,12 @@ type configClientHeadRecord struct {
 	VersioningRules  []byte                        `json:"versioning_rules,omitempty"`
 	RecoveryKnown    bool                          `json:"recovery_known,omitempty"`
 	Recovery         []*configClientRecoveryRecord `json:"recovery,omitempty"`
+	// SHA-256 of the head's Signed ServiceSettings and VersioningRules, each empty for a head holding none
+	SettingsRecordSha256        []byte `json:"settings_record_sha256,omitempty"`
+	VersioningRulesRecordSha256 []byte `json:"versioning_rules_record_sha256,omitempty"`
+	// the two hashes were kept, as every head this build verifies keeps them: a record without stands for no anchor,
+	// whose head is read again, since a state it anchored would judge again a record its next base carries
+	RecordsKnown bool `json:"records_known,omitempty"`
 }
 
 // Persists a member's recovery binding statement and its effective log position with the verified head.
@@ -134,6 +141,9 @@ func (self *ConfigClient) save() error {
 			if verified.versioningRules != nil {
 				record.VersioningRules, _ = proto.MarshalOptions{Deterministic: true}.Marshal(verified.versioningRules)
 			}
+			record.SettingsRecordSha256 = bytes.Clone(verified.settingsRecordSha256)
+			record.VersioningRulesRecordSha256 = bytes.Clone(verified.versioningRulesRecordSha256)
+			record.RecordsKnown = true
 			record.RecoveryKnown = verified.recoveryKnown
 			for memberId, body := range verified.recoveryBodies {
 				record.Recovery = append(record.Recovery, &configClientRecoveryRecord{MemberId: memberId, At: body.at, Type: body.kind, Body: body.body})
@@ -201,19 +211,34 @@ func (self *ConfigClient) restoreFromStore() error {
 		if len(record.ConfigHeadSha256) != sha256.Size {
 			continue
 		}
+		// a head verified before its records' hashes were kept, or whose hashes are not SHA-256s, is read again
+		// rather than anchoring a state that would judge again a record its next base carries (QD-1207)
+		recordSha256Known := func(recordSha256 []byte) bool {
+			return len(recordSha256) == 0 || len(recordSha256) == sha256.Size
+		}
+		if !record.RecordsKnown || !recordSha256Known(record.SettingsRecordSha256) || !recordSha256Known(record.VersioningRulesRecordSha256) {
+			continue
+		}
+		// a record of no field set encodes as no bytes, which the document omits: its hash says the head held it
 		var settings *protocol.ServiceSettings
-		if record.Settings != nil {
+		if record.Settings != nil || len(record.SettingsRecordSha256) != 0 {
 			settings = &protocol.ServiceSettings{}
 			if err := proto.Unmarshal(record.Settings, settings); err != nil {
 				continue
 			}
 		}
 		facts := &ConfigHeadFacts{Settings: settings, recoveryBodies: map[Id]*configRecoveryBody{}}
-		if record.VersioningRules != nil {
+		if record.VersioningRules != nil || len(record.VersioningRulesRecordSha256) != 0 {
 			facts.VersioningRules = &protocol.VersioningRules{}
 			if err := proto.Unmarshal(record.VersioningRules, facts.VersioningRules); err != nil {
 				continue
 			}
+		}
+		if len(record.SettingsRecordSha256) != 0 {
+			facts.settingsRecordSha256 = bytes.Clone(record.SettingsRecordSha256)
+		}
+		if len(record.VersioningRulesRecordSha256) != 0 {
+			facts.versioningRulesRecordSha256 = bytes.Clone(record.VersioningRulesRecordSha256)
 		}
 		for _, binding := range record.Recovery {
 			if binding != nil {
