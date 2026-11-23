@@ -282,14 +282,19 @@ func (self *tlsCtWatch) nextWait() time.Duration {
 	return wait
 }
 
-// Runs a pass about every CtWatchInterval, jittered, until ctx ends.
+// Runs a pass about every CtWatchInterval, jittered, until ctx ends. No pass starts once ctx has ended, at a wait whose
+// timer fired with the end included, so Close leaves no pass to run on a dead context and mark the watch degraded; an
+// ended ctx asks the clock for nothing.
 func (self *tlsCtWatch) run(ctx context.Context) {
 	defer close(self.done)
-	for {
+	for ctx.Err() == nil {
 		select {
 		case <-ctx.Done():
-			return
 		case <-self.clock.After(self.nextWait()):
+		}
+		// select takes either of two ready cases at random: a timer that fired as ctx ended reads as the end
+		if ctx.Err() != nil {
+			return
 		}
 		self.Pass(ctx)
 	}
