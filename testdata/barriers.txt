@@ -397,6 +397,7 @@ barrier gkm.group_create.after gkmservice/groups.go
 barrier gkm.group_create.before gkmservice/groups.go
 barrier gkm.group_owner.after gkmservice/groups.go
 barrier gkm.group_owner.before gkmservice/groups.go
+barrier gkm.hinted_groups.end gkm_sync.go
 barrier gkm.kp_claim.after gkmservice/keypackages.go
 barrier gkm.kp_claim.before gkmservice/keypackages.go
 barrier gkm.late-ask.follow gkm_group.go
