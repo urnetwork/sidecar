@@ -5,6 +5,10 @@
 //	ur socket listen <addr> <target>        a listen forwarding each stream to [<ip>:]<port>, 127.0.0.1 unless an ip
 //	                                        is given; serving is off while the target refuses; an outward name
 //	                                        (tls/, smtp/) waiting on a person prints ur approve <id>
+//	  [--expires=<d>]                       an outward name's grant lasts d, a Go duration or whole days as <n>d,
+//	                                        held to the requests rule's maxExpiry, which refuses longer, as ur bridge
+//	                                        public-tls's --expires is; the rule's expiresDefault when it is omitted
+//	                                        (§9.9; owner decision 687). Another name asks no grant and refuses it
 //	ur socket dial <addr> --listen=<local>  a local forward on [<ip>:]<port>, every interface unless an ip is given,
 //	                                        raw bytes with no TLS-only rule (D-TRUST-8; owner decisions 84, 130)
 //	ur socket dial <addr>                   stdin and stdout relayed to one stream, for ssh -o ProxyCommand, through
@@ -25,6 +29,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/docopt/docopt-go"
 
@@ -36,7 +41,7 @@ func init() {
 		name: "socket",
 		usage: strings.Join([]string{
 			"  ur socket",
-			"  ur socket listen <addr> <target>",
+			"  ur socket listen <addr> <target> [--expires=<d>]",
 			"  ur socket dial <addr> [--listen=<local>]",
 			"  ur socket ls [<net>]",
 			"  ur socket drain <addr>",
@@ -74,7 +79,12 @@ func runUrSocket(ctx context.Context, cli *urCli, options docopt.Opts) error {
 	switch {
 	case options["listen"] == true:
 		target, _ := options.String("<target>")
-		return runUrSocketListen(ctx, cli, address, target)
+		expiresText, _ := options.String("--expires")
+		expires, err := parseUrSocketListenExpires(expiresText)
+		if err != nil {
+			return err
+		}
+		return runUrSocketListen(ctx, cli, address, target, expires)
 	case options["dial"] == true:
 		if local, _ := options.String("--listen"); local != "" {
 			return runUrSocketDialForward(ctx, cli, address, local)
@@ -109,13 +119,28 @@ func formatUrSocketStatus(status *sidecar.DaemonSocketStatus) string {
 	return fmt.Sprintf("listen  %s to %s (%s), %d in flight", status.Name, status.Target, state, status.Inflight)
 }
 
-func runUrSocketListen(ctx context.Context, cli *urCli, address string, target string) error {
+// --expires: how long an outward name's grant lasts, in ur share add's grammar, a Go duration such as 36h or whole days
+// as 7d; empty is 0, the requests rule's expiresDefault. The daemon takes it in milliseconds, so a duration under one
+// is refused rather than sent as none.
+func parseUrSocketListenExpires(text string) (time.Duration, error) {
+	expires, err := parseUrShareExpires(text)
+	if err != nil {
+		return 0, err
+	}
+	if 0 < expires && expires < time.Millisecond {
+		return 0, errors.New("--expires takes a duration such as 36h, or whole days as 7d")
+	}
+	return expires, nil
+}
+
+// expires, 0 for none, is how long a tls/ or smtp/ listen's grant lasts, asked from now when the daemon files it.
+func runUrSocketListen(ctx context.Context, cli *urCli, address string, target string, expires time.Duration) error {
 	network, err := urSocketAddressNetwork(address)
 	if err != nil {
 		return err
 	}
 	reply := &sidecar.DaemonSocketListenReply{}
-	params := &sidecar.DaemonSocketListenParams{Network: network, Address: address, Target: target}
+	params := &sidecar.DaemonSocketListenParams{Network: network, Address: address, Target: target, ExpiresMs: expires.Milliseconds()}
 	if err := cli.callDaemon(ctx, sidecar.DaemonMethodSocketListen, params, false, reply); err != nil {
 		return err
 	}
