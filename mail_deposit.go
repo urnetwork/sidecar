@@ -24,9 +24,9 @@
 //	           mail_inbound_repos_per_message
 //	right      a repo this receiver's own newest verified state gives no deposit (§8.5; repo:<id>:deposit's table,
 //	           AclExchangeScopes, D-ACL-21) refuses the message before any deposit is made, at once (refuses), so the
-//	           session answers 451 4.3.0 before the body is even spooled, where the exchange's refusal would otherwise
-//	           be retried by evs's client for most of a minute; a repo whose client holds no ACL state to judge by is
-//	           left to the exchange and evs, which judge every deposit whatever this says
+//	           session answers 451 4.3.0 before the body is even spooled, where the exchange would otherwise refuse
+//	           the deposit's token only once the body was spooled; a repo whose client holds no ACL state to judge by
+//	           is left to the exchange and evs, which judge every deposit whatever this says
 //	bound      the deposits take at most DepositTimeout, past which every one still open is cancelled and the message
 //	           answers 451 4.3.0 inside the sender's wait
 //
