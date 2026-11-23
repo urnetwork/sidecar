@@ -47,20 +47,20 @@
  {
   "num": 6,
   "code": "PROTO",
-  "words": 9761,
-  "code_words": 4188,
+  "words": 9777,
+  "code_words": 4211,
   "ceiling": 3800,
-  "over": 5961,
-  "over_pct": 156.9
+  "over": 5977,
+  "over_pct": 157.3
  },
  {
   "num": 7,
   "code": "TEAM",
-  "words": 13481,
-  "code_words": 15387,
+  "words": 13616,
+  "code_words": 15509,
   "ceiling": 3500,
-  "over": 9981,
-  "over_pct": 285.2
+  "over": 10116,
+  "over_pct": 289.0
  },
  {
   "num": 8,
@@ -146,11 +146,11 @@
  {
   "num": 17,
   "code": "BRIDGE",
-  "words": 10001,
+  "words": 10136,
   "code_words": 6574,
   "ceiling": 3800,
-  "over": 6201,
-  "over_pct": 163.2
+  "over": 6336,
+  "over_pct": 166.7
  },
  {
   "num": 18,

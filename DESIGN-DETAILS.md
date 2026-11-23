@@ -3097,11 +3097,22 @@ Compile:                                                 -- captures cPin := the
              log.ApplyRun(the entries (base, cPin], 256 at a time)   -- Judge each at id level
              any error or fork -> alarm state_unverified, keep the state, return
   2 keys     for each generation g a sealed body or the head names and gen/<g> does not hold:
-               GkmApi.Generations(since) -> ParseGenRotate; GkmApi.Wraps(g, recipient = my delegation_id)
-               -> ParseGkmDelivery(SIGNED_DELEGATION_WRAP) -> OpenGkmDelivery(reader key) -> RK_g;
-               OpenGkmLadder downward; store gen/<g>
+               GkmApi.Forms(config repo) -> the group the newest GroupForm makes, moved to only along a
+               chain of verified forms from the group listed in, none re-forming below the newest
+               generation held (§10.8's re-form); kept in the groups record
+               GkmApi.Generations(that group, since) -> ParseGenRotate, each chaining by parent_commitment
+               from the one below and, at a generation held, the statement held; GkmApi.Wraps(g, recipient
+               = my delegation_id) -> ParseGkmDelivery(SIGNED_DELEGATION_WRAP) -> OpenGkmDelivery(reader
+               key) -> RK_g; OpenGkmLadder downward; store gen/<g>
              no wrap yet -> ask late once a LateAskInterval; bodies of that generation stay pending
-               (BRIDGE-M2-01's id-level effect); alarm config_key_waiting after KeyWaitAlarmInterval
+               (BRIDGE-M2-01's id-level effect)
+             a wanted generation not opened, listed or not, waits with its cause (no wrap yet, none listed,
+               forms that do not lead on, a listing stopped at a statement that does not stand, a failed
+               read) and the compile retries: alarm config_key_waiting after KeyWaitAlarmInterval and each
+               interval after, its detail the cause (owner decision 716)
+             a listed GenRotate off the held chain (no parent_commitment link to the one below, or not
+               the one held) -> head_alarm (fork), the compile's pin as evidence; it opens nothing
+               (owner decision 716)
   3 head     if head/<base.config_head_sha256> is not stored: EvsRepo.ReadHead of the config repo at
                base.config_version with the exchange's repo:<config_repo_id>:r token; require its chain value
                to equal config_head_sha256; NewConfigHead(files); require rows.settings to equal the head's
