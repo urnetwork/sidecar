@@ -151,6 +151,11 @@ func (self *Sidecar) startGeneration(args *sidecarGenerationArgs) {
 	defer clear(args.clientKeySeed)
 	defer clear(args.connectIdentitySeed)
 	generationNumber := args.identity.Generation
+	// what a kill or a lost answer left pending as the generation starts, read before its token is installed: the
+	// repost below posts these alone, so a statement an act keeps once the generation runs stays its caller's to post
+	// again (ErrSidecarActPending), and a repost that runs late never posts it beside that caller, past a re-check the
+	// caller has since made (D-TEAM-29's re-check before each post or retry)
+	startPendings, startPendingsErr := self.pendingStatements()
 	// The generation's proof signer and token are installed before the status names the generation, so a host
 	// or component that acts on that status finds them. A refused move takes them back out.
 	signer, signerErr := newDpopSigner(args.clientKeySeed, self.clock.Now, self.apiClockOffset, rand.Reader)
@@ -276,11 +281,17 @@ func (self *Sidecar) startGeneration(args *sidecarGenerationArgs) {
 		// and Online names a generation Status and the components already see
 		generation.leg.start()
 	}
-	// what a kill or a lost answer left pending goes again, the same bytes, on the new generation's token (§5.6's
-	// sign row); one still pending waits for the next start or a caller's PostPendingStatements
+	// what was pending at the start goes again, the same bytes, on the new generation's token (§5.6's sign row); one
+	// still pending waits for the next start or a caller's PostPendingStatements
+	repostKey := args.identity.SidecarId.String()
 	go func() {
 		defer close(generation.pendingDone)
-		if err := self.PostPendingStatements(generationCtx); err != nil && generationCtx.Err() == nil {
+		testHookBarrier("sidecar.generation.repost", repostKey)
+		err := startPendingsErr
+		if err == nil {
+			err = self.postPendingStatements(generationCtx, startPendings)
+		}
+		if err != nil && generationCtx.Err() == nil {
 			self.log.Infof("[identity]pending statements stay pending: %s", err)
 		}
 	}()
