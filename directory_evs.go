@@ -1322,6 +1322,9 @@ func (self *DirectoryEvsCards) readCardsOnce(ctx context.Context, repo *EvsRepo,
 		if fromChain != headChain {
 			return nil, fmt.Errorf("%w: a head at the version held with another chain", ErrEvsHeadForked)
 		}
+		// the head is the version the copy verified: what it shows of this device's own pushes is noted, as a verified
+		// head's is (evs_read.go's own pushes row)
+		repo.noteOwnPushesShown(refId, reply, headVersion, true)
 		return changes, nil
 	}
 	through := min(headVersion, afterVersion+uint64(max(1, self.settings.CardsPageVersionCount)))
@@ -1352,6 +1355,9 @@ func (self *DirectoryEvsCards) readCardsOnce(ctx context.Context, repo *EvsRepo,
 		}); err != nil {
 			return nil, err
 		}
+		// walked to and pinned, and only now what it shows of this device's own pushes noted (evs_read.go's own pushes
+		// row); a page short of the head notes nothing, its head still evs's word
+		repo.noteOwnPushesShown(refId, reply, headVersion, true)
 	} else if err := self.raisePin(repoId, refId, ask, afterVersion, fromChain, walked); err != nil {
 		return nil, err
 	}
