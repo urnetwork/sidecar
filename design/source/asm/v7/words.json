@@ -56,11 +56,11 @@
  {
   "num": 7,
   "code": "TEAM",
-  "words": 13616,
+  "words": 13883,
   "code_words": 15509,
   "ceiling": 3500,
-  "over": 10116,
-  "over_pct": 289.0
+  "over": 10383,
+  "over_pct": 296.7
  },
  {
   "num": 8,
@@ -92,11 +92,11 @@
  {
   "num": 11,
   "code": "EVS",
-  "words": 22883,
-  "code_words": 56446,
+  "words": 22895,
+  "code_words": 56654,
   "ceiling": 5000,
-  "over": 17883,
-  "over_pct": 357.7
+  "over": 17895,
+  "over_pct": 357.9
  },
  {
   "num": 12,
@@ -173,11 +173,11 @@
  {
   "num": 20,
   "code": "QUOTA",
-  "words": 5618,
+  "words": 5731,
   "code_words": 5021,
   "ceiling": 2500,
-  "over": 3118,
-  "over_pct": 124.7
+  "over": 3231,
+  "over_pct": 129.2
  },
  {
   "num": 21,
