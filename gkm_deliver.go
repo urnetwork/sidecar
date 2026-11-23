@@ -22,7 +22,9 @@
 // (QD-066). A path is created If-None-Match, so a restart stages again: a 412 whose winner is this rotator's own
 // earlier delivery of the same generation and commitment to the same recipient and key is success, a RecoveryWrap's
 // 412 under this rotation's own commitment likewise, and any other winner an alarm, since no other rotator holds
-// this C'. A result of 0 is sent again.
+// this C'. A result of 0 is sent again. A 409 or 403 ends the staging with ErrGkmWait, which the rotation first holds
+// against gen/: gkm takes a STAGED delivery only while its generation is unclaimed, so where a claim stands now the
+// race was lost at the claim, and the rotation takes the winner as a 412 has it (gkm_rotate.go).
 //
 // A LATE delivery (the deliver row) answers wrap-pending: after a random wait of up to LateDeliverJitter, a holder
 // that is not read_only, holds RK_g* and judged gen/<g*>, at a tip at or past its pin (R2), delivers to a recipient
@@ -60,6 +62,10 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
+
+// gkm's 409 or 403 to a STAGED delivery, under ErrGkmWait. gkm takes one only while gen/<g> is absent (§10.6), so a
+// rotation that meets it reads gen/ before it waits (rotateInFlow): another rotator's claim may have landed meanwhile.
+var errGkmStagedRefused = errors.New("gkm refused a staged delivery")
 
 // What one delivery of a rotation is.
 type gkmDeliveryTargetKind int
@@ -373,7 +379,7 @@ func (self *gkmGroupManager) stageDeliveries(ctx context.Context, state GkmAuthV
 				case 0:
 					again = append(again, item)
 				case http.StatusConflict, http.StatusForbidden:
-					return fmt.Errorf("%w: gkm refused a staged delivery", ErrGkmWait)
+					return fmt.Errorf("%w: %w", ErrGkmWait, errGkmStagedRefused)
 				default:
 					return &GkmError{Status: int(result.GetStatus())}
 				}

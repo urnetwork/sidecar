@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"errors"
+	"net/http"
 	"slices"
 	"strings"
 	"testing"
@@ -444,6 +445,64 @@ func TestGkmRotateAdoptsAWinnerThatCoversItsShrink(t *testing.T) {
 	}
 	if held, poisoned, found, err := b.client.TestHeldGeneration(world.repoId, 2); err != nil || !found || held == nil || poisoned {
 		t.Errorf("the loser's keychain: %v %v %v", found, poisoned, err)
+	}
+}
+
+// The claim's race met at the staging: the winner claims while the loser stages, and gkm, which takes a STAGED
+// delivery only while gen/<g> is absent (§10.6), answers each of the loser's 409. The loser reads gen/, judges the
+// winner, opens it by its ReaderWrap and adopts it, claiming nothing, as at a 412 (§10.7's KF6: rotations race only on
+// gen/<g+1>). Before, it answered ErrGkmWait, "gkm refused a staged delivery": the server e2e gkm case's exact
+// rotation race met it whenever one rotator's staging began after another's claim.
+func TestGkmRotateTakesTheWinnerWhenItsStagingMeetsTheClaim(t *testing.T) {
+	world := newGkmFlowWorld(t, protocol.RepoKind_REPO_KIND_GENERAL)
+	world.holdAll()
+	a, b := world.flows[world.a], world.flows[world.b]
+	// a revoked leaf: the rotations' keys go by ReaderWraps, which the staging uploads
+	world.revoke(world.x)
+	world.stateFor()
+	var winnerKey *sidecar.EvsRepoKey
+	world.store.plantHook("b", "UploadWraps", func() {
+		key, err := a.client.RotateRepo(world.ctx, world.repoId)
+		if err != nil {
+			t.Errorf("the winner's rotation: %v", err)
+		}
+		winnerKey = key
+		// gen/2 stands now: gkm refuses every STAGED delivery of it
+		world.store.refuseItemsOnce("b", "UploadWraps", http.StatusConflict)
+	})
+	key, err := b.client.RotateRepo(world.ctx, world.repoId)
+	if err != nil {
+		t.Fatalf("the loser's rotation, its staging refused once the winner claimed: %v", err)
+	}
+	if winnerKey == nil || key.Generation() != 2 || !bytes.Equal(key.Commitment(), winnerKey.Commitment()) {
+		t.Fatalf("the loser's key: generation %d", key.Generation())
+	}
+	if world.store.newestGeneration(world.groupId) != 2 || world.store.callCount("ClaimGeneration") != 1 || b.client.TestHasRotateDraft(world.repoId) || len(b.alarms) != 0 {
+		t.Errorf("the loser claimed, kept its draft or alarmed: gkm at %d, %d claims, alarms %v", world.store.newestGeneration(world.groupId), world.store.callCount("ClaimGeneration"), b.alarms)
+	}
+	if held, poisoned, found, err := b.client.TestHeldGeneration(world.repoId, 2); err != nil || !found || held == nil || poisoned {
+		t.Errorf("the loser's keychain: %v %v %v", found, poisoned, err)
+	}
+}
+
+// A staging refused while no claim of its generation stands is gkm's state ahead of the rotator's, as a refused
+// claim is: ErrGkmWait, with nothing claimed and the draft kept for the next try, which lands.
+func TestGkmRotateWaitsWhenItsStagingIsRefusedWithNoClaimStanding(t *testing.T) {
+	world := newGkmFlowWorld(t, protocol.RepoKind_REPO_KIND_GENERAL)
+	world.holdAll()
+	b := world.flows[world.b]
+	world.revoke(world.x)
+	world.stateFor()
+	world.store.refuseItemsOnce("b", "UploadWraps", http.StatusForbidden)
+	if _, err := b.client.RotateRepo(world.ctx, world.repoId); !errors.Is(err, sidecar.ErrGkmWait) {
+		t.Fatalf("a rotation whose staging gkm refused, no claim standing: %v", err)
+	}
+	if world.store.newestGeneration(world.groupId) != 1 || world.store.callCount("ClaimGeneration") != 0 || !b.client.TestHasRotateDraft(world.repoId) {
+		t.Errorf("gkm at %d after %d claims, the draft kept %t", world.store.newestGeneration(world.groupId), world.store.callCount("ClaimGeneration"), b.client.TestHasRotateDraft(world.repoId))
+	}
+	key, err := b.client.RotateRepo(world.ctx, world.repoId)
+	if err != nil || key.Generation() != 2 || world.store.newestGeneration(world.groupId) != 2 {
+		t.Errorf("the rotation tried again: %v %v", key, err)
 	}
 }
 

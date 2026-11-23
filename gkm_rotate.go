@@ -7,7 +7,9 @@
 //	         is poisoned, else the cause asked for; a leaf_wrap only on a clean tree (R5); a drop key for a kind that
 //	         takes deposits; the delivery set counted into wrap_count; RK' and the Signed GenRotate persisted in the
 //	         keychain's draft before anything is staged
-//	2 stage  every delivery STAGED before the claim (gkm_deliver.go)
+//	2 stage  every delivery STAGED before the claim (gkm_deliver.go); gkm takes one only while gen/<g*+1> is absent,
+//	         so a 409 or 403 while a claim of it stands is the 412 below met early: the next pass reads gen/ and
+//	         takes the winner (§10.7's KF6: rotations race only on gen/<g+1>)
 //	3 claim  POST gen/<g*+1>, the linearization point, between barriers gkm.rotate.claim.before and .after
 //	         201  the generation is this device's: keychain, pin, the draft deleted
 //	         412  the winner is judged by CheckRotation; one that passes is held, and adopted as the answer only if
@@ -203,7 +205,17 @@ func (self *gkmGroupManager) rotateInFlow(ctx context.Context, cause GkmCause) (
 			return nil, err
 		}
 		if err := self.stageDeliveries(ctx, state, pins.groupId, draft.key, targets); err != nil {
-			return nil, err
+			if !errors.Is(err, errGkmStagedRefused) {
+				return nil, err
+			}
+			// gkm takes a STAGED delivery only while gen/<g*+1> is absent (§10.6): where a claim of it stands now,
+			// another rotator claimed while this one staged, and the race was the claim's (§10.7's KF6: rotations race
+			// only on gen/<g+1>), so the next pass takes the winner as the 412 branch does; else gkm's state is ahead
+			standing, readErr := client.args.Api.Generations(ctx, self.repoId, pins.groupId, parent.GetGeneration())
+			if readErr != nil || len(standing.GetGenerations()) == 0 {
+				return nil, err
+			}
+			continue
 		}
 		key, winner, err := self.claim(ctx, pins.groupId, draft)
 		if err != nil {
