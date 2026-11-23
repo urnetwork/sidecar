@@ -87,10 +87,10 @@ const (
 	MailSendDelivered MailSendOutcome = "delivered"
 	// No record a receiver honors holds the address, or it is a burned or paused burner's (§15.9).
 	MailSendUnknown MailSendOutcome = "unknown"
-	// Another member's mailbox, which a device has no deposit right in until QD-136's cell is in §8.5's rows
-	// (plan-MAIL-member-deposit's interim): refused, closed.
-	MailSendMemberRefused MailSendOutcome = "member_refused"
-	// Policy gives this device no deposit or write in the recipient's repo.
+	// The recipient's repo gives this device no deposit that carries mail (§15.8, mail_send_local.go): none at all, as
+	// another member's mailbox gives a sender no send grant on mail: marks (owner decision 333), or only §16.8's receipt
+	// deposit, which a reader that does not write holds, a read_only device among them, and ingest never takes as mail.
+	// Nothing was deposited there.
 	MailSendNoDepositRight MailSendOutcome = "refused"
 	// Internet mail queued at o/ for a prover host (§15.10's step 4): §14's outcomes follow in or/.
 	MailSendQueued MailSendOutcome = "queued"
