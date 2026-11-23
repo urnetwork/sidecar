@@ -715,6 +715,8 @@ func TestParseEvsRepoPlaceHoldsItsShape(t *testing.T) {
 	}
 }
 
+// With a keying ttl of the whole RepoCacheTtl, a 404 and a keying repo/ are kept as long as any answer; by default
+// neither is kept (repo_keying_window_test.go).
 func TestRepoCacheKeepsAnAnswerAtMostItsTtl(t *testing.T) {
 	fixture := newEvsFixture(t)
 	repoId := testId("repo")
@@ -724,7 +726,9 @@ func TestRepoCacheKeepsAnAnswerAtMostItsTtl(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	repos := NewRepoCache(fixture.clock, fixture.engine.Settings())
+	settings := *fixture.engine.Settings()
+	settings.RepoKeyingCacheTtl = settings.RepoCacheTtl
+	repos := NewRepoCache(fixture.clock, &settings)
 	if _, err := repos.Read(fixture.ctx, cluster, repoId); !errors.Is(err, sidecar.ErrEvsRepoNotFound) {
 		t.Fatalf("before: %v", err)
 	}

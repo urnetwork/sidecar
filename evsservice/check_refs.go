@@ -31,7 +31,8 @@
 //
 // What settles for good is final: shredding, every ref rule and every change-shape rule, since each is a property of
 // the statement or of a head that never changes it. Keying, deletion, scope and the storage limit can change, so they
-// are recorded.
+// are recorded; and keying and deletion, which the creator's activation and a restore move on to active, are answered
+// only from a repo/ read from the cluster, as every refusal is from a cluster head (evsRepoStateMovesOn).
 
 package evsservice
 
@@ -98,6 +99,15 @@ func checkRepoState(repo *protocol.EvsRepoObject, instanceFormat uint32) *EvsChe
 		return newEvsCheckRefusal(EvsCheckReasonRepoFormat, fmt.Sprintf("a repo of format %d at an instance of format %d", repo.GetFormat(), instanceFormat))
 	}
 	return nil
+}
+
+// Whether refusal is one on a repo/ state a transition still moves on to active: keying, which the creator's
+// activation ends, and deleted, which a restore ends (§11.12's state row). Read from a cache, such a state may already
+// have moved on, and the refusal, recorded, would stand for the push id: a push answers it only from a repo/ read
+// from the cluster (push.go's restsOnCache). Shredding is final and a format past the instance's only rises, so
+// neither needs one.
+func evsRepoStateMovesOn(refusal *EvsCheckRefusal) bool {
+	return refusal.Reason == EvsCheckReasonRepoKeying || refusal.Reason == EvsCheckReasonRepoDeleted
 }
 
 // The refs table: see the file header.
