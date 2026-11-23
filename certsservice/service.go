@@ -333,9 +333,9 @@ func (self *CertsService) HoldChallengeName(name string, retryAfter time.Duratio
 	}
 }
 
-// Holds the challenge name dns's refusal of row's order names (a *CertsDnsWriteRateLimitError), or every
-// challenge name of row's CSR when it names none, as a refusal with no such error, ErrCertsDnsWriteRateLimited
-// alone, does.
+// Holds the challenge name that dns's refusal of row's order names (a *CertsDnsWriteRateLimitError), or
+// every challenge name of row's CSR when the refusal names none, ErrCertsDnsWriteRateLimited alone
+// among them.
 func (self *CertsService) holdRefusedChallengeNames(row *sidecar.TlsCertRecord, err error) {
 	var refusal *CertsDnsWriteRateLimitError
 	if errors.As(err, &refusal) && refusal.Name != "" {
