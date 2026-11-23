@@ -20,13 +20,7 @@ import (
 // the next and only fresh one right after it.
 func evsTestRequireCachedThenFresh(t *testing.T, when string, reads []evsTestCacheRead) {
 	t.Helper()
-	fresh := 0
-	for _, read := range reads {
-		if read.fresh {
-			fresh += 1
-		}
-	}
-	if len(reads) < 2 || !reads[0].cached || reads[0].fresh || !reads[1].fresh || fresh != 1 {
+	if len(reads) < 2 || !reads[0].cached || reads[0].fresh || !reads[1].fresh || evsTestFreshCount(reads) != 1 {
 		t.Errorf("%s: requests %+v, not the cache's and then one fresh one", when, reads)
 	}
 }
