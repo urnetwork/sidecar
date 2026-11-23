@@ -34,6 +34,15 @@
 // through the head's records reaching its first held entry. CheckConfigBase runs those; that the head is the config
 // repo's main ref at config_version, on its chain from C_0, is the evs ref's, which ConfigClient's head reader checks.
 //
+// A ServiceSettings or VersioningRules is judged at the base whose head first holds it: its signer standing, untagged
+// and of a role that signs it at S(n-1). Every head carries both forward unchanged, so a reader keeps a record the
+// previous base's head held, byte for byte, its signer not judged again: §7.9's Writes judges a record at its parent
+// head, and D-TEAM-26 has what a since-revoked device signed stand until an Owner or Admin files another (QD-1207). A
+// record a head removes and a later head puts back is new again and judged again, so none returns under a signer who
+// no longer stands. A reader that starts at a base cannot tell a carried record from a new one and judges no record's
+// signer there, so warm, new and cold readers hold the same records at every base. The state keeps each record's
+// Signed bytes' hash beside it (ConfigState), as ConfigClient's verified heads do.
+//
 // A head knows every path it may hold, and refuses one it does not, so a writer and a reader of one version agree on
 // what a head compiles from. Immutable once built; every accessor returns a copy. On every leg, with no connect import.
 // Nothing here creates, derives or unwraps a key, so nothing calls testHookSecret.
@@ -393,6 +402,24 @@ func (self *ConfigHead) signedRecord(path string, signedType bridge.SignedType) 
 	return signed, message, nil
 }
 
+// The SHA-256 of the record a head holds alone at path, its Signed verbatim, as a state keeps it beside the parsed
+// record (QD-1207); nil for a path the head does not hold.
+func (self *ConfigHead) recordSha256(path string) []byte {
+	data := self.files[path]
+	if data == nil {
+		return nil
+	}
+	digest := sha256.Sum256(data)
+	return digest[:]
+}
+
+// Whether a record whose Signed bytes hash to recordSha256 is the one the previous base's head held, whose hash a state
+// keeps as held (nil for none): the same bytes, so readers took it at a base before, judging its signer where a head
+// first held it, and keep it.
+func configHeadRecordCarried(held []byte, recordSha256 []byte) bool {
+	return len(held) == sha256.Size && bytes.Equal(held, recordSha256)
+}
+
 // The ServiceSettings the head holds and its Signed, nil for none, so §7.9's defaults hold.
 func (self *ConfigHead) ServiceSettings() (*protocol.ServiceSettings, *bridge.Signed, error) {
 	signed, message, err := self.signedRecord(ConfigHeadServiceSettingsPath, bridge.SignedType_SIGNED_SERVICE_SETTINGS)
@@ -425,7 +452,8 @@ func (self *ConfigHead) Names() (*protocol.ConfigNameTable, error) {
 
 // Whether a record that rides a head alone was signed by one who may sign it at state: its signature under the
 // sidecar's identity key, the sidecar standing and of an Owner's or Admin's member, as ServiceSettings' signer row
-// asks (§7.9). A head is judged at the state its base lands on.
+// asks (§7.9). A head is judged at the state its base lands on, and a record once, at the base whose head first holds
+// it: CheckConfigBase judges no record the previous base's head held byte for byte (QD-1207).
 func configHeadRecordSignedByAdmin(state *ConfigState, signed *bridge.Signed, signedType bridge.SignedType) error {
 	return configHeadRecordSignedByRole(state, signed, signedType, func(role bridge.MemberRole) bool {
 		return role == bridge.MemberRole_MEMBER_ROLE_OWNER || role == bridge.MemberRole_MEMBER_ROLE_ADMIN
@@ -467,9 +495,11 @@ func CheckConfigHeadWriter(state *ConfigState, sidecarId Id) error {
 
 // Checks head against one base (§7.9's BASE row), for a full reader's ConfigRowsSource.CheckHead: the head's genesis is
 // the log's; it holds as records exactly check.Folded, each by id with its carrying position, and none past the base's
-// folded_through; its ServiceSettings, if any, was signed by an Owner's or Admin's standing device; and its compile
-// (CompileProjectionRows over rows, L(folded_through), with this head) is check.Rows, byte for byte. rows is the
-// reader's, check.CompileRows: nil refuses, since no base compiles from nothing. Without check.Previous, a reader
+// folded_through; its ServiceSettings, if any, was signed by an Owner's or Admin's standing device, and its
+// VersioningRules by an Owner's, Admin's or Network admin's, each judged at check.Previous unless it is the record
+// check.Previous's own base's head held, byte for byte, which stands as readers took it there (QD-1207); and its
+// compile (CompileProjectionRows over rows, L(folded_through), with this head) is check.Rows, byte for byte. rows is
+// the reader's, check.CompileRows: nil refuses, since no base compiles from nothing. Without check.Previous, a reader
 // starting at the base, it checks the anchor instead (checkConfigAnchor). Any error makes the base a fork.
 func CheckConfigBase(head *ConfigHead, check *ConfigHeadCheck, rows *ConfigCompileRows) (*ConfigHeadFacts, error) {
 	if head == nil || check == nil || check.Header == nil {
@@ -517,14 +547,20 @@ func CheckConfigBase(head *ConfigHead, check *ConfigHeadCheck, rows *ConfigCompi
 		}
 	}
 
+	// each record the head holds alone is judged where a head first holds it: one the previous base's head held byte
+	// for byte stands under its signer, who need not stand now (§7.9's Writes, at its parent head; D-TEAM-26; QD-1207),
+	// and any other, a new record or one put back after a head removed it, is judged at S(n-1)
 	facts := &ConfigHeadFacts{}
 	settings, settingsSigned, err := head.ServiceSettings()
 	if err != nil {
 		return nil, err
 	}
 	if settingsSigned != nil {
-		if err := configHeadRecordSignedByAdmin(check.Previous, settingsSigned, bridge.SignedType_SIGNED_SERVICE_SETTINGS); err != nil {
-			return nil, fmt.Errorf("%w: service_settings: %w", ErrConfigHeadMismatch, err)
+		facts.settingsRecordSha256 = head.recordSha256(ConfigHeadServiceSettingsPath)
+		if !configHeadRecordCarried(check.Previous.headSettingsRecordSha256, facts.settingsRecordSha256) {
+			if err := configHeadRecordSignedByAdmin(check.Previous, settingsSigned, bridge.SignedType_SIGNED_SERVICE_SETTINGS); err != nil {
+				return nil, fmt.Errorf("%w: service_settings: %w", ErrConfigHeadMismatch, err)
+			}
 		}
 		if err := CheckServiceSettings(settings); err != nil {
 			return nil, fmt.Errorf("%w: service_settings: %w", ErrConfigHeadMismatch, err)
@@ -536,11 +572,14 @@ func CheckConfigBase(head *ConfigHead, check *ConfigHeadCheck, rows *ConfigCompi
 		return nil, err
 	}
 	if versioningSigned != nil {
-		err := configHeadRecordSignedByRole(check.Previous, versioningSigned, bridge.SignedType_SIGNED_VERSIONING_RULES, func(role bridge.MemberRole) bool {
-			return role == bridge.MemberRole_MEMBER_ROLE_OWNER || role == bridge.MemberRole_MEMBER_ROLE_ADMIN || role == bridge.MemberRole_MEMBER_ROLE_NETWORK_ADMIN
-		})
-		if err != nil {
-			return nil, fmt.Errorf("%w: versioning_rules: %w", ErrConfigHeadMismatch, err)
+		facts.versioningRulesRecordSha256 = head.recordSha256(ConfigHeadVersioningRulesPath)
+		if !configHeadRecordCarried(check.Previous.headVersioningRulesRecordSha256, facts.versioningRulesRecordSha256) {
+			err := configHeadRecordSignedByRole(check.Previous, versioningSigned, bridge.SignedType_SIGNED_VERSIONING_RULES, func(role bridge.MemberRole) bool {
+				return role == bridge.MemberRole_MEMBER_ROLE_OWNER || role == bridge.MemberRole_MEMBER_ROLE_ADMIN || role == bridge.MemberRole_MEMBER_ROLE_NETWORK_ADMIN
+			})
+			if err != nil {
+				return nil, fmt.Errorf("%w: versioning_rules: %w", ErrConfigHeadMismatch, err)
+			}
 		}
 		if err := CheckVersioningRules(versioningRules); err != nil {
 			return nil, fmt.Errorf("%w: versioning_rules: %w", ErrConfigHeadMismatch, err)
@@ -568,7 +607,9 @@ func CheckConfigBase(head *ConfigHead, check *ConfigHeadCheck, rows *ConfigCompi
 // check.Folded; the chain recomputed from the genesis through the records before check.FoldedFrom reaches the first
 // held entry's prev_chain, and passes through check.Floor when the reader held a pin there (DESIGN-DETAILS 5.5); its
 // ServiceSettings keeps its bounds; and the base's rows hold its ServiceSettings' Team scopes exactly (QD-1163). No
-// compile is checked: the reader holds no rows at folded_through but the base's.
+// compile is checked: the reader holds no rows at folded_through but the base's. Nor is a record's signer: this reader
+// cannot tell a record the head carries from one it first holds, so it takes both records as every reader before it
+// took them, each beside its Signed bytes' hash, and the next base keeps whichever its head carries (QD-1207).
 func checkConfigAnchor(head *ConfigHead, check *ConfigHeadCheck) (*ConfigHeadFacts, error) {
 	if bridge.GenesisChain(head.signedGenesis) != check.GenesisChain {
 		return nil, fmt.Errorf("%w: another genesis", ErrConfigHeadMismatch)
@@ -646,6 +687,7 @@ func checkConfigAnchor(head *ConfigHead, check *ConfigHeadCheck) (*ConfigHeadFac
 		}
 	}
 	facts.Settings = settings
+	facts.settingsRecordSha256 = head.recordSha256(ConfigHeadServiceSettingsPath)
 	versioningRules, _, err := head.VersioningRules()
 	if err != nil {
 		return nil, err
@@ -655,6 +697,7 @@ func checkConfigAnchor(head *ConfigHead, check *ConfigHeadCheck) (*ConfigHeadFac
 			return nil, fmt.Errorf("%w: versioning_rules: %w", ErrConfigHeadMismatch, err)
 		}
 		facts.VersioningRules = versioningRules
+		facts.versioningRulesRecordSha256 = head.recordSha256(ConfigHeadVersioningRulesPath)
 	}
 	return facts, nil
 }

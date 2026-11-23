@@ -255,16 +255,8 @@ func (self *EvsRepo) readHeadAloneFromPin(ctx context.Context, refId Id, fresh b
 			return self.readHeadAloneFromPin(ctx, refId, true, false)
 		}
 	}
-	head, err := self.client.verifier.VerifyHead(ctx, &EvsHeadRead{
-		RepoId:      self.repoId,
-		RefId:       refId,
-		Head:        reply.head,
-		FromVersion: fromVersion,
-		FromChain:   fromChain,
-		Statements:  reply.statements,
-		Behind:      reply.behind,
-		ask:         ask,
-	})
+	// verified, and only then what it shows of this device's own pushes noted (evs_read.go's own pushes row)
+	head, err := self.verifyReplyHead(ctx, refId, reply, fromVersion, fromChain, ask)
 	if err != nil {
 		return nil, err
 	}
@@ -380,10 +372,13 @@ func (self *EvsRepo) firstEpoch(ctx context.Context, refKind protocol.EvsRefKind
 var evsFirstEpochHook func(generation uint64) uint64
 
 // The ref's epoch state as a head verified within EpochFreshFor gives it, the head read again when the one held is
-// older, below a version this device's own push committed at, or none is.
+// older, below what this device's own pushes hold its reads of the ref to (evsClientEpochs.ownFloor), or none is. The
+// floor, not the version this device's newest push committed at: while evs's cluster stands behind that push, as a
+// site loss leaves it until its reseed, a verified fresh read lowered the floor to what the cluster holds, and a state
+// held at it is read again only once it is older than EpochFreshFor, where every call read it again.
 func (self *EvsRepo) freshEpochState(ctx context.Context, refId Id) (*evsRefEpoch, error) {
 	if state := self.client.refEpochState(self.repoId, refId); self.client.epochFresh(state) &&
-		self.client.epochs.committedVersion(self.repoId, refId) <= state.version {
+		self.client.epochs.ownFloor(self.repoId, refId) <= state.version {
 		return state, nil
 	}
 	if _, err := self.readHeadAlone(ctx, refId, true); err != nil {
@@ -434,10 +429,12 @@ type evsClientEpochs struct {
 	mapper any
 	// per ref, the newest version a push of this device committed at: a ref with a head though no verified one shows it
 	committed map[evsRefKey]uint64
-	// per ref, set only while evs's cluster stands behind committed's version, as a site loss leaves it until its
-	// reseed: the newest head a fresh read sent since that version was noted found there, raised by this device's
-	// pushes the cluster committed below it since. Reads are held to it in committed's place (ownFloor)
-	behind map[evsRefKey]uint64
+	// per ref, set once a fresh read sent since committed's version was noted found a head that verified: the newest
+	// version such a head, or the ref's pin as it then stood, showed, raised by this device's pushes the cluster
+	// committed below committed's since. Below committed, evs's cluster stands behind this device's push, as a site loss
+	// leaves it until its reseed, and reads are held to it in committed's place (ownFloor). It only rises, so no
+	// verified head lowers the floor below what another showed
+	shown map[evsRefKey]uint64
 	// per repo, the newest generation this device's own EnsureWritable returned, which a mapper starts at once for
 	writable map[Id]uint64
 }
@@ -464,7 +461,7 @@ func newEvsClientEpochs() *evsClientEpochs {
 		refAlarms:    map[evsRefKey]*evsRefAlarm{},
 		waiters:      map[evsRefKey]chan struct{}{},
 		committed:    map[evsRefKey]uint64{},
-		behind:       map[evsRefKey]uint64{},
+		shown:        map[evsRefKey]uint64{},
 		writable:     map[Id]uint64{},
 	}
 }
@@ -489,17 +486,18 @@ func (self *evsClientEpochs) rotatedTo(repoId Id, generation uint64) bool {
 }
 
 // Notes a push of this device committed on a ref at version. At or past the newest one noted, evs's cluster holds
-// that newest, so no fresh read's word that it stands behind it (behind) holds any longer; below it, a late answer or
-// a push planned on a cluster behind, it raises such a word to the version the cluster committed.
+// that newest, so what fresh reads found of the push before it (shown) says nothing of it; below it, a late answer or
+// a push planned on a cluster behind, it raises what they found to the version the cluster committed, and lowers
+// nothing.
 func (self *evsClientEpochs) noteCommitted(repoId Id, refId Id, version uint64) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	key := evsRefKey{repoId: repoId, refId: refId}
 	if self.committed[key] <= version {
 		self.committed[key] = version
-		delete(self.behind, key)
-	} else if behind, ok := self.behind[key]; ok && behind < version {
-		self.behind[key] = version
+		delete(self.shown, key)
+	} else if shown, ok := self.shown[key]; ok && shown < version {
+		self.shown[key] = version
 	}
 }
 
@@ -511,42 +509,41 @@ func (self *evsClientEpochs) committedVersion(repoId Id, refId Id) uint64 {
 }
 
 // The version this device's reads of a ref are held to (evs_read.go's own pushes row): the newest a push of this
-// device committed at, or, where a fresh read found evs's cluster behind that, what the cluster holds; 0 for none.
+// device committed at, or, where a verified fresh read found evs's cluster behind that, what the cluster holds; 0 for
+// none.
 func (self *evsClientEpochs) ownFloor(repoId Id, refId Id) uint64 {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	key := evsRefKey{repoId: repoId, refId: refId}
-	if behind, ok := self.behind[key]; ok {
-		return behind
+	committed := self.committed[key]
+	if shown, ok := self.shown[key]; ok && shown < committed {
+		return shown
 	}
-	return self.committed[key]
+	return committed
 }
 
-// Notes the head version a fresh read of a ref found, a read sent while asked was the newest version a push of this
-// device had committed at. Below asked, evs's cluster has lost that push, as a site loss leaves it until its reseed,
-// and reads are held to what the cluster holds from then on, so none is sent fresh again for it; at or past asked, the
-// cluster holds the push. A read sent before the newest commit was noted, or before a reseed lowered it, says nothing
-// of it, and changes nothing.
+// Notes what a fresh read of a ref found once its head verified, its walk and VerifyHead passed: version is the
+// head's own, or the ref's pin where that stood higher, and asked the newest version a push of this device had
+// committed at when the read was sent. Below asked, evs's cluster has lost that push, as a site loss leaves it until
+// its reseed, and reads are held to what the cluster holds from then on, so none is sent fresh again for it; at or
+// past asked, the cluster holds the push. What is noted only rises until the next push or reseed, so the floor falls
+// once, to the first such head, and never below what a verified head showed. A read sent before the newest commit was
+// noted, or before a reseed lowered it, says nothing of it and changes nothing, as on a ref this device never pushed.
+// Nothing unverified reaches here (EvsRepo.noteOwnPushesShown), so a reply evs forged lowers no floor.
 func (self *evsClientEpochs) noteFreshHead(repoId Id, refId Id, asked uint64, version uint64) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	key := evsRefKey{repoId: repoId, refId: refId}
 	committed := self.committed[key]
-	if committed != asked {
+	if committed != asked || committed == 0 {
 		return
 	}
-	if committed <= version {
-		delete(self.behind, key)
-		return
-	}
-	if behind, ok := self.behind[key]; !ok || behind < version {
-		self.behind[key] = version
-	}
+	self.shown[key] = max(self.shown[key], version)
 }
 
 // Drops a ref's listings cached at heads above headVersion, and lowers the version its pushes committed at to it:
-// what a ref re-seeded at headVersion no longer holds (EvsClient.forgetRefHead). What a fresh read found of the
-// history before the reseed (behind) goes with it.
+// what a ref re-seeded at headVersion no longer holds (EvsClient.forgetRefHead). What fresh reads found of the history
+// before the reseed (shown) goes with it.
 func (self *evsClientEpochs) forgetAbove(repoId Id, refId Id, headVersion uint64) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
@@ -563,7 +560,7 @@ func (self *evsClientEpochs) forgetAbove(repoId Id, refId Id, headVersion uint64
 	if headVersion < self.committed[key] {
 		self.committed[key] = headVersion
 	}
-	delete(self.behind, key)
+	delete(self.shown, key)
 }
 
 // The listing cached for a directory at headVersion, nil when none is.
