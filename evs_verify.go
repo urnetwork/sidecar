@@ -16,7 +16,8 @@
 // reader's, stands only on a walk whose chain reaches the head the reader verifies and pins. I-16 is unchanged: no pin
 // falls, and the walk's authorization pins only rise (evsCheckWalkRules). Not judged means not judged at a state the
 // reader no longer retains: what the refs table refuses whatever rights its signer held at the pin, such as a deposit
-// ref's id derived from another depositor, still refuses it, as it would a judged one (evsCheckRefRulesUnjudged).
+// ref's id derived from another depositor, still refuses it, as it would a judged one (QD-1221;
+// evsCheckRefRulesUnjudged).
 //
 // A pin above the newest state the reader holds waits (QD-1202, as §10.9's judged row has it for gkm: one above my tip
 // waits until I reach it, one I cannot reach being withheld): the device's log is behind a faster writer's, so the
@@ -553,7 +554,7 @@ type evsRefRights struct {
 	admin bool
 }
 
-// The refs table over an unjudged statement, one whose auth pin lies before what newest retains (QD-1178;
+// The refs table over an unjudged statement, one whose auth pin lies before what newest retains (QD-1178, QD-1221;
 // VerifyStatement): only the rules that refuse it whatever rights its signer held at that pin, which need no state
 // there; each rule that turns on those rights is not judged. The table runs with writing granted, since it refuses a
 // signer only for lacking it, and with admin both ways, since it holds an admin's BASE of its own stream to removals
