@@ -210,7 +210,13 @@ type ConfigState struct {
 	// byte keeps it without its signer judged again (CheckConfigBase; QD-1207).
 	headSettingsRecordSha256        []byte
 	headVersioningRulesRecordSha256 []byte
-	proposals                       map[[sha256.Size]byte]*configProposal
+	// SHA-256 of the Signed BridgeBlock readers of the newest base hold, verbatim: its head's where they take it, kept
+	// unjudged where a head carries the one held before or judged where a head first holds it, and else, for a head
+	// that drops it or holds one they refuse, the one held before; nil for none, and where no head was opened. What a
+	// writer's next head signs again once its signer no longer stands, whichever base carried it (WithBridgeBlock;
+	// QD-1205).
+	bridgeBlockRecordSha256 []byte
+	proposals               map[[sha256.Size]byte]*configProposal
 	// the IndexerSet designations that hold, by subject and scope
 	indexers map[configIndexerKey]*bridge.IndexerRow
 	// §17.8's bridge statements that took effect since the newest base's folded_through, nil for none
@@ -743,6 +749,7 @@ func configCopyState(state *ConfigState) *ConfigState {
 
 		headSettingsRecordSha256:        state.headSettingsRecordSha256,
 		headVersioningRulesRecordSha256: state.headVersioningRulesRecordSha256,
+		bridgeBlockRecordSha256:         state.bridgeBlockRecordSha256,
 	}
 }
 

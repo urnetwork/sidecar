@@ -73,6 +73,9 @@ type configClientHeadRecord struct {
 	// the two hashes were kept, as every head this build verifies keeps them: a record without stands for no anchor,
 	// whose head is read again, since a state it anchored would judge again a record its next base carries
 	RecordsKnown bool `json:"records_known,omitempty"`
+	// SHA-256 of the BridgeBlock record this device held from that base on, empty for none (QD-1205): a record without
+	// it anchors a state holding no block record, as a reader starting there holds where it refuses the head's
+	BridgeBlockRecordSha256 []byte `json:"bridge_block_record_sha256,omitempty"`
 }
 
 // Persists a member's recovery binding statement and its effective log position with the verified head.
@@ -143,6 +146,7 @@ func (self *ConfigClient) save() error {
 			}
 			record.SettingsRecordSha256 = bytes.Clone(verified.settingsRecordSha256)
 			record.VersioningRulesRecordSha256 = bytes.Clone(verified.versioningRulesRecordSha256)
+			record.BridgeBlockRecordSha256 = bytes.Clone(verified.bridgeBlockRecordSha256)
 			record.RecordsKnown = true
 			record.RecoveryKnown = verified.recoveryKnown
 			for memberId, body := range verified.recoveryBodies {
@@ -239,6 +243,10 @@ func (self *ConfigClient) restoreFromStore() error {
 		}
 		if len(record.VersioningRulesRecordSha256) != 0 {
 			facts.versioningRulesRecordSha256 = bytes.Clone(record.VersioningRulesRecordSha256)
+		}
+		// a hash that is not a SHA-256 holds no block record (QD-1205)
+		if len(record.BridgeBlockRecordSha256) == sha256.Size {
+			facts.bridgeBlockRecordSha256 = bytes.Clone(record.BridgeBlockRecordSha256)
 		}
 		for _, binding := range record.Recovery {
 			if binding != nil {

@@ -586,6 +586,9 @@ func CheckConfigBase(head *ConfigHead, check *ConfigHeadCheck, rows *ConfigCompi
 		}
 		facts.VersioningRules = versioningRules
 	}
+	// the BridgeBlock readers hold from here, which no block forks (D-BRIDGE-16): the head's where they take it, its
+	// signer judged at S(n-1) only where the previous base's readers held another (QD-1205)
+	facts.bridgeBlockRecordSha256 = configBridgeBlockRecordHeld(head, check.Previous, check.Previous.bridgeBlockRecordSha256)
 
 	if rows == nil {
 		return nil, fmt.Errorf("%w: no rows to compile the head with", ErrConfigHeadMismatch)
@@ -609,7 +612,9 @@ func CheckConfigBase(head *ConfigHead, check *ConfigHeadCheck, rows *ConfigCompi
 // ServiceSettings keeps its bounds; and the base's rows hold its ServiceSettings' Team scopes exactly (QD-1163). No
 // compile is checked: the reader holds no rows at folded_through but the base's. Nor is a record's signer: this reader
 // cannot tell a record the head carries from one it first holds, so it takes both records as every reader before it
-// took them, each beside its Signed bytes' hash, and the next base keeps whichever its head carries (QD-1207).
+// took them, each beside its Signed bytes' hash, and the next base keeps whichever its head carries (QD-1207). A
+// refused BridgeBlock forks no reader, so its readers may hold another, and this one holds the head's only as one a
+// head first holds, judged at check.AnchorState, none without (QD-1205).
 func checkConfigAnchor(head *ConfigHead, check *ConfigHeadCheck) (*ConfigHeadFacts, error) {
 	if bridge.GenesisChain(head.signedGenesis) != check.GenesisChain {
 		return nil, fmt.Errorf("%w: another genesis", ErrConfigHeadMismatch)
@@ -698,6 +703,9 @@ func checkConfigAnchor(head *ConfigHead, check *ConfigHeadCheck) (*ConfigHeadFac
 		}
 		facts.VersioningRules = versioningRules
 		facts.versioningRulesRecordSha256 = head.recordSha256(ConfigHeadVersioningRulesPath)
+	}
+	if check.AnchorState != nil {
+		facts.bridgeBlockRecordSha256 = configBridgeBlockRecordHeld(head, check.AnchorState, nil)
 	}
 	return facts, nil
 }
