@@ -767,6 +767,8 @@ func (self *SidecarConfigFollower) startClient(networkId Id, genesisChain [sha25
 			Sign: func(purpose string, signedType bridge.SignedType, body []byte) (*bridge.Signed, error) {
 				return self.sidecar.Sign(purpose, signedType, body, nil)
 			},
+			// §17.4: a head that holds no bridge block gets one from this writer's next head
+			FirstBridgeBlock: WithFirstBridgeBlock,
 		}
 		if judge := client.logSettings.BridgeBodyJudge; judge != nil {
 			args.BridgeFold = judge.Fold

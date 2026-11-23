@@ -23,9 +23,12 @@
 // SaveHead is the path every other change to the config repo goes through: SOCK's K_sock file and §17's bridge files
 // edit the head, which saves with the fold where it is and lands as a base.
 //
-// It signs heads and bases only; statements are CORE's acts (C-01). The clock and the delay's randomness come through
-// ConfigWriterSettings, so a test steers both. Every leg, no connect type. Safe for concurrent use; one publish runs at a
-// time.
+// A head that holds no bridge block, an older network's or one bootstrapped before the bridge shipped, gets the
+// network's first from this writer's next head, whatever saves it, through FirstBridgeBlock (§17.4's first block row).
+//
+// It signs heads, bases and that first block only; statements are CORE's acts (C-01). The clock, the delay's randomness
+// and the block's draw come through ConfigWriterSettings, so a test steers all three. Every leg, no connect type. Safe
+// for concurrent use; one publish runs at a time.
 
 package sidecar
 
@@ -37,6 +40,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"sync"
 	"time"
@@ -156,6 +160,8 @@ type ConfigWriterSettings struct {
 	PublishTimeout time.Duration
 	// The fold delay's randomness, a fraction in [0, 1). Nil is crypto/rand.
 	Random func() float64
+	// The first bridge block's draw (ConfigWriterArgs.FirstBridgeBlock). Nil is crypto/rand's reader.
+	BridgeBlockRandom io.Reader
 	// The clock; nil is real time.
 	Clock Clock
 	// Ids only (I-13). Nil is the leg's default.
@@ -181,6 +187,11 @@ func DefaultConfigWriterSettings() *ConfigWriterSettings {
 // below the one asked. BridgeBodyJudge.Fold is one.
 type ConfigBridgeFold func(previous *ConfigHead, state *ConfigState, foldedThrough uint64, entryTimeMs func(n uint64) (int64, bool)) (*BridgeLedgerFold, error)
 
+// The network's first bridge block on a head a writer's plan is about to save (§17.4's first block row): head with a
+// bridge/block sign signed, drawn with random, where head holds none and readers at state take sign's block, and head
+// itself otherwise. WithFirstBridgeBlock is one.
+type ConfigFirstBridgeBlock func(state *ConfigState, head *ConfigHead, sign ConfigSignFunction, random io.Reader) (*ConfigHead, error)
+
 // What a ConfigWriter runs on.
 type ConfigWriterArgs struct {
 	// This device, which signs heads and bases.
@@ -194,6 +205,10 @@ type ConfigWriterArgs struct {
 	// The bridge ledger's fold. Nil folds no bridge statement: a fold stops below the first one, or keeps the previous
 	// fold where §7.9's fold rule does not allow that, so no head this writer saves misses its ledger.
 	BridgeFold ConfigBridgeFold
+	// The first bridge block a head that holds none gets from this writer's next head, which the follower's writers
+	// take (WithFirstBridgeBlock). Nil adds none: no writer runs on the ios_extension legs, which link no block draw, and
+	// a network's block then waits for a writer that has one.
+	FirstBridgeBlock ConfigFirstBridgeBlock
 }
 
 // One device's config writer.
@@ -433,10 +448,16 @@ func (self *ConfigWriter) plan(ctx context.Context, previous *configWriterPlan, 
 		return nil, err
 	}
 
-	// the head: the current one with the edit, the bridge ledger and the fold, saved when any changes it
+	// the head: the current one with the edit, the network's first bridge block where it holds none, the bridge ledger
+	// and the fold, saved when any changes it
 	next := head
 	if edit != nil {
 		if next, err = edit(next); err != nil {
+			return nil, err
+		}
+	}
+	if self.args.FirstBridgeBlock != nil {
+		if next, err = self.args.FirstBridgeBlock(state, next, self.args.Sign, self.settings.BridgeBlockRandom); err != nil {
 			return nil, err
 		}
 	}

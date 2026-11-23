@@ -13,6 +13,9 @@
 //	upper    aliases and exposed prefixes fill the upper /17 first-fit from its bottom, aligned, while spilled hosts
 //	         take its top, and the two never overlap (AllocateBridgeUpperBlock; D-BRIDGE-20)
 //	renumber a host keeps its host bits across a block change while the old block drains (RenumberBridgeAddress)
+//	first    a network's first block, drawn at its bootstrap into its first config head, and for a head that holds
+//	         none, an older network's or one bootstrapped before the bridge shipped, by any config writer's next head
+//	         (WithFirstBridgeBlock; §17.4's first block row, plan-BRIDGE-small-readings #13)
 //
 // A client proposes and the log decides: the first claim in log order wins, so an address this allocates is a proposal
 // until its BridgeAddress takes effect and the ledger shows it. An address is bound to its sidecar_id, which survives
@@ -23,8 +26,9 @@
 // A block in 10.0.0.0/8 can collide with connect's tun ranges, 10.a.b.0/24, which the sdk's avoid list handles
 // (BRIDGE-M4-21); 169.254.0.0/16 is outside every block a network may hold.
 //
-// Pure but for the random source a caller passes. On every leg, with no connect import. Nothing here creates, derives
-// or unwraps a key, so nothing calls testHookSecret.
+// Pure but for the random source a caller passes, and the identity key's signature a first block carries. Every leg but
+// the ios_extension legs', which write no config head, with no connect import. Nothing here creates, derives or unwraps
+// a key, so nothing calls testHookSecret.
 
 package sidecar
 
@@ -34,6 +38,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+
+	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
@@ -94,6 +100,47 @@ func ChooseBridgeBlock(random io.Reader) (*bridge.BridgeIpv4Prefix, error) {
 		return nil, err
 	}
 	return &bridge.BridgeIpv4Prefix{Address: candidates[index], Length: bridgeBlockPrefixLength}, nil
+}
+
+// A network's first block as a config head's bridge/block holds it: a /16 ChooseBridgeBlock draws with random, in a
+// BridgeBlock with no block before it, signed by sign as an admin's device signs a head's record (§17.8's BridgeBlock
+// row). BootstrapNetwork writes it into the first head, and WithFirstBridgeBlock into a writer's next head.
+func bridgeFirstBlockRecord(sign ConfigSignFunction, random io.Reader) ([]byte, error) {
+	prefix, err := ChooseBridgeBlock(random)
+	if err != nil {
+		return nil, err
+	}
+	return configSignRecord(sign, bridge.SignedType_SIGNED_BRIDGE_BLOCK, &bridge.BridgeBlock{Ipv4Prefix: prefix})
+}
+
+// ConfigWriterArgs.FirstBridgeBlock, which the follower's config writers take (§17.4's first block row): head with the
+// network's first block where it holds no bridge/block, an older network's or one bootstrapped before the bridge
+// shipped, drawn with random (crypto/rand's reader when nil) and signed by sign. head itself where it holds one, refused
+// or not, since only an admin's `ur bridge block` replaces a block; and where every reader would refuse sign's block at
+// state, a Network or IT admin's writer's (configHeadRecordSignedByAdmin), so an Owner's or Admin's writer adds it.
+//
+// Two writers drawing at once leave one block: a head is saved over the version it was read at, If-Match, so of two
+// heads drawn from one blockless head one lands and the other's save conflicts, and its retry reads the first one's
+// block and draws none.
+func WithFirstBridgeBlock(state *ConfigState, head *ConfigHead, sign ConfigSignFunction, random io.Reader) (*ConfigHead, error) {
+	if head == nil || head.File(ConfigHeadBridgeBlockPath) != nil {
+		return head, nil
+	}
+	if state == nil || sign == nil {
+		return nil, errors.New("first bridge block: no state or signer")
+	}
+	signedBytes, err := bridgeFirstBlockRecord(sign, random)
+	if err != nil {
+		return nil, fmt.Errorf("first bridge block: %w", err)
+	}
+	signed := &bridge.Signed{}
+	if err := proto.Unmarshal(signedBytes, signed); err != nil {
+		return nil, err
+	}
+	if configHeadRecordSignedByAdmin(state, signed, bridge.SignedType_SIGNED_BRIDGE_BLOCK) != nil {
+		return head, nil
+	}
+	return head.WithFile(ConfigHeadBridgeBlockPath, signedBytes)
 }
 
 // One network's addresses as a reader sees them at the log's time its ledger was read at: the block its verified head

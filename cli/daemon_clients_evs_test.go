@@ -741,6 +741,18 @@ func testDaemonFirstOwner(t *testing.T, restart bool) {
 	if err != nil || len(heads) != 1 || heads[0].GetVersion() != 1 {
 		t.Fatalf("the first config repo heads: %v %v", heads, err)
 	}
+	// §17.4's first block: the first head the follower reads from evs carries the block the first device drew and
+	// signed, a /16 of 100.64.0.0/10 a reader of base 1 takes
+	head, err := follower.Heads().ReadConfigHead(ctx, state.Base().GetConfigVersion(), state.Base().GetConfigHeadSha256())
+	if err != nil {
+		t.Fatalf("the first head on evs: %v", err)
+	}
+	block, err := sidecar.ReadBridgeBlock(head, state, nil)
+	signed := &bridge.Signed{}
+	if err != nil || block == nil || block.GetIpv4Prefix().GetAddress()>>22 != 100<<2|1 || proto.Unmarshal(head.File(sidecar.ConfigHeadBridgeBlockPath), signed) != nil ||
+		!bytes.Equal(signed.GetSignerId(), firstId.Bytes()) {
+		t.Fatalf("the first head's bridge block %v: %v", block, err)
+	}
 }
 
 // A publisher whose every base is lost before api takes it: a bootstrap cut short before base 1.
