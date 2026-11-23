@@ -275,8 +275,9 @@ type BridgeComponent struct {
 	compileRetryAt  time.Time
 	// the newest position whose denials the sink was handed
 	revokedThrough uint64
-	// the block the last compile held, the next one's PreviousBlock
-	block *bridge.BridgeBlock
+	// the block the last compile held, the next one's PreviousBlock, and the record it came from (QD-1205)
+	block       *bridge.BridgeBlock
+	blockRecord []byte
 	// the alarms the last compile raised, so a repeat is not raised again
 	raisedAlarms []BridgeAlarm
 
@@ -893,12 +894,13 @@ func (self *BridgeComponent) compileNow() {
 			return err
 		}
 		local := &BridgeCompileLocal{
-			SidecarId:     identity.SidecarId,
-			Bindings:      self.bindings.Snapshot(),
-			PreviousBlock: self.block,
-			NameZones:     self.args.NameZones,
-			ShareTables:   self.shareTables.Rows(),
-			Settings:      self.settings.Compile,
+			SidecarId:           identity.SidecarId,
+			Bindings:            self.bindings.Snapshot(),
+			PreviousBlock:       self.block,
+			PreviousBlockRecord: self.blockRecord,
+			NameZones:           self.args.NameZones,
+			ShareTables:         self.shareTables.Rows(),
+			Settings:            self.settings.Compile,
 
 			AnswerServedRoutes: self.args.ServedRoutes != nil,
 		}
@@ -928,7 +930,7 @@ func (self *BridgeComponent) compileNow() {
 			// refused leaves the engine on the routes of the state it keeps
 			self.args.ServedRoutes(compiled.ServedRoutes)
 		}
-		self.block = compiled.Block
+		self.block, self.blockRecord = compiled.Block, compiled.BlockRecord
 		func() {
 			self.stateLock.Lock()
 			defer self.stateLock.Unlock()

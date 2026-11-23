@@ -142,13 +142,13 @@ func testBlockWriter(world *testWriterWorld, device testWriterDevice, client *si
 		heads = world.heads.For(device.sidecarId, device.key)
 	}
 	writer, err := sidecar.NewConfigWriter(world.ctx, &sidecar.ConfigWriterArgs{
-		SidecarId:        device.sidecarId,
-		Sign:             device.sign(),
-		Client:           client,
-		Heads:            heads,
-		Publisher:        world.publisher(),
-		Settings:         settings,
-		FirstBridgeBlock: sidecar.WithFirstBridgeBlock,
+		SidecarId:   device.sidecarId,
+		Sign:        device.sign(),
+		Client:      client,
+		Heads:       heads,
+		Publisher:   world.publisher(),
+		Settings:    settings,
+		BridgeBlock: sidecar.WithBridgeBlock,
 	})
 	if err != nil {
 		world.t.Fatal(err)
@@ -578,5 +578,52 @@ func TestConcurrentWritersDrawOneFirstBridgeBlock(t *testing.T) {
 		if string(committed.File(sidecar.ConfigHeadBridgeBlockPath)) != string(head.File(sidecar.ConfigHeadBridgeBlockPath)) {
 			t.Errorf("head %d committed another block", i)
 		}
+	}
+}
+
+// QD-1205 through a writer: once the owner's first device, which drew and signed the network's block at its bootstrap,
+// is revoked, a reader holding no block refuses the block the head in force carries; the owner's second device's
+// writer's next head signs the same block again, which that reader, and a new reader, take from its base on.
+func TestAWritersNextHeadReSignsTheBlockARevokedDeviceDrew(t *testing.T) {
+	world := newTestWriterWorld(t)
+	want := testBlockDrawn(t, "owner")
+	result, err := testBlockBootstrap(world, world.owner, testBlockRandom("owner"))
+	if err != nil || !result.Won {
+		t.Fatalf("bootstrap: %v", err)
+	}
+	world.genesis = result
+	desktop := testWriterDeviceOf("owner desktop", world.owner.memberId)
+	if _, err := world.api.AppendStatement(world.ctx, world.networkId, world.statement(world.owner, bridge.SignedType_SIGNED_SIDECAR_ADMIT, &protocol.SidecarAdmit{
+		Header:            world.header(),
+		NetworkId:         world.networkId.Bytes(),
+		SidecarId:         desktop.sidecarId.Bytes(),
+		IdentityPublicKey: desktop.key.Public().(ed25519.PublicKey),
+		IdentityAlg:       "ed25519",
+		MemberId:          desktop.memberId.Bytes(),
+	})); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := world.api.AppendStatement(world.ctx, world.networkId, world.statement(desktop, bridge.SignedType_SIGNED_SIDECAR_REVOKE, &bridge.SidecarRevoke{
+		Header: world.header(), SidecarId: world.owner.sidecarId.Bytes(), Reason: bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_LOST,
+	})); err != nil {
+		t.Fatalf("the first device's revocation: %v", err)
+	}
+	client := world.client()
+	state := world.caughtUp(client)
+	if _, err := sidecar.ReadBridgeBlock(testBlockHead(t, world, state), state, nil); !errors.Is(err, sidecar.ErrBridgeBlockRefused) {
+		t.Fatalf("a reader with no block, the first device revoked: %v", err)
+	}
+	writer := testBlockWriter(world, desktop, client, nil, testBlockNoDraw())
+	if _, err := writer.SaveHead(world.ctx, testBlockPolicy("{}")); err != nil {
+		t.Fatalf("the desktop's next head: %v", err)
+	}
+	state = world.caughtUp(client)
+	head := testBlockHead(t, world, state)
+	held := testBlockAt(t, world, state)
+	if held == nil || !proto.Equal(held.GetIpv4Prefix(), want) || held.GetPreviousPrefix() != nil || testBlockSigner(t, head) != desktop.sidecarId {
+		t.Fatalf("the next head's block %v, want %v signed by the desktop", held, want)
+	}
+	if held := testBlockAt(t, world, world.caughtUp(world.client())); held == nil || !proto.Equal(held.GetIpv4Prefix(), want) {
+		t.Fatalf("a new reader holds %v", held)
 	}
 }

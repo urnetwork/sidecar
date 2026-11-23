@@ -61,6 +61,9 @@ type forwarderCompiled struct {
 	StateByteCount int64 `json:"state_byte_count"`
 	// The block in force, a marshalled BridgeBlock, empty for none.
 	Block []byte `json:"block,omitempty"`
+	// The Signed record Block came from, which the next compile keeps unjudged from a head carrying it (QD-1205); empty
+	// for none, and in a record written before it, so that compile judges the head's record.
+	BlockRecord []byte `json:"block_record,omitempty"`
 	// The sidecar's forwarding Delegation live at the state, empty for none.
 	ForwardDelegationId []byte `json:"forward_delegation_id,omitempty"`
 }
@@ -314,7 +317,7 @@ func (self *Forwarder) compile() (forwarderCompileOutcome, bool) {
 	if previous != nil && 0 < len(previous.Block) {
 		block := &bridge.BridgeBlock{}
 		if proto.Unmarshal(previous.Block, block) == nil {
-			local.PreviousBlock = block
+			local.PreviousBlock, local.PreviousBlockRecord = block, previous.BlockRecord
 		}
 	}
 	testHookBarrier("bridge_forward.compile.state", self.args.NetworkId.String())
@@ -354,6 +357,7 @@ func (self *Forwarder) compile() (forwarderCompileOutcome, bool) {
 	}
 	if compiled.Block != nil {
 		record.Block, _ = forwarderMarshal(compiled.Block)
+		record.BlockRecord = bytes.Clone(compiled.BlockRecord)
 	}
 	if delegationId, _, ok := state.ForwardingKey(self.args.SidecarId); ok {
 		record.ForwardDelegationId = delegationId

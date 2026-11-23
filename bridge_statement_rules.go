@@ -197,7 +197,8 @@ func CheckBridgeBlock(block *bridge.BridgeBlock) error {
 // CheckBridgeBlock gives that block. One that fails either, or a head that drops the block a reader holds, gives the
 // previous block back with an error wrapping ErrBridgeBlockRefused, which the reader raises as bridge_alarm's
 // block_refused and otherwise ignores: the base stands (D-BRIDGE-16). A head with no block, read by a reader that held
-// none, gives nil and no error (plan-BRIDGE-small-readings #13).
+// none, gives nil and no error (plan-BRIDGE-small-readings #13). A reader that holds the record its previous block came
+// from reads through readBridgeBlockHeld (QD-1205).
 func ReadBridgeBlock(head *ConfigHead, state *ConfigState, previous *bridge.BridgeBlock) (*bridge.BridgeBlock, error) {
 	if head == nil || state == nil {
 		return previous, fmt.Errorf("%w: no head or state to read one at", ErrBridgeBlockRefused)
@@ -220,6 +221,26 @@ func ReadBridgeBlock(head *ConfigHead, state *ConfigState, previous *bridge.Brid
 		return previous, err
 	}
 	return block, nil
+}
+
+// ReadBridgeBlock for a reader that holds the record its previous block came from (QD-1205): a head that carries that
+// record byte for byte keeps the previous block, its signer not judged again, since the reader judged it at the head
+// that first held it (§7.9's Writes; D-TEAM-26, what a device signed before its revocation stands), so a block whose
+// signer was revoked since raises no block_refused. Any other record is judged as ReadBridgeBlock judges it. Answers
+// the record the answered block came from: the head's for a block it takes, previousRecord for the previous block kept,
+// nil for none.
+func readBridgeBlockHeld(head *ConfigHead, state *ConfigState, previous *bridge.BridgeBlock, previousRecord []byte) (*bridge.BridgeBlock, []byte, error) {
+	if previous != nil && 0 < len(previousRecord) && head != nil && bytes.Equal(head.File(ConfigHeadBridgeBlockPath), previousRecord) {
+		return previous, previousRecord, nil
+	}
+	block, err := ReadBridgeBlock(head, state, previous)
+	switch {
+	case block == nil:
+		return nil, nil, err
+	case err != nil || block == previous:
+		return block, previousRecord, err
+	}
+	return block, head.File(ConfigHeadBridgeBlockPath), nil
 }
 
 // What a reader made of one statement at body level.
