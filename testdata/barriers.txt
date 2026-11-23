@@ -127,6 +127,7 @@ barrier config_client.confirm.after config_client.go
 barrier config_client.confirm.before config_client.go
 barrier config_client.unconfirmed config_client.go
 barrier config_writer.plan.tip config_writer.go
+barrier config_writer.sign.tip config_writer.go
 barrier daemon.claims.choose.after daemon_claims.go
 barrier daemon.claims.choose.before daemon_claims.go
 barrier daemon.directory.list.taint.after daemon_directory.go
