@@ -47,8 +47,8 @@
 // posted and not yet followed, or never filed, so the effect posts those bytes again, which api answers with the entry
 // that holds them (§7.9's retry identity), and where none are kept or they never land it files again under the same id.
 // With no marker it takes the id of a statement of the effect still in the sidecar's pending records, where a kill or
-// an earlier build left no marker. A marker is spent once the view holds its rule withdrawn or void, and dropped
-// StandingMarkerKeepTimeout after its newest filing, past which nothing filed under it can land.
+// an earlier build left no marker. A marker is spent once the view holds its rule withdrawn or void, or Close withdraws
+// its rule, and dropped StandingMarkerKeepTimeout after its newest filing, past which nothing filed under it can land.
 //
 // A route names the §8 route rules of the head that hold it for this advertiser (AclLocalPolicy's own predicate,
 // StandingCovers), which QD-764's rows carry at id level: a rule whose prefixes hold the route, and for a subnet route
@@ -1211,6 +1211,29 @@ func (self *BridgeFiler) pruneStandingMarkersWithLock(view *bridgeFileView) {
 	}
 }
 
+// Drops each standing filing's marker naming ruleId, under standingLock, once Close withdrew the rule or tried to: Close
+// found the rule in the view, which from then on answers its effect asked again, by the rule in force or, withdrawn,
+// by a new one; a marker it left would name the withdrawn id until a filing found it spent or it aged out, past which the
+// rows may drop the id. A store that does not list or remove is logged: the next standing filing's pass drops it.
+func (self *BridgeFiler) spendStandingMarkers(ruleId []byte) {
+	self.standingLock.Lock()
+	defer self.standingLock.Unlock()
+	names, err := self.recordNames(bridgeFileStandingPrefix)
+	if err != nil {
+		self.log.Warningf("[bridge]the standing filings' markers do not list: %v", err)
+		return
+	}
+	for _, name := range names {
+		marker := &bridgeStandingMarker{}
+		if found, err := self.loadRecord(name, marker); err != nil || !found || !bytes.Equal(marker.RuleId, ruleId) {
+			continue
+		}
+		if err := self.removeRecord(name); err != nil {
+			self.log.Warningf("[bridge]a standing filing's marker was not dropped: %v", err)
+		}
+	}
+}
+
 // A statement in the sidecar's pending records, signed and not yet seen landed, that files a rule of signedType for
 // this host: the one under ruleId where it is set, else one under an id the view holds nothing under whose body, opened
 // under the config keys held, has the effect key and carries no approval. Its Signed bytes and its rule id; nil for
@@ -1928,7 +1951,10 @@ func (self *BridgeFiler) Close(ctx context.Context, origin *BridgeFileOrigin, id
 		if err := self.oweRoute(owed); err != nil {
 			return nil, fmt.Errorf("%w: %w", ErrBridgeFileRefused, err)
 		}
-		if _, err := self.runAct(ctx, act, origin); err != nil {
+		_, err = self.runAct(ctx, act, origin)
+		// the view that found the rule answers its effect asked again from here, in force or withdrawn
+		self.spendStandingMarkers(id)
+		if err != nil {
 			self.settleRoute(owed, err)
 			return nil, err
 		}

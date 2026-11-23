@@ -436,9 +436,9 @@ func TestStandingFilingTakesTheIdOfAPendingStatementOfItsEffect(t *testing.T) {
 }
 
 // Withdrawing the one rule a lost answer and an ask again filed leaves nothing serving: before, the compile serves the
-// map; after a reset withdrawal the ledger holds it withdrawn and the compile serves no map. The marker is then spent:
-// the map asked again files a new rule under a new id, the one map in force, and withdrawing it leaves nothing
-// serving again.
+// map; after a reset withdrawal, which spends the effect's marker at once, the ledger holds it withdrawn and the compile
+// serves no map. The map asked again then files a new rule under a new id, the one map in force, and withdrawing it
+// leaves nothing serving again.
 func TestWithdrawingTheOneStandingRuleLeavesNothingServing(t *testing.T) {
 	world, lag := newTestStandingWorld(t, false)
 	ctx := context.Background()
@@ -456,6 +456,9 @@ func TestWithdrawingTheOneStandingRuleLeavesNothingServing(t *testing.T) {
 	}
 	if _, err := world.filer.Close(ctx, world.mcp(), filing.RuleId, true); err != nil {
 		t.Fatal(err)
+	}
+	if markers := world.standingMarkers(); len(markers) != 0 {
+		t.Fatalf("%d standing markers after the withdrawal", len(markers))
 	}
 	lag.catchUp()
 	if rule := world.ledger().Rule(filing.RuleId); rule == nil || rule.Withdrawn == nil || rule.Active() {
