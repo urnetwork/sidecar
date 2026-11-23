@@ -452,8 +452,8 @@ func (self *ConfigHead) Names() (*protocol.ConfigNameTable, error) {
 
 // Whether a record that rides a head alone was signed by one who may sign it at state: its signature under the
 // sidecar's identity key, the sidecar standing and of an Owner's or Admin's member, as ServiceSettings' signer row
-// asks (§7.9). A head is judged at the state its base lands on, and a record there once, where a head first holds it:
-// CheckConfigBase judges no record the previous base's head held byte for byte (QD-1207).
+// asks (§7.9). A head is judged at the state its base lands on, and a record once, at the base whose head first holds
+// it: CheckConfigBase judges no record the previous base's head held byte for byte (QD-1207).
 func configHeadRecordSignedByAdmin(state *ConfigState, signed *bridge.Signed, signedType bridge.SignedType) error {
 	return configHeadRecordSignedByRole(state, signed, signedType, func(role bridge.MemberRole) bool {
 		return role == bridge.MemberRole_MEMBER_ROLE_OWNER || role == bridge.MemberRole_MEMBER_ROLE_ADMIN
