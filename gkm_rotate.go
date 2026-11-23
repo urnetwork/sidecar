@@ -728,7 +728,7 @@ func (self *gkmGroupManager) askLate(ctx context.Context, groupId Id, generation
 	if _, err := client.args.Api.Wraps(ctx, self.repoId, groupId, generation, query); err != nil && client.log.V(1).Enabled() {
 		client.log.Infof("[gkm]late ask of generation %d failed: %v", generation, err)
 	}
-	client.followLateAsk(self.repoId, since)
+	client.followLateAsk(self.repoId, since, now)
 }
 
 // A late ask that found no current ReaderKey (DESIGN-DETAILS 6.2.4's asker row: a device none of whose keys opens
