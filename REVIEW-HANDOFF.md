@@ -410,27 +410,41 @@ The owner's first instruction for the next phase (2026-11-21) is end-to-end inte
 services. They spin up all the server services and their clients and test concurrency, in the manner of
 `server/connect`'s and `server/proxy`'s tests.
 
-Progress at this update, in `server/sidecare2e` and `server/sidecart3` (plan: `.stack/state/e2e-plan.md`):
+Progress at this update (2026-11-23), in `server/sidecare2e` and `server/sidecart3` (plan: `.stack/state/e2e-plan.md`):
 
-- **The world.** Every block's host runs in one process, with real sidecar clients across several networks, the
-  mail step in and out, and usage ledgers that reconcile exactly per meter after restarts. Its package header names
-  each stand-in left.
-- **Bugs it found and that are fixed:**
-  - an EvsClient's overlapping calls raised false fork and tamper alarms, and the desktop sync engine could let a
-    fork through (evs-client-concurrent-pin, evs-readers-pin-snapshot);
-  - a joining device got its config key only at the next rotation, up to 30 days (keys-late-delivery);
-  - repo creation lost to its own readers' cached 404 at gkm (gkm-repo-create-race).
-- **Bugs it found that are being fixed:**
-  - the approval gate refuses `Sidecar.Listen`;
-  - a dns label drawn out of serial order is never routed;
-  - a member's own device has no deposit on its mailbox, and the receiver never answers 451;
-  - a mailbox's first deposit never wakes its reader;
-  - api never installs the SMTP api gate;
-  - the receiver's reception checks query public DoH resolvers from tests.
-- **The owner's two named cases are running:** "blogger" (writers' webservers behind one tlsedge name through
-  sockets' fair scheduler, each serving articles from a cache cleared on evs's change hint) and "it bridge" (subnets
-  and port forwards churning while gVisor clients' traffic must reach the right destinations).
-- **A sweep of every sidecar-related server package** is running, after four server tests turned out red unseen.
+- **The scenarios.** Eight cases run every block's host in one process, with real sidecar clients on real keys, chaos
+  restarts of hosts and devices, and ledgers that reconcile exactly:
+  - evs (`TestE2eEvsConcurrency`): many writers on one repo, exact-head races, drops, holds and erasure, evs restarts;
+  - gkm (`TestE2eGkmConcurrency`, with its re-form and second-device cases): membership churn, rotation races,
+    re-forms under contention, gkm restarts;
+  - the owner's "blogger" case and "it bridge" case, the second now with no stand-ins left;
+  - mail (`TestE2eMailConcurrency`), group mailboxes included;
+  - dns and certificates (`TestE2eDnsCertsConcurrency`): the real certs worker against an in-process Pebble, dnsedge
+    serving the challenges, and the desktop orderer's delegated DNS-01 path;
+  - the control plane (`TestE2eControlPlaneConcurrency`, with chaos and quota cases), on a team network of several
+    members and tagged sidecars;
+  - churn load (`TestE2eChurnLoad`): fifteen worker kinds over rounds across every service, then exact ledgers.
+- **Where they stand.** All eight passed once on sidecar `c88a64af`, and churn and gkm's side cases passed again on
+  later tips. The main gkm case fails about one run in three, on varying checks, and the control-plane harness has a
+  sync race when a member is removed; `e2e-flakes-final` is sorting both into case timing or product. Each case's
+  file header lists its findings, fixed or open.
+- **What they found.** Dozens of product bugs, each fixed on the `sidecar` branches or queued. The most serious, all
+  fixed:
+  - revoking the device that signed a network's ServiceSettings or VersioningRules forked every device of the network
+    at the next base, for good (QD-1207);
+  - repo paths untouched for two config bases became unreadable on every device (QD-1178);
+  - after an api restart, a personal network whose base its second device signed was never loaded, and its exchange
+    answered temporarily_unavailable (QD-1192);
+  - published names never resolved to the edge, because nothing wrote the zones' `*` address records, and Team scope
+    zones were never written at all;
+  - a personal network's second device got no vault scope at the token exchange;
+  - group mail answered delivered was lost at ingest (QD-1196);
+  - a key rotation racing a re-form stranded a device on the old group (QD-1186 to QD-1188).
+- **Decisions.** QD-1170 to QD-1209 were recorded under the owner's standing acceptance of recommended options, each
+  in `.stack/decisions/RESOLUTIONS.md`. QD-1176 to QD-1209 still wait for a design-records fold into DESIGN.md.
+- **Still to do in this phase:** the queued fix tracks (`.stack/scratch/lanes/pending-fix-tracks.json`), that design
+  fold, and the plan's step 5, a nightly leg that runs a bounded e2e subset and the sidecar-related server packages'
+  own tests.
 
 Then come:
 
