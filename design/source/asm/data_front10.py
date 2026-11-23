@@ -2534,3 +2534,43 @@ _D15 = ("A sixth late fold, on 2026-11-23, numbers as it folds them the answers 
         "the ingester's window (712); and one order of a challenge name (713), following @@OD:430@@, copy rows at "
         "hosts with records (714), extending @@OD:335@@, and no scope _mta-sts (715), following @@OD:630@@. ")
 DECISIONS_INTRO = DECISIONS_INTRO.replace(_D690, _D690 + _D15)
+
+# The seventh late fold (dr16-late-fold, 2026-11-23): the answers the end-to-end phase's fix tracks raised after the
+# sixth late fold, QD-1210 to QD-1221, numbered as folded, one topic's answers sharing an entry. Its first piece:
+# a forwarding role's key alarms, a removal ending the member's keys, topic sock raised and the exact-head saves of
+# a person's confirmed commands (716-719).
+INDEX += [
+    (716, "Forwarding's config key alarms",
+     'A forwarding role alarms config_key_waiting for a generation it wants and cannot open, naming the cause, and '
+     'head_alarm (fork) off its chain.'),
+    (717, "A removal ends the member's keys",
+     "A team member's removal ends the auth keys and API keys it made, so a re-join revives none of them."),
+    (718, 'Topic sock is a raised clock',
+     "Sockets' hint versions are raised past the stored value as mail's are, so a second hint in one ms is "
+     'delivered.'),
+    (719, "Confirmed commands' exact-head saves",
+     "The stock daemon sets EXACT_HEAD for every head a person's confirmed command, or its flow, saves, `ur bridge "
+     "block` included."),
+]
+for _n, _note in [
+        (141, " Amended by @@OD:719@@: the stock daemon sets it for every head a person's confirmed command, or "
+              "that command's flow, saves."),
+        (197, ' Extended by @@OD:716@@: a forwarding role alarms a generation it cannot open and a listing off its '
+              'chain.'),
+        (698, ' Followed by @@OD:719@@: in ur daemon the re-signing head is saved through its writer for confirmed '
+              'saves.'),
+        (701, ' Extended by @@OD:717@@: a removal ends every key the member made, API keys included.'),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 720))
+DATES.update({_n: '2026-11-23' for _n in range(716, 720)})
+_D715 = "and no scope _mta-sts (715), following @@OD:630@@. "
+assert DECISIONS_INTRO.count(_D715) == 1, 'decisions lead moved'
+_D16 = ("A seventh late fold the same day numbers the answers the end-to-end phase's fix tracks raised after that, "
+        "one topic's answers sharing an entry: a forwarding role's config key alarms (716), extending @@OD:197@@; a "
+        "removal ending the keys a member made (717), extending @@OD:701@@; topic sock raised as a clock (718); and "
+        "the exact-head saves of a person's confirmed commands (719), amending @@OD:141@@ and following "
+        "@@OD:698@@. ")
+DECISIONS_INTRO = DECISIONS_INTRO.replace(_D715, _D715 + _D16)

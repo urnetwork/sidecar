@@ -835,7 +835,7 @@
   "family": "pg_redis_durable",
   "file": "06-PROTO.md",
   "line": 358,
-  "col": 437,
+  "col": 457,
   "match": "Redis's Lua keeps numbers as doubles, exact only below 2^53, and evs",
   "snippet": " `EXPIRE ... 3600 NX`, and returns the stream id, `tok` and `live` from the same slot for §18.7's wake step, which never shares a command with them. Versions stay exact: Redis's Lua keeps numbers as doubles, exact only below 2^53, and evs's push sequence is near 1.8 × 10^18 (§11.10), so every version is a canonical decimal string (digits only, no leading zero, at most 20) from the caller's `ARGV` to `ver`",
   "reading": "This describes §6.8's Redis hint writes, which are notification transport (owner decision 17), and the precision of evs's push sequence. §11.10 (11-EVS.md:1266-1280; D-EVS-14) defines that sequence as rebuildable Redis soft state under owner decision 136, not durable state.",
@@ -873,7 +873,7 @@
  {
   "family": "pools",
   "file": "06-PROTO.md",
-  "line": 552,
+  "line": 554,
   "col": 158,
   "match": "pooled",
   "snippet": "- **Codecs.** v0 uses `connect.ProtoCodec`, which allocates per receive (connect/subprotocol.go:237-259). From M5, if §22 measures the cost worth removing, a pooled envelope codec, byte-identical to `proto.Marshal` like connect's wrapper (connect/subprotocol.go:138-227), implements `SubprotocolMessagePool` (:72-75), fuzzed by §22.",
@@ -886,7 +886,7 @@
  {
   "family": "pools",
   "file": "06-PROTO.md",
-  "line": 574,
+  "line": 576,
   "col": 101,
   "match": "pooled",
   "snippet": "**D-PROTO-2 (proposed).** Envelopes are capped at 4,080 B, with chunking (§6.5). *Why:* buffers stay pooled; connect does not fragment.",
@@ -899,7 +899,7 @@
  {
   "family": "pools",
   "file": "06-PROTO.md",
-  "line": 592,
+  "line": 594,
   "col": 127,
   "match": "pooled",
   "snippet": "**D-PROTO-11 (proposed).** Package `urnetwork.sidecar`, protoc-gen-go v1.36.11, and `connect.ProtoCodec` until §22 justifies a pooled codec. *Why:* no registry or sdk-pin conflicts.",
@@ -912,7 +912,7 @@
  {
   "family": "pg_redis_durable",
   "file": "06-PROTO.md",
-  "line": 594,
+  "line": 596,
   "col": 266,
   "match": "Redis's Lua holds numbers as doubles, exact only below 2^53, so evs",
   "snippet": "al string in Redis and its scripts, never a Lua number, and uint64 on the wire. *Why:* HSET and XADD emit nothing in production; concurrent writers would lower versions; Redis's Lua holds numbers as doubles, exact only below 2^53, so evs's push sequence, near 1.8 × 10^18, would round to a multiple of 256.",
@@ -925,7 +925,7 @@
  {
   "family": "pg_redis_durable",
   "file": "06-PROTO.md",
-  "line": 647,
+  "line": 649,
   "col": 2,
   "match": "Redis loss drops hints, subscription leases and evs",
   "snippet": "| Redis loss drops hints, subscription leases and evs push sequences | Low | Medium | Sequences restart above old values beyond the masters' clock skew, and clients take a jump or a clock version's fall as a gap and resync;",
@@ -938,7 +938,7 @@
  {
   "family": "pools",
   "file": "06-PROTO.md",
-  "line": 661,
+  "line": 663,
   "col": 47,
   "match": "pooled",
   "snippet": "- **M5-M6.** Streams with §9's `tls/`, and the pooled codec if measured worthwhile; Service edges (C9, M5); FriendsAndFamily shares with C18 (M6); same-network P2P behind `EnablePeerP2p`, built at M6 and off by default (own",
@@ -1042,7 +1042,7 @@
  {
   "family": "window_14d_weekly",
   "file": "07-TEAM.md",
-  "line": 1465,
+  "line": 1473,
   "col": 67,
   "match": "weekly",
   "snippet": "         to the member (owner decision 126); together these hold a weekly re-enroller near 14 admitted",
@@ -1055,7 +1055,7 @@
  {
   "family": "window_14d_weekly",
   "file": "07-TEAM.md",
-  "line": 1538,
+  "line": 1546,
   "col": 118,
   "match": "14 days",
   "snippet": "**D-TEAM-1 (proposed).** P0 stage 1 refuses child and admin-refused tokens on all 37 routes before any sidecar, after 14 days log-only, confines `strict_exp` bearers to 7.4's route allowlist and closes AUTH.md:202. *Why:* owner decision 45.",
@@ -1068,7 +1068,7 @@
  {
   "family": "window_14d_weekly",
   "file": "07-TEAM.md",
-  "line": 1594,
+  "line": 1602,
   "col": 1178,
   "match": "weekly",
   "snippet": "ry admin device lists each member's page Workers but its newest for an admin to revoke (7.10's `cleanup` row). *Why:* with `self_admit` off no member device admits, so a weekly re-enroller's evicted Workers would pile up toward Team's 5,000 `config_admissions` (§20.4); a stale-removed Worker has had no leaf change for 90 days and holds no leaf ",
@@ -1081,7 +1081,7 @@
  {
   "family": "device_cap_1000",
   "file": "07-TEAM.md",
-  "line": 1668,
+  "line": 1676,
   "col": 3706,
   "match": "member-device cap",
   "snippet": "ed, consent, recovery and cascade rows, and its approval suite a cancel under §7.4's allowlist (owner decision 551); §20.4 allows Team 5,000 `config_admissions`, with no member-device cap; §2.8's api-7 shows each `IndexerSet`'s signer, subject, scope and `retire`, its services sealed, and §15.5 keeps an undesignated `tag:mail` device off the mail listener",
