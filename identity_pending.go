@@ -316,10 +316,24 @@ func (self *Sidecar) PostPendingStatements(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	return self.postPendingStatements(ctx, pendings)
+}
+
+// Posts pendings as PostPendingStatements posts what is pending. One that no longer stands when its turn comes, which
+// another post landed, refused or dropped unposted since pendings was read, is passed over, so it is not posted twice
+// or posted past the re-check that dropped it.
+func (self *Sidecar) postPendingStatements(ctx context.Context, pendings []*sidecarPendingStatement) error {
 	var firstErr error
 	for _, run := range sidecarPendingRuns(pendings) {
 		for _, pending := range run {
-			if _, err := self.postPendingInOrder(ctx, pending); err != nil && !errors.Is(err, ErrSidecarActRefused) {
+			standing, err := self.pendingStands(pending)
+			if err == nil && !standing {
+				continue
+			}
+			if err == nil {
+				_, err = self.postPendingInOrder(ctx, pending)
+			}
+			if err != nil && !errors.Is(err, ErrSidecarActRefused) {
 				if firstErr == nil {
 					firstErr = err
 				}
@@ -328,6 +342,25 @@ func (self *Sidecar) PostPendingStatements(ctx context.Context) error {
 		}
 	}
 	return firstErr
+}
+
+// Whether pending's record still stands in the pending records.
+func (self *Sidecar) pendingStands(pending *sidecarPendingStatement) (bool, error) {
+	secrets := self.currentCoreSecrets()
+	if secrets == nil {
+		return false, ErrSidecarNoIdentity
+	}
+	id, err := pending.id()
+	if err != nil {
+		return false, err
+	}
+	if _, err := secrets.Get(sidecarPendingStatementPrefix + id); err != nil {
+		if errors.Is(err, ErrSidecarStoreAbsent) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 // POST /network/config/delta's body (§7.9; sidecartest/fake_api_config.go reads alike).

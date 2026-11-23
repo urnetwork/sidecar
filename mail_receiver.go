@@ -7,8 +7,10 @@
 //	listen    one §9 registration, smtp/25/<host> (mx, or mx.<scope> for a Team scope's receiver), protocol
 //	          smtp-starttls and max_streams 16, which burners share. Sidecar.Listen goes through §5.4's Authorize
 //	          first (I-8), and may answer *ApprovalPendingError: Start answers it to its caller, which surfaces it, and
-//	          the receiver asks again every ApprovalRetryInterval until a person's decision lets it through. A listen
-//	          that fails otherwise, or ends, is asked again after ListenRetryInterval
+//	          the receiver asks again every ApprovalRetryInterval until a person's decision lets it through. Under a
+//	          requests rule the grant asked lasts ListenExpires, 7 days, held to the rule's maxExpiry, so a person
+//	          approves the receiver once a week (owner decision 687). A listen that fails otherwise, or ends, is asked
+//	          again after ListenRetryInterval
 //	serving   the registration starts not serving, so it takes no ticket, and serves only once a key is live
 //	          (mail_receiver_keys.go): a new key never serves before its TLSA is live, so a DANE sender never fails on
 //	          a key it cannot match. With no key live it stops serving again, and a stream ticketed before meets a
@@ -82,11 +84,17 @@ var (
 	ErrMailReceiverInvalid = errors.New("mail receiver: invalid")
 )
 
-// What a receiver is tuned by (§15.5). Every duration and count must be positive.
+// What a receiver is tuned by (§15.5). Every duration and count must be positive, but ListenExpires, which may be 0.
 type MailReceiverSettings struct {
 	// The registration's max_streams: sessions at once on this receiver (§15.5's 16), which bounds what one
 	// receiver's checks and spool hold.
 	MaxStreams int
+	// How long the grant the listen asks lasts, its SocketListenSettings.Expires (§15.5, §9.9; owner decision 687):
+	// 7 days, the longest the implicit document's requests rule gives a tls/ or smtp/ listen, so a receiver under that
+	// rule is approved once a week rather than every hour, its expiresDefault. MatchAclRequest holds it to the rule's
+	// maxExpiry, refusing a listen past it, so under a document whose rule gives less it must be at most that. 0 asks
+	// the rule's expiresDefault. A standing grant passes the listen whatever this asks.
+	ListenExpires time.Duration
 	// The TTL §12 publishes a receiver key's TLSA with (§15.5's 300 s), which dns.yml's tlsa sets server side.
 	TlsaTtl time.Duration
 	// The TTLs after its publication at which a key goes live: RFC 7671 §8.1's 2.
@@ -114,6 +122,7 @@ type MailReceiverSettings struct {
 func DefaultMailReceiverSettings() *MailReceiverSettings {
 	return &MailReceiverSettings{
 		MaxStreams:            16,
+		ListenExpires:         7 * 24 * time.Hour,
 		TlsaTtl:               300 * time.Second,
 		TlsaLiveTtlCount:      2,
 		ApprovalRetryInterval: time.Minute,
@@ -127,7 +136,7 @@ func DefaultMailReceiverSettings() *MailReceiverSettings {
 
 // Whether every field is in range.
 func (self *MailReceiverSettings) valid() bool {
-	return self != nil && 0 < self.MaxStreams && 0 < self.TlsaTtl && 0 < self.TlsaLiveTtlCount &&
+	return self != nil && 0 < self.MaxStreams && 0 <= self.ListenExpires && 0 < self.TlsaTtl && 0 < self.TlsaLiveTtlCount &&
 		0 < self.ApprovalRetryInterval && 0 < self.ListenRetryInterval && 0 < self.PublishRetryInterval &&
 		0 < self.RetiredKeyRetention && 0 < self.KeyCheckInterval && 0 < self.HandshakeTimeout
 }
@@ -400,6 +409,7 @@ func (self *MailReceiver) listen(ctx context.Context) (MailReceiverListener, err
 	listener, err := self.args.Listen(ctx, mailReceiverListenPrefix+self.args.Host, &SocketListenSettings{
 		Protocol:   socketListenSmtpProtocol,
 		MaxStreams: self.settings.MaxStreams,
+		Expires:    self.settings.ListenExpires,
 	})
 	if err == nil && listener == nil {
 		err = fmt.Errorf("%w: the listen answered no listener", ErrMailReceiverInvalid)

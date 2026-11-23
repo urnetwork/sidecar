@@ -244,6 +244,10 @@ type MailConfigArgs struct {
 	// Nil refuses every outward action; else its alias_create and alias_delete Lookups are this MailConfig's until
 	// Close. One gate holds one Lookup a kind, so a second MailConfig on it replaces the first's.
 	Gate MailConfigGate
+	// Whether Gate's Lookups wait for the owner's registerLookups rather than registering at construction: a
+	// MailClient's, which registers only the reader it keeps, so a racing build it closes never takes the kept one's
+	// Lookups off the gate (MailClient.mailConfig)
+	lookupsOnInstall bool
 	// A burner creation's label drawer; nil refuses burner creations (SetBurnerLabels installs one later).
 	BurnerLabels MailBurnerLabelsFunction
 	// Called with each version a reader passes over, on the syncing goroutine; it must not block. Nil counts them
@@ -337,6 +341,8 @@ type MailConfig struct {
 	wake chan struct{}
 	// closed when the follower ends
 	finished chan struct{}
+	// runs the gate's registration of this MailConfig's Lookups at most once (registerLookups)
+	registerOnce sync.Once
 
 	stateLock sync.Mutex
 	// each table by its key, an address or a label
@@ -352,7 +358,8 @@ type MailConfig struct {
 	// alarms raised already, by path, version and reason, so a path replayed again raises none twice
 	alarmed      map[string]bool
 	burnerLabels MailBurnerLabelsFunction
-	unregisters  []func()
+	// what takes back the Lookups registerLookups put on the gate
+	unregisters []func()
 	// ends the follower, once it started
 	cancel    func()
 	following bool
@@ -402,14 +409,48 @@ func newMailConfig(store mailConfigStore, args *MailConfigArgs) *MailConfig {
 		alarmed:        map[string]bool{},
 		burnerLabels:   args.BurnerLabels,
 	}
-	if args.Gate != nil {
-		config.unregisters = append(config.unregisters,
-			args.Gate.RegisterEffectLookup(SidecarActionAliasCreate, config.Lookup),
-			args.Gate.RegisterEffectLookup(SidecarActionAliasDelete, config.Lookup),
-		)
-	}
 	config.cancel = func() {}
+	if !args.lookupsOnInstall {
+		config.registerLookups()
+	}
 	return config
+}
+
+// Registers this MailConfig's alias_create and alias_delete Lookups on its gate, once: a call while another
+// registers waits for it, and a closed MailConfig registers none, or takes back what it registered as it closed, so
+// it holds no kind past its Close. Nothing with no gate.
+func (self *MailConfig) registerLookups() {
+	if self.gate == nil {
+		return
+	}
+	self.registerOnce.Do(func() {
+		closed := func() bool {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			return self.closed
+		}()
+		if closed {
+			return
+		}
+		unregisters := []func(){
+			self.gate.RegisterEffectLookup(SidecarActionAliasCreate, self.Lookup),
+			self.gate.RegisterEffectLookup(SidecarActionAliasDelete, self.Lookup),
+		}
+		kept := func() bool {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			if self.closed {
+				return false
+			}
+			self.unregisters = append(self.unregisters, unregisters...)
+			return true
+		}()
+		if !kept {
+			for _, unregister := range unregisters {
+				unregister()
+			}
+		}
+	})
 }
 
 // Starts the follower, once: see run.
