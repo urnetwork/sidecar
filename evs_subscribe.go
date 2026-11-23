@@ -1502,7 +1502,7 @@ func (self *evsSubscriber) walkLog(ctx context.Context, key evsRefKey, version u
 		}
 		since = next
 	}
-	walked, err := self.client.verifier.walk(key.repoId, key.refId, version, chain, statements, throughVersion)
+	walked, err := self.client.verifier.walk(ctx, key.repoId, key.refId, version, chain, statements, throughVersion)
 	return walked, false, err
 }
 

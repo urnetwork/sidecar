@@ -29,7 +29,8 @@ func aclTestRights(state *AclState, sidecarId Id, repoId Id, audience AclTokenAu
 }
 
 // The config gives every admitted sidecar r, gkm rw to member devices but read_only ones, and evs rw only
-// to config writers, who administer it at both (QD-894); an ephemeral sidecar never writes it (§7.9, §10.6, FS-19).
+// to config writers, who administer it at both (QD-894); an ephemeral sidecar never writes it (§7.9, §10.6, FS-19),
+// and a read_only one holds r alone there, no receipt going to the config (QD-1183).
 func TestAclEvsAccessConfigByAudience(t *testing.T) {
 	fixture := newAclTestFixture()
 	owner := fixture.member(bridge.MemberRole_MEMBER_ROLE_OWNER)
@@ -58,7 +59,7 @@ func TestAclEvsAccessConfigByAudience(t *testing.T) {
 	}{
 		{sidecarId: writer, evs: AclEvsRead | AclEvsWrite | AclEvsAdmin, gkm: AclEvsRead | AclEvsWrite | AclEvsAdmin},
 		{sidecarId: memberDevice, evs: AclEvsRead, gkm: AclEvsRead | AclEvsWrite},
-		{sidecarId: pageWorker, evs: AclEvsRead | AclEvsDeposit, gkm: AclEvsRead | AclEvsDeposit},
+		{sidecarId: pageWorker, evs: AclEvsRead, gkm: AclEvsRead},
 		{sidecarId: ephemeral, evs: AclEvsRead, gkm: AclEvsRead},
 		{sidecarId: ephemeralWriter, evs: AclEvsRead, gkm: AclEvsRead},
 		{sidecarId: agent, evs: AclEvsRead, gkm: AclEvsRead},
@@ -154,7 +155,7 @@ func TestAclEvsAccessConfigAdminIsEveryConfigWriters(t *testing.T) {
 	}
 	fixture.view.configWriters[first] = true
 	fixture.admission(first).Row.Capabilities = uint32(bridge.SidecarCapability_SIDECAR_CAPABILITY_READ_ONLY)
-	if rights := aclTestRights(fixture.state(t), first, configId, AclTokenAudienceEvs); rights != AclEvsRead|AclEvsDeposit {
+	if rights := aclTestRights(fixture.state(t), first, configId, AclTokenAudienceEvs); rights != AclEvsRead {
 		t.Errorf("read_only: %b", rights)
 	}
 	fixture.admission(first).Row.Capabilities = 0
@@ -180,8 +181,9 @@ func TestAclEvsAccessConfigAdminIsEveryConfigWriters(t *testing.T) {
 	}
 }
 
-// The directory: every admitted sidecar reads it and every one not read_only writes its own paths;
-// admin only for its consented, not read_only admins, its creator and config writers (D-ACL-24, §8.8).
+// The directory: every admitted sidecar reads it and every one not read_only writes its own paths, a read_only one
+// holding r alone; admin only for its consented, not read_only admins, its creator and config writers (D-ACL-24,
+// §8.8).
 func TestAclEvsAccessDirectory(t *testing.T) {
 	fixture := newAclTestFixture()
 	owner := fixture.member(bridge.MemberRole_MEMBER_ROLE_OWNER)
@@ -212,7 +214,7 @@ func TestAclEvsAccessDirectory(t *testing.T) {
 		{sidecarId: writer, rights: all},
 		{sidecarId: unconsentedWriter, rights: AclEvsRead | AclEvsWrite},
 		{sidecarId: memberDevice, rights: AclEvsRead | AclEvsWrite},
-		{sidecarId: pageWorker, rights: AclEvsRead | AclEvsDeposit},
+		{sidecarId: pageWorker, rights: AclEvsRead},
 		{sidecarId: ephemeral, rights: AclEvsRead | AclEvsWrite},
 		{sidecarId: agent, rights: AclEvsRead | AclEvsWrite},
 	}
@@ -748,7 +750,7 @@ func TestAclEvsAccessDeletedRepoGivesItsStandingAdminsAdminAlone(t *testing.T) {
 		{name: "general second admin", repoId: world.generalId, sidecarId: world.generalSecondAdmin, live: all, admin: true},
 		{name: "general ephemeral admin", repoId: world.generalId, sidecarId: world.generalEphemeralAdmin, live: all, admin: true},
 		{name: "general removed admin", repoId: world.generalId, sidecarId: world.generalRemovedAdmin, live: AclEvsRead},
-		{name: "general read_only admin", repoId: world.generalId, sidecarId: world.generalReadOnlyAdmin, live: AclEvsRead | AclEvsDeposit},
+		{name: "general read_only admin", repoId: world.generalId, sidecarId: world.generalReadOnlyAdmin, live: AclEvsRead},
 		{name: "general suspended admin", repoId: world.generalId, sidecarId: world.generalSuspendedAdmin, reason: AclReasonSuspended},
 		{name: "general writer by grant", repoId: world.generalId, sidecarId: world.generalWriter, live: AclEvsRead | AclEvsWrite},
 		{name: "general admin by rule", repoId: world.generalId, sidecarId: world.generalRuleAdmin, live: all},
@@ -965,7 +967,8 @@ func TestAclEvsAccessMailboxDepositForMailSendSubjects(t *testing.T) {
 // QD-1173: write implies deposit wherever the repo takes deposits, a kind whose GenRotates carry a drop key or a general
 // repo its RepoCreate marks an inbox (gkmRepoTakesDeposits): a group inbox's writer deposits there, and so does a team
 // record's; a plain general repo's, the network mailcfg's, the directory's and the config's writers do not, and a
-// read_only device keeps r with the receipt deposit.
+// read_only device whose member writes a group inbox keeps r alone there, its one deposit being §16.8's receipt
+// deposit, which only an owner-bound repo takes (QD-1183).
 func TestAclEvsAccessWriteImpliesDepositWhereTheRepoTakesDeposits(t *testing.T) {
 	fixture := newAclTestFixture()
 	owner := fixture.member(bridge.MemberRole_MEMBER_ROLE_OWNER)
@@ -995,11 +998,95 @@ func TestAclEvsAccessWriteImpliesDepositWhereTheRepoTakesDeposits(t *testing.T) 
 		{name: "the network mailcfg's writer", sidecarId: writer, repoId: mailcfgId, rights: AclEvsRead | AclEvsWrite},
 		{name: "the directory's writer", sidecarId: writer, repoId: directoryId, rights: AclEvsRead | AclEvsWrite},
 		{name: "the config's writer", sidecarId: writer, repoId: configId, rights: AclEvsRead | AclEvsWrite | AclEvsAdmin},
-		{name: "a read_only device in a group inbox", sidecarId: readOnly, repoId: inboxId, rights: AclEvsRead | AclEvsDeposit},
+		{name: "a read_only device in a group inbox", sidecarId: readOnly, repoId: inboxId, rights: AclEvsRead},
 	}
 	for _, c := range cases {
 		if rights := aclTestRights(state, c.sidecarId, c.repoId, AclTokenAudienceEvs); rights != c.rights {
 			t.Errorf("%s: %b, want %b", c.name, rights, c.rights)
+		}
+	}
+}
+
+// QD-1183: a read_only sidecar holds r, with §16.8's receipt deposit only where receipts go, a repo of an owner-bound
+// kind it reads and never writes: as a consented device of the owner in its vault, mailbox and secret, and as an
+// EvsShare's subject in another member's vault. In every other repo it reads it holds r alone, whatever would give it
+// more: a general and a record repo a rule lets members write and deposit into, a group inbox members write, the team
+// record its admin member reads, the network's mailcfg members write, a Team scope's own mailcfg it reads as a
+// consented device, the config and the directory. A deposit with no read, an unconsented device's in its owner's vault
+// and mailbox, gives it nothing. It stays among each repo's readers and out of its writers, and the member's device
+// that is not read_only keeps every deposit it held.
+func TestAclEvsAccessReadOnlyDepositsOnlyForReceiptsInAnOwnerBoundRepo(t *testing.T) {
+	fixture := newAclTestFixture()
+	admin := fixture.member(bridge.MemberRole_MEMBER_ROLE_ADMIN)
+	other := fixture.member(bridge.MemberRole_MEMBER_ROLE_MEMBER)
+	laptop := fixture.invitedDevice(admin)
+	worker := fixture.device(admin, laptop.Bytes())
+	unconsented := fixture.device(admin, NewId().Bytes())
+	friend := fixture.invitedDevice(other)
+	for _, sidecarId := range []Id{worker, unconsented, friend} {
+		fixture.admission(sidecarId).Row.Capabilities |= uint32(bridge.SidecarCapability_SIDECAR_CAPABILITY_READ_ONLY)
+	}
+	consented := [][]byte{laptop.Bytes(), worker.Bytes()}
+	vaultId, vault := fixture.repo(protocol.RepoKind_REPO_KIND_VAULT, admin)
+	vault.ConsentedSidecarIds = consented
+	vault.Shares = []*protocol.AclRepoShareRow{{Subject: friend.Bytes(), Signer: laptop.Bytes(), At: fixture.next()}}
+	mailboxId, mailbox := fixture.repo(protocol.RepoKind_REPO_KIND_MAILBOX, admin)
+	mailbox.ConsentedSidecarIds = consented
+	secretId, secret := fixture.repo(protocol.RepoKind_REPO_KIND_SECRET, admin)
+	secret.ConsentedSidecarIds = consented
+	generalId, _ := fixture.repo(protocol.RepoKind_REPO_KIND_GENERAL, Id{})
+	recordId, _ := fixture.repo(protocol.RepoKind_REPO_KIND_RECORD, Id{})
+	inboxId, inbox := fixture.repo(protocol.RepoKind_REPO_KIND_GENERAL, Id{})
+	inbox.Inbox = protocol.RepoInbox_REPO_INBOX_GROUP
+	teamRecordId, _ := fixture.repo(protocol.RepoKind_REPO_KIND_TEAM_RECORD, Id{})
+	mailcfgId, _ := fixture.repo(protocol.RepoKind_REPO_KIND_MAILCFG, Id{})
+	scopeMailcfgId, scopeMailcfg := fixture.repo(protocol.RepoKind_REPO_KIND_MAILCFG, admin)
+	scopeMailcfg.ConsentedSidecarIds = consented
+	directoryId, _ := fixture.repo(protocol.RepoKind_REPO_KIND_DIRECTORY, Id{})
+	configId := fixture.configRepo(Id{}, Id{})
+	fixture.rule(autogroupAtoms(protocol.AclAutogroup_ACL_AUTOGROUP_MEMBER),
+		[]*protocol.AclTarget{aclRepoTarget(generalId), aclRepoTarget(recordId), aclRepoTarget(inboxId)},
+		protocol.AclAction_ACL_ACTION_WRITE, protocol.AclAction_ACL_ACTION_DEPOSIT)
+	state := fixture.state(t)
+	cases := []struct {
+		name      string
+		sidecarId Id
+		repoId    Id
+		rights    AclEvsRights
+	}{
+		{name: "its owner's vault", sidecarId: worker, repoId: vaultId, rights: AclEvsRead | AclEvsDeposit},
+		{name: "its owner's mailbox", sidecarId: worker, repoId: mailboxId, rights: AclEvsRead | AclEvsDeposit},
+		{name: "its owner's secret", sidecarId: worker, repoId: secretId, rights: AclEvsRead | AclEvsDeposit},
+		{name: "another member's vault shared to it", sidecarId: friend, repoId: vaultId, rights: AclEvsRead | AclEvsDeposit},
+		{name: "a general repo members write and deposit into", sidecarId: worker, repoId: generalId, rights: AclEvsRead},
+		{name: "a record repo members write and deposit into", sidecarId: worker, repoId: recordId, rights: AclEvsRead},
+		{name: "a group inbox members write", sidecarId: worker, repoId: inboxId, rights: AclEvsRead},
+		{name: "a group inbox, another member's device", sidecarId: friend, repoId: inboxId, rights: AclEvsRead},
+		{name: "the team record its admin member reads", sidecarId: worker, repoId: teamRecordId, rights: AclEvsRead},
+		{name: "the network's mailcfg", sidecarId: worker, repoId: mailcfgId, rights: AclEvsRead},
+		{name: "a Team scope's own mailcfg", sidecarId: worker, repoId: scopeMailcfgId, rights: AclEvsRead},
+		{name: "the directory", sidecarId: worker, repoId: directoryId, rights: AclEvsRead},
+		{name: "the config", sidecarId: worker, repoId: configId, rights: AclEvsRead},
+		{name: "an unconsented device in its owner's vault", sidecarId: unconsented, repoId: vaultId, rights: 0},
+		{name: "an unconsented device in its owner's mailbox", sidecarId: unconsented, repoId: mailboxId, rights: 0},
+		{name: "its member's writer in the vault", sidecarId: laptop, repoId: vaultId, rights: AclEvsRead | AclEvsWrite | AclEvsDeposit},
+		{name: "its member's writer in the group inbox", sidecarId: laptop, repoId: inboxId, rights: AclEvsRead | AclEvsWrite | AclEvsDeposit},
+		{name: "its member's writer in the general repo", sidecarId: laptop, repoId: generalId, rights: AclEvsRead | AclEvsWrite | AclEvsDeposit},
+		{name: "its member's device in the team record", sidecarId: laptop, repoId: teamRecordId, rights: AclEvsRead | AclEvsDeposit},
+	}
+	for _, c := range cases {
+		access := state.EvsAccess(AclSidecarSubject(c.sidecarId), c.repoId, AclTokenAudienceEvs, aclTestNow)
+		if access.Rights != c.rights || access.Allowed != (c.rights != 0) {
+			t.Errorf("%s: rights %b, allowed %t, want %b", c.name, access.Rights, access.Allowed, c.rights)
+		}
+	}
+	// the config and its group at gkm alike
+	if rights := aclTestRights(state, worker, configId, AclTokenAudienceGkm); rights != AclEvsRead {
+		t.Errorf("the config at gkm: %b", rights)
+	}
+	for _, repoId := range []Id{vaultId, inboxId, generalId, teamRecordId, directoryId} {
+		if !slices.Contains(state.RepoReaders(repoId, aclTestNow), worker) || slices.Contains(state.RepoWriters(repoId, aclTestNow), worker) {
+			t.Errorf("%s: readers %v, writers %v", repoId, state.RepoReaders(repoId, aclTestNow), state.RepoWriters(repoId, aclTestNow))
 		}
 	}
 }

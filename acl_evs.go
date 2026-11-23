@@ -32,10 +32,14 @@
 // within the ceiling (plan-ACL-small-readings #3), and write deposit in a repo that takes deposits, a kind whose
 // GenRotates carry a drop key or a general repo its RepoCreate marks an inbox (gkmRepoTakesDeposits; QD-1173): a
 // mailbox's consented devices, its receivers among them, and a group inbox's writers deposit the mail they take
-// without a send grant, the deposit giving a writer nothing its write did not. A read_only sidecar gets only r,
-// plus the receipt deposit with it (D-TEAM-24), and a reader of an owner-bound repo that does not write gets the
-// receipt deposit too (§16.8). A mailbox also takes the deposit of every subject of the network the projection
-// marks mail_send, a send grant on mail: in force, for §15.8's same-network mail (D-MAIL-8, owner decision 333).
+// without a send grant, the deposit giving a writer nothing its write did not. A reader of an owner-bound repo that
+// does not write gets §16.8's receipt deposit there, the repos of an owner-bound kind being the only ones a receipt
+// goes to (evs_receipt_gate.go). That is the one deposit a read_only sidecar holds (§7.8, §8.12, D-TEAM-24;
+// QD-1183): it gets r, with the receipt deposit in an owner-bound repo it reads, and r alone in every other repo it
+// reads, whatever else gives it more, so it deposits into no group, team record, config or directory, the exchange
+// mints it no deposit scope there, evs honors none, and its same-network send to a group answers
+// MailSendNoDepositRight. A mailbox also takes the deposit of every subject of the network the projection marks
+// mail_send, a send grant on mail: in force, for §15.8's same-network mail (D-MAIL-8, owner decision 333).
 //
 // A repo whose rows' newest RepoDelete stands unrestored gives admin alone, and only to its standing admins: the
 // sidecars §8.8's access log counts as the repo's admins now, which are the ones it lets sign the RepoDelete, a
@@ -319,14 +323,21 @@ func (self *AclState) sidecarEvsAccess(sidecar *aclSidecarState, repoId Id, audi
 			rights |= AclEvsDeposit
 		}
 	}
-	if aclRepoKindOwnerBound(repo.kind) && rights.Has(AclEvsRead) && !rights.Has(AclEvsWrite) {
+	// the kinds §16.8's receipts go to; a Team scope's own mailcfg, owner-bound by its row, takes no deposit (QD-1107)
+	receiptKind := aclRepoKindOwnerBound(repo.kind)
+	if receiptKind && rights.Has(AclEvsRead) && !rights.Has(AclEvsWrite) {
 		rights |= AclEvsDeposit
 	}
 	if sidecar.readOnly {
-		if rights.Has(AclEvsRead) {
-			rights = AclEvsRead | AclEvsDeposit
-		} else {
+		switch {
+		case !rights.Has(AclEvsRead):
 			rights = 0
+		case receiptKind:
+			// r with the receipt deposit, in a repo it reads and never writes
+			rights = AclEvsRead | AclEvsDeposit
+		default:
+			// r alone: no receipt goes here, and no other deposit is its (QD-1183)
+			rights = AclEvsRead
 		}
 	}
 	if rights == 0 {

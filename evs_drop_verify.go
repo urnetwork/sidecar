@@ -40,6 +40,7 @@ package sidecar
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -100,7 +101,7 @@ func (self *evsFormat2Rules) heldDrops(client *EvsClient, repoId Id, refId Id) [
 }
 
 // A path's reply in a drop's state: see the file header.
-func (self *evsFormat2Rules) verifyDropPath(verifier *EvsVerifier, head *EvsVerifiedHead, epochs *EvsPathEpochs, reply *protocol.EvsReadPathReply) (*EvsVerifiedPath, error) {
+func (self *evsFormat2Rules) verifyDropPath(ctx context.Context, verifier *EvsVerifier, head *EvsVerifiedHead, epochs *EvsPathEpochs, reply *protocol.EvsReadPathReply) (*EvsVerifiedPath, error) {
 	client := verifier.client
 	tamper := func(detail string) error {
 		client.alarm(head.RepoId, head.RefId, SidecarEvsAlarmTamper, "", nil)
@@ -122,7 +123,7 @@ func (self *evsFormat2Rules) verifyDropPath(verifier *EvsVerifier, head *EvsVeri
 	if err != nil || !replyPath.Equal(tokenPath) {
 		return nil, fmt.Errorf("%w: a reply for another path", ErrEvsEntryRefused)
 	}
-	drop, err := self.dropOf(verifier, head, reply)
+	drop, err := self.dropOf(ctx, verifier, head, reply)
 	if err != nil {
 		return nil, err
 	}
@@ -136,7 +137,7 @@ func (self *evsFormat2Rules) verifyDropPath(verifier *EvsVerifier, head *EvsVeri
 		if reply.GetState() != protocol.EvsReadPathState_EVS_READ_PATH_DROPPED || k == 0 {
 			return nil, fmt.Errorf("%w: an entry version withheld for a version not dropped", ErrEvsEntryRefused)
 		}
-		if statement, err = verifier.statementAt(head, version.GetCommitVersion(), version.GetPushId(), reply.GetStatement()); err != nil {
+		if statement, err = verifier.statementAt(ctx, head, version.GetCommitVersion(), version.GetPushId(), reply.GetStatement()); err != nil {
 			return nil, err
 		}
 		versionPath, _, err := evsTokenPathOfStatement(epochs, statement)
@@ -157,7 +158,7 @@ func (self *evsFormat2Rules) verifyDropPath(verifier *EvsVerifier, head *EvsVeri
 			Version: k, PushId: version.GetPushId(), Kind: uint32(protocol.EvsEntryKind_EVS_ENTRY_FILE),
 		}
 	} else {
-		if err := verifier.verifyVersion(head, epochs, version, reply.GetStatement(), reply.GetProof(), verified); err != nil {
+		if err := verifier.verifyVersion(ctx, head, epochs, version, reply.GetStatement(), reply.GetProof(), verified); err != nil {
 			return nil, err
 		}
 		statement, k = verified.Statement, verified.Entry.GetVersion()
@@ -239,7 +240,7 @@ func evsDropListsVersion(listing *protocol.EvsDropPath, k uint64, dropVersion ui
 }
 
 // The DROP a reply names, H1 and H2 checked, its body kept once checked.
-func (self *evsFormat2Rules) dropOf(verifier *EvsVerifier, head *EvsVerifiedHead, reply *protocol.EvsReadPathReply) (*evsReadDrop, error) {
+func (self *evsFormat2Rules) dropOf(ctx context.Context, verifier *EvsVerifier, head *EvsVerifiedHead, reply *protocol.EvsReadPathReply) (*evsReadDrop, error) {
 	client := verifier.client
 	tamper := func(detail string) error {
 		client.alarm(head.RepoId, head.RefId, SidecarEvsAlarmTamper, "", nil)
@@ -297,7 +298,7 @@ func (self *evsFormat2Rules) dropOf(verifier *EvsVerifier, head *EvsVerifiedHead
 	if len(statementBytes) == 0 {
 		return nil, tamper("a drop state with no DROP statement")
 	}
-	statement, err := verifier.VerifyStatement(statementBytes, head.RepoId, head.RefId)
+	statement, err := verifier.VerifyStatement(ctx, statementBytes, head.RepoId, head.RefId)
 	if err != nil {
 		return nil, err
 	}

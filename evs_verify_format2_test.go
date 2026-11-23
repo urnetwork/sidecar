@@ -744,7 +744,7 @@ func BenchmarkEvsFormat2Walk100Versions(b *testing.B) {
 	start := EvsChainStart(world.repoId, world.refId)
 	b.ResetTimer()
 	for b.Loop() {
-		walked, err := verifier.walk(world.repoId, world.refId, 0, start, statements, 100)
+		walked, err := verifier.walk(b.Context(), world.repoId, world.refId, 0, start, statements, 100)
 		if err != nil || len(walked) != 100 {
 			b.Fatalf("walked %d: %v", len(walked), err)
 		}

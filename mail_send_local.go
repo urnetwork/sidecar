@@ -16,6 +16,12 @@
 //	          §8.5's rows yet): within one member, a one-member network and an agent's sponsor all work. Beside that
 //	          rule every target must give the sender deposit or write at the installed state (I-5), as evs's own gate
 //	          will
+//	receipts  a deposit right that is §16.8's receipt deposit carries no mail, the one a reader of an owner-bound repo
+//	          that does not write holds there: ingest leaves such a depositor's ref to the record's receipts
+//	          (MailIngestAclAuthority.DepositorClass), so a send into it refuses closed as MailSendNoDepositRight rather
+//	          than answering delivered. A read_only device holds no deposit but that one (§7.8; QD-1183), so its send
+//	          refuses alike to a group it reads, where it holds r alone and evs refuses its deposit, and to its own
+//	          member's mailbox, where it reads as a consented device
 //
 // Nothing here logs an address, a label or a byte of a message (I-13). On every leg but the extension's.
 
@@ -131,7 +137,11 @@ func mailSendMayDeposit(state *AclState, senderSidecarId Id, repoId Id, now time
 		return MailSendNoDepositRight
 	}
 	rights := state.EvsAccess(AclSidecarSubject(senderSidecarId), repoId, AclTokenAudienceEvs, now).Rights
-	if !rights.Has(AclEvsDeposit) && !rights.Has(AclEvsWrite) {
+	switch {
+	case !rights.Has(AclEvsDeposit) && !rights.Has(AclEvsWrite):
+		return MailSendNoDepositRight
+	case aclRepoKindOwnerBound(repo.GetKind()) && rights.Has(AclEvsRead) && !rights.Has(AclEvsWrite):
+		// its deposit there is the receipt deposit, which ingest never takes as mail (the file header's receipts row)
 		return MailSendNoDepositRight
 	}
 	return MailSendDelivered

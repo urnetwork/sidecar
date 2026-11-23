@@ -343,7 +343,7 @@ func (self *EvsGitReceiver) judgeAttempt(ctx context.Context, refId Id, head *Ev
 	if err != nil {
 		return evsJournalPending, err
 	}
-	walked, err := self.client.verifier.walk(self.mount.RepoId, refId, attempt.BaseVersion, [32]byte(chainBytes), statements, version)
+	walked, err := self.client.verifier.walk(ctx, self.mount.RepoId, refId, attempt.BaseVersion, [32]byte(chainBytes), statements, version)
 	if err != nil {
 		return evsJournalPending, err
 	}

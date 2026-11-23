@@ -133,7 +133,7 @@ func (self *EvsClient) CatchUpRef(ctx context.Context, through *protocol.RefHead
 	if err != nil {
 		return HeadCheckCatchUpUnserved, err
 	}
-	walked, err := self.verifier.walk(repoId, refId, fromVersion, fromChain, statements, through.GetVersion())
+	walked, err := self.verifier.walk(ctx, repoId, refId, fromVersion, fromChain, statements, through.GetVersion())
 	if err != nil {
 		if errors.Is(err, ErrEvsChainBroken) || errors.Is(err, ErrEvsStatementRefused) {
 			return HeadCheckCatchUpForked, err

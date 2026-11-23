@@ -14,7 +14,8 @@ import (
 // QD-748), and SignProvenance with settings.AgentSubkeys, so the agent's subkey in this network's keychain.ur signs a
 // push made for its agent_id and a reader holds certificates to this sidecar's bound (evs_provenance.go; owner decision
 // 470). gkm, the verified config state and the statement poster are the caller's, from KEYS, TEAM and CORE-M2-02 as
-// each lands.
+// each lands. ConfigFollow and ConfigWait go to this Sidecar's config follower, whose verified state a member's config
+// is: a caller whose config no follower moves clears ConfigWait, so a pin above its state is withheld at once.
 func (self *Sidecar) EvsClientArgs(gkm GkmClient, config EvsConfigFunction, fileStatement EvsFileStatementFunction) (*EvsClientArgs, error) {
 	networkId := self.enrolledNetworkId()
 	if networkId == nil {
@@ -42,6 +43,7 @@ func (self *Sidecar) EvsClientArgs(gkm GkmClient, config EvsConfigFunction, file
 		Settings:           self.settings.Evs,
 		RepoCreated:        self.announceCreatedRepo,
 		ConfigFollow:       self.evsConfigFollow,
+		ConfigWait:         self.evsConfigWait,
 		SignProvenance:     self.SignProvenance,
 		AgentSubkeys:       self.settings.AgentSubkeys,
 	}
@@ -61,6 +63,23 @@ func (self *Sidecar) evsConfigFollow(ctx context.Context) error {
 		return nil
 	}
 	return client.CatchUp(ctx)
+}
+
+// EvsClientArgs.ConfigWait: waits until the network's config follower's client has applied position n
+// (ConfigClient.WaitForPin), the client whose newest verified state the follower's VerifiedState gives, standing or
+// still catching up to its anchor. ErrEvsNoConfig at once where no follower or client runs, which withholds the
+// statement as before.
+func (self *Sidecar) evsConfigWait(ctx context.Context, n uint64) error {
+	follower := self.ConfigFollower()
+	if follower == nil {
+		return ErrEvsNoConfig
+	}
+	client := follower.followingClient()
+	if client == nil {
+		return ErrEvsNoConfig
+	}
+	_, err := client.WaitForPin(ctx, n)
+	return err
 }
 
 // What EnablePrefixRules takes from this Sidecar (DESIGN-DETAILS 16.2.5, 16.2.7): the config follower's head reader,

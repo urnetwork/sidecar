@@ -279,6 +279,12 @@ type EvsSettings struct {
 	// walked, which judge a head a raise passed (evs_pin_store.go's header): 1,024, at most about 64 KiB a ref and
 	// none once no read is in flight, the oldest out first, past which such a head is read again.
 	PinChainCount int
+	// How long a reader waits for its authorization log to reach a statement's pin above the newest state it holds,
+	// before it withholds the statement as ErrConfigPinAhead (QD-1202, as §10.9's judged row has it for gkm: one above
+	// my tip waits until I reach it, one I cannot reach being withheld): one follow's bound,
+	// ConfigClientSettings.FollowTimeout, 60 s, since the wait asks its follower for a follow, which reaches the pin
+	// wherever api serves it. Non-positive withholds at once.
+	AuthPinWaitTimeout time.Duration
 
 	// §11.11's git-lfs rows (evs_lfs_*.go). A git-lfs pointer is shorter than this, 1,024 bytes, git-lfs's own bound
 	// (docs/spec.md): a longer blob is no pointer and requires nothing (R(c)'s requires row).
@@ -436,6 +442,7 @@ func DefaultEvsSettings() *EvsSettings {
 		ReadReplacedRestartCount: 3,
 		ReadStaleRetryCount:      4,
 		PinChainCount:            1024,
+		AuthPinWaitTimeout:       DefaultConfigClientSettings().FollowTimeout,
 		LfsPointerMaxByteCount:   1024,
 		LfsObjectMaxByteCount:    2 * 1024 * 1024 * 1024,
 		LfsHeadReadPathCount:     64,

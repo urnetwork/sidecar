@@ -335,7 +335,7 @@ func TestEvsVerifierTakesTheFirstConfigPushAtTheGenesis(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := world.client.Verifier().VerifyStatement(push.SignedPush, world.configRepoId, refId); err != nil {
+	if _, err := world.client.Verifier().VerifyStatement(t.Context(), push.SignedPush, world.configRepoId, refId); err != nil {
 		t.Fatalf("the first config push at the genesis pin: %v", err)
 	}
 	if err := evsCheckRefRules(world.net.statesAt[0], statement, testConfigId("another repo"), refId, world.net.owner.sidecarId); !errors.Is(err, ErrEvsStatementRefused) {

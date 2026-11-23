@@ -650,7 +650,7 @@ func (self *DirectoryEvsCards) readStreamLogOnce(ctx context.Context, repo *EvsR
 		return result, nil
 	}
 	through := statements[len(statements)-1].GetVersion()
-	walked, err := self.client.verifier.walk(repoId, refId, afterVersion, fromChain, statements, through)
+	walked, err := self.client.verifier.walk(ctx, repoId, refId, afterVersion, fromChain, statements, through)
 	if err != nil {
 		return nil, err
 	}
@@ -1333,7 +1333,7 @@ func (self *DirectoryEvsCards) readCardsOnce(ctx context.Context, repo *EvsRepo,
 	} else if statements, err = self.client.readLog(ctx, repoId, refId, afterVersion+1, through); err != nil {
 		return nil, recordEvsRefusal(err)
 	}
-	walked, err := self.client.verifier.walk(repoId, refId, afterVersion, fromChain, statements, through)
+	walked, err := self.client.verifier.walk(ctx, repoId, refId, afterVersion, fromChain, statements, through)
 	if err != nil {
 		return nil, err
 	}

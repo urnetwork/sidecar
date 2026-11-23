@@ -155,13 +155,14 @@ func TestAclExchangeScopesReadTheConfigRepoFromTheGenesis(t *testing.T) {
 		[]string{configR, configRw}, []string{configAdmin})
 }
 
-// FS-19's scope rows: a read_only sidecar gets only r and the receipt deposit, an ephemeral one no config rw at either
-// audience, and an owner-bound repo's reader that does not write the receipt deposit.
+// FS-19's scope rows: a read_only sidecar gets only r and the receipt deposit, which a general repo members write is
+// not where it goes (QD-1183), an ephemeral one no config rw at either audience, and an owner-bound repo's reader that
+// does not write the receipt deposit.
 func TestAclExchangeScopesFs19Rows(t *testing.T) {
 	net := newAclExchangeNet(t)
 	notesR, notesRw, notesDeposit := aclExchangeScope(net.notesId, "r"), aclExchangeScope(net.notesId, "rw"), aclExchangeScope(net.notesId, "deposit")
 	aclExchangeCheck(t, "read_only", net.exchange(t, net.readOnly, AclTokenAudienceEvs, notesR, notesRw, notesDeposit),
-		[]string{notesR, notesDeposit}, []string{notesRw})
+		[]string{notesR}, []string{notesRw, notesDeposit})
 	aclExchangeCheck(t, "read_only at gkm", net.exchange(t, net.readOnly, AclTokenAudienceGkm, aclExchangeScope(net.configId, "rw")),
 		[]string{}, []string{aclExchangeScope(net.configId, "rw")})
 

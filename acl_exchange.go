@@ -23,10 +23,11 @@
 // else's every scope, and the admin token is what §11.12's DELETE and restore take. A RepoRestore brings the table
 // above back.
 //
-// A read_only sidecar gets only r and the receipt deposit, whatever else it is (D-TEAM-24); in a team network every
-// admitted sidecar but a read_only one gets the directory's rw. A forward_only client (§7.4), which acts as its
-// sidecar, gets only repo:<config_repo_id>:r, and only while that sidecar's forwarding Delegation is live (§7.9's
-// forwarding row, owner decision 197), whatever its sidecar reads.
+// A read_only sidecar gets only r and the receipt deposit, whatever else it is (D-TEAM-24), the deposit only in an
+// owner-bound repo it reads, where receipts go (QD-1183); in a team network every admitted sidecar but a read_only one
+// gets the directory's rw. A forward_only client (§7.4), which acts as its sidecar, gets only repo:<config_repo_id>:r,
+// and only while that sidecar's forwarding Delegation is live (§7.9's forwarding row, owner decision 197), whatever its
+// sidecar reads.
 //
 // One token carries at most RepoScopeMaxCount repo: scopes, §7.8's 64, keeping its bearer under the lb's 8 KiB header
 // line, and a request for more is refused whole. A scope that is not repo:<id>:<role> is not this table's: it is refused here, and the

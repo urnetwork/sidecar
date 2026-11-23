@@ -370,8 +370,10 @@ func (self *aclReference) evsRights(subject aclReferenceSubject, repoId Id, t ti
 		}
 	}
 	if subject.readOnly {
+		// r alone: its one deposit is §16.8's receipt deposit, which only an owner-bound repo takes, and none of
+		// these kinds is one (QD-1183)
 		if rights.Has(AclEvsRead) {
-			return AclEvsRead | AclEvsDeposit
+			return AclEvsRead
 		}
 		return 0
 	}
