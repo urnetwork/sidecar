@@ -1,12 +1,14 @@
 // Step 4 (§11.8): what a push reads before step 5 checks it, and the view check.go's functions run over.
 //
 //	head    the verified cache entry when its version is at least the push's base, else a cluster GET; a refusal on
-//	        a cached head runs step 4 again from the cluster (push.go)
+//	        a cached head, or on a keying or deleted repo/ the cache answered, runs step 4 again from the cluster
+//	        (push.go's restsOnCache)
 //	state   the authorization state: the gate view of the repo's network, read from memory again at the start of
 //	        each run, before the head, so step 7, issued within PushStepSevenWindow of step 4's reads, is within it
 //	        of the state it validated against (§11.8's timing row; QD-660); bind's read at arrival judges only
 //	        bind's own 5b
-//	round   one round on the repo's cluster after it, issued together: repo/ (cached at most 5 s), the generation
+//	round   one round on the repo's cluster after it, issued together: repo/ (cached at most 5 s, a keying one only
+//	        RepoKeyingCacheTtl, and read from the cluster by a step 4 from the cluster: repo_cache.go), the generation
 //	        record, its signer's key from that state, every changed path's entry by §11.6's read rule (its source
 //	        copies included while the head lists sources), each reuse source's ref head and entry, and the records
 //	        of the window versions after folded_through whose digest may touch a changed path, which the newest rule
@@ -112,6 +114,11 @@ func (self *pushAttempt) readStep4(cached bool) (*pushOutcome, bool) {
 	waitGroup.Add(3)
 	go func() {
 		defer waitGroup.Done()
+		if !cached {
+			// a step 4 from the cluster reads repo/ there too, so a refusal on its state rests on a cluster read
+			reads.repo, repoErr = engine.repos.ReadFresh(self.ctx, self.cluster, self.repoId)
+			return
+		}
 		reads.repo, repoErr = engine.repos.Read(self.ctx, self.cluster, self.repoId)
 	}()
 	go func() {

@@ -8,8 +8,9 @@
 //	5a P committed in the window or the log pages of (b, b+64] answers 200 {its version}; another statement under
 //	   its id 409 PUSH_ID_REUSED; a refusal record answers its status with recorded: true (outcome.go)
 //	5  b to h as check.go's pure functions over what step 4 read; a refusal on a cached head runs step 4 again from
-//	   the cluster, since every refusal rests on a cluster head; a final one is answered, one that refuses nothing is
-//	   answered, and the rest are recorded first by the refuse row (refuse.go)
+//	   the cluster, since every refusal rests on a cluster head, and so does one on a keying or deleted repo/ the
+//	   cache answered, which the creator's activation or a restore may have moved on since; a final one is answered,
+//	   one that refuses nothing is answered, and the rest are recorded first by the refuse row (refuse.go)
 //	6  the record joins this process's open batch and waits for its write; a window about to pass 127 versions pages
 //	   out; new slots are PUT If-None-Match (push_commit.go)
 //	7  the head If-Match step 4's ETag, issued only within 5 s of step 4's reads; a 412 rereads, settles or reruns
@@ -472,7 +473,8 @@ func (self *pushAttempt) runSteps() *pushOutcome {
 		refusal := self.check()
 		if refusal != nil {
 			if self.restsOnCache(refusal) {
-				// every refusal rests on a head read from the cluster
+				// every refusal rests on a head read from the cluster, and one on repo/'s keying or deleted state on a
+				// repo/ read from it
 				continue
 			}
 			return self.refuse(refusal)
@@ -556,10 +558,16 @@ func (self *pushAttempt) check() *EvsCheckRefusal {
 	return refusal
 }
 
-// Whether refusal rests on a head step 4 read from the cache, so step 4 runs again from the cluster before it is
-// answered: the push's own head, or for 5h's DROPPED any head the fence read (check_dropped.go).
+// Whether refusal rests on a read step 4 took from a cache, so step 4 runs again from the cluster before it is
+// answered: the push's own head, for 5h's DROPPED any head the fence read (check_dropped.go), and for 5c's keying or
+// deleted state the repo/ it judged, which the creator's activation or a restore may have moved on since on another
+// process: answered from the cache, the refusal would be recorded and stand for the push id (check_refs.go's
+// evsRepoStateMovesOn). A step 4 from the cluster reads repo/ there too (push_step4.go).
 func (self *pushAttempt) restsOnCache(refusal *EvsCheckRefusal) bool {
 	if self.head.Cached {
+		return true
+	}
+	if evsRepoStateMovesOn(refusal) && self.reads != nil && self.reads.repo != nil && self.reads.repo.Cached {
 		return true
 	}
 	return refusal.Reason == EvsCheckReasonDropped && self.reads != nil && evsDroppedOnCachedHead(self.reads.view)
