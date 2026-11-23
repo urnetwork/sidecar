@@ -168,11 +168,13 @@ func TestAclAnAdminsSecondAdmissionConfirmLeavesALaptopsConsent(t *testing.T) {
 }
 
 // QD-1208's second case: the laptop admits the phone, the network owner's device admits g, the laptop's OwnerConfirm
-// consents g, and from since_n the phone's OwnerConfirm takes the row's owner_confirm_signer. The phone's compromise
-// revocation from since_n voids the phone's confirmation but not the laptop's, outside P, so g's consent rests on a
-// signature outside P and the cascade's consent clause, which asks the same replay, leaves g out of P: g stays unparked,
-// consented from the laptop's confirmation and in m's vault's list, which drops the phone alone. Before, P took g from
-// the phone's confirmation and parked it. Every reader agrees, after a base too.
+// consents g, and from since_n the phone's OwnerConfirm takes the row's owner_confirm_signer. A compromise revocation of
+// the phone from since_n voids the phone's confirmation but not the laptop's, outside P, so g's consent rests on a
+// signature outside P and the cascade's consent clause, which asks the same replay, leaves g out of P. So g itself
+// revokes the stolen phone, which a P holding g would refuse (D-TEAM-26: a stolen device's redundant confirmations pull
+// no device that would revoke it into P), and g stays unparked, consented from the laptop's confirmation and in m's
+// vault's list, which drops the phone alone. Before, P took g from the phone's confirmation, so g's revocation was
+// refused, and the laptop's parked g. Every reader agrees, after a base too.
 func TestAclAnOwnerConfirmOutsidePKeepsADeviceConsentedPastAVoidedNewerOne(t *testing.T) {
 	net := newTestConfigNet(t)
 	memberId, laptop := net.consentedMember("m")
@@ -196,7 +198,9 @@ func TestAclAnOwnerConfirmOutsidePKeepsADeviceConsentedPastAVoidedNewerOne(t *te
 	if from, held := closure.From(deviceG.sidecarId); held {
 		t.Errorf("P holds g from %d, though the laptop's OwnerConfirm stands outside it: %v", from, closure.Members)
 	}
-	net.mustPost(laptop, bridge.SignedType_SIGNED_SIDECAR_REVOKE, net.compromise(phone, sinceN))
+	if verdict := net.post(deviceG, bridge.SignedType_SIGNED_SIDECAR_REVOKE, net.compromise(phone, sinceN)); !verdict.Accepted() {
+		t.Fatalf("g's compromise revocation of the phone that confirmed it: %v", verdict.Refusal)
+	}
 	check := func(label string) {
 		t.Helper()
 		state := net.log.State()
