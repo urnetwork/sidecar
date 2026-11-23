@@ -7,8 +7,10 @@
 // signer's identity key in the judged state, then from the newest down opens each by a DelegationWrap to one of the
 // component's reader keys, or by the ladder from the generation above. Each opened key is kept as gen/<g> with its
 // Signed GenRotate, so the next compile reads it from the store. A generation with no wrap yet is asked for late,
-// once a LateAskInterval; its bodies stay pending at id level and older generations still open, and config_key_waiting
-// is raised once it has waited KeyWaitAlarmInterval and again each interval.
+// once a LateAskInterval; its bodies stay pending at id level and older generations still open. Every generation a
+// compile wants that does not open waits with its cause, whether or not gkm lists it (QD-1210): its compile retries,
+// and config_key_waiting is raised once it has waited KeyWaitAlarmInterval and again each interval, its detail the
+// cause: no wrap yet, gkm listing no such generation, the GroupForms not leading on, or a listing stopped short.
 //
 // A re-form of the config's group (plan-KEYS-reform-ladder rules 7 and 8 as QD-074 decided them; §10.8) draws a new
 // group, carries the old ladder into it byte for byte and claims every later generation there, so the group a hand-off
@@ -20,8 +22,9 @@
 // gkm_served_generation.go): the group's own, or one its ladder carried under the form that makes it, and it names the
 // config repo and the hand-off's group or one along that chain, a copy naming any other being refused. Each chains by
 // parent_commitment from the one below it, the newest held below the listing's first among them, and one at a held
-// generation is the one held, so a listing that leaves this component's chain stops where it leaves it. Deliveries
-// are read in the group listed, which a carried generation's name too (rule 7).
+// generation is the one held, so a listing that leaves this component's chain stops where it leaves it and raises
+// head_alarm (fork), as a conflicting GenRotate is a member's (QD-1210; DESIGN-DETAILS 6.2.6), with the compile's pin
+// for evidence. Deliveries are read in the group listed, whose id a carried generation's body names too (rule 7).
 //
 // The Forwarder holds a GenRotate, a GroupForm and a wrap to their signers' identity keys in the judged state, the
 // wrap to the Delegation and key it names, and RK_g to gen/<g>'s commitment. §10.9's rotation and delivery checks and
@@ -212,6 +215,8 @@ func (self *Forwarder) loadGenerations() (map[uint64]*forwarderGeneration, error
 type forwarderListing struct {
 	groupId Id
 	form    *GkmGroupFormFacts
+	// why the group stayed where the forms did not lead it on, or could not be read to; empty where they named it
+	stayed string
 }
 
 // Reads the config repo's GroupForms and moves groups.current to the group the newest makes where a chain of verified
@@ -226,7 +231,7 @@ func (self *Forwarder) followGroups(ctx context.Context, state *ConfigState, gro
 		if self.log.V(1).Enabled() {
 			self.log.Infof("[forward]%s gkm refused the config's GroupForms: %v", self.args.NetworkId, err)
 		}
-		return &forwarderListing{groupId: groups.current}, nil
+		return &forwarderListing{groupId: groups.current, stayed: fmt.Sprintf("gkm refused the config's GroupForms: %v", err)}, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("gkm's GroupForms of the config: %w", err)
@@ -237,8 +242,9 @@ func (self *Forwarder) followGroups(ctx context.Context, state *ConfigState, gro
 		return &forwarderListing{groupId: groups.current}, nil
 	}
 	if self.settings.ConfigFormMaxCount < len(signedForms) {
-		self.log.Warningf("[forward]%s the config's %d GroupForms are past %d: generations stay listed in %s", self.args.NetworkId, len(signedForms), self.settings.ConfigFormMaxCount, groups.current)
-		return &forwarderListing{groupId: groups.current}, nil
+		detail := fmt.Sprintf("the config's %d GroupForms are past %d", len(signedForms), self.settings.ConfigFormMaxCount)
+		self.log.Warningf("[forward]%s generations stay listed in %s: %s", self.args.NetworkId, groups.current, detail)
+		return &forwarderListing{groupId: groups.current, stayed: detail}, nil
 	}
 	// each form's group as its body names it, unverified, so a chain finds its next form
 	formGroupIds := make([]Id, len(signedForms))
@@ -271,7 +277,7 @@ func (self *Forwarder) followGroups(ctx context.Context, state *ConfigState, gro
 		if err != nil {
 			form = nil
 		}
-		return &forwarderListing{groupId: groups.current, form: form}, nil
+		return &forwarderListing{groupId: groups.current, form: form, stayed: detail}, nil
 	}
 	newestGroupId := formGroupIds[len(signedForms)-1]
 	if newestGroupId == (Id{}) {
@@ -355,7 +361,9 @@ func (self *Forwarder) keepGroups(groups *forwarderGroups, chain []*GkmGroupForm
 // none, or follows a head read that lacked a generation's key, into held and the store, listing them in the group the
 // config's GroupForms lead to (the file's comment). Returns how many it opened. state is the judged state, whose
 // identity keys a GenRotate, a GroupForm and a wrap verify under. A read of gkm that fails is an error, which the
-// compile retries; a generation with no wrap is not.
+// compile retries; a generation with no wrap is not. Each generation wanted that does not open, and each listed one no
+// wrap opened, waits with its cause, whether or not gkm lists it, and config_key_waiting is raised for it once it has
+// waited KeyWaitAlarmInterval (QD-1210).
 func (self *Forwarder) openGenerations(ctx context.Context, state *ConfigState, held map[uint64]*forwarderGeneration, wanted []uint64) (int, error) {
 	if self.args.Gkm == nil {
 		return 0, nil
@@ -363,6 +371,23 @@ func (self *Forwarder) openGenerations(ctx context.Context, state *ConfigState, 
 	lacking := len(held) == 0 || 0 < len(self.keyWaits) || self.headKeysWanted || slices.ContainsFunc(wanted, func(generation uint64) bool { return held[generation] == nil })
 	if !lacking {
 		return 0, nil
+	}
+	now := self.clock.Now()
+	// a step that failed leaves every wait standing, and each wanted generation not held waiting on that failure
+	failed := func(opened int, err error) (int, error) {
+		for _, generation := range wanted {
+			if held[generation] != nil {
+				continue
+			}
+			wait := self.keyWaits[generation]
+			if wait == nil {
+				wait = &forwarderKeyWait{since: now}
+				self.keyWaits[generation] = wait
+			}
+			wait.cause = err.Error()
+		}
+		self.alarmKeyWaits(now)
+		return opened, err
 	}
 	// the generations held with none missing below them: gkm lists from there, so a gap is listed again
 	since := uint64(0)
@@ -377,15 +402,15 @@ func (self *Forwarder) openGenerations(ctx context.Context, state *ConfigState, 
 	defer cancel()
 	groups, err := self.records.groups(self.args.ConfigGroupId)
 	if err != nil {
-		return 0, fmt.Errorf("the config's groups: %w", err)
+		return failed(0, fmt.Errorf("the config's groups: %w", err))
 	}
 	listing, err := self.followGroups(fetchCtx, state, groups, newestHeld)
 	if err != nil {
-		return 0, err
+		return failed(0, err)
 	}
 	reply, err := self.args.Gkm.Generations(fetchCtx, self.args.ConfigRepoId, listing.groupId, since)
 	if err != nil {
-		return 0, fmt.Errorf("gkm's generations of %s after %d: %w", listing.groupId, since, err)
+		return failed(0, fmt.Errorf("gkm's generations of %s after %d: %w", listing.groupId, since, err))
 	}
 	// listed: a generation the head's read lacked opens now if gkm has it, and waits for its wrap otherwise
 	self.headKeysWanted = false
@@ -400,10 +425,13 @@ func (self *Forwarder) openGenerations(ctx context.Context, state *ConfigState, 
 	}
 	listed := []*GkmGeneration{}
 	signedRotates := [][]byte{}
+	// where the list stopped short of what gkm served, and why: the cause of each wanted generation from there on
+	stoppedAt, stopped := uint64(0), ""
 	for i, signed := range reply.GetGenerations() {
 		generation := since + 1 + uint64(i)
 		signedBytes, err := forwarderMarshal(signed)
 		if err != nil {
+			stoppedAt, stopped = generation, fmt.Sprintf("gen/%d in %s does not encode: %v", generation, listing.groupId, err)
 			break
 		}
 		parsed, err := GkmParseServedGeneration(signedBytes, self.args.ConfigRepoId, listing.groupId, generation, formMaking, identityKey)
@@ -421,15 +449,22 @@ func (self *Forwarder) openGenerations(ctx context.Context, state *ConfigState, 
 			if self.log.V(1).Enabled() {
 				self.log.Infof("[forward]%s gen/%d in %s does not verify at %d: %v", self.args.NetworkId, generation, listing.groupId, state.Pin().GetVersion(), err)
 			}
+			stoppedAt, stopped = generation, fmt.Sprintf("gen/%d in %s does not stand: %v", generation, listing.groupId, err)
 			break
 		}
+		// a statement off the chain this component holds is a fork, as a conflicting GenRotate is a member's
+		// (QD-1210; DESIGN-DETAILS 6.2.6), with the compile's pin for evidence as a head served in another's place
 		rotate := parsed.Rotate
 		if 1 < generation && !bytes.Equal(rotate.GetParentCommitment(), below) {
 			self.log.Warningf("[forward]%s gen/%d in %s does not chain from the generation below it: the list stops there", self.args.NetworkId, generation, listing.groupId)
+			self.emitHeadAlarm(SidecarHeadAlarmFork, state.Pin(), state.Pin())
+			stoppedAt, stopped = generation, fmt.Sprintf("gen/%d in %s does not chain from the generation below it", generation, listing.groupId)
 			break
 		}
 		if kept := held[generation]; kept != nil && !bytes.Equal(rotate.GetCommitment(), kept.generation.Rotate.GetCommitment()) {
 			self.log.Warningf("[forward]%s gen/%d in %s is not the statement held: the list stops there", self.args.NetworkId, generation, listing.groupId)
+			self.emitHeadAlarm(SidecarHeadAlarmFork, state.Pin(), state.Pin())
+			stoppedAt, stopped = generation, fmt.Sprintf("gen/%d in %s is not the statement held", generation, listing.groupId)
 			break
 		}
 		below = rotate.GetCommitment()
@@ -438,14 +473,12 @@ func (self *Forwarder) openGenerations(ctx context.Context, state *ConfigState, 
 	}
 	readerKeys, err := self.args.Keys.ReaderKeys()
 	if err != nil {
-		return 0, fmt.Errorf("the forwarding reader keys: %w", err)
+		return failed(0, fmt.Errorf("the forwarding reader keys: %w", err))
 	}
-	now := self.clock.Now()
 	opened := 0
 	for i := len(listed) - 1; 0 <= i; i -= 1 {
 		generation := since + 1 + uint64(i)
 		if held[generation] != nil {
-			delete(self.keyWaits, generation)
 			continue
 		}
 		var key *EvsRepoKey
@@ -459,28 +492,52 @@ func (self *Forwarder) openGenerations(ctx context.Context, state *ConfigState, 
 			key = self.openWrap(fetchCtx, state, listing.groupId, listed[i], generation, readerKeys)
 		}
 		if key == nil {
-			if self.keyWaits[generation] == nil {
-				self.keyWaits[generation] = &forwarderKeyWait{since: now}
-			}
 			continue
 		}
 		record := forwarderEncodeGeneration(signedRotates[i], state.IdentityKey(listed[i].SignerId), key.repoKey)
 		testHookBarrier("bridge_forward.generation.store", self.args.NetworkId.String())
 		if err := self.records.write(forwarderNumberName(forwarderGenerationPrefix, generation), record); err != nil {
-			return opened, err
+			return failed(opened, err)
 		}
 		held[generation] = &forwarderGeneration{key: key, generation: listed[i]}
-		delete(self.keyWaits, generation)
 		for _, readerKey := range readerKeys {
 			self.lateAsks.Done(listing.groupId, generation, forwarderWrapRecipient(readerKey.DelegationId[:]))
 		}
 		opened += 1
 	}
-	// a generation gkm no longer lists past the held ones waits for nothing
+	// what waits, and why: each listed generation no wrap opened, and each wanted one that did not open, whether or not
+	// gkm lists it (QD-1210); any other waits for nothing
+	causes := map[uint64]string{}
+	for i := range listed {
+		if generation := since + 1 + uint64(i); held[generation] == nil {
+			causes[generation] = "no DelegationWrap of it has reached the forwarding reader key"
+		}
+	}
+	for _, generation := range wanted {
+		if held[generation] != nil || causes[generation] != "" {
+			continue
+		}
+		switch {
+		case 0 < stoppedAt && stoppedAt <= generation:
+			causes[generation] = stopped
+		case listing.stayed != "":
+			causes[generation] = listing.stayed
+		default:
+			causes[generation] = fmt.Sprintf("gkm lists no gen/%d in %s", generation, listing.groupId)
+		}
+	}
 	for generation := range self.keyWaits {
-		if generation <= since || since+uint64(len(listed)) < generation {
+		if causes[generation] == "" {
 			delete(self.keyWaits, generation)
 		}
+	}
+	for generation, cause := range causes {
+		wait := self.keyWaits[generation]
+		if wait == nil {
+			wait = &forwarderKeyWait{since: now}
+			self.keyWaits[generation] = wait
+		}
+		wait.cause = cause
 	}
 	func() {
 		self.stateLock.Lock()
@@ -539,8 +596,8 @@ func (self *Forwarder) openWrap(ctx context.Context, state *ConfigState, groupId
 	return nil
 }
 
-// Raises config_key_waiting for the newest generation that has waited KeyWaitAlarmInterval for its wrap, and again
-// each interval while one waits; clears it when none waits.
+// Raises config_key_waiting for the newest generation that has waited KeyWaitAlarmInterval for its key, and again each
+// interval while one waits, its detail the wait's cause; clears it when none waits.
 func (self *Forwarder) alarmKeyWaits(now time.Time) {
 	if len(self.keyWaits) == 0 {
 		self.clearAlarm(SidecarBridgeAlarm(ForwarderAlarmConfigKeyWaiting))
@@ -563,7 +620,7 @@ func (self *Forwarder) alarmKeyWaits(now time.Time) {
 		wait.alarmedAt = now
 		self.emitAlarm(BridgeAlarm{
 			Reason: SidecarBridgeAlarm(ForwarderAlarmConfigKeyWaiting),
-			Detail: fmt.Sprintf("no DelegationWrap of config generation %d has reached the forwarding reader key in %s", generation, now.Sub(wait.since)),
+			Detail: fmt.Sprintf("config generation %d has not opened in %s: %s", generation, now.Sub(wait.since), wait.cause),
 		})
 		return
 	}
