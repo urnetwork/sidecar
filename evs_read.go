@@ -15,6 +15,18 @@
 // its read held when it asked, never against what another read raised since, and a head another read raised the pin
 // past stands as read or is read again (evs_pin_store.go's header).
 //
+// Own pushes. evs caches a commit's head only in step 8, after it answered the push (§11.9's cache row), so for a
+// while a request that is not fresh is served the head before this device's own last push, up to 10 min after a lost
+// step-8 put: a device would not read what it had just written, and a writer that takes a path's version from its read
+// (mail_store.go's IfVersion) would be refused as moved again and again until the cache caught up. So a round, or a
+// head-alone read, that was not asked fresh and is served a head below the version this device's own push committed
+// at (evsClientEpochs.committedVersion) is asked once more, fresh, before anything judges it
+// (postReadSeeingOwnPushes): ReadHead, List and History, a write's and a git update's plan (evs_plan.go), and
+// CONSUME's and ERASE's plans all read through it. A fresh request is never sent again. One that finds evs's cluster
+// behind this device's push, as a site loss leaves it until its reseed, holds this device's reads of the ref to what
+// the cluster holds instead (evsClientEpochs.ownFloor), so none goes fresh again for that push. Another device's
+// reads are held only to its own pushes.
+//
 // Objects the reply carries (segment ranges, slots) stream into spills (evs_reconstruct.go), never a whole reply in
 // memory. Nothing is decrypted before the head and the path verify and the head is pinned, and nothing at all of an
 // owner-bound repo this sidecar does not write until EVS1-M2-29's receipt gate deposits a read receipt: until that
@@ -448,7 +460,8 @@ func (self *EvsRepo) read(ctx context.Context, refId Id, paths []string, version
 	return self.readPaths(ctx, refId, readPaths, fresh)
 }
 
-// One round: the request naming each path in the epochs the loop chose, its framed reply, and the head's check from
+// One round: the request naming each path in the epochs the loop chose, its framed reply, asked again fresh where
+// evs's cache served a head below this device's own last push (postReadSeeingOwnPushes), and the head's check from
 // the pin, or from the oldest read record's pin of the paths asked, so every statement since is walked. The paths'
 // checks, the pin and the records are the loop's.
 func (self *EvsRepo) readRound(ctx context.Context, refId Id, keys *evsReadKeys, paths []*evsReadPath, fresh bool) (*evsReadRound, error) {
@@ -491,7 +504,7 @@ func (self *EvsRepo) readRoundFromPin(ctx context.Context, refId Id, keys *evsRe
 		}
 		request.Paths = append(request.Paths, readPath)
 	}
-	reply, objects, err := self.client.postRead(ctx, self.repoId, request)
+	reply, objects, err := self.postReadSeeingOwnPushes(ctx, refId, request)
 	if err != nil {
 		return nil, err
 	}
@@ -524,6 +537,33 @@ func (self *EvsRepo) readRoundFromPin(ctx context.Context, refId Id, keys *evsRe
 		return nil, err
 	}
 	return &evsReadRound{reply: reply, objects: objects, head: head, keys: keys, refPinVersion: refPinVersion}, nil
+}
+
+// POST .../read for one request of the ref's head, held to this device's own pushes (the file header's own pushes
+// row): a reply to a request that was not fresh whose head is below what this device's reads of the ref are held to
+// (evsClientEpochs.ownFloor) was served from evs's head cache before step 8 of this device's own push, and is asked
+// for once more, request.Fresh set. A fresh request is never sent again, and the head its reply carries is noted
+// against the version this device's push had committed at when it was sent (evsClientEpochs.noteFreshHead). Nothing
+// here judges a reply: the caller verifies whichever one comes back.
+func (self *EvsRepo) postReadSeeingOwnPushes(ctx context.Context, refId Id, request *protocol.EvsReadRequest) (*evsReadReply, *evsReadObjects, error) {
+	epochs := self.client.epochs
+	asked := epochs.committedVersion(self.repoId, refId)
+	reply, objects, err := self.client.postRead(ctx, self.repoId, request)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !request.Fresh && reply.head.GetVersion() < epochs.ownFloor(self.repoId, refId) {
+		objects.close()
+		request.Fresh = true
+		asked = epochs.committedVersion(self.repoId, refId)
+		if reply, objects, err = self.client.postRead(ctx, self.repoId, request); err != nil {
+			return nil, nil, err
+		}
+	}
+	if request.Fresh {
+		epochs.noteFreshHead(self.repoId, refId, asked, reply.head.GetVersion())
+	}
+	return reply, objects, nil
 }
 
 // A head served below this device's pin of the ref (§11.9's reader row; §11.13's re-seed row, §19.10): the shorter

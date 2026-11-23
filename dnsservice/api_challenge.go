@@ -6,8 +6,10 @@
 // What a challenge may be, at most two values, at most 10 writes a name an hour, an hour's life, under a
 // live label or alias, or at a verified custom domain's <acme_token>.acme.<root> (QD-175; DNS-M6-02), is
 // the model's (DnsChallengeWriter), since it is a rule of §12.6's one write path. This route maps the answers: a restore's 503 with Retry-After, which certs retries; a name or
-// values the writer refuses, 400; the hourly cap, 429; a removal of nothing, the serial zero. A block
-// whose host gives no writer answers 503 to every challenge, so nothing is written around the path.
+// values the writer refuses, 400; the hourly cap, 429, with a Retry-After when the writer says when the
+// name takes a write again (DnsChallengeRateError), until which certs holds the name's orders (QD-1204);
+// a removal of nothing, the serial zero. A block whose host gives no writer answers 503 to every
+// challenge, so nothing is written around the path.
 
 package dnsservice
 
@@ -20,13 +22,11 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // The challenge route (plan-DNS-internal-route-credential's prefix over §12.8's /dns/acme-challenge).
 const DnsAcmeChallengePath = DnsInternalPathPrefix + "acme-challenge"
-
-// The most bytes a challenge request may hold: a name and two digests, many times over.
-const dnsChallengeRequestMaxByteCount = 16 * 1024
 
 var (
 	// A name that is no live label or alias of the root, or values no challenge may hold: 400.
@@ -35,10 +35,35 @@ var (
 	ErrDnsChallengeRate = errors.New("dns challenge rate reached")
 )
 
+// The hourly cap's refusal with how long until the name takes a write again, which the route's 429
+// names in its Retry-After (QD-1204). It is ErrDnsChallengeRate, and the writer's own refusal.
+type DnsChallengeRateError struct {
+	// How long from the refusal until a write of the name is taken: until the write whose leaving brings
+	// the name's count below the cap has left the window. Zero: the writer knows no such time, as with a
+	// cap of zero, and the 429 names none.
+	RetryAfter time.Duration
+	// What the writer refused with, nil for none.
+	Err error
+}
+
+func (self *DnsChallengeRateError) Error() string {
+	if self.Err == nil {
+		return ErrDnsChallengeRate.Error()
+	}
+	return ErrDnsChallengeRate.Error() + ": " + self.Err.Error()
+}
+
+func (self *DnsChallengeRateError) Unwrap() []error {
+	if self.Err == nil {
+		return []error{ErrDnsChallengeRate}
+	}
+	return []error{ErrDnsChallengeRate, self.Err}
+}
+
 // The model's half of the route: one write through §12.6's path that takes a serial, or a removal.
 // Returns ErrDnsRestoring while restoring, ErrDnsChallengeRefused or ErrDnsChallengeRate for what the
-// path refuses, and ErrDnsWriteEmpty for a removal of a challenge already gone. Safe for concurrent
-// use.
+// path refuses, the latter as a *DnsChallengeRateError when the writer knows when the name takes a
+// write again, and ErrDnsWriteEmpty for a removal of a challenge already gone. Safe for concurrent use.
 type DnsChallengeWriter interface {
 	PutChallenge(ctx context.Context, root string, name string, values []string, ttl uint32) (serial uint64, err error)
 }
@@ -87,8 +112,8 @@ func (self *DnsApi) serveChallenge(writer http.ResponseWriter, request *http.Req
 		unavailable()
 		return
 	}
-	body, err := io.ReadAll(io.LimitReader(request.Body, dnsChallengeRequestMaxByteCount+1))
-	if err != nil || dnsChallengeRequestMaxByteCount < len(body) {
+	body, err := io.ReadAll(io.LimitReader(request.Body, int64(self.settings.Api.ChallengeRequestMaxByteCount)+1))
+	if err != nil || self.settings.Api.ChallengeRequestMaxByteCount < len(body) {
 		http.Error(writer, "bad request", http.StatusBadRequest)
 		return
 	}
@@ -117,6 +142,12 @@ func (self *DnsApi) serveChallenge(writer http.ResponseWriter, request *http.Req
 		return
 	case errors.Is(err, ErrDnsChallengeRate):
 		self.metrics.challenges.Add(1, dnsChallengeResultRate)
+		// whole seconds, rounded up, so certs does not ask again before the name takes a write
+		var rateErr *DnsChallengeRateError
+		if errors.As(err, &rateErr) && 0 < rateErr.RetryAfter {
+			retryAfter := int64(math.Ceil(rateErr.RetryAfter.Seconds()))
+			writer.Header().Set("Retry-After", strconv.FormatInt(max(retryAfter, 1), 10))
+		}
 		http.Error(writer, "too many challenges", http.StatusTooManyRequests)
 		return
 	default:
