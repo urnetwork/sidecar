@@ -134,8 +134,9 @@ type EvsSettings struct {
 	// How long a call rides out the token exchange's invalid_scope, no scope it asked granted in the newest state api's
 	// gate holds, from the first such answer, before it ends with it: 5 s, §8.9's target for an entry to reach server
 	// gates, which a grant this device already acts on may not have reached at api (question
-	// evs-refusal-retry-followups-grant-gate-window). A write asks again ReadRetryWait apart (retryRefusingNothing), at
-	// most this long after its first refusal. Positive.
+	// evs-refusal-retry-followups-grant-gate-window). A write asks again ReadRetryWait apart (retryRefusingNothing), a
+	// lease at its doubling wait and a delivery ReadRetryWait apart (evs_subscribe.go), each at most this long after its
+	// first refusal. Positive.
 	ExchangeScopeWaitTimeout time.Duration
 	// How many times one write builds its push again, under a new push id, after a refusal that asks for it
 	// (SEGMENT_STALE, SEGMENT_GONE, SLOT_STALE, GATE_CLOSED, BASE_STALE, TIME_STALE), or re-tokenizes it after 412
@@ -246,7 +247,8 @@ type EvsSettings struct {
 	// §11.10's gap row: after an incomplete reset a background daemon first waits a random time below this, 10 min.
 	SubscribeResetMaxWait time.Duration
 	// A lease that did not answer 200 is tried again after this, doubling to SubscribeRetryMaxWait: 1 s to 5 min. A
-	// final refusal waits SubscribeResyncInterval.
+	// final refusal waits SubscribeResyncInterval, the hourly resync's pace (§11.10's gap and loss rows), which
+	// SubscribeRetryMaxWait does not cap.
 	SubscribeRetryMinWait time.Duration
 	SubscribeRetryMaxWait time.Duration
 	// How many tries Subscribe makes itself before it answers with the lease still owed, which the rounds keep

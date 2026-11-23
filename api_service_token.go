@@ -46,8 +46,8 @@ var (
 )
 
 // How a call whose service token could not be had goes on, by why it could not (§7.8's exchange answers): what a
-// service client's retry owner reads, evs's retryRefusingNothing among them. The zero value goes again at the owner's
-// own wait: no answer from api, a keychain still locked, no api yet, an error of any other kind.
+// service client's retry owner reads, evs's retryRefusingNothing, leases and deliveries among them. The zero value goes
+// again at the owner's own wait: no answer from api, a keychain still locked, no api yet, an error of any other kind.
 type sidecarServiceTokenRefusal struct {
 	// The call ends with its error, since the same request meets the same answer however long it waits.
 	final bool

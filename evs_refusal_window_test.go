@@ -1,13 +1,18 @@
 // The follow-ups of evs-exchange-refusal-retry: what evs's retry owners do with a service token they could not have.
 //
-//	window     a write rides out the token exchange's invalid_scope for ExchangeScopeWaitTimeout (5 s, §8.9's bound
-//	           for a grant to reach api's gate) from its first, ending after it, not after PushRetryCount's 40 s and
-//	           not at once (question evs-refusal-retry-followups-grant-gate-window)
+//	window     a write, a lease and a delivery ride out the token exchange's invalid_scope for ExchangeScopeWaitTimeout
+//	           (5 s, §8.9's bound for a grant to reach api's gate) from its first, ending after it, not after
+//	           PushRetryCount's 40 s and not at once (question evs-refusal-retry-followups-grant-gate-window)
 //	typed      Sidecar.ServiceToken's own refusals are typed: no enrolled client ends a call at once, a keychain still
 //	           locked and no api yet go again within the call's bound
+//	leases     a lease classifies as retryRefusingNothing does: a refusal for good ends Subscribe at once, the lb's 502
+//	           and 504 go again, and a final refusal in the rounds waits SubscribeResyncInterval, which
+//	           SubscribeRetryMaxWait no longer caps (§11.10's lease, gap and loss rows)
+//	deliveries a delivery's log read refused for good, by the exchange or by evs's 401 twice, raises its gap at once
+//	           rather than being owed again every ReadRetryWait, and the lb's lost answer is owed again, not a gap
 //
-// Over SidecarApi's own exchange against a scripted api (evs_exchange_refusal_retry_test.go's) and the write tests'
-// stand-in evs (evs_plan_test.go).
+// Over SidecarApi's own exchange against a scripted api (evs_exchange_refusal_retry_test.go's), the write tests'
+// stand-in evs (evs_plan_test.go) and the subscription tests' lease stand-in (evs_subscribe_test.go).
 
 package sidecar
 
@@ -22,6 +27,10 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"google.golang.org/protobuf/proto"
+
+	"github.com/urnetwork/sidecar/protocol"
 )
 
 // api's token exchange for one scope whose grant reaches api's gate late, as an appended entry reaches it within §8.9's
@@ -360,5 +369,345 @@ func TestEvsWriteAsksAgainWhileTheKeychainIsLocked(t *testing.T) {
 		if !errors.Is(err, want) || asks != 4 || len(writer.test.clock.waited()) != 3 {
 			t.Errorf("no api %t: ended %v after %d asks and %d waits", noApi, err, asks, len(writer.test.clock.waited()))
 		}
+	}
+}
+
+// A subscription test whose first subscription, docs, is leased and pinned the head, so a later Subscribe asks evs for
+// its lease alone.
+func newEvsTestLeasedSubscriber(t *testing.T) (*evsTestWorld, *evsTestLeases, *evsTestClient) {
+	t.Helper()
+	world := newEvsTestWorld(t)
+	leases := newEvsTestLeases(world)
+	test := newEvsSubscribeTest(t, world, leases, newEvsTestStore(t))
+	world.push(&evsTestChange{path: "docs/a", content: []byte("a")})
+	if _, err := test.client.Repo(world.repoId).Subscribe(context.Background(), &EvsSubscribeArgs{RefName: EvsMainRefName, Paths: []string{"docs"}}); err != nil {
+		t.Fatal(err)
+	}
+	return world, leases, test
+}
+
+// The subscriptions the subscriber holds.
+func evsTestSubscriptionCount(test *evsTestClient) int {
+	test.client.subscriber.stateLock.Lock()
+	defer test.client.subscriber.stateLock.Unlock()
+	return len(test.client.subscriber.subscriptions)
+}
+
+// A lease whose service token is refused for good ends Subscribe at once with that refusal (the brief's second item):
+// the exchange's invalid_grant and no enrolled client each end it after one ask, with no wait, nothing posted and the
+// subscription dropped. Before, evsLeaseRetries read both as a lost token and asked SubscribeRetryCount more times,
+// then answered the subscription with its lease owed.
+func TestEvsSubscribeEndsAtOnceAtAServiceTokenRefusedForGood(t *testing.T) {
+	cases := []struct {
+		name string
+		// installs the refusing token on the read scope, answering how many asks it took
+		install func(t *testing.T, test *evsTestClient, scope string) func() int
+		check   func(err error) bool
+	}{
+		{name: "invalid_grant", install: func(t *testing.T, test *evsTestClient, scope string) func() int {
+			return newEvsTestExchange(t, test.client, scope, evsTestExchangeRefusedForGood(http.StatusBadRequest, "invalid_grant")).count
+		}, check: func(err error) bool {
+			var apiErr *SidecarApiError
+			return errors.As(err, &apiErr) && apiErr.Code == "invalid_grant"
+		}},
+		{name: "no enrolled client", install: func(t *testing.T, test *evsTestClient, scope string) func() int {
+			asks := 0
+			test.client.http.serviceToken = func(ctx context.Context, resource string, scopes []string) (string, error) {
+				asks += 1
+				return "", ErrSidecarServiceTokenNoClient
+			}
+			return func() int { return asks }
+		}, check: func(err error) bool { return errors.Is(err, ErrSidecarServiceTokenNoClient) }},
+	}
+	for _, c := range cases {
+		world, leases, test := newEvsTestLeasedSubscriber(t)
+		posts := leases.postCount()
+		waits := len(test.clock.waited())
+		asks := c.install(t, test, evsRepoScope(world.repoId, evsScopeRead))
+		subscription, err := test.client.Repo(world.repoId).Subscribe(context.Background(), &EvsSubscribeArgs{RefName: EvsMainRefName, Paths: []string{"src"}})
+		if subscription != nil || !c.check(err) {
+			t.Errorf("%s: Subscribe answered %v, %v", c.name, subscription, err)
+			continue
+		}
+		if count := asks(); count != 1 {
+			t.Errorf("%s: %d asks", c.name, count)
+		}
+		if got := evsTestWaitsSince(test.clock, waits); len(got) != 0 || leases.postCount() != posts {
+			t.Errorf("%s: waits %v, %d posts", c.name, got, leases.postCount()-posts)
+		}
+		if count := evsTestSubscriptionCount(test); count != 1 {
+			t.Errorf("%s: %d subscriptions kept", c.name, count)
+		}
+	}
+}
+
+// A handler in front of next that answers the next lost requests matching the route with the lb's page for status,
+// no answer from evs at all (QD-758).
+func evsTestLbLosing(next http.Handler, method string, matches func(path string) bool, status int, lost *int) http.Handler {
+	pages := map[int]string{http.StatusBadGateway: evsTestLbBadGatewayPage, http.StatusGatewayTimeout: evsTestLbGatewayTimeoutPage}
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method == method && matches(request.URL.Path) && 0 < *lost {
+			*lost -= 1
+			writer.Header().Set("Content-Type", "text/html")
+			writer.WriteHeader(status)
+			writer.Write([]byte(pages[status]))
+			return
+		}
+		next.ServeHTTP(writer, request)
+	})
+}
+
+// The lb's 502 or 504 to a lease's POST is no answer from evs at all (QD-758), so Subscribe tries again after
+// SubscribeRetryMinWait and holds its lease once evs answers 200. Before, the lease read its unknown outcome as a
+// refusal for good and Subscribe dropped the subscription with it.
+func TestEvsSubscribeTriesAgainAfterTheLbsLostAnswer(t *testing.T) {
+	for _, status := range []int{http.StatusBadGateway, http.StatusGatewayTimeout} {
+		world, leases, test := newEvsTestLeasedSubscriber(t)
+		lost := 1
+		front := evsTestLbLosing(leases, http.MethodPost, func(path string) bool { return path == "/evs/v1/subscriptions" }, status, &lost)
+		test.client.http.transport = wrapSidecarApiTransport(&evsTestTransport{handler: front})
+		waits := len(test.clock.waited())
+		if _, err := test.client.Repo(world.repoId).Subscribe(context.Background(), &EvsSubscribeArgs{RefName: EvsMainRefName, Paths: []string{"src"}}); err != nil {
+			t.Errorf("%d: %v", status, err)
+			continue
+		}
+		if got := evsTestWaitsSince(test.clock, waits); !slices.Equal(got, []time.Duration{test.client.settings.SubscribeRetryMinWait}) {
+			t.Errorf("%d: waits %v", status, got)
+		}
+		if lost != 0 || len(leases.fields()) != 2 || evsTestSubscriptionCount(test) != 2 {
+			t.Errorf("%d: leases %q, %d subscriptions", status, leases.fields(), evsTestSubscriptionCount(test))
+		}
+	}
+}
+
+// A lease the rounds owe that is refused for good, evs's 403 SCOPE or the exchange's invalid_grant, is tried again at
+// the hourly resync's pace, SubscribeResyncInterval on (§11.10's gap and loss rows), with nothing asked at
+// SubscribeRetryMaxWait: before, min(wait, SubscribeRetryMaxWait) brought an hour down to 5 min, and the exchange's
+// refusal was not even read as final, its next try 2 s on.
+func TestEvsLeaseRefusedForGoodWaitsTheHourlyResync(t *testing.T) {
+	cases := []struct {
+		name string
+		// refuses the owed lease for good from here on, answering a count that moves with each try of it
+		refuse func(t *testing.T, test *evsTestClient, world *evsTestWorld, leases *evsTestLeases) func() int
+	}{
+		{name: "evs SCOPE", refuse: func(t *testing.T, test *evsTestClient, world *evsTestWorld, leases *evsTestLeases) func() int {
+			posts := 0
+			front := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				if request.Method == http.MethodPost && request.URL.Path == "/evs/v1/subscriptions" {
+					posts += 1
+					body, _ := proto.Marshal(&protocol.EvsRefusalReply{Code: protocol.EvsRefusalCode_EVS_REFUSAL_SCOPE})
+					writer.WriteHeader(http.StatusForbidden)
+					writer.Write(body)
+					return
+				}
+				leases.ServeHTTP(writer, request)
+			})
+			test.client.http.transport = wrapSidecarApiTransport(&evsTestTransport{handler: front})
+			return func() int { return posts }
+		}},
+		{name: "exchange invalid_grant", refuse: func(t *testing.T, test *evsTestClient, world *evsTestWorld, leases *evsTestLeases) func() int {
+			return newEvsTestExchange(t, test.client, evsRepoScope(world.repoId, evsScopeRead),
+				evsTestExchangeRefusedForGood(http.StatusBadRequest, "invalid_grant")).count
+		}},
+	}
+	for _, c := range cases {
+		world := newEvsTestWorld(t)
+		leases := newEvsTestLeases(world)
+		test := newEvsSubscribeTest(t, world, leases, newEvsTestStore(t))
+		settings := test.client.settings
+		world.push(&evsTestChange{path: "docs/a", content: []byte("a")})
+		ctx := context.Background()
+		// Subscribe tries once, evs answers 503, and the rounds owe the lease
+		settings.SubscribeRetryCount = 0
+		leases.failPosts = 1
+		if _, err := test.client.Repo(world.repoId).Subscribe(ctx, &EvsSubscribeArgs{RefName: EvsMainRefName, Paths: []string{"docs"}}); err != nil {
+			t.Fatal(err)
+		}
+		// the first round's resync and reads, before the lease falls due
+		test.client.subscriber.runDue(ctx)
+		tries := c.refuse(t, test, world, leases)
+		test.clock.advance(settings.SubscribeRetryMinWait)
+		refusedAt := test.clock.Now()
+		test.client.subscriber.runDue(ctx)
+		if count := tries(); count != 1 {
+			t.Errorf("%s: the owed lease tried %d times", c.name, count)
+			continue
+		}
+		dueAt := func() time.Time {
+			test.client.subscriber.stateLock.Lock()
+			defer test.client.subscriber.stateLock.Unlock()
+			for _, state := range test.client.subscriber.subscriptions {
+				return state.leaseDueAt
+			}
+			return time.Time{}
+		}()
+		if due := dueAt.Sub(refusedAt); due != settings.SubscribeResyncInterval {
+			t.Errorf("%s: the next try %s on, not SubscribeResyncInterval", c.name, due)
+		}
+		test.clock.advance(settings.SubscribeRetryMaxWait)
+		test.client.subscriber.runDue(ctx)
+		if count := tries(); count != 1 {
+			t.Errorf("%s: tried again %d times at SubscribeRetryMaxWait", c.name, count-1)
+		}
+		if evsTestSubscriptionCount(test) != 1 {
+			t.Errorf("%s: the rounds dropped the subscription", c.name)
+		}
+	}
+}
+
+// A lease whose read scope reaches api's gate 2 s after the exchange first refused it lands: Subscribe asks at 0 s,
+// 1 s and 3 s, its doubling wait, and the third is granted. One never granted ends Subscribe with its invalid_scope
+// after the window, the last try at its end (0, 1, 3 and 5 s), and drops the subscription. Before, invalid_scope was a
+// lost token, asked again SubscribeRetryCount times and answered as a subscription with its lease owed.
+func TestEvsLeaseRidesOutAGrantTheExchangeLoadsLate(t *testing.T) {
+	second := time.Second
+	cases := []struct {
+		name  string
+		late  time.Duration
+		never bool
+		asked []time.Duration
+	}{
+		{name: "2 s late", late: 2 * time.Second, asked: []time.Duration{0, second, 3 * second}},
+		{name: "never", never: true, asked: []time.Duration{0, second, 3 * second, 5 * second}},
+	}
+	for _, c := range cases {
+		world, leases, test := newEvsTestLeasedSubscriber(t)
+		grant := newEvsTestLateGrant(t, test.client, test.clock, evsRepoScope(world.repoId, evsScopeRead), c.late, c.never)
+		subscription, err := test.client.Repo(world.repoId).Subscribe(context.Background(), &EvsSubscribeArgs{RefName: EvsMainRefName, Paths: []string{"src"}})
+		if asked := grant.asked(); !slices.Equal(asked, c.asked) {
+			t.Errorf("%s: the lease asked at %v", c.name, asked)
+		}
+		if c.never {
+			if subscription != nil || !evsTestIsScopeRefusal(err) || evsTestSubscriptionCount(test) != 1 {
+				t.Errorf("%s: Subscribe answered %v, %v, %d subscriptions", c.name, subscription, err, evsTestSubscriptionCount(test))
+			}
+			continue
+		}
+		if err != nil || len(leases.fields()) != 2 {
+			t.Errorf("%s: %v, leases %q", c.name, err, leases.fields())
+		}
+	}
+}
+
+// A followed ref whose pin another call raised past its mark with no statement, so its delivery reads the log: two
+// commits past the subscription's mark, the hourly resync and the reread run first.
+func newEvsTestOwedDelivery(t *testing.T) (*evsTestWorld, *evsTestLeases, *evsTestClient, *evsTestChanges) {
+	t.Helper()
+	world := newEvsTestWorld(t)
+	leases := newEvsTestLeases(world)
+	test := newEvsSubscribeTest(t, world, leases, newEvsTestStore(t))
+	world.push(&evsTestChange{path: "docs/a", content: []byte("a")})
+	ctx := context.Background()
+	listened := &evsTestChanges{}
+	test.client.AddRepoChangeListener(&world.repoId, listened.add)
+	if _, err := test.client.Repo(world.repoId).Subscribe(ctx, &EvsSubscribeArgs{RefName: EvsMainRefName, Paths: []string{"docs"}}); err != nil {
+		t.Fatal(err)
+	}
+	test.clock.advance(test.client.settings.SubscribeRereadDelay)
+	test.client.subscriber.runDue(ctx)
+	world.push(&evsTestChange{path: "docs/b", content: []byte("b")})
+	world.push(&evsTestChange{path: "docs/c", content: []byte("c")})
+	if err := evsTestWalkRaise(ctx, test.client, world.repoId, world.refId); err != nil {
+		t.Fatal(err)
+	}
+	return world, leases, test, listened
+}
+
+// A delivery whose log read the exchange refuses for good, invalid_grant, raises its gap at the pin at once, after one
+// ask, and asks nothing more; one refused invalid_scope is owed again ReadRetryWait apart until
+// ExchangeScopeWaitTimeout has passed since the first, then raises the gap, six asks in all; and one whose grant
+// reaches api's gate 2 s late raises both commits' own changes and no gap. Before, every one of them was owed again
+// every ReadRetryWait for as long as the exchange refused, and raised nothing.
+func TestEvsDeliveryRaisesAGapAtALogTheExchangeRefusesForGood(t *testing.T) {
+	ctx := context.Background()
+	// invalid_grant
+	world, _, test, listened := newEvsTestOwedDelivery(t)
+	exchange := newEvsTestExchange(t, test.client, evsRepoScope(world.repoId, evsScopeRead), evsTestExchangeRefusedForGood(http.StatusBadRequest, "invalid_grant"))
+	test.client.subscriber.runDue(ctx)
+	if change := listened.last(); len(listened.versions()) != 1 || change == nil || !change.Gap || change.Version != 3 || !slices.Equal(change.Paths, []string{"docs"}) {
+		t.Errorf("invalid_grant: changes %v, the last %+v", listened.versions(), change)
+	}
+	test.clock.advance(test.client.settings.ReadRetryWait)
+	test.client.subscriber.runDue(ctx)
+	if count := exchange.count(); count != 1 || len(listened.versions()) != 1 {
+		t.Errorf("invalid_grant: %d asks, %d changes", count, len(listened.versions()))
+	}
+
+	// invalid_scope, never granted
+	world, _, test, listened = newEvsTestOwedDelivery(t)
+	grant := newEvsTestLateGrant(t, test.client, test.clock, evsRepoScope(world.repoId, evsScopeRead), 0, true)
+	for round := range 6 {
+		test.client.subscriber.runDue(ctx)
+		if round < 5 {
+			if count := len(listened.versions()); count != 0 {
+				t.Fatalf("invalid_scope: round %d raised %d changes inside the window", round, count)
+			}
+			test.clock.advance(test.client.settings.ReadRetryWait)
+		}
+	}
+	if change := listened.last(); len(listened.versions()) != 1 || change == nil || !change.Gap || change.Version != 3 {
+		t.Errorf("invalid_scope: changes %v, the last %+v", listened.versions(), change)
+	}
+	second := time.Second
+	if asked := grant.asked(); !slices.Equal(asked, []time.Duration{0, second, 2 * second, 3 * second, 4 * second, 5 * second}) {
+		t.Errorf("invalid_scope: the log asked at %v", asked)
+	}
+	test.clock.advance(test.client.settings.ReadRetryWait)
+	test.client.subscriber.runDue(ctx)
+	if count := len(grant.asked()); count != 6 {
+		t.Errorf("invalid_scope: asked %d times after the gap", count-6)
+	}
+
+	// invalid_scope, granted 2 s late
+	world, _, test, listened = newEvsTestOwedDelivery(t)
+	newEvsTestLateGrant(t, test.client, test.clock, evsRepoScope(world.repoId, evsScopeRead), 2*time.Second, false)
+	for range 3 {
+		test.client.subscriber.runDue(ctx)
+		test.clock.advance(test.client.settings.ReadRetryWait)
+	}
+	if versions := listened.versions(); !slices.Equal(versions, []uint64{2, 3}) || listened.last().Gap {
+		t.Errorf("a late grant: changes %v", versions)
+	}
+}
+
+// The lb's 502 or 504 to a delivery's log read is no answer at all (QD-758): the delivery is owed again and raises
+// both commits' own changes once the log answers, where it raised a gap before. evs's 401 twice, a client a rev/
+// object voids, refuses for good: the delivery raises its gap at once, where it was owed again every ReadRetryWait,
+// two exchanges and two 401s a try.
+func TestEvsDeliveryTriesAgainAfterTheLbsLostAnswer(t *testing.T) {
+	ctx := context.Background()
+	isLog := func(path string) bool { return strings.HasSuffix(path, "/log") }
+	for _, status := range []int{http.StatusBadGateway, http.StatusGatewayTimeout} {
+		_, leases, test, listened := newEvsTestOwedDelivery(t)
+		lost := 1
+		test.client.http.transport = wrapSidecarApiTransport(&evsTestTransport{handler: evsTestLbLosing(leases, http.MethodGet, isLog, status, &lost)})
+		test.client.subscriber.runDue(ctx)
+		if lost != 0 || len(listened.versions()) != 0 {
+			t.Errorf("%d: %d lost left, changes %v", status, lost, listened.versions())
+		}
+		test.clock.advance(test.client.settings.ReadRetryWait)
+		test.client.subscriber.runDue(ctx)
+		if versions := listened.versions(); !slices.Equal(versions, []uint64{2, 3}) || listened.last().Gap {
+			t.Errorf("%d: changes %v", status, versions)
+		}
+	}
+	_, leases, test, listened := newEvsTestOwedDelivery(t)
+	unauthenticated := 0
+	test.client.http.transport = wrapSidecarApiTransport(&evsTestTransport{handler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodGet && isLog(request.URL.Path) {
+			unauthenticated += 1
+			writer.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		leases.ServeHTTP(writer, request)
+	})})
+	test.client.subscriber.runDue(ctx)
+	if change := listened.last(); len(listened.versions()) != 1 || change == nil || !change.Gap || change.Version != 3 {
+		t.Errorf("401: changes %v, the last %+v", listened.versions(), change)
+	}
+	test.clock.advance(test.client.settings.ReadRetryWait)
+	test.client.subscriber.runDue(ctx)
+	if unauthenticated != 2 || len(listened.versions()) != 1 {
+		t.Errorf("401: %d log reads, %d changes", unauthenticated, len(listened.versions()))
 	}
 }
