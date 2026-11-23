@@ -293,10 +293,12 @@ func TestConfigClientJoinsRowsOnlyThenStandsOnTheFullReread(t *testing.T) {
 	callbacksLock.Unlock()
 }
 
-// A forged head at a base the rows-only pass applied: once the key is held the full pass meets it and is refused, as any
-// full start's is, with head_alarm fork; nothing is confirmed, WaitFor still answers nothing and the rows-only log is
-// not forked, so the device withholds and never stands on what that pass applied.
-func TestConfigClientRereadWithholdsAtAForgedHead(t *testing.T) {
+// A forged head at a base the rows-only pass applied: once the key is held the full pass meets it, a fork its start
+// meets, which the client holds and stops at as at a held log's fork (QD-1209), with head_alarm fork once. Nothing is
+// confirmed, a wait answers the fork, a follow after it opens no head again, and the rows-only log itself is not
+// forked: the device never stands on what that pass applied. Before QD-1209 the full pass was refused and ran again
+// at every follow, the client unforked, and the wait answered nothing.
+func TestConfigClientRereadHoldsTheForkAtAForgedHead(t *testing.T) {
 	world := newTestConfigClientWorld(t)
 	net := world.net
 	world.joinedNetwork()
@@ -314,10 +316,13 @@ func TestConfigClientRereadWithholdsAtAForgedHead(t *testing.T) {
 	joiner.hold()
 	ctx, cancel := context.WithTimeout(context.Background(), testConfigJoinTimeout)
 	defer cancel()
-	if err := client.CatchUp(ctx); !errors.Is(err, ErrConfigFork) {
+	err = client.CatchUp(ctx)
+	fork := &ConfigForkError{}
+	if !errors.As(err, &fork) {
 		t.Fatalf("the full pass over a forged head: %v", err)
 	}
-	if opened, _ := heads.reads(); !slices.Contains(opened, 2) {
+	opened, _ := heads.reads()
+	if !slices.Contains(opened, 2) {
 		t.Fatalf("the full pass did not reach the forged head: %v", opened)
 	}
 	if client.State() != nil || client.VerifiedState() != nil || testConfigWaitAnswers(client, 1) {
@@ -326,11 +331,22 @@ func TestConfigClientRereadWithholdsAtAForgedHead(t *testing.T) {
 	if pin := client.UnconfirmedPin(); !proto.Equal(pin, net.log.Pin()) {
 		t.Errorf("the rows-only pass stands at %v", pin)
 	}
-	if client.Fork() != nil {
-		t.Error("the rows-only log forked: the follower would refuse rather than withhold")
+	if client.Fork() != fork || client.unconfirmed.Load().Fork() != nil {
+		t.Errorf("the client holds %v, its rows-only log forked %v: want the full pass's fork held, the rows-only log unforked", client.Fork(), client.unconfirmed.Load().Fork())
 	}
-	if world.headAlarms(SidecarHeadAlarmFork) == 0 {
-		t.Error("no head_alarm fork for the forged head")
+	waitCtx, waitCancel := context.WithCancel(context.Background())
+	waitCancel()
+	if _, err := client.WaitFor(waitCtx, net.n); err != fork {
+		t.Errorf("a wait answered %v, want the held fork", err)
+	}
+	if err := client.CatchUp(ctx); err != fork {
+		t.Errorf("a follow after the fork answered %v, want the held fork", err)
+	}
+	if again, _ := heads.reads(); len(again) != len(opened) {
+		t.Errorf("a follow after the fork opened heads %v again", again[len(opened):])
+	}
+	if alarms := world.headAlarms(SidecarHeadAlarmFork); alarms != 1 {
+		t.Errorf("head_alarm fork raised %d times for the forged head, want once", alarms)
 	}
 	if positions := world.gkm.advancedPositions(); len(positions) != 0 {
 		t.Errorf("AuthAdvanced saw %v", positions)
