@@ -499,43 +499,63 @@ func (self *MailIngestor) Run(ctx context.Context) {
 	} else {
 		defer stop()
 	}
-	for {
+	mailRunPasses(ctx, self.clock, self.settings.MinPassInterval, self.wake, func() time.Duration {
 		pass, err := self.Ingest(ctx)
 		if ctx.Err() != nil {
-			return
+			return 0
 		}
-		// the least gap first, so a burst of hints is one pass
-		gap := max(self.settings.MinPassInterval, 0)
-		wait := self.settings.ResyncInterval
 		if err != nil && !errors.Is(err, ErrMailNotIngester) {
 			self.log.Warningf("[mail]ingest %s: %v", self.repoId, err)
 		}
 		if err != nil || 0 < pass.Pending {
 			// a failed pass, or a deposit whose pin this device's state has yet to reach, which no hint announces
-			if wait = self.settings.RetryInterval; wait <= 0 {
-				wait = gap
-			}
+			return self.settings.retryWait()
 		}
+		return self.settings.ResyncInterval
+	})
+}
+
+// How long a pass that failed, or that left a deposit whose pin this device does not hold yet, waits before the next:
+// RetryInterval, else MinPassInterval, and with neither positive only a change brings it.
+func (self *MailIngestSettings) retryWait() time.Duration {
+	if 0 < self.RetryInterval {
+		return self.RetryInterval
+	}
+	return max(self.MinPassInterval, 0)
+}
+
+// Passes on the caller's goroutine until ctx ends: one at once, then one at each wake and once the wait the last pass
+// answered runs out, never two within gap of each other, so wakes that come while a pass runs or within gap after it
+// bring one pass. A wait that is not positive leaves the next pass to a wake alone. MailIngestor.Run's loop, and a
+// group repo's on the mail component (mail_component_group.go).
+func mailRunPasses(ctx context.Context, clock Clock, gap time.Duration, wake <-chan struct{}, pass func() (wait time.Duration)) {
+	gap = max(gap, 0)
+	for {
+		wait := pass()
+		if ctx.Err() != nil {
+			return
+		}
+		// the least gap first, so a burst of wakes is one pass
 		if 0 < gap {
 			select {
 			case <-ctx.Done():
 				return
-			case <-self.clock.After(gap):
+			case <-clock.After(gap):
 			}
 		}
 		if 0 < wait && wait <= gap {
 			// the timed wait is spent: the next pass is due
 			continue
 		}
-		// with no timed wait, only a change brings the next pass
+		// with no timed wait, only a wake brings the next pass
 		var timer <-chan time.Time
 		if 0 < wait {
-			timer = self.clock.After(wait - gap)
+			timer = clock.After(wait - gap)
 		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-self.wake:
+		case <-wake:
 		case <-timer:
 		}
 	}

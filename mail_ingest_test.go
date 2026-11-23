@@ -67,7 +67,14 @@ type mailIngestTestRepo struct {
 	failConsumeBefore error
 	// the next CONSUME commits and then answers this, once: an answer lost
 	failConsumeAfter error
-	wake             func()
+	// the live watch's wake, nil once it stopped; the watches made and the stops called
+	wake           func()
+	watchCount     int
+	watchStopCount int
+	// the next Watch answers this and makes no watch, once: a subscription evs refused
+	failWatch error
+	// the listings of its depositors, one a pass that reads the deposits
+	depositorsCount int
 	// whether a slot still holds its key; nil holds every one
 	slotHeld func(slotId Id) bool
 	// called with each new deposit's slot, with no lock of the repo's held
@@ -112,6 +119,7 @@ func (self *mailIngestTestRepo) standingCount(depositorId Id) int {
 func (self *mailIngestTestRepo) Depositors(ctx context.Context) ([]Id, error) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
+	self.depositorsCount += 1
 	depositorIds := []Id{}
 	for depositorId := range self.versions {
 		depositorIds = append(depositorIds, depositorId)
@@ -184,8 +192,28 @@ func (self *mailIngestTestRepo) Erasures(ctx context.Context, afterVersion uint6
 func (self *mailIngestTestRepo) Watch(ctx context.Context, wake func()) (func(), error) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
+	if err := self.failWatch; err != nil {
+		self.failWatch = nil
+		return nil, err
+	}
+	self.watchCount += 1
+	watchId := self.watchCount
 	self.wake = wake
-	return func() {}, nil
+	return func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.watchStopCount += 1
+		if self.watchCount == watchId {
+			self.wake = nil
+		}
+	}, nil
+}
+
+// The live watch's wake, nil with none; the watches made and stopped; and the depositor listings so far.
+func (self *mailIngestTestRepo) watching() (wake func(), watchCount int, watchStopCount int, depositorsCount int) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.wake, self.watchCount, self.watchStopCount, self.depositorsCount
 }
 
 // §8's answers as a test sets them: every depositor's deposits are mail unless classed otherwise.

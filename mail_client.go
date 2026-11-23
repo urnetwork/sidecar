@@ -143,6 +143,9 @@ type mailClientParts interface {
 	repos(args *MailReposArgs) *MailRepos
 	ingestor(repoId Id, args *MailIngestArgs) (*MailIngestor, error)
 	groupRefs(groupId, mailboxId Id) (*MailGroupRefs, error)
+	// Calls wake, which never blocks, at each change of the repo's refs until stop, as an ingestor's watch does
+	// (mailIngestRepo.Watch); an error where no watch stands.
+	watch(ctx context.Context, repoId Id, wake func()) (stop func(), err error)
 }
 
 // The parts over an EvsClient.
@@ -177,6 +180,11 @@ func (self *mailEvsClientParts) groupRefs(groupId, mailboxId Id) (*MailGroupRefs
 func (self *mailEvsClientParts) ingestor(repoId Id, args *MailIngestArgs) (*MailIngestor, error) {
 	args.Repo = self.evs.Repo(repoId)
 	return NewMailIngestor(args)
+}
+
+// A subscription to every ref of the repo, as its ingestor holds one.
+func (self *mailEvsClientParts) watch(ctx context.Context, repoId Id, wake func()) (func(), error) {
+	return (&mailIngestEvsRepo{repo: self.evs.Repo(repoId)}).Watch(ctx, wake)
 }
 
 // What this device's receiver says of itself, as the component last saw it.

@@ -193,6 +193,9 @@ type GkmGroupClient struct {
 	repoIdManagers          map[Id]*gkmGroupManager
 	// the hint work running now, by kind and repo
 	hintWorkKeys map[string]bool
+	// the groups commit hints named that this device holds none of, each with the looks it has had for the repo a
+	// re-form gave it, waiting for the next (gkm_sync.go's followHintedGroups)
+	hintedGroupIdLooks map[Id]int
 	// what HeadCheck and the acks read from memory: each held repo's pins and its tree's leaves (gkm_pins.go)
 	repoIdHeads map[Id]*gkmRepoHead
 	// when a late ask for a GroupInfo or a waiting leaf's want last went, by repo (H2)
@@ -244,16 +247,17 @@ func NewGkmGroupClient(args *GkmGroupClientArgs) (*GkmGroupClient, error) {
 		settings = DefaultGkmSettings()
 	}
 	return &GkmGroupClient{
-		args:              args,
-		settings:          settings,
-		clock:             clockOrReal(args.Clock),
-		log:               loggerOrDefault(args.Log),
-		lateAsks:          NewGkmLateAsks(settings),
-		repoIdManagers:    map[Id]*gkmGroupManager{},
-		hintWorkKeys:      map[string]bool{},
-		rebindWake:        make(chan struct{}, 1),
-		repoIdHeads:       map[Id]*gkmRepoHead{},
-		repoIdWantAskedAt: map[Id]time.Time{},
+		args:               args,
+		settings:           settings,
+		clock:              clockOrReal(args.Clock),
+		log:                loggerOrDefault(args.Log),
+		lateAsks:           NewGkmLateAsks(settings),
+		repoIdManagers:     map[Id]*gkmGroupManager{},
+		hintWorkKeys:       map[string]bool{},
+		hintedGroupIdLooks: map[Id]int{},
+		rebindWake:         make(chan struct{}, 1),
+		repoIdHeads:        map[Id]*gkmRepoHead{},
+		repoIdWantAskedAt:  map[Id]time.Time{},
 	}, nil
 }
 
@@ -1362,9 +1366,10 @@ func (self *GkmGroupClient) heldRepoOfGroup(groupId Id) (Id, bool) {
 // drop key has under 7 days left (§10.6's drop keys row); welcome joins; wrap-pending answers with a late delivery
 // after its own wait; and each resync runs all three for every repo held, so a lost hint costs at most the resync
 // interval. A hint is only a wake: whatever it names is refetched and verified. commit catches up or resyncs (KF5,
-// gkm_sync.go), and a resync also runs each repo's due self-update and its drop key's renewal. Each wake's work runs
-// on its own goroutine until ctx ends, one at a time per repo and kind, so a wait never holds the intake and a
-// repeated hint piles nothing up.
+// gkm_sync.go), and one naming a group this device holds none of has it look for the held repo a re-form gave that
+// group, whose form it follows at once (takeCommitHint); a resync also runs each repo's due self-update and its drop
+// key's renewal. Each wake's work runs on its own goroutine until ctx ends, one at a time per repo and kind, so a wait
+// never holds the intake and a repeated hint piles nothing up.
 //
 // In KeyDelivery mode pending names a group: one this device holds takes what gkm holds past it at once, a delivery
 // to it among them, and then, where it would hand something on (KeyDeliveryPending: a LATE delivery to a holder the
@@ -1461,13 +1466,7 @@ func (self *GkmGroupClient) AttachHints(ctx context.Context, hints *GkmHints) {
 			}
 			pendingUnheld(ctx)
 		})
-		hints.SetHandler(protocol.GkmHintKind_GKM_HINT_COMMIT, func(ctx context.Context, wake *GkmHintWake) {
-			if wake.GroupId != nil {
-				if repoId, ok := self.heldRepoOfGroup(*wake.GroupId); ok {
-					self.hintWork(ctx, "sync", repoId, func() { self.logFlowError("sync", self.SyncRepo(ctx, repoId)) })
-				}
-			}
-		})
+		hints.SetHandler(protocol.GkmHintKind_GKM_HINT_COMMIT, self.takeCommitHint)
 		hints.SetHandler(protocol.GkmHintKind_GKM_HINT_WRAP_PENDING, func(ctx context.Context, wake *GkmHintWake) {
 			if wake.GroupId != nil && wake.Recipient != "" {
 				if repoId, ok := self.heldRepoOfGroup(*wake.GroupId); ok {
@@ -1496,16 +1495,7 @@ func (self *GkmGroupClient) AttachHints(ctx context.Context, hints *GkmHints) {
 		self.logFlowError("welcome", err)
 		self.selfUpdateJoined(ctx, joinedRepoIds)
 	})
-	hints.SetHandler(protocol.GkmHintKind_GKM_HINT_COMMIT, func(ctx context.Context, wake *GkmHintWake) {
-		if wake.GroupId == nil {
-			return
-		}
-		if repoId, ok := self.heldRepoOfGroup(*wake.GroupId); ok {
-			self.hintWork(ctx, "commit", repoId, func() {
-				self.logFlowError("commit", self.SyncRepo(ctx, repoId))
-			})
-		}
-	})
+	hints.SetHandler(protocol.GkmHintKind_GKM_HINT_COMMIT, self.takeCommitHint)
 	hints.SetHandler(protocol.GkmHintKind_GKM_HINT_WRAP_PENDING, func(ctx context.Context, wake *GkmHintWake) {
 		if wake.GroupId == nil {
 			return
@@ -1627,12 +1617,13 @@ func (self *GkmGroupClient) noteAgentRepoRefused(repoId Id, version uint64) bool
 }
 
 // Coalesce work by repo. A native sync or pending wake arriving during a pass may carry the first delivery for a
-// device that was still waiting at that pass, so run it once more.
+// device that was still waiting at that pass, so run it once more; and so does the look for a hinted group's repo,
+// since a group queued as its pass ends would otherwise wait for the next hint (followHintedGroups).
 func (self *GkmGroupClient) hintWork(ctx context.Context, kind string, repoId Id, work func()) {
 	key := kind + ":" + gkmPathId(repoId)
 	self.stateLock.Lock()
 	if _, running := self.hintWorkKeys[key]; running {
-		if (kind == "sync" || kind == "pending") && self.KeyDeliveryOnly() {
+		if (kind == "sync" || kind == "pending") && self.KeyDeliveryOnly() || kind == gkmHintWorkHintedGroups {
 			self.hintWorkKeys[key] = true
 		}
 		self.stateLock.Unlock()

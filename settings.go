@@ -648,8 +648,15 @@ type GkmSettings struct {
 	// this: 1 h (§6.8's hourly resync).
 	ResyncInterval time.Duration
 	// The wakes the hint intake holds pending, coalesced by kind and group: 4,096. Past it a new one is dropped and
-	// a resync asked for instead.
+	// a resync asked for instead. The groups a group client holds queued for its look at hinted groups' repos, below,
+	// stop at it too.
 	HintPendingCount int
+	// A commit hint naming a group this device holds none of has it read the forms of the repos it holds, for the one a
+	// re-form gave that group, whose form it follows at once (gkm_sync.go's followHintedGroups); a group no verified
+	// newest form named is looked for once more this long after, then dropped: 5 s, gkm's FormCacheTtl, since a gkm
+	// process serves a repo's forms from a cache up to that old, so a look that met another process's list from before
+	// the form meets the new one. Non-positive looks once.
+	HintedGroupRecheckWait time.Duration
 	// How often key upkeep checks what is due: 1 h, besides each resync and each refill a hint asks for.
 	UpkeepInterval time.Duration
 	// D-KEYS-25: a ReaderKey is replaced by a fresh pair once it is this old: 6 days.
@@ -808,6 +815,7 @@ func DefaultGkmSettings() *GkmSettings {
 		ReplyMaxByteCount:            16 * 1024 * 1024,
 		ResyncInterval:               1 * time.Hour,
 		HintPendingCount:             4096,
+		HintedGroupRecheckWait:       5 * time.Second,
 		UpkeepInterval:               1 * time.Hour,
 		ReaderKeyReplaceAge:          6 * 24 * time.Hour,
 		ReaderKeyLifetime:            7 * 24 * time.Hour,

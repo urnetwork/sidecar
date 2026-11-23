@@ -12,8 +12,10 @@
 // reader refuses it alike (FS-102). A fork stops the log: Apply refuses every later entry and keeps the evidence.
 // Nothing here reads a clock: every time is an entry's own, so a verdict depends on the log alone.
 //
-// Apply, Retained and Fork are for one goroutine, the log's follower; State and Pin are safe for concurrent use and
-// take no lock. Nothing here creates, derives or unwraps a key, so nothing calls testHookSecret.
+// Apply, Retained and the checks are for one goroutine, the log's follower, which alone records a fork. State and Pin
+// are safe for concurrent use and take no lock; Fork is safe for concurrent use under the log's stateLock, since a
+// client's waits and readers ask for the fork on their own goroutines while the follower records it. Nothing here
+// creates, derives or unwraps a key, so nothing calls testHookSecret.
 //
 // On every leg, the sidecar_http page Worker's included: root Id, no connect type.
 
@@ -25,6 +27,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sync"
 	"sync/atomic"
 
 	"google.golang.org/protobuf/proto"
@@ -263,7 +266,10 @@ type ConfigLog struct {
 	keptFrom uint64
 	// the rows of the current and previous bases, by rows_sha256
 	baseRows map[[sha256.Size]byte][]byte
-	// once set, every Apply returns it
+	// guards fork, which the follower records while other goroutines read it through Fork
+	stateLock sync.Mutex
+	// once set, every Apply returns it. The follower alone writes it, under stateLock, so its own reads may skip the
+	// lock; every other reader goes through Fork
 	fork *ConfigForkError
 	// a rows-only reader opens no config head (config_rows_only.go): its bases skip the head check and its settings
 	// are unknown
@@ -372,8 +378,10 @@ func (self *ConfigLog) Pin() *bridge.AuthPin {
 	return self.state.Load().Pin()
 }
 
-// The fork that stopped this log, or nil.
+// The fork that stopped this log, or nil. Safe for concurrent use.
 func (self *ConfigLog) Fork() *ConfigForkError {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
 	return self.fork
 }
 
@@ -395,7 +403,7 @@ func (self *ConfigLog) Check(signedBytes []byte, timeMs int64) ConfigVerdict {
 	if chain, err := bridge.AuthChainDigest(entry.GetN(), entry.GetPrevChain(), entry.GetKind(), timeMs, signedBytes); err == nil {
 		verdict.Pin = &bridge.AuthPin{Version: entry.GetN(), Chain: bytes.Clone(chain[:])}
 	}
-	if self.fork != nil {
+	if self.Fork() != nil {
 		verdict.Refusal = fmt.Errorf("%w: the log stopped at a fork", ErrConfigRefused)
 		return verdict
 	}
@@ -439,7 +447,11 @@ func (self *ConfigLog) keptEntry(n uint64) *configKeptEntry {
 
 // Stops the log at a fork, logs it and returns its evidence.
 func (self *ConfigLog) stopAtFork(fork *ConfigForkError) error {
-	self.fork = fork
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.fork = fork
+	}()
 	self.log.Errorf("[config]%s fork at %d: %s", self.networkId, fork.N, fork.Reason)
 	return fork
 }
@@ -453,8 +465,8 @@ func (self *ConfigLog) Apply(entryBytes []byte, rowsSource ConfigRowsSource) (Co
 	testHookBarrier("config.apply.before", barrierKey)
 	defer testHookBarrier("config.apply.after", barrierKey)
 
-	if self.fork != nil {
-		return ConfigVerdict{}, self.fork
+	if fork := self.Fork(); fork != nil {
+		return ConfigVerdict{}, fork
 	}
 	entry := &bridge.AuthEntry{}
 	if err := proto.Unmarshal(entryBytes, entry); err != nil {
