@@ -26,6 +26,13 @@
 // admits as under way from then: the order pass admits only while it has taken up fewer rows under way
 // than OrderResumeCount (run.go), so there are few to read. Two passes at once, which the order chain's
 // one task makes rare, may still each admit a row of one set, as before.
+//
+// A challenge name dns refused a write at past dns_challenges_per_name_hour holds its rows too
+// (QD-1204), a renewal's among them, since dns refuses its write alike: the order's failure named the
+// name (run.go), and the service holds it until dns's Retry-After, when the name's oldest write in the
+// window leaves it, or NameWritesHold with none (service.go). A held row waits, asking no CA, budget or
+// name for anything, so a set past the cap sends one newOrder a refusal rather than one a pass. The hold
+// is the process's, as a CA's is.
 
 package certsservice
 
@@ -190,6 +197,12 @@ func (self *CertsService) admitRow(ctx context.Context, row *sidecar.TlsCertReco
 	// order's end frees it
 	if reason := underWay.waitReason(row, names); reason != "" {
 		report.Waiting = append(report.Waiting, &CertsWait{CertId: row.CertId, Reason: reason})
+		return nil
+	}
+	// a name dns refused past its writes an hour holds every order of it, a renewal's too, which dns
+	// would refuse alike (the file header)
+	if until := self.nameWritesHeldUntil(names, now); !until.IsZero() {
+		report.Waiting = append(report.Waiting, &CertsWait{CertId: row.CertId, Reason: CertsWaitNameWrites, Until: until})
 		return nil
 	}
 	admit := func(ca CertsCa, kind CertsOrderKind, replaces *sidecar.TlsCertRecord) error {

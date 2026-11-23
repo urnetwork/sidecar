@@ -88,6 +88,20 @@ func TestValidateRefusesANegativeOrderLifetime(t *testing.T) {
 	}
 }
 
+// dns's refusal past dns_challenges_per_name_hour holds a name an hour when its 429 names no
+// Retry-After, the cap's window (QD-1204), and a hold that is not positive is refused by name.
+func TestNameWritesHoldDefaultsToTheCapsWindow(t *testing.T) {
+	settings := DefaultCertsSettings()
+	if settings.NameWritesHold != time.Hour {
+		t.Fatalf("NameWritesHold %v", settings.NameWritesHold)
+	}
+	settings.RootDomain = "root.example"
+	settings.NameWritesHold = 0
+	if err := settings.Validate(); !errors.Is(err, ErrCertsSettingsRefused) || !strings.Contains(err.Error(), "NameWritesHold") {
+		t.Fatalf("a hold of nothing: %v", err)
+	}
+}
+
 // DESIGN-DETAILS 17.2.8's failure backoff, the owner's answer to how long a failing URnetwork-zone name
 // waits at a CA (QD-857): 30 min after its first failure there, doubling with each one after, a day from
 // the seventh on and no further however many come, each kept 8 d past its time.

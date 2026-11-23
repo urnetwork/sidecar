@@ -24,15 +24,20 @@
 //   - hints.go, TlsHint on topic tls.
 //
 // A CA's Retry-After and each name's failed authorizations of the hour are held in the process, as the
-// extender's hold is: a restart forgets them, and the CA's next refusal holds again. A name's failure
-// backoff at each CA (QD-857) is the store's, so a restart keeps it: each failed authorization there
-// doubles the name's wait there up to FailureBackoffMax, and a success there ends it.
+// extender's hold is: a restart forgets them, and the CA's next refusal holds again. So is a challenge
+// name dns refused a write at past dns_challenges_per_name_hour (QD-1204): its orders wait until dns's
+// Retry-After, when the name's oldest write in the window leaves it, or NameWritesHold when dns named
+// none, so a set past the cap costs one newOrder a refusal rather than one a pass; a restart forgets the
+// hold, and dns's next refusal sets it again. A name's failure backoff at each CA (QD-857) is the
+// store's, so a restart keeps it: each failed authorization there doubles the name's wait there up to
+// FailureBackoffMax, and a success there ends it.
 
 package certsservice
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -57,13 +62,39 @@ var (
 	ErrCertsAcmeUnavailable = errors.New("certs has no ACME client")
 )
 
+// POST /dns/acme-challenge refused a write because the name's writes this hour reached
+// dns_challenges_per_name_hour (§12.8; D-DNS-8): dns's 429. It is ErrCertsDnsWriteRefused too, a refusal
+// of the path that wrote nothing, but one of its own, on which the service holds the name's orders until
+// dns's Retry-After rather than let each pass send a newOrder that the refused write then fails (QD-1204).
+var ErrCertsDnsWriteRateLimited = fmt.Errorf("%w: the name's writes this hour are spent", ErrCertsDnsWriteRefused)
+
+// A challenge write dns refused past dns_challenges_per_name_hour, as data for the policy (QD-1204): the
+// challenge name it was for and dns's Retry-After. It is ErrCertsDnsWriteRateLimited.
+type CertsDnsWriteRateLimitError struct {
+	// The name whose _acme-challenge label the write was for, certsChallengeNameOf's form. Empty: the
+	// client did not say, and every challenge name of the order is held.
+	Name string
+	// dns's Retry-After: how long until the name takes a write again, once the write whose leaving brings
+	// its count in the window below the cap has left it. Zero: dns named none.
+	RetryAfter time.Duration
+}
+
+func (self *CertsDnsWriteRateLimitError) Error() string {
+	return ErrCertsDnsWriteRateLimited.Error()
+}
+
+func (self *CertsDnsWriteRateLimitError) Unwrap() error {
+	return ErrCertsDnsWriteRateLimited
+}
+
 // §12.8's /dns/* routes as certs drives them, the only writer of DNS-01 in URnetwork zones (D-DNS-8):
 // TLS-M5-16's server.NewCertsDnsClient on api's routes with the internal-certs bearer
 // (plan-TLS-internal-credentials), driven by TLS-M5-15's solver. Safe for concurrent use.
 type CertsDns interface {
 	// POST /dns/acme-challenge: the TXT values at _acme-challenge.<name>, at most 2, TTL 60, gone after 1 h,
 	// at most 10 writes per name per hour. Answers the serial they were committed at. A 503 while a
-	// restore runs is an error its caller retries with backoff.
+	// restore runs is an error its caller retries with backoff. A write past the hour's 10 is a
+	// *CertsDnsWriteRateLimitError naming name and dns's Retry-After.
 	WriteAcmeChallenge(ctx context.Context, name string, values []string) (serial uint64, err error)
 	// Takes them out, however the order ended.
 	RemoveAcmeChallenge(ctx context.Context, name string) error
@@ -191,6 +222,8 @@ type CertsService struct {
 	caHolds map[CertsCa]time.Time
 	// each name's failed authorizations inside the window
 	nameFailures map[string][]time.Time
+	// each challenge name dns refused a write at past its writes an hour, held until when (QD-1204)
+	nameWritesHolds map[string]time.Time
 }
 
 // A service over store, with host's Redis for the budget and its clock. A nil dns or acme refuses every
@@ -220,15 +253,16 @@ func NewCertsService(
 		acme = ClosedCertsAcme{}
 	}
 	return &CertsService{
-		store:        store,
-		dns:          dns,
-		acme:         acme,
-		budget:       NewCertsBudget(host.Redis, store, settings),
-		settings:     settings,
-		clock:        host.ClockOrReal(),
-		push:         host.Push,
-		caHolds:      map[CertsCa]time.Time{},
-		nameFailures: map[string][]time.Time{},
+		store:           store,
+		dns:             dns,
+		acme:            acme,
+		budget:          NewCertsBudget(host.Redis, store, settings),
+		settings:        settings,
+		clock:           host.ClockOrReal(),
+		push:            host.Push,
+		caHolds:         map[CertsCa]time.Time{},
+		nameFailures:    map[string][]time.Time{},
+		nameWritesHolds: map[string]time.Time{},
 	}, nil
 }
 
@@ -270,6 +304,67 @@ func (self *CertsService) HoldCa(ca CertsCa, retryAfter time.Time) {
 	if until.After(self.caHolds[ca]) {
 		self.caHolds[ca] = until
 	}
+}
+
+// Holds every order whose CSR holds name's challenge name, at every CA, for retryAfter and the margin from
+// now, or NameWritesHold from now when dns named no Retry-After: dns's refusal of a challenge write past
+// dns_challenges_per_name_hour (a *CertsDnsWriteRateLimitError; QD-1204). Renewals wait too, since they
+// write the same name and dns refuses theirs alike. A later hold never shortens an earlier one, and holds
+// that have ended are dropped as another is set, so the process keeps only those of the last window.
+func (self *CertsService) HoldChallengeName(name string, retryAfter time.Duration) {
+	name = certsChallengeNameOf(name)
+	if name == "" {
+		return
+	}
+	now := self.clock.Now()
+	until := now.Add(self.settings.NameWritesHold)
+	if 0 < retryAfter {
+		until = now.Add(retryAfter + self.settings.RetryAfterMargin)
+	}
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	for heldName, heldUntil := range self.nameWritesHolds {
+		if !now.Before(heldUntil) {
+			delete(self.nameWritesHolds, heldName)
+		}
+	}
+	if until.After(self.nameWritesHolds[name]) {
+		self.nameWritesHolds[name] = until
+	}
+}
+
+// Holds the challenge name dns's refusal of row's order names (a *CertsDnsWriteRateLimitError), or every
+// challenge name of row's CSR when it names none, as a refusal with no such error, ErrCertsDnsWriteRateLimited
+// alone, does.
+func (self *CertsService) holdRefusedChallengeNames(row *sidecar.TlsCertRecord, err error) {
+	var refusal *CertsDnsWriteRateLimitError
+	if errors.As(err, &refusal) && refusal.Name != "" {
+		self.HoldChallengeName(refusal.Name, refusal.RetryAfter)
+		return
+	}
+	retryAfter := time.Duration(0)
+	if refusal != nil {
+		retryAfter = refusal.RetryAfter
+	}
+	// the CA was sent this CSR, so it parsed
+	names, _ := certsCsrNames(row.Csr)
+	for _, name := range names {
+		self.HoldChallengeName(name, retryAfter)
+	}
+}
+
+// Until when dns's refusals hold an order whose CSR names names, zero when none does at now: the latest
+// hold of their challenge names that is still ahead.
+func (self *CertsService) nameWritesHeldUntil(names []string, now time.Time) time.Time {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	until := time.Time{}
+	for _, name := range names {
+		if heldUntil := self.nameWritesHolds[certsChallengeNameOf(name)]; now.Before(heldUntil) && heldUntil.After(until) {
+			until = heldUntil
+		}
+	}
+	return until
 }
 
 // Counts a failed authorization of each name at ca at now (a *CertsAcmeAuthorizationError) twice: in the
