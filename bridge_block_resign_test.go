@@ -192,3 +192,73 @@ func TestCompileKeepsTheBlockRecordItHoldsOnceItsSignerIsRevoked(t *testing.T) {
 		t.Fatalf("holding no record: %v, alarms %v", refused.Block, refused.Alarms)
 	}
 }
+
+// A desktop that followed its network's bases, each head carrying a block the owner's laptop signed, holds the record
+// at each base, and keeps it with the head it verified in authlog/ once the laptop is revoked and a base carries the
+// record on. Its restart anchors at its newest kept base with that head, while every head read would answer another
+// network's head, and holds the record still, where a reader starting there would judge it and hold none; so its
+// writer signs the block again from the restart on.
+func TestARestartKeepsTheBridgeBlockRecordItsReadersHold(t *testing.T) {
+	world := newTestConfigClientWorld(t)
+	net := world.net
+	laptop := net.device("owner laptop", net.ownerMemberId)
+	net.admitDevice(net.owner, laptop, 0)
+	block := testFirstBlock(78)
+	record := net.sign(laptop, bridge.SignedType_SIGNED_BRIDGE_BLOCK, block)
+	world.heads.stateLock.Lock()
+	world.heads.blockRecord = record
+	world.heads.stateLock.Unlock()
+	want := sha256.Sum256(record)
+	for _, c := range []struct {
+		member        string
+		configVersion uint64
+	}{{member: "member a", configVersion: 2}, {member: "member b", configVersion: 3}} {
+		net.admitMember(net.owner, testConfigId(c.member), bridge.MemberRole_MEMBER_ROLE_MEMBER)
+		net.fold(net.owner, net.n, c.configVersion)
+	}
+	net.mustPost(net.owner, bridge.SignedType_SIGNED_SIDECAR_REVOKE, net.revocation(laptop, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_LOST))
+	net.fold(net.owner, net.n, 4)
+	world.publish()
+
+	desktop := DefaultConfigClientSettings()
+	desktop.RetainFullTail = true
+	client := world.client(desktop)
+	state := world.caughtUp(client)
+	if state.Base().GetConfigVersion() != 4 || !bytes.Equal(state.bridgeBlockRecordSha256, want[:]) {
+		t.Fatalf("the desktop holds %x at head %d", state.bridgeBlockRecordSha256, state.Base().GetConfigVersion())
+	}
+	client.Close()
+	document := world.store.document(t)
+	kept := false
+	for _, verified := range document.VerifiedHeads {
+		if bytes.Equal(verified.ConfigHeadSha256, state.Base().GetConfigHeadSha256()) {
+			kept = bytes.Equal(verified.BridgeBlockRecordSha256, want[:])
+		}
+	}
+	if !kept {
+		t.Fatal("authlog/ keeps the newest base's head without the block record its readers hold")
+	}
+	first := &bridge.AuthEntry{}
+	if err := proto.Unmarshal(document.Entries[0], first); err != nil || first.GetN() <= 1 {
+		t.Fatalf("the kept entries start at %d: %v", first.GetN(), err)
+	}
+
+	world.heads.stateLock.Lock()
+	world.heads.forged = testConfigHead(t, newTestConfigNetOf(t, "another network"))
+	world.heads.stateLock.Unlock()
+	restored := world.client(desktop).State()
+	if restored == nil || !proto.Equal(restored.Pin(), state.Pin()) || !bytes.Equal(restored.bridgeBlockRecordSha256, want[:]) {
+		t.Fatalf("the restart stands at %v holding %x", restored.Pin(), restored.bridgeBlockRecordSha256)
+	}
+	head, err := testConfigHead(t, net).WithFile(ConfigHeadBridgeBlockPath, record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, err := WithBridgeBlock(restored, head, testFirstBlockSign(net.owner), iotest.ErrReader(errors.New("no draw")))
+	if err != nil || bytes.Equal(next.File(ConfigHeadBridgeBlockPath), record) {
+		t.Fatalf("the restarted writer left the block: %v", err)
+	}
+	if signed, err := ReadBridgeBlock(next, restored, nil); err != nil || !proto.Equal(signed, block) {
+		t.Fatalf("the restarted writer's block %v: %v", signed, err)
+	}
+}
