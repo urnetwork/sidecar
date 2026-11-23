@@ -1,12 +1,15 @@
 package pushservice_test
 
-// §6.8's coalescing of a topic's superseded hints in one publisher batch, on publisher_test.go's FakeRedis,
-// fake clock and fake resident send: a hint that a later one of its topic repeats, the same kind and the
-// same bytes, keeps its seq and loses its bytes, while distinct hints of a topic each keep theirs, up to
-// the topic's newest TopicHintBodyCount. gkm-reader-key-upload-retry found the publisher keeping only a
-// topic's last body a batch, so of two late asks reaching a holder at once on its per-client gkm topic,
-// one ask's wrap-pending hint arrived without its group and recipient, and only the asker's next ask
-// delivered.
+// Distinct hints of one topic each reaching the client (§6.8). Most rows run on publisher_test.go's
+// FakeRedis, fake clock and fake resident send: in one publisher batch, a hint that a later one of its
+// topic repeats, the same kind and the same bytes, is superseded, keeping its seq and losing its bytes,
+// while distinct hints of a topic each keep theirs, up to the topic's newest TopicHintBodyCount.
+// gkm-reader-key-upload-retry found the publisher keeping only a topic's last body a batch, so of two
+// late asks reaching a holder at once on its per-client gkm topic, one ask's wrap-pending hint arrived
+// without its group and recipient, and only the asker's next ask delivered. Two rows run end to end on
+// T2's Net: those late asks reaching a real GkmHints intake, and two sock hints of one millisecond both
+// reaching the client now that sock is a raised clock (QD-1212), where the second used to carry the
+// first's version and be passed over as stale.
 
 import (
 	"context"
@@ -83,7 +86,8 @@ func (self *testPublisherEnv) awaitBatch(first uint64, count int) []*protocol.Pu
 }
 
 // A gkm hint intake on the client's side (gkm_hints.go), its handlers recording the wakes they take and
-// its resyncs, on a clock that never moves, so no hourly resync runs.
+// its resyncs, on a clock that never moves, so no hourly resync runs. subscribe nil subscribes to
+// nothing, and the test hands it notices itself.
 type testGkmIntake struct {
 	hints *sidecar.GkmHints
 
@@ -94,9 +98,9 @@ type testGkmIntake struct {
 	lowPasses chan int
 }
 
-func newTestGkmIntake(t *testing.T) *testGkmIntake {
+func newTestGkmIntake(t *testing.T, subscribe sidecar.GkmSubscribeFunction) *testGkmIntake {
 	t.Helper()
-	hints, err := sidecar.NewGkmHints(t.Context(), &sidecar.GkmHintsArgs{Clock: sidecartest.NewFakeClock(sidecartest.DefaultClockStart())})
+	hints, err := sidecar.NewGkmHints(t.Context(), &sidecar.GkmHintsArgs{Subscribe: subscribe, Clock: sidecartest.NewFakeClock(sidecartest.DefaultClockStart())})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,20 +128,27 @@ func newTestGkmIntake(t *testing.T) *testGkmIntake {
 }
 
 // Hands the intake each hint as the client's push machine hands a subscriber a hint above the version it
-// holds (push_state.go's pushMachine.hint), then waits until the pass that took key-packages-low's wake,
-// which a test sends last, has finished, so every wake and any resync the notices asked for has run.
+// holds (push_state.go's pushMachine.hint), then settles.
 func (self *testGkmIntake) take(t *testing.T, hints []*protocol.PushHint) (wakes []*sidecar.GkmHintWake, resyncCount int) {
 	t.Helper()
 	for _, hint := range hints {
 		self.hints.Receive(sidecar.PushNotice{Topic: hint.Topic, Version: hint.Version, Kind: hint.Kind, Hint: slices.Clone(hint.Hint)})
 	}
+	return self.settle(t, testPublisherTimeout)
+}
+
+// Waits until the pass that took key-packages-low's wake, which a test sends last, has finished, so every
+// wake and any resync the notices before it asked for has run, and answers them. timeout, real time,
+// only fails a test that would otherwise hang.
+func (self *testGkmIntake) settle(t *testing.T, timeout time.Duration) (wakes []*sidecar.GkmHintWake, resyncCount int) {
+	t.Helper()
 	var lowPassCount int
 	select {
 	case lowPassCount = <-self.lowPasses:
-	case <-time.After(testPublisherTimeout):
+	case <-time.After(timeout):
 		t.Fatal("the intake never took key-packages-low's wake")
 	}
-	guard := time.After(testPublisherTimeout)
+	guard := time.After(timeout)
 	for {
 		passCount, changed := self.hints.Passes()
 		if lowPassCount < passCount {
@@ -185,35 +196,251 @@ func TestPublisherKeepsDistinctGkmWorkHintsOfOneBatch(t *testing.T) {
 		t.Errorf("stats %+v", stats)
 	}
 
-	wakes, resyncCount := newTestGkmIntake(t).take(t, hints)
+	wakes, resyncCount := newTestGkmIntake(t, nil).take(t, hints)
 	if resyncCount != 0 {
 		t.Errorf("the intake resynced %d times", resyncCount)
 	}
-	type wakeKey struct {
-		kind      protocol.GkmHintKind
-		groupId   sidecar.Id
-		recipient string
-	}
-	got := map[wakeKey]bool{}
-	for _, wake := range wakes {
-		key := wakeKey{kind: wake.Kind, recipient: wake.Recipient}
-		if wake.GroupId != nil {
-			key.groupId = *wake.GroupId
-		}
-		got[key] = true
-	}
-	for _, want := range []wakeKey{
+	expectGkmWakes(t, wakes, []testGkmWakeKey{
 		{kind: protocol.GkmHintKind_GKM_HINT_WRAP_PENDING, groupId: groupId, recipient: recipient},
 		{kind: protocol.GkmHintKind_GKM_HINT_WRAP_PENDING, groupId: otherGroupId, recipient: recipient},
 		{kind: protocol.GkmHintKind_GKM_HINT_PENDING, groupId: groupId},
 		{kind: protocol.GkmHintKind_GKM_HINT_KEY_PACKAGES_LOW},
-	} {
-		if !got[want] {
-			t.Errorf("no wake of %v: %d wakes", want, len(wakes))
+	})
+}
+
+// What a wake names: its kind, group and recipient, which the intake coalesces wakes by.
+type testGkmWakeKey struct {
+	kind      protocol.GkmHintKind
+	groupId   sidecar.Id
+	recipient string
+}
+
+// Fails unless wakes are want, one wake each.
+func expectGkmWakes(t *testing.T, wakes []*sidecar.GkmHintWake, want []testGkmWakeKey) {
+	t.Helper()
+	keyCounts := map[testGkmWakeKey]int{}
+	for _, wake := range wakes {
+		key := testGkmWakeKey{kind: wake.Kind, recipient: wake.Recipient}
+		if wake.GroupId != nil {
+			key.groupId = *wake.GroupId
+		}
+		keyCounts[key] += 1
+	}
+	for _, key := range want {
+		if keyCounts[key] != 1 {
+			t.Errorf("%d wakes of %v, want 1", keyCounts[key], key)
 		}
 	}
-	if len(wakes) != 4 {
-		t.Errorf("%d wakes, want 4", len(wakes))
+	if len(wakes) != len(want) {
+		t.Errorf("%d wakes, want %d", len(wakes), len(want))
+	}
+}
+
+// How long a Net test waits for any one step before it fails: the Net's push tests' bound, since a whole
+// Net is slower than a fake resident under load. Real time, only ever a failure's bound.
+const testPublisherNetTimeout = 45 * time.Second
+
+// One client on T2's Net (Q-TEST-1) with its resident's own publisher started on a clock only the test
+// moves and its reset taken, so hints written as owners write them, on the Net's FakeRedis, go from
+// ControlId over the connect transport to the client's PushClient. The push's start refetch is refused
+// and retried only once the test has subscribed, so no versions page read after the hints raises their
+// topic past them, which would have the client take them as stale.
+type testPublisherNet struct {
+	laptop         *sidecartest.SubprotocolSidecar
+	writer         *pushservice.HintWriter
+	settings       *pushservice.SidecarPublisherSettings
+	publisherClock *sidecartest.FakeClock
+}
+
+// subscribe runs on the client before its resident starts, so it misses nothing the resident sends.
+func newTestPublisherNet(t *testing.T, subscribe func(laptop *sidecartest.SubprotocolSidecar)) *testPublisherNet {
+	t.Helper()
+	ctx := t.Context()
+	net := sidecartest.NewNet(ctx, nil)
+	t.Cleanup(net.Close)
+	refused, err := net.Faults().Add(&sidecartest.FaultPlan{Op: sidecartest.FaultOpHttp, KeyPrefix: "/sidecar/sync/versions", Result: sidecartest.FailBeforeApply})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sidecars, _, err := net.AddSubprotocolSidecars("laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	laptop := sidecars[0]
+	cores := make(chan sidecar.PushNotice, 16)
+	removeCore, err := laptop.Subprotocol().Subscribe(sidecar.PushTopicCore, func(notice sidecar.PushNotice) {
+		select {
+		case cores <- notice:
+		default:
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer removeCore()
+	subscribe(laptop)
+	resident, err := net.AddResident(laptop.ClientId())
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-refused:
+	case <-time.After(testPublisherNetTimeout):
+		t.Fatal("the push's start refetch never reached the api")
+	}
+	// The Net's clock stands where it stood at the refusal, so the retry's timer is at a time known here.
+	// Once it is set, the clock goes to it, the nearest timer the sidecar sets within RetryMaxInterval, and
+	// on until the retried page's core notice: the client then holds every version the owners wrote.
+	netClock := net.Clock()
+	retryTime := netClock.Now().Add(sidecar.DefaultPushClientSettings().RetryMinInterval)
+	guard := time.After(testPublisherNetTimeout)
+	for {
+		pending, added := netClock.WatchTimers()
+		if slices.ContainsFunc(pending, retryTime.Equal) {
+			break
+		}
+		select {
+		case <-added:
+		case <-guard:
+			t.Fatalf("no retry timer at %s: %v", retryTime, pending)
+		}
+	}
+	stepLimit := netClock.Now().Add(sidecar.DefaultPushClientSettings().RetryMaxInterval)
+	for refetched := false; !refetched; {
+		pending, added := netClock.WatchTimers()
+		if 0 < len(pending) && !pending[0].After(stepLimit) {
+			netClock.AdvanceTo(pending[0])
+			continue
+		}
+		select {
+		case notice := <-cores:
+			refetched = notice.Resync
+		case <-added:
+		case <-guard:
+			t.Fatal("the push's retried refetch never came")
+		}
+	}
+
+	settings := pushservice.DefaultSidecarPublisherSettings()
+	publisherClock := sidecartest.NewFakeClock(netClock.Now())
+	if _, err := resident.StartPublisher(settings, publisherClock); err != nil {
+		t.Fatal(err)
+	}
+	// its reset, of an empty ver, reaches the client before any hint is written
+	awaitCtx, awaitCancel := context.WithTimeout(ctx, testPublisherNetTimeout)
+	defer awaitCancel()
+	if err := resident.AwaitAcked(awaitCtx, 1); err != nil {
+		t.Fatal(err)
+	}
+	writer, err := net.HintWriter()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &testPublisherNet{laptop: laptop, writer: writer, settings: settings, publisherClock: publisherClock}
+}
+
+// Writes one hint for the client as an owner would.
+func (self *testPublisherNet) hint(t *testing.T, hint *sidecar.ClientHint) *pushservice.PushHintResult {
+	t.Helper()
+	result, err := self.writer.HintClient(t.Context(), self.laptop.ClientId(), hint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result
+}
+
+// Moves the publisher's clock past the window it waits out after its reset, so the read past it takes
+// every hint written since as one batch.
+func (self *testPublisherNet) passWindow(t *testing.T) {
+	t.Helper()
+	windowTime := self.publisherClock.Now().Add(self.settings.HintCoalesceTimeout)
+	guard := time.After(testPublisherNetTimeout)
+	for {
+		pending, added := self.publisherClock.WatchTimers()
+		if slices.ContainsFunc(pending, windowTime.Equal) {
+			break
+		}
+		select {
+		case <-added:
+		case <-guard:
+			t.Fatalf("no window timer at %s: %v", windowTime, pending)
+		}
+	}
+	self.publisherClock.Advance(self.settings.HintCoalesceTimeout)
+}
+
+// The same two late asks end to end on T2's Net, taken by a GkmHints intake subscribed on the client's
+// Subprotocol, which wakes each ask's delivery by its group and recipient and asks no resync.
+func TestPublisherDistinctGkmWorkHintsReachTheClientsIntake(t *testing.T) {
+	var intake *testGkmIntake
+	env := newTestPublisherNet(t, func(laptop *sidecartest.SubprotocolSidecar) {
+		intake = newTestGkmIntake(t, laptop.Subprotocol().Subscribe)
+	})
+	groupId, otherGroupId := sidecar.NewId(), sidecar.NewId()
+	recipient := testGkmRecipient(sidecar.NewId())
+	for _, body := range [][]byte{
+		testGkmHintBody(t, protocol.GkmHintKind_GKM_HINT_WRAP_PENDING, &groupId, recipient),
+		testGkmHintBody(t, protocol.GkmHintKind_GKM_HINT_WRAP_PENDING, &otherGroupId, recipient),
+		testGkmHintBody(t, protocol.GkmHintKind_GKM_HINT_KEY_PACKAGES_LOW, nil, ""),
+	} {
+		env.hint(t, &sidecar.ClientHint{Topic: sidecar.PushTopicGkm, Version: uint64(env.publisherClock.Now().UnixMicro()), Kind: uint32(protocol.MessageType_GKM_HINT), Body: body})
+	}
+	env.passWindow(t)
+
+	wakes, resyncCount := intake.settle(t, testPublisherNetTimeout)
+	if resyncCount != 0 {
+		t.Errorf("the intake resynced %d times", resyncCount)
+	}
+	expectGkmWakes(t, wakes, []testGkmWakeKey{
+		{kind: protocol.GkmHintKind_GKM_HINT_WRAP_PENDING, groupId: groupId, recipient: recipient},
+		{kind: protocol.GkmHintKind_GKM_HINT_WRAP_PENDING, groupId: otherGroupId, recipient: recipient},
+		{kind: protocol.GkmHintKind_GKM_HINT_KEY_PACKAGES_LOW},
+	})
+}
+
+// Two sock hints for one listener client in one millisecond, as sockets hints two listens revoked at
+// once, end to end on T2's Net: sock is a raised clock (QD-1212), so the second carries the stored
+// version plus one, and both reach the client's sock subscriber with their bytes. While sock was no
+// raised clock, the second carried the stored version, which the client's push machine passes over as
+// stale, so the second listen's revocation never reached it.
+func TestSockHintsOfOneMillisecondBothReachTheClient(t *testing.T) {
+	notices := make(chan sidecar.PushNotice, 16)
+	env := newTestPublisherNet(t, func(laptop *sidecartest.SubprotocolSidecar) {
+		// a subscriber's callback must not block: a full channel is the test's failure, not a wait
+		if _, err := laptop.Subprotocol().Subscribe(sidecar.PushTopicSock, func(notice sidecar.PushNotice) {
+			select {
+			case notices <- notice:
+			default:
+				t.Errorf("the test's notices are full")
+			}
+		}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	version := uint64(env.publisherClock.Now().UnixMilli())
+	bodies := [][]byte{}
+	results := []*pushservice.PushHintResult{}
+	for range 2 {
+		body, err := proto.Marshal(&protocol.SocketHint{Kind: protocol.SocketHintKind_SOCKET_HINT_REVOKED, ListenId: sidecar.NewId().Bytes()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		bodies = append(bodies, body)
+		results = append(results, env.hint(t, &sidecar.ClientHint{Topic: sidecar.PushTopicSock, Version: version, Kind: uint32(protocol.MessageType_SOCKET_HINT), Body: body}))
+	}
+	if results[0].Version != version || results[1].Version != version+1 {
+		t.Fatalf("the hints of %d carry %d and %d, want %d and %d", version, results[0].Version, results[1].Version, version, version+1)
+	}
+	env.passWindow(t)
+	for index, body := range bodies {
+		select {
+		case notice := <-notices:
+			if notice.Resync || notice.Version != results[index].Version || notice.Kind != uint32(protocol.MessageType_SOCKET_HINT) || !slices.Equal(notice.Hint, body) {
+				t.Errorf("notice %d is %+v, want version %d with bytes %x", index, notice, results[index].Version, body)
+			}
+		case <-time.After(testPublisherNetTimeout):
+			t.Fatalf("notice %d never came", index)
+		}
 	}
 }
 

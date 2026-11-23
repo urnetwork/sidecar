@@ -1659,11 +1659,12 @@ const (
 // without its key, which asks again, so the next ask goes as soon as the interval lets it (DESIGN-DETAILS 6.2.4's
 // asker row: with since its first ask, at most once a LateAskInterval, which gkm reads to widen its hint to other
 // holders after its LateAskWidenAge) and not at whatever next syncs the repo, which may be the hourly resync. An ask's
-// wrap-pending hint is lossy: a holder's push batch carries one hint of the per-client gkm topic with its bytes, the
-// batch's last, so asks that reach a holder together, two repos' asks at one sync, leave the earlier ones a resync
-// there, and a resync delivers to the holders that joined since a claim (answerLateInFlow), not to one the claim held
-// whose rotator passed it for want of a ReaderKey, as a re-former's rotation passes a device that published its key
-// late: that holder's asks alone bring its delivery. One follow-up runs a repo at a time, an ask made meanwhile
+// wrap-pending hint is lossy: a holder's push batch keeps the bytes of each distinct hint of its per-client gkm topic
+// only up to the topic's TopicHintBodyCount (pushservice's publisher), a reset carries no hint's bytes, and gkm, its
+// host's client lookup or Redis may lose one, each leaving the ask a resync at that holder, and a resync delivers to
+// the holders that joined since a claim (answerLateInFlow), not to one the claim held whose rotator passed it for want
+// of a ReaderKey, as a re-former's rotation passes a device that published its key late: that holder's asks alone
+// bring its delivery. One follow-up runs a repo at a time, an ask made meanwhile
 // following on in it. The follow-ups of an ask end once its first is a ResyncInterval old, from when the resyncs ask,
 // or a LateAskInterval old where that is longer, so a lost hint is asked again once at least: neither the follow-up
 // nor an ask its last sync makes starts another past that age. None runs without hints attached, where the caller's
