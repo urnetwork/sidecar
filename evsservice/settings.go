@@ -44,6 +44,15 @@ type EvsSettings struct {
 	// How long a repo/ read stays cached in a process: §11.8 step 4's "cached at most 5 s". At most RepoCacheMaxTtl;
 	// non-positive caches nothing, every read going to the cluster.
 	RepoCacheTtl time.Duration
+	// How long a repo/ read showing a state its creation leaves within moments stays cached: keying, which the
+	// creator's activation ends right after KF1's deliveries, and no repo/ yet, which the creator's PUT writes right
+	// after place/. A request judged against either after the change would be refused for the rest of RepoCacheTtl:
+	// a push right after the activation, on another process that read repo/ keying, 409 REPO_KEYING, recorded, and the
+	// activation, on a process that read a reader's 404 between place/ and repo/, 404. Its default 0, so the window
+	// does not occur: each request to a repo in its creation reads repo/ as it issues, a creation's few. At most
+	// RepoCacheTtl; non-positive caches neither. Whatever it is, a push records no refusal on a keying or deleted
+	// repo/ the cache answered (push.go's restsOnCache).
+	RepoKeyingCacheTtl time.Duration
 	// The most repo/ objects one process caches; past it one is evicted. Non-positive caches none.
 	RepoCacheCount int
 
@@ -387,6 +396,7 @@ func DefaultEvsSettings() *EvsSettings {
 		InstanceFormat:              sidecar.EvsRepoFormat2,
 		RepoCacheMaxTtl:             5 * time.Second,
 		RepoCacheTtl:                5 * time.Second,
+		RepoKeyingCacheTtl:          0,
 		RepoCacheCount:              100 * 1000,
 		PriceBlockByteCount:         4 * 1024,
 		RequestBodyMaxByteCount:     16 * 1024 * 1024,
@@ -551,6 +561,9 @@ func (self *EvsSettings) Validate() error {
 	}
 	if self.RepoCacheMaxTtl < self.RepoCacheTtl {
 		return fmt.Errorf("%w: repo/ cached %s, past step 4's %s", ErrEvsSettings, self.RepoCacheTtl, self.RepoCacheMaxTtl)
+	}
+	if self.RepoCacheTtl < self.RepoKeyingCacheTtl {
+		return fmt.Errorf("%w: a keying repo/ cached %s, past RepoCacheTtl's %s", ErrEvsSettings, self.RepoKeyingCacheTtl, self.RepoCacheTtl)
 	}
 	if self.Place.NotFoundTtl < 0 {
 		return fmt.Errorf("%w: a negative place/ 404 ttl", ErrEvsSettings)
