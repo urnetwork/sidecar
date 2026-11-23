@@ -25,7 +25,7 @@
 //
 // A head that holds no bridge block, an older network's or one bootstrapped before the bridge shipped, gets the
 // network's first from this writer's next head, whatever saves it, and a block whose signer no longer stands is signed
-// again there, through BridgeBlock (§17.4's first block row; QD-1205).
+// again there, through BridgeBlock, whichever head and bases carried it since (§17.4's first block row; QD-1205).
 //
 // It signs heads, bases and that block only; statements are CORE's acts (C-01). The clock, the delay's randomness and
 // the block's draw come through ConfigWriterSettings, so a test steers all three. Every leg, no connect type. Safe for
@@ -189,11 +189,10 @@ func DefaultConfigWriterSettings() *ConfigWriterSettings {
 type ConfigBridgeFold func(previous *ConfigHead, state *ConfigState, foldedThrough uint64, entryTimeMs func(n uint64) (int64, bool)) (*BridgeLedgerFold, error)
 
 // The network's bridge block on a head a writer's plan is about to save (§17.4's first block row; QD-1205): head with
-// the network's first block drawn with random where it holds none, or with the block inForce carries signed again
-// where that block's signer no longer stands, each signed by sign and only where readers at state take sign's block;
-// head itself otherwise. inForce is the head the newest base names when the plan stands on it, nil while a newer head
-// waits for its base. WithBridgeBlock is one.
-type ConfigBridgeBlock func(state *ConfigState, inForce *ConfigHead, head *ConfigHead, sign ConfigSignFunction, random io.Reader) (*ConfigHead, error)
+// the network's first block drawn with random where it holds none, or with the block every reader of state's newest
+// base holds signed again where head carries its record and that record's signer no longer stands, each signed by sign
+// and only where readers at state take sign's block; head itself otherwise. WithBridgeBlock is one.
+type ConfigBridgeBlock func(state *ConfigState, head *ConfigHead, sign ConfigSignFunction, random io.Reader) (*ConfigHead, error)
 
 // What a ConfigWriter runs on.
 type ConfigWriterArgs struct {
@@ -460,13 +459,7 @@ func (self *ConfigWriter) plan(ctx context.Context, previous *configWriterPlan, 
 		}
 	}
 	if self.args.BridgeBlock != nil {
-		// the head read is the one the newest base names, whose records every reader judged there, unless a newer one
-		// waits for its base
-		var inForce *ConfigHead
-		if version == base.GetConfigVersion() {
-			inForce = head
-		}
-		if next, err = self.args.BridgeBlock(state, inForce, next, self.args.Sign, self.settings.BridgeBlockRandom); err != nil {
+		if next, err = self.args.BridgeBlock(state, next, self.args.Sign, self.settings.BridgeBlockRandom); err != nil {
 			return nil, err
 		}
 	}

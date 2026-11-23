@@ -285,6 +285,8 @@ func (self *ConfigLog) startAtBase(entries []*bridge.AuthEntry, chains [][sha256
 			// the sidecars b's tail admits, b's own signer among them where it pushed the head b names; the head reader
 			// reads only the genesis and those keys
 			Anchor: rebuilt,
+			// and at which this reader judges the head's bridge block as one a head first holds (QD-1205)
+			AnchorState: rebuilt,
 		})
 		if errors.Is(err, ErrConfigHeadUnavailable) {
 			return err

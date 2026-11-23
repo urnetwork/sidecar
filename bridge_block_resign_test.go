@@ -2,9 +2,11 @@
 
 // QD-1205 on the test network. A reader that holds a bridge block keeps it from a head that carries its record byte for
 // byte once the record's signer is revoked, raising nothing, and judges every other record as before. A writer's next
-// head signs again the block the head in force carries once its signer no longer stands, where every reader took that
-// record at the newest base, and leaves alone a record no reader took there, a head waiting for its base, a record the
-// head being saved replaces, and a block its own signature could not carry.
+// head signs again the block of the record every reader of the newest base holds once its signer no longer stands,
+// whichever base carried it there, and leaves alone a record readers do not hold, a record the head being saved
+// replaces, and a block its own signature could not carry. The test network's log opens no head, so the record its
+// readers hold is set on the state here, as a full reader's head check sets it (bridge_block_resign_carry_test.go runs
+// that through real bases).
 
 package sidecar
 
@@ -76,11 +78,23 @@ func TestAReaderKeepsTheBridgeBlockRecordItHoldsOnceItsSignerIsRevoked(t *testin
 	}
 }
 
-// The head in force carries the laptop's block, which every reader took at the newest base; once the laptop is revoked
-// the owner's writer signs the same block again, which a reader with no block takes. The writer leaves the head as it is
-// with no head in force (one waiting for its base), where the head being saved carries another record, where no reader
-// took the record at the newest base (the base after the revocation, a member's record), and for a signer whose block
-// readers refuse, reading no randomness on any path.
+// state with record as the BridgeBlock its newest base's readers hold, nil for none, as a full reader's head check
+// leaves it.
+func testResignHolding(state *ConfigState, record []byte) *ConfigState {
+	holding := configCopyState(state)
+	holding.bridgeBlockRecordSha256 = nil
+	if record != nil {
+		digest := sha256.Sum256(record)
+		holding.bridgeBlockRecordSha256 = digest[:]
+	}
+	return holding
+}
+
+// Every reader holds the laptop's block; once the laptop is revoked the owner's writer signs the same block again,
+// which a reader with no block takes, and again after a base its revocation lands before, whoever published that. The
+// writer leaves the head as it is where readers hold no record (a rows-only state's, or one a head first holds), where
+// the head being saved carries another record than the one held, a member's of the same block among them, where the
+// record held still stands, and for a signer whose block readers refuse, reading no randomness on any path.
 func TestAWriterReSignsTheBridgeBlockItsSignerNoLongerStandsFor(t *testing.T) {
 	net, laptop, held, record, head := testResignWorld(t, 76)
 	if verdict := net.fold(net.owner, net.n, 2); !verdict.Accepted() {
@@ -88,54 +102,62 @@ func TestAWriterReSignsTheBridgeBlockItsSignerNoLongerStandsFor(t *testing.T) {
 	}
 	member := net.admitMemberDevice("plain")
 	net.mustPost(net.owner, bridge.SignedType_SIGNED_SIDECAR_REVOKE, net.revocation(laptop, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_LOST))
-	state := net.log.State()
+	state := testResignHolding(net.log.State(), record)
 	noDraw := iotest.ErrReader(errors.New("no draw"))
 
 	if _, err := ReadBridgeBlock(head, state, nil); !errors.Is(err, ErrBridgeBlockRefused) {
 		t.Fatalf("a reader with no block, the laptop revoked: %v", err)
 	}
-	resigned, err := WithBridgeBlock(state, head, head, testFirstBlockSign(net.owner), noDraw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	block, err := ReadBridgeBlock(resigned, state, nil)
-	signed := &bridge.Signed{}
-	if err != nil || !proto.Equal(block, held) || bytes.Equal(resigned.File(ConfigHeadBridgeBlockPath), record) ||
-		proto.Unmarshal(resigned.File(ConfigHeadBridgeBlockPath), signed) != nil || !bytes.Equal(signed.GetSignerId(), net.owner.sidecarId.Bytes()) {
-		t.Fatalf("the re-signed block %v, by %x: %v", block, signed.GetSignerId(), err)
-	}
-
-	unchanged := func(name string, inForce *ConfigHead, saving *ConfigHead, state *ConfigState, signer testConfigDevice) {
+	resigned := func(name string, state *ConfigState) {
 		t.Helper()
-		next, err := WithBridgeBlock(state, inForce, saving, testFirstBlockSign(signer), noDraw)
+		next, err := WithBridgeBlock(state, head, testFirstBlockSign(net.owner), noDraw)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		block, err := ReadBridgeBlock(next, state, nil)
+		signed := &bridge.Signed{}
+		if err != nil || !proto.Equal(block, held) || bytes.Equal(next.File(ConfigHeadBridgeBlockPath), record) ||
+			proto.Unmarshal(next.File(ConfigHeadBridgeBlockPath), signed) != nil || !bytes.Equal(signed.GetSignerId(), net.owner.sidecarId.Bytes()) {
+			t.Fatalf("%s: the re-signed block %v, by %x: %v", name, block, signed.GetSignerId(), err)
+		}
+	}
+	resigned("the laptop revoked", state)
+
+	unchanged := func(name string, saving *ConfigHead, state *ConfigState, signer testConfigDevice) {
+		t.Helper()
+		next, err := WithBridgeBlock(state, saving, testFirstBlockSign(signer), noDraw)
 		if err != nil || !bytes.Equal(next.File(ConfigHeadBridgeBlockPath), saving.File(ConfigHeadBridgeBlockPath)) {
 			t.Errorf("%s: the head's block changed: %v", name, err)
 		}
 	}
-	unchanged("no head in force", nil, head, state, net.owner)
+	unchanged("a record readers do not hold", head, testResignHolding(state, nil), net.owner)
+	unchanged("a rows-only state", head, net.log.State(), net.owner)
 	replaced, err := head.WithFile(ConfigHeadBridgeBlockPath, net.sign(laptop, bridge.SignedType_SIGNED_BRIDGE_BLOCK, testFirstBlock(77)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	unchanged("a head replacing the record in force", head, replaced, state, net.owner)
+	unchanged("a head replacing the record held", replaced, state, net.owner)
 	memberHead, err := testConfigHead(t, net).WithFile(ConfigHeadBridgeBlockPath, net.sign(member, bridge.SignedType_SIGNED_BRIDGE_BLOCK, held))
 	if err != nil {
 		t.Fatal(err)
 	}
-	unchanged("a member's record no reader took", memberHead, memberHead, state, net.owner)
-	unchanged("a member's writer", head, head, state, member)
+	unchanged("a member's record of the block held", memberHead, state, net.owner)
+	unchanged("a member's writer", head, state, member)
+
+	// a base after the revocation carries the record on, as a Network admin's writer's, which cannot re-sign it, would
 	if verdict := net.fold(net.owner, net.n, 3); !verdict.Accepted() {
 		t.Fatalf("the base after the revocation: %v", verdict.Refusal)
 	}
-	unchanged("a record refused at the newest base", head, head, net.log.State(), net.owner)
+	resigned("after a base the revocation lands before", testResignHolding(net.log.State(), record))
 
 	// a held record its signer still stands for is left alone, and a blockless head still draws
-	standing, err := testConfigHead(t, net).WithFile(ConfigHeadBridgeBlockPath, net.sign(net.owner, bridge.SignedType_SIGNED_BRIDGE_BLOCK, held))
+	standingRecord := net.sign(net.owner, bridge.SignedType_SIGNED_BRIDGE_BLOCK, held)
+	standing, err := testConfigHead(t, net).WithFile(ConfigHeadBridgeBlockPath, standingRecord)
 	if err != nil {
 		t.Fatal(err)
 	}
-	unchanged("a record that stands", standing, standing, net.log.State(), net.owner)
-	drawn, err := WithBridgeBlock(net.log.State(), nil, testConfigHead(t, net), testFirstBlockSign(net.owner), rand.NewChaCha8(sha256.Sum256([]byte("resign draw"))))
+	unchanged("a record that stands", standing, testResignHolding(net.log.State(), standingRecord), net.owner)
+	drawn, err := WithBridgeBlock(net.log.State(), testConfigHead(t, net), testFirstBlockSign(net.owner), rand.NewChaCha8(sha256.Sum256([]byte("resign draw"))))
 	if err != nil || drawn.File(ConfigHeadBridgeBlockPath) == nil {
 		t.Fatalf("a blockless head drew no block: %v", err)
 	}

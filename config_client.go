@@ -275,6 +275,9 @@ type configVerifiedHead struct {
 	// holds beside the records, so its next base keeps a record that head carries (QD-1207)
 	settingsRecordSha256        []byte
 	versioningRulesRecordSha256 []byte
+	// SHA-256 of the BridgeBlock record this device held from that base on, nil for none, which a state the head
+	// anchors holds, so a restart keeps a block it held whose signer no longer stands (QD-1205)
+	bridgeBlockRecordSha256 []byte
 }
 
 // Holds the decrypted head with the version and digest the client verified for offline policy tests.
@@ -1289,6 +1292,7 @@ func (self *configClientRowsSource) CheckHead(check *ConfigHeadCheck) (*ConfigHe
 					recoveryBodies:              verified.recoveryBodies,
 					settingsRecordSha256:        bytes.Clone(verified.settingsRecordSha256),
 					versioningRulesRecordSha256: bytes.Clone(verified.versioningRulesRecordSha256),
+					bridgeBlockRecordSha256:     bytes.Clone(verified.bridgeBlockRecordSha256),
 				}, nil
 			}
 		}
@@ -1336,6 +1340,7 @@ func (self *ConfigClient) rememberHead(headSha256 []byte, configVersion uint64, 
 		recoveryKnown:               recoveryKnown,
 		settingsRecordSha256:        bytes.Clone(facts.settingsRecordSha256),
 		versioningRulesRecordSha256: bytes.Clone(facts.versioningRulesRecordSha256),
+		bridgeBlockRecordSha256:     bytes.Clone(facts.bridgeBlockRecordSha256),
 	}
 }
 

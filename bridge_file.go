@@ -285,7 +285,8 @@ type bridgeFileView struct {
 	state  *ConfigState
 	head   *ConfigHead
 	ledger *BridgeLedger
-	// nil before a head carries one, or while the head's is refused
+	// the block readers hold from the head (readBridgeBlockInForce): nil before a head carries one, or while the head's
+	// is refused
 	block *bridge.BridgeBlock
 	self  Id
 }
@@ -327,8 +328,9 @@ func (self *BridgeFiler) view(ctx context.Context) (*bridgeFileView, error) {
 	}
 	view.ledger = ledger
 	if view.head != nil {
-		// a refused block leaves none, so nothing that needs one is filed (D-BRIDGE-16)
-		if block, err := ReadBridgeBlock(view.head, state, nil); err == nil {
+		// the block readers hold, though its signer stopped standing since they took it (QD-1205); a refused block
+		// leaves none, so nothing that needs one is filed (D-BRIDGE-16)
+		if block, err := readBridgeBlockInForce(view.head, state); err == nil {
 			view.block = block
 		}
 	}
