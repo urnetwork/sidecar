@@ -132,8 +132,7 @@ func TestCheckRepoMemberOwnerBoundTakesOnlyConsentedDevicesAndShares(t *testing.
 	}
 
 	// the owner's OwnerConfirm, which the next base's compile lists among the consented devices, admits it
-	fixture.admission(adminAdmitted).Row.OwnerConfirmSigner = laptop.Bytes()
-	fixture.admission(adminAdmitted).Row.OwnerConfirmedAt = fixture.next()
+	fixture.confirm(adminAdmitted, configConfirmOwner, laptop.Bytes())
 	vault.ConsentedSidecarIds = append(vault.ConsentedSidecarIds, adminAdmitted.Bytes())
 	if decision := fixture.state(t).CheckRepoMember(vaultId, aclTestLeaf(adminAdmitted), aclTestNow); !decision.Allowed {
 		t.Errorf("the confirmed device: %+v", decision)
