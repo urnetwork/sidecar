@@ -1,11 +1,11 @@
 // QD-1178's unjudged statements held to what needs no state at their pin: a statement pinned before what the reader
 // retains is not judged at a state the reader no longer holds, and is still held to every rule of §11.8's refs table
-// that refuses it whatever rights its signer held at that pin (evsCheckRefRulesUnjudged). A deposit or erasure ref whose
-// id is not derived as the rules say, a deposit another sidecar signed, a CONSUME or BASE that writes, an owned ref
-// another sidecar signed outside an admin's BASE or CLOSURE of a stream, and a creates-only ref's removal or write on a
-// base refuse as they do at a judged pin, on the stand-in config and on a new device whose log starts at the newest
-// base. The rules that ask the signer a right at its pin, who writes the repo and who administers it, are not judged, so
-// a statement only they refuse reads, and a well-formed statement reads, on a walk as alone.
+// that refuses it whatever rights its signer held at that pin (QD-1221; evsCheckRefRulesUnjudged). A deposit or
+// erasure ref whose id is not derived as the rules say, a deposit another sidecar signed, a CONSUME or BASE that
+// writes, an owned ref another sidecar signed outside an admin's BASE or CLOSURE of a stream, and a creates-only ref's
+// removal or write on a base refuse as they do at a judged pin, on the stand-in config and on a new device whose log
+// starts at the newest base. The rules that ask the signer a right at its pin, who writes the repo and who administers
+// it, are not judged, so a statement only they refuse reads, and a well-formed statement reads, on a walk as alone.
 
 package sidecar
 
@@ -45,12 +45,12 @@ func evsTestRefusedFor(err error, want string) bool {
 }
 
 // Each rule of the refs table a statement read alone meets, through VerifyStatement on the stand-in config, judged at
-// the statement's pin and unjudged (QD-1178): a rule that refuses whatever rights the signer held there refuses both
-// ways, in the same words, and one that asks the signer a right there refuses only judged. An admin's BASE of its own
-// stream that creates is the one rule that turns on admin both ways, removals alone for an admin and creations alone for
-// anyone else, so unjudged it is refused only where both refuse. The signers: a stream owner and a writer, which write
-// the repo, an admin, which writes and administers it, and an outsider and two depositors, which the state admits and
-// gives no right.
+// the statement's pin and unjudged (QD-1178, QD-1221): a rule that refuses whatever rights the signer held there
+// refuses both ways, in the same words but for a repo the state holds no row of, and one that asks the signer a right
+// there refuses only judged. An admin's BASE of its own stream that creates is the one rule that turns on admin both
+// ways, removals alone for an admin and creations alone for anyone else, so unjudged it is refused only where both
+// refuse. The signers: a stream owner and a writer, which write the repo, an admin, which writes and administers it,
+// and an outsider and two depositors, which the state admits and gives no right.
 func TestEvsUnjudgedStatementHeldToTheRefRulesNoRightExcuses(t *testing.T) {
 	world := newEvsTestWorld(t)
 	owner, admin, writer := newEvsTestSigner("stream owner"), newEvsTestSigner("repo admin"), newEvsTestSigner("writer")
