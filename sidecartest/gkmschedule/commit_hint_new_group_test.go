@@ -33,8 +33,9 @@ import (
 
 // A KeyDelivery world of a general repo at generation 2: a, its creator and admin, and b, writers, c a read_only reader
 // and the agent d, each of b, c and d holding generation 2 by its delivery and its hint intake attached, whose resync
-// falls a day on, so none runs within a case. gkm probes its stores once, so a case that moves the clock never finds
-// a probe in flight past its timeout, which would read the stores as unreachable.
+// falls a day on, so none runs within a case. With config, the network's config repo too, which a writes and every
+// device holds beside the repo. gkm probes its stores once, so a case that moves the clock never finds a probe in
+// flight past its timeout, which would read the stores as unreachable.
 type hintedReformWorld struct {
 	world      *FsKeysWorld
 	reformer   *FsKeysDevice
@@ -45,13 +46,23 @@ type hintedReformWorld struct {
 	hints      map[*FsKeysDevice]*sidecar.GkmHints
 }
 
-func newHintedReformWorld(t *testing.T) *hintedReformWorld {
+func newHintedReformWorld(t *testing.T, config bool) *hintedReformWorld {
 	world := NewFsKeysWorld(t, protocol.RepoKind_REPO_KIND_GENERAL)
 	ctx, cancel := context.WithTimeout(world.Ctx, 30*time.Second)
 	t.Cleanup(cancel)
 	world.Ctx = ctx
-	world.Reconfigure(func(settings *gkmservice.GkmServiceSettings) { settings.DraftMls = false })
-	probeStoresOnce(t, world)
+	// one gkm instance in the first's place, KeyDelivery and probing its stores once, made only once the first has
+	// probed: every instance shares the world's settings, and its probe loop reads them after each probe, so a change
+	// before the first probe has ended races that read
+	awaitStoreProbe(t, world)
+	world.Reconfigure(func(settings *gkmservice.GkmServiceSettings) {
+		settings.DraftMls = false
+		settings.StoreProbeInterval = 0
+	})
+	awaitStoreProbe(t, world)
+	if !world.Engine.Ready() {
+		t.Fatal("gkm reads its stores as unreachable")
+	}
 	self := &hintedReformWorld{world: world, hints: map[*FsKeysDevice]*sidecar.GkmHints{}}
 	self.reformer = world.AddMember("a", false)
 	self.writer = world.AddMember("b", false)
@@ -60,8 +71,14 @@ func newHintedReformWorld(t *testing.T) *hintedReformWorld {
 	world.Grant(true, self.reformer, self.writer)
 	world.Grant(false, self.reader, self.agent)
 	world.Creator(self.reformer)
+	if config {
+		world.ConfigWriters(self.reformer)
+	}
 	world.Advance()
 	world.Publish()
+	if config {
+		world.CreateConfig(self.reformer)
+	}
 	world.Create(self.reformer)
 	self.oldGroupId = world.GroupId
 	if key, err := self.reformer.Client.RotateRepo(world.Ctx, world.RepoId); err != nil || key.Generation() != 2 {
@@ -71,6 +88,12 @@ func newHintedReformWorld(t *testing.T) *hintedReformWorld {
 	for _, device := range self.members() {
 		world.Again(device.Label+"'s sync to generation 2", func() error { return device.Client.SyncRepo(world.Ctx, world.RepoId) })
 		awaitHoldsGeneration(t, world, device, second)
+		if config {
+			world.Again(device.Label+"'s sync of the config", func() error { return device.Client.SyncRepo(world.Ctx, world.ConfigRepoId) })
+			if held, _ := device.Client.RepoKeyHeld(world.ConfigRepoId); !held {
+				t.Fatalf("%s holds no generation of the config", device.Label)
+			}
+		}
 		hintsSettings := sidecar.DefaultGkmSettings()
 		hintsSettings.ResyncInterval = 24 * time.Hour
 		hints, err := sidecar.NewGkmHints(world.Ctx, &sidecar.GkmHintsArgs{Settings: hintsSettings, Clock: world.Clock})
@@ -82,6 +105,23 @@ func newHintedReformWorld(t *testing.T) *hintedReformWorld {
 		self.hints[device] = hints
 	}
 	return self
+}
+
+// Waits until the gkm instance standing has finished a probe of its stores, after which its probe loop reads its
+// settings no more until its next probe, which the world's clock holds back.
+func awaitStoreProbe(t *testing.T, world *FsKeysWorld) {
+	t.Helper()
+	for {
+		count, changed := world.Engine.Probes()
+		if 0 < count {
+			return
+		}
+		select {
+		case <-changed:
+		case <-world.Ctx.Done():
+			t.Fatal("gkm never probed its stores")
+		}
+	}
 }
 
 // The members beside the re-former.
@@ -258,7 +298,7 @@ func (self *hintedReformRequests) snapshot() (int, []string) {
 // delivery, with no clock moved, so no resync and no late ask's follow-up brought it, and no alarm raised. Before,
 // each passed the hint over, holding generation 2 of the old group until its next sync.
 func TestCommitHintNamingAReformedGroupHasEveryMemberHoldItsGenerationAtOnce(t *testing.T) {
-	hinted := newHintedReformWorld(t)
+	hinted := newHintedReformWorld(t, false)
 	world := hinted.world
 	startedAt := world.Clock.Now()
 	newGroupId, third := hinted.reform(t)
@@ -292,7 +332,7 @@ func TestCommitHintNamingAReformedGroupHasEveryMemberHoldItsGenerationAtOnce(t *
 // and nothing else: it syncs nothing, follows no form, raises no alarm and keeps its pin. Each next hint's recheck is
 // waited for, so the look before it has ended when its effects are read; a fourth group's closes the third's.
 func TestCommitHintNamingAGroupNoVerifiedFormNamesChangesNothing(t *testing.T) {
-	hinted := newHintedReformWorld(t)
+	hinted := newHintedReformWorld(t, false)
 	world := hinted.world
 	writer := hinted.writer
 	unknownGroupId, unadmittedGroupId, refusedGroupId, closingGroupId := sidecar.NewId(), sidecar.NewId(), sidecar.NewId(), sidecar.NewId()
@@ -386,7 +426,7 @@ func TestCommitHintNamingAGroupNoVerifiedFormNamesChangesNothing(t *testing.T) {
 // moments before serves them, finds no form naming the hinted group and looks once more HintedGroupRecheckWait later,
 // meeting the new form then, and the writer follows it and holds generation 3. Until the recheck it follows nothing.
 func TestCommitHintLookThatMetFormsFromBeforeTheReformFollowsAtItsRecheck(t *testing.T) {
-	hinted := newHintedReformWorld(t)
+	hinted := newHintedReformWorld(t, false)
 	world := hinted.world
 	writer := hinted.writer
 	before, err := writer.Api.Forms(world.Ctx, world.RepoId)
@@ -423,5 +463,56 @@ func TestCommitHintLookThatMetFormsFromBeforeTheReformFollowsAtItsRecheck(t *tes
 	}
 	if formsReads, _ := requests.snapshot(); formsReads < 2 {
 		t.Fatalf("%d forms reads, want the look and its recheck", formsReads)
+	}
+}
+
+// A look stops reading forms once it has followed every group it took: with the config repo held beside the repo, a
+// look for the repo's new group that meets the repo first, in the keychain's order, reads none of the config repo's
+// forms, and one that meets the config repo first reads them once. The look's end barrier says it has ended, so this
+// needs sidecar_testhooks.
+func TestCommitHintLookReadsNoFormsPastTheLastGroupItFollows(t *testing.T) {
+	if !sidecartest.HooksLinked {
+		t.Skip("the look's end barrier needs sidecar_testhooks")
+	}
+	hinted := newHintedReformWorld(t, true)
+	world := hinted.world
+	writer := hinted.writer
+	ended := make(chan struct{}, 16)
+	remove, err := sidecartest.InstallTestHooks(nil, func(name string, key string) {
+		if name == "gkm.hinted_groups.end" {
+			select {
+			case ended <- struct{}{}:
+			default:
+			}
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer remove()
+	newGroupId, third := hinted.reform(t)
+	requests := hinted.watchRequests(writer, nil)
+	hinted.relayGroupCommit(t, writer, newGroupId)
+	select {
+	case <-ended:
+	case <-world.Ctx.Done():
+		t.Fatal("the look never ended")
+	}
+	awaitHoldsGeneration(t, world, writer, third)
+	configFormsRead := "GET /gkm/repos/" + hex.EncodeToString(world.ConfigRepoId.Bytes()) + "/forms"
+	_, others := requests.snapshot()
+	configReads := 0
+	for _, request := range others {
+		if request == configFormsRead {
+			configReads += 1
+		}
+	}
+	// the keychain lists a repo's records under its id in hex, so the look meets the repos in their ids' order
+	wantConfigReads := 0
+	if bytes.Compare(world.ConfigRepoId.Bytes(), world.RepoId.Bytes()) < 0 {
+		wantConfigReads = 1
+	}
+	if configReads != wantConfigReads {
+		t.Fatalf("the look read the config repo's forms %d times, want %d", configReads, wantConfigReads)
 	}
 }

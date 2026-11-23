@@ -223,7 +223,8 @@ func (self *GkmGroupClient) takeCommitHint(ctx context.Context, wake *GkmHintWak
 // client. A re-form of a repo this device holds names a new group, and the claim of its first generation hints the
 // repo's readers on gkm:<new group> alone, so a member that passed the hint over followed the re-form only at its next
 // sync or resync, the hourly one at worst, holding no key of the new group's generations until then. Each pass takes
-// the groups queued and reads the forms of each repo this device holds a group of, once a pass. A repo whose newest
+// the groups queued and reads the forms of each repo this device holds a group of, once a pass, in the keychain's
+// order, until every group it took is followed. A repo whose newest
 // GroupForm names one of them, verifies under its signer's admitted key and re-forms another group, its signer allowed
 // to form the repo's group at the form's pin, is synced at once, as a resync syncs it: the sync follows the form,
 // checking it and the new group's ladder in full (adoptReformInFlow), and takes the new group's generations. A repo a
@@ -269,6 +270,10 @@ func (self *GkmGroupClient) followHintedGroups(ctx context.Context) {
 			}
 			followedGroupIds[groupId] = true
 			self.logFlowError("hinted re-form", self.SyncRepo(ctx, repoId))
+			if len(followedGroupIds) == len(groupIdLooks) {
+				// every group taken is followed: no other repo's forms are read
+				break
+			}
 		}
 		recheck := false
 		func() {
