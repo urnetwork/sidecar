@@ -166,6 +166,13 @@ type fs97World struct {
 
 func newFs97World(t *testing.T) *fs97World {
 	t.Helper()
+	return newFs97WorldOn(t, nil)
+}
+
+// newFs97World, beforeDevice, when not nil, given the Net before the owner's device starts on it, as a schedule that
+// holds the device's own steps arms them.
+func newFs97WorldOn(t *testing.T, beforeDevice func(net *sidecartest.Net)) *fs97World {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), fs97Timeout)
 	t.Cleanup(cancel)
 	net := sidecartest.NewNet(ctx, nil)
@@ -188,6 +195,9 @@ func newFs97World(t *testing.T) *fs97World {
 	suite := sidecartest.NewAdmissionNet(t, tier)
 	t.Cleanup(suite.Close)
 
+	if beforeDevice != nil {
+		beforeDevice(net)
+	}
 	device, err := net.AddSidecarIn("owner desktop", suite.NetworkId(), nil)
 	if err != nil {
 		t.Fatal(err)
