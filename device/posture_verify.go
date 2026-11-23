@@ -7,8 +7,8 @@
 //
 // A base passes as bridge.VerifyBaseKeylessDigest says, signed by a config writer: an AdminSet member's member device,
 // standing and not read_only, by the rows in effect before it, or, for the first base a posture takes, by its own rows;
-// under a state, which vouches for its signer, also under the key its own rows or the state's identities give
-// (QD-1193, posture_apply.go).
+// under a state, which vouches for its signer, also under the key its own rows or the state's identities give, or the
+// key the state says its newest base verified under (QD-1193, QD-1200, posture_apply.go).
 // A statement this role applies as a denial passes on its header, its signer's identity key in the rows and its
 // signer class; the countersignature §7.9's presence row asks for is the compile's to check, so such a statement is
 // Covered. A Delegation and a DelegationRevoke are config.proto's, which this package may not link (§4.4), so their

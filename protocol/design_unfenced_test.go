@@ -645,6 +645,7 @@ var testFenceAdditions = []struct {
 }{
 	{message: "RepoCreate", field: testFenceField{name: "inbox", number: 4, typeName: "RepoInbox"}, question: "plan-MAIL-group-inbox (QD-102)"},
 	{message: "AclRepo", field: testFenceField{name: "inbox", number: 14, typeName: "RepoInbox"}, question: "plan-MAIL-group-inbox (QD-102)"},
+	{message: "BridgeState", field: testFenceField{name: "base_signer_identity_public_key", number: 10, typeName: "bytes"}, question: "posture-later-writer-base-state-names-no-base-signer (QD-1200)"},
 }
 
 // One field an owner's answer takes out of a message the design fences, its number reserved.

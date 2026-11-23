@@ -205,7 +205,12 @@ type ConfigState struct {
 	recoveryBodies    map[Id]*configRecoveryBody
 	// the VersioningRules the base's config head holds, nil for none; known by headSettingsKnown (config_versioning.go)
 	headVersioningRules *protocol.VersioningRules
-	proposals           map[[sha256.Size]byte]*configProposal
+	// SHA-256 of the Signed ServiceSettings and VersioningRules the base's config head holds, verbatim, beside the
+	// parsed records; nil for none, and where no head was opened. A later base's head that carries a record byte for
+	// byte keeps it without its signer judged again (CheckConfigBase; QD-1207).
+	headSettingsRecordSha256        []byte
+	headVersioningRulesRecordSha256 []byte
+	proposals                       map[[sha256.Size]byte]*configProposal
 	// the IndexerSet designations that hold, by subject and scope
 	indexers map[configIndexerKey]*bridge.IndexerRow
 	// §17.8's bridge statements that took effect since the newest base's folded_through, nil for none
@@ -735,6 +740,9 @@ func configCopyState(state *ConfigState) *ConfigState {
 		chainsFrom:          state.chainsFrom,
 		basePins:            state.basePins,
 		history:             state.history,
+
+		headSettingsRecordSha256:        state.headSettingsRecordSha256,
+		headVersioningRulesRecordSha256: state.headVersioningRulesRecordSha256,
 	}
 }
 

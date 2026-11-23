@@ -46,6 +46,10 @@ message BridgeState {
   repeated BridgeIdentity identities = 7;  // the subjects its rules let reach this host (17.9), ~64 B each
   repeated BridgeShareKey share_keys = 8;  // the shares this host serves (17.9)
   repeated string daemon_listeners = 9;    // rule 0 (17.6): the daemon's listener binds, host:port
+  bytes base_signer_identity_public_key = 10;  // the key the newest base verified under, Ed25519, 32 B (QD-1200):
+                                           //   its signer's identity key at S(b-1), b the newest base at or below
+                                           //   auth, which the posture tries for that signer under this state past
+                                           //   the rows' writers and identities (QD-1193); empty before base 1
 }
 
 message BridgeIdentity {

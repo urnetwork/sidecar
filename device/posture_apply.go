@@ -13,8 +13,10 @@
 // knows it; a base whose signer those rows do not name at all, as a writer admitted after them, is followed by its
 // chain alone and waits for a compile, as a base of another config head does, while the denials after it apply under
 // the rows held. Under a state, whose compile judged its run, the signer's identity key may also come from the base's
-// own rows or from the identities the state names, and the signature, prev_chain, rows_sha256 and versions are checked
-// as ever; a state at or past a base the posture followed takes that base.
+// own rows, from the identities the state names, or from the key the state says its newest base verified under at
+// S(b-1) (base_signer_identity_public_key, QD-1200), which covers a signer no rule lets reach this host, one revoked
+// since, and one the tail promoted; and the signature, prev_chain, rows_sha256 and versions are checked as ever. A state
+// at or past a base the posture followed takes that base.
 //
 // Called only with the posture's operationLock held, which is what every *WithLock and postureOperation method
 // assumes.
@@ -693,7 +695,8 @@ func (self *Posture) readEntries(name string, visit func(entryBytes []byte) erro
 // What vouches for a base's signer beyond the config writers in the rows that judge it (QD-1193).
 type postureBaseVouch struct {
 	// A state whose run holds the base, which its compile judged: the base's own rows' config writers vouch for its
-	// signer's key, and past them the identity key the state names for the signer.
+	// signer's key, past them the identity key the state's identities name for the signer, and last the key the state
+	// says its newest base verified under (QD-1200).
 	state *bridge.BridgeState
 	// The key a committed manifest kept for the base, which its signature verified under when it was taken.
 	storedPublicKey []byte
@@ -772,6 +775,10 @@ func (self *Posture) readBase(parsed *postureEntry, rowsRecord string, previous 
 				stateKey = identity.GetIdentityPublicKey()
 			}
 			addCandidate(stateKey)
+			// the key the state's compile says its newest base verified under at S(b-1), its signer's identity key
+			// whether or not a rule lets that signer reach this host and whether or not it stands now (QD-1200); the
+			// base's signature must verify under it as under any other
+			addCandidate(vouch.state.GetBaseSignerIdentityPublicKey())
 		}
 		addCandidate(vouch.storedPublicKey)
 	}
@@ -928,8 +935,9 @@ func postureWaitingAbove(waiting []PostureWaitingEntry, pinN uint64) []PostureWa
 
 // Streams a base's rows from openRows into a new record, hashing and reading has_document as they pass, then checks
 // the base against them: from previous's config writers, or with previous nil its own; under a state, which vouches
-// for its signer (QD-1193), also from its own rows' writers and the key the state names for the signer. Nothing of the
-// rows stays in memory but has_document and the writers' keys.
+// for its signer (QD-1193), also from its own rows' writers, the key the state's identities name for the signer and the
+// key the state says its newest base verified under (QD-1200). Nothing of the rows stays in memory but has_document and
+// the writers' keys.
 func (self *postureOperation) takeBase(parsed *postureEntry, openRows func(rowsSha256 []byte) (io.ReadCloser, error), previous *postureBase) (*postureBase, error) {
 	signed, header, signerId, err := parsePostureBase(parsed.entry)
 	if err != nil {

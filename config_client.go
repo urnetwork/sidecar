@@ -260,6 +260,10 @@ type configVerifiedHead struct {
 	recoveryBodies  map[Id]*configRecoveryBody
 	recoveryKnown   bool
 	versioningRules *protocol.VersioningRules
+	// SHA-256 of the head's Signed ServiceSettings and VersioningRules, nil for none, which a state the head anchors
+	// holds beside the records, so its next base keeps a record that head carries (QD-1207)
+	settingsRecordSha256        []byte
+	versioningRulesRecordSha256 []byte
 }
 
 // Holds the decrypted head with the version and digest the client verified for offline policy tests.
@@ -1199,7 +1203,13 @@ func (self *configClientRowsSource) CheckHead(check *ConfigHeadCheck) (*ConfigHe
 				needsRecovery = needsRecovery || len(member.GetRecoveryKeySha256()) != 0
 			}
 			if verified.recoveryKnown || !needsRecovery {
-				return &ConfigHeadFacts{Settings: verified.settings, VersioningRules: verified.versioningRules, recoveryBodies: verified.recoveryBodies}, nil
+				return &ConfigHeadFacts{
+					Settings:                    verified.settings,
+					VersioningRules:             verified.versioningRules,
+					recoveryBodies:              verified.recoveryBodies,
+					settingsRecordSha256:        bytes.Clone(verified.settingsRecordSha256),
+					versioningRulesRecordSha256: bytes.Clone(verified.versioningRulesRecordSha256),
+				}, nil
 			}
 		}
 	}
@@ -1238,7 +1248,15 @@ func (self *ConfigClient) verifiedHead(headSha256 []byte, configVersion uint64) 
 func (self *ConfigClient) rememberHead(headSha256 []byte, configVersion uint64, facts *ConfigHeadFacts, recoveryKnown bool) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
-	self.verifiedHeads[[sha256.Size]byte(headSha256)] = &configVerifiedHead{configVersion: configVersion, settings: facts.Settings, versioningRules: facts.VersioningRules, recoveryBodies: facts.recoveryBodies, recoveryKnown: recoveryKnown}
+	self.verifiedHeads[[sha256.Size]byte(headSha256)] = &configVerifiedHead{
+		configVersion:               configVersion,
+		settings:                    facts.Settings,
+		versioningRules:             facts.VersioningRules,
+		recoveryBodies:              facts.recoveryBodies,
+		recoveryKnown:               recoveryKnown,
+		settingsRecordSha256:        bytes.Clone(facts.settingsRecordSha256),
+		versioningRulesRecordSha256: bytes.Clone(facts.versioningRulesRecordSha256),
+	}
 }
 
 // HeadCheckAuthSource's ChainAt: A_version as the log keeps it, false before its retention point or past its pin.
