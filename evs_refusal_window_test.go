@@ -12,7 +12,8 @@
 //	           rather than being owed again every ReadRetryWait, and the lb's lost answer is owed again, not a gap
 //
 // Over SidecarApi's own exchange against a scripted api (evs_exchange_refusal_retry_test.go's), the write tests'
-// stand-in evs (evs_plan_test.go) and the subscription tests' lease stand-in (evs_subscribe_test.go).
+// stand-in evs (evs_plan_test.go) and the subscription tests' lease stand-in (evs_subscribe_test.go). The owned ref's
+// queue is evs_local_receive_exchange_hold_test.go's.
 
 package sidecar
 
