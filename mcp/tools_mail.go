@@ -241,7 +241,7 @@ type mcpMailSendIn struct {
 // One recipient's outcome.
 type mcpMailRecipientOut struct {
 	Address string `json:"address"`
-	// delivered, queued, unknown, member_refused, refused, internet_refused, internet_waits or failed
+	// delivered, queued, unknown, refused, internet_refused, internet_waits or failed
 	Outcome string `json:"outcome"`
 }
 

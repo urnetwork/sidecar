@@ -286,7 +286,7 @@ func (self *Sidecar) startGeneration(args *sidecarGenerationArgs) {
 	repostKey := args.identity.SidecarId.String()
 	go func() {
 		defer close(generation.pendingDone)
-		testHookBarrier("sidecar.generation.repost", repostKey)
+		testHookBarrier("sidecar.generation.repost.before", repostKey)
 		err := startPendingsErr
 		if err == nil {
 			err = self.postPendingStatements(generationCtx, startPendings)
@@ -294,6 +294,7 @@ func (self *Sidecar) startGeneration(args *sidecarGenerationArgs) {
 		if err != nil && generationCtx.Err() == nil {
 			self.log.Infof("[identity]pending statements stay pending: %s", err)
 		}
+		testHookBarrier("sidecar.generation.repost.after", repostKey)
 	}()
 	if self.log.V(1).Enabled() {
 		self.log.Infof("[sidecar]generation %d started", generationNumber)

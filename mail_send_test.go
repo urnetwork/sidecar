@@ -1,9 +1,9 @@
 //go:build !sidecar_http && !js && !ios_extension
 
 // MAIL-M7-18's same-network delivery on MAIL-M7-17's client world: two devices of one member, the deposit labeled by
-// its signer's signature and kept as a sent copy, never routed to the internet path; a group's one deposit; another
-// member's mailbox refused closed until plan-MAIL-member-deposit; a mixed list delivering its local part only; a From
-// this device may not send as refused; a forged signer shown as outside mail at ingest; and no address in a log.
+// its signer's signature and kept as a sent copy, never routed to the internet path; a group's one deposit; a mixed
+// list delivering its local part only; a From this device may not send as refused; a forged signer shown as outside
+// mail at ingest; and no address in a log. Mail between members is mail_member_deposit_test.go's.
 
 package sidecar
 
@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/urnetwork/sidecar/protocol"
-	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
 // One deposit a send made.
@@ -258,59 +257,6 @@ func TestMailSendFansOutOneDepositARepo(t *testing.T) {
 	if !slices.Equal(byRepo[groupRepoId], []string{"team@acme.root.example"}) ||
 		!slices.Equal(byRepo[mailboxId], []string{testMailIngestRecipient, "cy@acme.root.example"}) || len(byRepo) != 2 {
 		t.Fatalf("deposits by repo %v", byRepo)
-	}
-}
-
-// Another member's mailbox gives a device no deposit right (§8.5, §8.8), so a send there refuses closed until
-// plan-MAIL-member-deposit's cell lands, while the device's own member's mailbox takes it: at a real state.
-func TestMailSendRefusesAnotherMembersMailboxAtTheState(t *testing.T) {
-	repos := newMailReposTestWorld(t)
-	ownerId := repos.fixture.member(bridge.MemberRole_MEMBER_ROLE_OWNER)
-	otherId := repos.fixture.member(bridge.MemberRole_MEMBER_ROLE_MEMBER)
-	phone := repos.fixture.invitedDevice(ownerId)
-	laptop := repos.fixture.device(ownerId, phone.Bytes())
-	otherPhone := repos.fixture.invitedDevice(otherId)
-	repos.rebuild()
-	ctx := context.Background()
-	own, err := repos.repos(phone).EnsureMailbox(ctx, ownerId)
-	if err != nil {
-		t.Fatal(err)
-	}
-	other, err := repos.repos(otherPhone).EnsureMailbox(ctx, otherId)
-	if err != nil {
-		t.Fatal(err)
-	}
-	state := repos.state()
-	now := aclTestNow
-	cases := []struct {
-		sender Id
-		repoId Id
-		want   MailSendOutcome
-	}{
-		{sender: phone, repoId: own.RepoId(), want: MailSendDelivered},
-		{sender: laptop, repoId: own.RepoId(), want: MailSendDelivered},
-		{sender: phone, repoId: other.RepoId(), want: MailSendMemberRefused},
-		{sender: otherPhone, repoId: own.RepoId(), want: MailSendMemberRefused},
-		{sender: phone, repoId: NewId(), want: MailSendNoDepositRight},
-	}
-	for _, c := range cases {
-		if got := mailSendMayDeposit(state, c.sender, c.repoId, now); got != c.want {
-			t.Errorf("%s into %s: %s, not %s", c.sender, c.repoId, got, c.want)
-		}
-	}
-}
-
-// The client answers another member's mailbox member_refused, deposits nothing there and keeps no copy of a message
-// that went nowhere.
-func TestMailSendCrossMemberRefusedUntilTheQuestionLands(t *testing.T) {
-	world, parts, mailboxId := newMailSendTestWorld(t)
-	parts.repoOutcomes[mailboxId] = MailSendMemberRefused
-	result, err := world.client.Send(context.Background(), &MailSendArgs{From: testMailSendFrom, To: []string{testMailIngestRecipient}, Text: "x"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Recipients[0].Outcome != MailSendMemberRefused || result.SentCopy || len(parts.snapshot()) != 0 {
-		t.Fatalf("a cross-member send %+v, copy %t, %d deposits", result.Recipients[0], result.SentCopy, len(parts.snapshot()))
 	}
 }
 

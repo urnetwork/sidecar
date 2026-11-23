@@ -24,7 +24,7 @@ func TestGenerationRepostLeavesAStatementKeptAfterItsStart(t *testing.T) {
 	release := make(chan struct{})
 	var once sync.Once
 	SetTestHooks(&TestHooks{Barrier: func(name string, key string) {
-		if name != "sidecar.generation.repost" {
+		if name != "sidecar.generation.repost.before" {
 			return
 		}
 		held := false
