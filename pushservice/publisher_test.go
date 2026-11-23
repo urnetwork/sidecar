@@ -304,8 +304,8 @@ func (self *testPublisherSend) checkPool() []string {
 			fate = "taken, the resident's reference returned"
 		}
 		if pooled, _ := connect.MessagePoolCheck(frame.buffer); !pooled {
-			// returned as many times more than it was held as the ledger holds shares: back in the pool,
-			// where another owner may hold it now, so the ledger returns nothing more
+			// returned too often by at least the ledger's shares: back in the pool, where another owner
+			// may hold it now, so the ledger returns nothing more
 			poolFaults = append(poolFaults, fmt.Sprintf("%s (%s): back in the pool while the ledger held shares of it", frame.name, fate))
 			continue
 		}
@@ -514,6 +514,15 @@ func (self *testPublisherEnv) expectNoMessage() {
 	}
 }
 
+// What the publisher counted, read once it has stopped. It counts a frame once the send has answered,
+// after the send gave the test the frame, and an ack or a live write once its Redis call has answered,
+// after the test saw the call, so counts read as soon as the test has the last of them may lack it; Close
+// waits for the run, which has counted all it did by then.
+func (self *testPublisherEnv) closedStats() pushservice.SidecarPublisherStats {
+	self.publisher.Close()
+	return self.publisher.Stats()
+}
+
 // Starts the publisher and takes it through its first reset and the read after it, to idle.
 func (self *testPublisherEnv) startIdle(topics []string) []*protocol.PushReset {
 	self.t.Helper()
@@ -658,14 +667,15 @@ func TestPublisherCoalescesATopicKeepingSeq(t *testing.T) {
 			t.Errorf("hint %d's ack is set: %t", index, message.ack != nil)
 		}
 	}
-	if stats := env.publisher.Stats(); stats.HintCount != 5 || stats.CoalescedCount != 2 || stats.BodyBoundCount != 0 {
-		t.Errorf("stats %+v", stats)
-	}
 	// the next read finds nothing past the last one sent
 	env.publisher.Kick()
 	env.passWindow()
 	env.awaitIdleRead()
 	env.expectNoMessage()
+	// read after the run's next read, by which it has counted the batch
+	if stats := env.publisher.Stats(); stats.HintCount != 5 || stats.CoalescedCount != 2 || stats.BodyBoundCount != 0 {
+		t.Errorf("stats %+v", stats)
+	}
 }
 
 // A batch longer than one read is read page after page and sent in seq order.
@@ -955,7 +965,7 @@ func TestPublisherAckScriptOncePerBatch(t *testing.T) {
 	if ackCount() != 2 || storedAck() != results[1].StreamId {
 		t.Errorf("after two batches: %d scripts, ack %q, want %s", ackCount(), storedAck(), results[1].StreamId)
 	}
-	if stats := env.publisher.Stats(); stats.AckCount != 2 || stats.AckRaisedCount != 2 {
+	if stats := env.closedStats(); stats.AckCount != 2 || stats.AckRaisedCount != 2 {
 		t.Errorf("stats %+v", stats)
 	}
 }
@@ -1215,5 +1225,35 @@ func TestPublisherPoolCheckFindsEachOwnershipFault(t *testing.T) {
 		for range c.leftoverCount {
 			connect.MessagePoolReturn(frame.MessageBytes)
 		}
+	}
+}
+
+// The publisher counts a hint once the send has answered, so the test can hold a hint its counts lack:
+// here the send has given the test the hint and not yet answered. Tests that read the counts as soon as
+// they had their last hint failed under load with one hint short (HintCount 9 of 10); read once the
+// publisher has stopped, the counts hold every hint.
+func TestPublisherCountsAHintOnceTheSendHasAnswered(t *testing.T) {
+	env := newTestPublisherEnv(t, nil)
+	env.startIdle(nil)
+	env.hint(sidecar.PushTopicTeam, 1, []byte("t"))
+	release := env.send.holdNextSend()
+	env.publisher.Kick()
+	env.passWindow()
+	env.awaitCall("xrange")
+	select {
+	case message := <-env.send.holding:
+		if message.hint == nil || message.hint.Seq != 1 {
+			t.Fatalf("the held frame is reset %v, hint %v", message.reset, message.hint)
+		}
+	case <-time.After(testPublisherTimeout):
+		t.Fatal("no send")
+	}
+	if stats := env.publisher.Stats(); stats.HintCount != 0 {
+		t.Errorf("the hint was counted before the send answered: %+v", stats)
+	}
+	release(true)
+	env.awaitHints(1)
+	if stats := env.closedStats(); stats.HintCount != 1 {
+		t.Errorf("stats %+v", stats)
 	}
 }
