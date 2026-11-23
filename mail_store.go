@@ -6,7 +6,9 @@
 // each only while its path still stands at the version its writer read: a path CAS, which is how §15.7's racing
 // writers meet ("a racing i/ write gets a path 409 and re-reads", §11.8's 5g).
 //
-// mailEvsStore is the store over EvsRepo. Its reads are EvsRepo's verified ReadHead and List. Its write is one
+// mailEvsStore is the store over EvsRepo. Its reads are EvsRepo's verified ReadHead and List, held to this device's
+// own pushes (evs_read.go's own pushes row), so a read right after the store's own write gives the version that write
+// made, though evs's head cache has not reached it, and a write held to it lands at once. Its write is one
 // WritePaths push, each path one EvsPathWrite held to the version its writer read (EvsPathWrite.IfVersion; QD-721,
 // question mail-m7-06-evs-path-precondition): 0 for a path read as absent, the create-only write §15.7 asks of
 // addr/, burner/, o/ and ingest's m/. evs's planner checks that version against its own read and states it as the
