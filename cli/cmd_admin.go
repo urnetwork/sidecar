@@ -12,8 +12,10 @@
 //	                                            client-only fragment, which the inviting device appends, is not yet
 //	ur admin members remove <member_id>         the MemberRevoke's plan from the verified log, confirmed on
 //	                                            /dev/tty; then POST /network/member-remove, the server's denial at
-//	                                            once; then the MemberRevoke the daemon signs, which is the removal
-//	                                            (§7.10): an AdminSet member's as a proposal its cosigns complete
+//	                                            once, the member's auth keys among what it ends, with the server's
+//	                                            note when a pre-approved key's bundle still admits (QD-1211); then
+//	                                            the MemberRevoke the daemon signs, which is the removal (§7.10): an
+//	                                            AdminSet member's as a proposal its cosigns complete
 //	ur admin oauth-clients [list]               GET /network/oauth-clients
 //	ur admin oauth-clients create --scopes=...  POST /network/oauth-clients, its secret printed once
 //	ur admin oauth-clients revoke <id>          POST /network/oauth-client-revoke
@@ -230,6 +232,10 @@ func (self *urAdminRefusal) Error() string {
 // The server's text for a member it holds no membership of (model.ErrNetworkMemberNotFound): already denied, by an
 // earlier removal or SCIM.
 const urAdminNoSuchMember = "No such member of the team."
+
+// What ur says when a member's removal revoked a pre-approved auth key (D-TEAM-31): revoking stops the key's bearer
+// only.
+const urAdminMemberRemoveBundleNote = "a revoked auth key was pre-approved: a copy of its bundle still admits devices until its Delegation ends; `ur admin delegations` lists it, and `ur admin delegations revoke <delegation_id>` ends it"
 
 // Runs a Team command and decodes its answer into result; a route's model refusal, {error: {message}}, is a
 // *urAdminRefusal.
@@ -492,6 +498,10 @@ func runUrAdminMemberRemove(ctx context.Context, cli *urCli, options docopt.Opts
 	}
 	denied := &struct {
 		DeactivatedClientCount int64 `json:"deactivated_client_count"`
+		RevokedAuthKeyCount    int64 `json:"revoked_auth_key_count"`
+		// a revoked key was pre-approved: a copy of its bundle still admits until its Delegation ends (D-TEAM-31),
+		// which ur says in its own words rather than printing the server's note
+		BundleStillAdmits bool `json:"bundle_still_admits"`
 	}{}
 	err = urAdminRun(ctx, cli, options, command, denied)
 	refusal := &urAdminRefusal{}
@@ -502,7 +512,15 @@ func runUrAdminMemberRemove(ctx context.Context, cli *urCli, options docopt.Opts
 	case err != nil:
 		return err
 	default:
-		cli.printf("the server denied member %s, %d client(s) deactivated\n", memberId, denied.DeactivatedClientCount)
+		cli.printf(
+			"the server denied member %s, %d client(s) deactivated, %d auth key(s) revoked\n",
+			memberId,
+			denied.DeactivatedClientCount,
+			denied.RevokedAuthKeyCount,
+		)
+		if denied.BundleStillAdmits {
+			cli.printf("%s\n", urAdminMemberRemoveBundleNote)
+		}
 	}
 	act := &urMemberRevokeActReply{}
 	if err := cli.callDaemon(ctx, urMethodAdminMemberAct, params, true, act); err != nil {

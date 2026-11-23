@@ -20,7 +20,8 @@
 //	              as kind egress_change, its subject, mode and exits (QD-799); once per effect key, by a marker that
 //	              keeps the statement's bytes, which the component's LookupEgress reads
 //	SetBlock      the network's BridgeBlock in a config head, an admin's, for a person's confirmation alone, through
-//	              this device's config writer: a /16 CheckBridgeBlock takes, or ChooseBridgeBlock's for cycle, the
+//	              this device's config writer, or where none runs the one its host keeps for confirmed saves, ur
+//	              daemon's (ConfirmedHeadWriter): a /16 CheckBridgeBlock takes, or ChooseBridgeBlock's for cycle, the
 //	              block it replaces draining (D-BRIDGE-16)
 //	FindRule      a rule id as the authorization log holds it for this host, read through the ledger: what the
 //	              bridge component's Lookup answers by (§16.6's step 5)
@@ -194,8 +195,13 @@ type BridgeFilerArgs struct {
 	Grants *AclGrantFiler
 	// The head's compiled policy, whose route rules a route names (AclFollower's); nil, or a nil answer, names none.
 	AclLocal func() *AclLocalPolicy
-	// This device's config writer, nil, or a nil answer, where none runs: SetBlock refuses.
+	// This device's config writer, nil, or a nil answer, where none runs: a share's accept and activation refuse, and
+	// SetBlock takes ConfirmedHeadWriter.
 	HeadWriter func() BridgeHeadWriter
+	// The writer a person's confirmed command saves a head through where no general one runs, a host's for confirmed
+	// saves alone, ur daemon's (ConfigClient.ConfirmedWriter), which SetBlock alone takes after HeadWriter: nil, or a
+	// nil answer, and with no HeadWriter either, SetBlock refuses.
+	ConfirmedHeadWriter func() BridgeHeadWriter
 	// Where route entries go; nil is the sidecar's record.
 	Records func() (RecordWriter, error)
 	// Where the filer keeps the route entries it owes and its egress changes' markers; nil is this sidecar's network
@@ -285,7 +291,8 @@ type bridgeFileView struct {
 	state  *ConfigState
 	head   *ConfigHead
 	ledger *BridgeLedger
-	// nil before a head carries one, or while the head's is refused
+	// the block readers hold from the head (readBridgeBlockInForce): nil before a head carries one, or while the head's
+	// is refused
 	block *bridge.BridgeBlock
 	self  Id
 }
@@ -327,8 +334,9 @@ func (self *BridgeFiler) view(ctx context.Context) (*bridgeFileView, error) {
 	}
 	view.ledger = ledger
 	if view.head != nil {
-		// a refused block leaves none, so nothing that needs one is filed (D-BRIDGE-16)
-		if block, err := ReadBridgeBlock(view.head, state, nil); err == nil {
+		// the block readers hold, though its signer stopped standing since they took it (QD-1205); a refused block
+		// leaves none, so nothing that needs one is filed (D-BRIDGE-16)
+		if block, err := readBridgeBlockInForce(view.head, state); err == nil {
 			view.block = block
 		}
 	}
@@ -2159,6 +2167,9 @@ func (self *BridgeFiler) SetBlock(ctx context.Context, origin *BridgeFileOrigin,
 	var writer BridgeHeadWriter
 	if self.args.HeadWriter != nil {
 		writer = self.args.HeadWriter()
+	}
+	if writer == nil && self.args.ConfirmedHeadWriter != nil {
+		writer = self.args.ConfirmedHeadWriter()
 	}
 	if writer == nil {
 		return nil, fmt.Errorf("%w: no config writer runs for this network on this device", ErrBridgeFileRefused)

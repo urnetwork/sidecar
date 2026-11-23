@@ -35,7 +35,6 @@
 package sidecar
 
 import (
-	"bytes"
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
@@ -120,21 +119,23 @@ func bridgeFirstBlockRecord(sign ConfigSignFunction, random io.Reader) ([]byte, 
 //
 //	first    where head holds no bridge/block, an older network's or one bootstrapped before the bridge shipped, the
 //	         network's first block, drawn with random (crypto/rand's reader when nil) (§17.4's first block row)
-//	re-sign  where head carries the record inForce carries, which every reader took at the newest base, its signer
-//	         standing in the state that base gave, and that signer no longer stands at state, the same block signed
-//	         again, its prefix, previous_prefix and drain_until kept, so a reader with no previous block, a new
-//	         device's, holds it again from this head on (QD-1205)
+//	re-sign  where head carries the record every reader of state's newest base holds (ConfigState's bridge block
+//	         record), taken where a head first held it under a signer standing there and carried byte for byte since,
+//	         and that signer no longer stands at state, the same block signed again, its prefix, previous_prefix and
+//	         drain_until kept, so a reader with no previous block, a new device's, holds it again from this head on
+//	         (QD-1205); whichever head the plan stands on, a pending one's included, and whoever's bases carried the
+//	         record since, so a Network or IT admin's base in between, which cannot re-sign it, strands nothing
 //
 // each signed by sign, and only where readers at state take sign's block, an Owner's or Admin's device's
 // (configHeadRecordSignedByAdmin), so a Network or IT admin's writer leaves it to one. head itself otherwise: a record
-// that stands; one head replaces, inForce's no longer being the one saved; one no reader took at the newest base; and
-// any while a newer head waits for its base (inForce nil), since re-signing those could put in force a block no admin
-// chose, and only an admin's `ur bridge block` replaces a block.
+// that stands, and any record readers do not hold, one the head being saved replaces, one a head first holds that no
+// base has judged, one readers refused, since re-signing those could put in force a block no admin chose, and only an
+// admin's `ur bridge block` replaces a block. A rows-only state holds no record, and re-signs none.
 //
 // Two writers drawing at once leave one block: a head is saved over the version it was read at, If-Match, so of two
 // heads drawn from one blockless head one lands and the other's save conflicts, and its retry reads the first one's
 // block and draws none. Two re-signing at once leave one record alike.
-func WithBridgeBlock(state *ConfigState, inForce *ConfigHead, head *ConfigHead, sign ConfigSignFunction, random io.Reader) (*ConfigHead, error) {
+func WithBridgeBlock(state *ConfigState, head *ConfigHead, sign ConfigSignFunction, random io.Reader) (*ConfigHead, error) {
 	if head == nil {
 		return head, nil
 	}
@@ -142,22 +143,18 @@ func WithBridgeBlock(state *ConfigState, inForce *ConfigHead, head *ConfigHead, 
 		return nil, errors.New("bridge block: no state or signer")
 	}
 	var block *bridge.BridgeBlock
-	if record := head.File(ConfigHeadBridgeBlockPath); record == nil {
+	if head.File(ConfigHeadBridgeBlockPath) == nil {
 		prefix, err := ChooseBridgeBlock(random)
 		if err != nil {
 			return nil, fmt.Errorf("first bridge block: %w", err)
 		}
 		block = &bridge.BridgeBlock{Ipv4Prefix: prefix}
 	} else {
-		if inForce == nil || !bytes.Equal(inForce.File(ConfigHeadBridgeBlockPath), record) {
+		if !configHeadRecordCarried(state.bridgeBlockRecordSha256, head.recordSha256(ConfigHeadBridgeBlockPath)) {
 			return head, nil
 		}
 		signed, message, err := head.signedRecord(ConfigHeadBridgeBlockPath, bridge.SignedType_SIGNED_BRIDGE_BLOCK)
 		if err != nil || configHeadRecordSignedByAdmin(state, signed, bridge.SignedType_SIGNED_BRIDGE_BLOCK) == nil {
-			return head, nil
-		}
-		baseState := bridgeStateAtBase(state)
-		if baseState == nil || configHeadRecordSignedByAdmin(baseState, signed, bridge.SignedType_SIGNED_BRIDGE_BLOCK) != nil {
 			return head, nil
 		}
 		block = message.(*bridge.BridgeBlock)
@@ -177,27 +174,6 @@ func WithBridgeBlock(state *ConfigState, inForce *ConfigHead, head *ConfigHead, 
 		return head, nil
 	}
 	return head.WithFile(ConfigHeadBridgeBlockPath, signedBytes)
-}
-
-// The state the newest base gave, at which every reader judged the records of the head it names; nil where state no
-// longer serves it.
-func bridgeStateAtBase(state *ConfigState) *ConfigState {
-	base := state.Base()
-	if base == nil {
-		return nil
-	}
-	if base.GetVersion() == state.n {
-		return state
-	}
-	chain, ok := state.chainAt(base.GetVersion())
-	if !ok {
-		return nil
-	}
-	at, err := state.StateAt(&bridge.AuthPin{Version: base.GetVersion(), Chain: chain[:]})
-	if err != nil {
-		return nil
-	}
-	return at
 }
 
 // One network's addresses as a reader sees them at the log's time its ledger was read at: the block its verified head
