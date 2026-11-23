@@ -720,13 +720,16 @@ func (self *GkmEngine) resolveGroup(ctx context.Context, groupId sidecar.Id, can
 		}
 		return found && ownerRepoId == repoId, nil
 	}
-	if repoId, ok := self.owners.known(groupId); ok {
-		// the marker this process read names the group's one repo: no other is asked
-		if !slices.Contains(candidateRepoIds, repoId) {
+	// the marker this process read names the group's one repo: that repo alone is asked, where the token scopes it
+	byMarker := func(ownerRepoId sidecar.Id) (sidecar.Id, bool, error) {
+		if !slices.Contains(candidateRepoIds, ownerRepoId) {
 			return sidecar.Id{}, false, nil
 		}
-		found, err := named(repoId)
-		return repoId, found, err
+		found, err := named(ownerRepoId)
+		return ownerRepoId, found, err
+	}
+	if repoId, ok := self.owners.known(groupId); ok {
+		return byMarker(repoId)
 	}
 	for i, repoId := range candidateRepoIds {
 		if self.settings.GroupResolveRepoMaxCount <= i {
@@ -740,9 +743,15 @@ func (self *GkmEngine) resolveGroup(ctx context.Context, groupId sidecar.Id, can
 			return repoId, true, nil
 		}
 		if ownerRepoId, ok := self.owners.known(groupId); ok {
-			// the marker is read now: the repo's group by a form that is no longer its newest, which no write
-			// reaches, or another repo's group, which this candidate's form only names
-			return ownerRepoId, false, nil
+			// the marker is read now, by this candidate's form or by another request while this one asked it
+			if ownerRepoId == repoId {
+				// the repo's group by a form that is no longer its newest, which no write reaches
+				return ownerRepoId, false, nil
+			}
+			// another repo's group, which this candidate's form only names, or one another request's read of the
+			// marker resolved meanwhile: the marker's repo is asked as above, so a token scoping it is never refused
+			// for having asked another candidate first
+			return byMarker(ownerRepoId)
 		}
 	}
 	return sidecar.Id{}, false, nil
