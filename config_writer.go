@@ -70,6 +70,11 @@ var (
 	ErrConfigWriterNothing = errors.New("config writer: nothing new to publish")
 )
 
+// The point a fault schedule holds a writer's plan at (§22.8), keyed by the network id: after the plan read the config
+// head and before it judges under the follow lock whether the log moved since it took its state, so an entry applied
+// there moves the tip under the plan.
+const configWriterBarrierPlanTip = "config_writer.plan.tip"
+
 // A head push signed and not yet sent: what a base names and carries before its head lands (plan-TEAM-api-config-head-
 // reach #2, #4).
 type ConfigHeadPush struct {
@@ -511,6 +516,7 @@ func (self *ConfigWriter) plan(ctx context.Context, previous *configWriterPlan, 
 	var records []ConfigFoldRecord
 	var compileRows *ConfigCompileRows
 	var ledgerFold *BridgeLedgerFold
+	testHookBarrier(configWriterBarrierPlanTip, state.NetworkId().String())
 	err = func() error {
 		self.args.Client.followLock.Lock()
 		defer self.args.Client.followLock.Unlock()
