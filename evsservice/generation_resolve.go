@@ -12,11 +12,13 @@
 //	         GroupForm makes, taken where that form re-forms another group at a generation of g or more and the
 //	         statement there names group_id and the repo
 //
-// Every statement is verified under its signer's identity key in evs's newest state, as an own one is, and every
-// form it rests on under its own signer's (sidecar.GkmVerifyGroupForm), each held to its shape; who may sign a form
-// at its pin is the members' check (§10.8's members row), not evs's. A generation evs cannot resolve answers none, and
-// one naming another group that no form carries answers ErrGkmMalformed, each 503 at the push route, which refuses
-// nothing, since a form lands before its ladder and so a moment later may carry it.
+// The own and carried rows are the root's GkmParseServedGeneration (gkm_served_generation.go), which a VPN
+// component's Forwarder holds a re-formed config group's statements to as well. Every statement is verified under its
+// signer's identity key in evs's newest state, as an own one is, and every form it rests on under its own signer's
+// (sidecar.GkmVerifyGroupForm), each held to its shape; who may sign a form at its pin is the members' check (§10.8's
+// members row), not evs's. A generation evs cannot resolve answers none, and one naming another group that no form
+// carries answers ErrGkmMalformed, each 503 at the push route, which refuses nothing, since a form lands before its
+// ladder and so a moment later may carry it.
 //
 // A writer seals to the generation's key, which names the group the generation was claimed in, so a push names the old
 // group at each generation the ladder carried, and the new group only past the form's generation: own and moved stand
@@ -40,11 +42,8 @@ import (
 	"slices"
 	"time"
 
-	"google.golang.org/protobuf/proto"
-
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
-	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
 // One repo's GroupForms as a resolution read them, oldest first: each key, and its facts once a resolution verified
@@ -91,23 +90,16 @@ func (self *GenerationRecords) Read(ctx context.Context, cluster sidecar.BlobClu
 	return resolved, nil
 }
 
-// The own and carried rows, for the object gkm holds at gkm/<groupId>/gen/<generation>.
+// The own and carried rows, for the object gkm holds at gkm/<groupId>/gen/<generation>: the root's
+// GkmParseServedGeneration, the repo's forms read only for a statement of another group.
 func (self *GenerationRecords) resolveStanding(ctx context.Context, cluster sidecar.BlobCluster, repoId sidecar.Id, groupId sidecar.Id, generation uint64, objectBytes []byte, view sidecar.GkmAuthView) (*protocol.GenRotate, error) {
-	namedGroupId, err := generationNamedGroup(objectBytes)
+	parsed, err := sidecar.GkmParseServedGeneration(objectBytes, repoId, groupId, generation, func() (*sidecar.GkmGroupFormFacts, error) {
+		return self.formMaking(ctx, cluster, repoId, groupId, view)
+	}, sidecar.GkmIdentityKeys(view))
 	if err != nil {
 		return nil, err
 	}
-	if namedGroupId == groupId {
-		return verifyGenerationRecord(objectBytes, groupId, generation, view)
-	}
-	form, err := self.formMaking(ctx, cluster, repoId, groupId, view)
-	if err != nil {
-		return nil, err
-	}
-	if form == nil || form.PreviousGroupId == (sidecar.Id{}) || form.Generation < generation {
-		return nil, fmt.Errorf("%w: gen/%d of another group, which no re-form of the repo carries", sidecar.ErrGkmMalformed, generation)
-	}
-	return verifyCarriedRecord(objectBytes, repoId, namedGroupId, generation, view)
+	return parsed.Rotate, nil
 }
 
 // The moved row, for a statement whose own group holds no gen/<generation>.
@@ -123,7 +115,7 @@ func (self *GenerationRecords) resolveMoved(ctx context.Context, cluster sidecar
 	if err != nil || objectBytes == nil {
 		return nil, err
 	}
-	namedGroupId, err := generationNamedGroup(objectBytes)
+	namedGroupId, err := sidecar.GkmGenerationNamedGroup(objectBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -131,7 +123,14 @@ func (self *GenerationRecords) resolveMoved(ctx context.Context, cluster sidecar
 		// the ladder holds another group's statement there: the statement's group never held gen/<generation>
 		return nil, nil
 	}
-	return verifyCarriedRecord(objectBytes, repoId, groupId, generation, view)
+	// the newest group's ladder carried it, under that group's form
+	parsed, err := sidecar.GkmParseServedGeneration(objectBytes, repoId, newest.GroupId, generation, func() (*sidecar.GkmGroupFormFacts, error) {
+		return newest, nil
+	}, sidecar.GkmIdentityKeys(view))
+	if err != nil {
+		return nil, err
+	}
+	return parsed.Rotate, nil
 }
 
 // Keeps a resolved record for the process's life, evicting one past GenerationCacheCount.
@@ -161,51 +160,6 @@ func (self *GenerationRecords) readGenerationObject(ctx context.Context, cluster
 	}
 	defer object.Body.Close()
 	return readAllLimited(object, self.settings.GenerationRecordMaxByteCount)
-}
-
-// The group a gen/ object's statement names, unverified: which row it falls under.
-func generationNamedGroup(objectBytes []byte) (sidecar.Id, error) {
-	signed := &bridge.Signed{}
-	rotate := &protocol.GenRotate{}
-	if err := proto.Unmarshal(objectBytes, signed); err != nil {
-		return sidecar.Id{}, fmt.Errorf("%w: gen object: %w", sidecar.ErrGkmMalformed, err)
-	}
-	if err := proto.Unmarshal(signed.GetBody(), rotate); err != nil {
-		return sidecar.Id{}, fmt.Errorf("%w: GenRotate: %w", sidecar.ErrGkmMalformed, err)
-	}
-	groupId, err := sidecar.IdFromBytes(rotate.GetGroupId())
-	if err != nil {
-		return sidecar.Id{}, fmt.Errorf("%w: gen object names no group", sidecar.ErrGkmMalformed)
-	}
-	return groupId, nil
-}
-
-// A gen/ object's GenRotate, verified under its signer's identity key in view as naming groupId at generation.
-func verifyGenerationRecord(objectBytes []byte, groupId sidecar.Id, generation uint64, view sidecar.GkmAuthView) (*protocol.GenRotate, error) {
-	parsed, err := sidecar.ParseGenRotate(objectBytes, groupId, generation, func(signerId sidecar.Id) ([]byte, error) {
-		identityKey := view.IdentityKey(signerId)
-		if len(identityKey) == 0 {
-			return nil, fmt.Errorf("%w: a rotator the state admits no identity key for", sidecar.ErrGkmAuthentication)
-		}
-		return identityKey, nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return parsed.Rotate, nil
-}
-
-// A ladder's statement, verified as naming namedGroupId at generation, and repoId, since a group a re-form makes holds
-// only its own repo's ladder.
-func verifyCarriedRecord(objectBytes []byte, repoId sidecar.Id, namedGroupId sidecar.Id, generation uint64, view sidecar.GkmAuthView) (*protocol.GenRotate, error) {
-	rotate, err := verifyGenerationRecord(objectBytes, namedGroupId, generation, view)
-	if err != nil {
-		return nil, err
-	}
-	if sidecar.Id(rotate.GetRepoId()) != repoId {
-		return nil, fmt.Errorf("%w: a re-formed group's gen/%d of another repo", sidecar.ErrGkmMalformed, generation)
-	}
-	return rotate, nil
 }
 
 // The repo's newest GroupForm, verified; nil for a repo with none.

@@ -194,6 +194,7 @@ gkm_reform.go
 gkm_rotate.go
 gkm_seats.go
 gkm_selfupdate.go
+gkm_served_generation.go
 gkm_stale.go
 gkm_state.go
 gkm_sync.go
