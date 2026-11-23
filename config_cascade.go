@@ -235,7 +235,9 @@ func (self *ConfigCascadeClosure) recordEntry(state *ConfigState, row *bridge.Si
 
 // §8.5's clause: each untagged member device consented now that is not once what this P signed counts for nothing
 // joins P, from the earliest of its consent records P signed. One whose loss runs through another device's consent
-// waits until that device has joined, so its position is that device's record's. Whether any joined.
+// waits until that device has joined, so its position is that device's record's. Whether any joined. Consent is ACL's
+// replay over a view voiding this P too, which counts every confirmation the rows keep (QD-1208), so a device that a
+// confirmation by its member's consented device outside P consents stays out, whatever newer one P signed.
 func (self *ConfigCascadeClosure) consentEntries(state *ConfigState, acl *AclState, sidecarIds []Id) (bool, error) {
 	rows := state.aclRows
 	if rows == nil {
@@ -436,8 +438,8 @@ func configVoidBindings(next *configStateBuilder) {
 }
 
 // Records a confirmation that took effect at n on the sidecar's row: the newest of its kind, a ConfirmationRow in its
-// history, and, for a parked sidecar, the lift (§7.9's lift row): unparked here, and a member device standing again
-// live from here (§7.9's leaves row).
+// history, which §8.5's consent replays whole (QD-1208), and, for a parked sidecar, the lift (§7.9's lift row):
+// unparked here, and a member device standing again live from here (§7.9's leaves row).
 func configConfirmSidecar(next *configStateBuilder, n uint64, kind uint32, signer []byte, sidecarId Id) {
 	row := next.sidecarForWrite(sidecarId)
 	if row == nil {
