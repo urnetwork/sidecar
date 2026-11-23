@@ -2574,3 +2574,32 @@ _D16 = ("A seventh late fold the same day numbers the answers the end-to-end pha
         "the exact-head saves of a person's confirmed commands (719), amending @@OD:141@@ and following "
         "@@OD:698@@. ")
 DECISIONS_INTRO = DECISIONS_INTRO.replace(_D715, _D715 + _D16)
+
+# The same fold's second piece: who a team's notices and billing mail reach and the network they name, the outbox's
+# record after a send, and unjudged evs statements held to the refs table's rules that need no right (720-722).
+INDEX += [
+    (720, "A team's notices and billing mail",
+     "A team's key and authority notices reach its Owners and Admins, its wallet and billing mail its Owners and "
+     'Billing admins, Owners first, naming the network.'),
+    (721, 'The outbox records after the send',
+     "The account message outbox records a send's outcome on a context made after the send, so a slow send is not "
+     'sent twice.'),
+    (722, 'Unjudged statements meet the refs table',
+     "An evs statement pinned before the reader's window still meets the refs table's rules no right at its pin "
+     'excuses.'),
+]
+for _n, _note in [
+        (706, " Refined by @@OD:722@@: an unjudged statement still meets the refs table's rules no right excuses."),
+        (712, ' Followed by @@OD:722@@: the read refuses a deposit its depositor did not sign, at any pin.'),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 723))
+DATES.update({_n: '2026-11-23' for _n in range(720, 723)})
+_D719 = "(719), amending @@OD:141@@ and following @@OD:698@@. "
+assert DECISIONS_INTRO.count(_D719) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D719, _D719 + "Its second piece numbers who a team's security notices and billing mail reach, and the network "
+    "they name (720), the account message outbox recording a send's outcome after the send (721), and unjudged evs "
+    "statements held to the refs table's rules that need no right at their pin (722), refining @@OD:706@@. ")
