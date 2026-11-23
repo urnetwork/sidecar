@@ -13,7 +13,8 @@
 //	publish  POST /network/config/projection {Signed ProjectionHeader, rows, config_pushes}; on 409 the device catches
 //	         up and re-signs at the new tip, keeping its fold and its compile while folded_through stays within 1,024
 //	         of the tip and no other base landed, so a stream of statements never starves it; a base that landed
-//	         meanwhile replans from its rows, so no stale compile is signed
+//	         meanwhile replans from its rows, so no stale compile is signed. A tip that moved while the base was
+//	         planned, before its edit and any push, is the same race seen first here, and is caught up the same way
 //
 // The fold loop (run) folds once the oldest unfolded statement or tick is 1,024 positions behind the tip or 24 h old,
 // at once at a start after being offline, after a random delay of up to 10 min that another base cancels. A config
@@ -58,8 +59,9 @@ var (
 	ErrConfigWriterNotWriter = errors.New("config writer: not a config writer here")
 	// The config repo's ref moved since the head was read: read it again and save on top.
 	ErrConfigHeadConflict = errors.New("config head conflict")
-	// The base did not land within ConfigWriterSettings.PublishAttemptCount re-signs: the tip kept moving, or api kept
-	// finding other shrinks at its time than this device's clock gave (QD-746).
+	// The base did not land within ConfigWriterSettings.PublishAttemptCount attempts: the tip kept moving while it was
+	// planned or at api, or api kept finding other shrinks at its time than this device's clock gave (QD-746). It wraps
+	// the last attempt's ErrConfigTipMoved.
 	ErrConfigWriterGaveUp = errors.New("config writer: the tip kept moving")
 	// A base would keep both the newest base's fold and its head: it says nothing new, so none is published.
 	ErrConfigWriterNothing = errors.New("config writer: nothing new to publish")
@@ -155,7 +157,8 @@ type ConfigWriterSettings struct {
 	// How often the loop looks again with nothing landing: 1 min, so a pending head and a fold due by age are seen
 	// within it.
 	CheckInterval time.Duration
-	// How many times a publish re-signs after api's 409 before it gives up until the next pass: 16.
+	// How many times one publish plans and signs a base, again after each tip that moved, at api's 409 or while the
+	// base was planned, before it gives up until the next pass: 16. Non-positive makes one attempt.
 	PublishAttemptCount int
 	// How long one publish may take: 60 s.
 	PublishTimeout time.Duration
@@ -334,23 +337,34 @@ type configWriterPlan struct {
 	threshold     uint32
 }
 
-// One publish (DESIGN-DETAILS 5.2.4's WriterPublishBase), re-signing at each new tip up to PublishAttemptCount times.
+// One publish (DESIGN-DETAILS 5.2.4's WriterPublishBase), planned and signed at each new tip up to PublishAttemptCount
+// times. The tip moves under a base two ways, which publish treats alike: api answers 409 to the base signed, or the log
+// applies an entry while the plan reads the config head, which plan answers ErrConfigTipMoved before its edit and any
+// push. Either way the writer catches up and plans again at the new tip: a plan made in full is kept, its fold and
+// compile, where plan keeps one, and an edit not yet made is made there; past the bound it gives up with the last
+// moved tip.
 func (self *ConfigWriter) publish(ctx context.Context, fold bool, edit func(head *ConfigHead) (*ConfigHead, error), expected *ConfigHeadTip) (*bridge.AuthPin, error) {
 	self.publishLock.Lock()
 	defer self.publishLock.Unlock()
 	var plan *configWriterPlan
-	for range max(self.settings.PublishAttemptCount, 1) {
-		var err error
-		plan, err = self.plan(ctx, plan, fold, edit, expected)
+	// one attempt, which leaves plan and edit as they were where its plan fails: a confirmed save whose push landed
+	// keeps requiring that push's head when it plans again (plan's expected rule), and an edit is made only once
+	attempt := func() (*bridge.AuthPin, error) {
+		next, err := self.plan(ctx, plan, fold, edit, expected)
 		if err != nil {
 			return nil, err
 		}
-		edit = nil
+		// the edit is in the plan's head from here, pushed or found there, and is never made again
+		plan, edit = next, nil
 		signedHeader, err := self.signBase(plan)
 		if err != nil {
 			return nil, err
 		}
-		pin, err := self.args.Publisher.PublishConfigBase(ctx, &ConfigBasePublish{SignedHeader: signedHeader, Rows: plan.rows, ConfigPushes: plan.pushes})
+		return self.args.Publisher.PublishConfigBase(ctx, &ConfigBasePublish{SignedHeader: signedHeader, Rows: plan.rows, ConfigPushes: plan.pushes})
+	}
+	var moved error
+	for range max(self.settings.PublishAttemptCount, 1) {
+		pin, err := attempt()
 		if err == nil {
 			if self.log.V(1).Enabled() {
 				self.log.Infof("[config]%s published a base at %d folding through %d", self.args.Client.NetworkId(), pin.GetVersion(), plan.foldedThrough)
@@ -363,17 +377,22 @@ func (self *ConfigWriter) publish(ctx context.Context, fold bool, edit func(head
 		if !errors.Is(err, ErrConfigTipMoved) {
 			return nil, err
 		}
-		// the tip moved: catch up and re-sign at the new tip
+		if self.log.V(1).Enabled() {
+			self.log.Infof("[config]%s the tip moved under a base: %v", self.args.Client.NetworkId(), err)
+		}
+		moved = err
+		// catch up and plan again at the new tip
 		if err := self.args.Client.CatchUp(ctx); err != nil {
 			return nil, err
 		}
 	}
-	return nil, ErrConfigWriterGaveUp
+	return nil, fmt.Errorf("%w: %w", ErrConfigWriterGaveUp, moved)
 }
 
 // The plan for a base at the client's tip. A plan from the attempt before is kept, its fold and compile, while no
 // other base landed and its fold stays within FoldEntryCount of the tip; else the fold, the head and the rows are
-// planned anew from the newest base.
+// planned anew from the newest base. Its own ErrConfigTipMoved only where the log applied an entry while the head was
+// read, which it finds before the edit and before any push, so nothing of this plan was made yet.
 func (self *ConfigWriter) plan(ctx context.Context, previous *configWriterPlan, fold bool, edit func(head *ConfigHead) (*ConfigHead, error), expected *ConfigHeadTip) (*configWriterPlan, error) {
 	state := self.args.Client.State()
 	if state == nil {
@@ -425,7 +444,8 @@ func (self *ConfigWriter) plan(ctx context.Context, previous *configWriterPlan, 
 		defer self.args.Client.followLock.Unlock()
 		log := self.args.Client.configLog.Load()
 		if log == nil || log.State().n != state.n {
-			return ErrConfigTipMoved
+			// publish catches up and plans again, as after api's 409
+			return fmt.Errorf("%w: the log moved past %d while the base was planned", ErrConfigTipMoved, state.n)
 		}
 		if fork := log.Fork(); fork != nil {
 			return fmt.Errorf("%w: %w", ErrConfigWriterNotWriter, fork)
