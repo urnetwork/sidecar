@@ -39,7 +39,7 @@ require (
 	github.com/google/btree v1.1.3 // indirect
 	github.com/google/pprof v0.0.0-20260202012954-cb029daf43ef // indirect
 	github.com/google/uuid v1.6.0 // indirect
-	github.com/gorilla/websocket v1.5.3 // indirect
+	github.com/gorilla/websocket v1.5.4-0.20240701034025-d67f41855da4 // indirect
 	github.com/klauspost/compress v1.20.2 // indirect
 	github.com/letsencrypt/challtestsrv v1.4.2 // indirect
 	github.com/letsencrypt/pebble/v2 v2.10.3 // indirect

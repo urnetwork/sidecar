@@ -11,6 +11,7 @@ require (
 	github.com/urnetwork/connect v0.0.0
 	github.com/urnetwork/sidecar v0.0.0
 	github.com/urnetwork/sidecar/smtpproof v0.0.0
+	golang.org/x/crypto v0.58.0
 	golang.org/x/net v0.62.0
 	golang.org/x/sys v0.49.0
 	golang.zx2c4.com/wireguard v0.0.0-20261024220952-b3bc704ef0ee
@@ -36,7 +37,7 @@ require (
 	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/google/pprof v0.0.0-20260202012954-cb029daf43ef // indirect
 	github.com/google/uuid v1.6.0 // indirect
-	github.com/gorilla/websocket v1.5.3 // indirect
+	github.com/gorilla/websocket v1.5.4-0.20240701034025-d67f41855da4 // indirect
 	github.com/klauspost/compress v1.20.2 // indirect
 	github.com/letsencrypt/challtestsrv v1.4.2 // indirect
 	github.com/letsencrypt/pebble/v2 v2.10.3 // indirect
@@ -77,7 +78,6 @@ require (
 	github.com/wlynxg/anet v0.0.5 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
-	golang.org/x/crypto v0.58.0
 	golang.org/x/exp v0.0.0-20260727155853-b88d891fe743 // indirect
 	golang.org/x/mod v0.41.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
