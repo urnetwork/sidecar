@@ -182,8 +182,8 @@ func TestAclOnlyAConsentedDeviceIsListedInItsOwnersVault(t *testing.T) {
 	net.everyReaderAgrees()
 }
 
-// A listed device that stops being consented keeps its id, as an OwnerConfirm's listing always did, and reads nothing
-// once revoked: the rows' list never stands in for consented(d, M) now.
+// A listed device leaves the list at its revocation, which ends its consent (QD-1191), and reads nothing: the list
+// holds exactly the owner's consented devices now (acl_consented_list_drops_test.go has the other endings).
 func TestAclARevokedListedDeviceReadsNothing(t *testing.T) {
 	net := newTestConfigNet(t)
 	vaultId := testConsentRowsRepo(net, net.owner, "consent rows revoked vault", protocol.RepoKind_REPO_KIND_VAULT)
@@ -196,8 +196,8 @@ func TestAclARevokedListedDeviceReadsNothing(t *testing.T) {
 		Header: net.header(), SidecarId: second.sidecarId.Bytes(), Reason: bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_LOST,
 	})
 	state := net.log.State()
-	if !testConsentRowsListed(state, vaultId, second.sidecarId) {
-		t.Error("the revocation rewrote the list")
+	if listed := state.Repo(vaultId).GetConsentedSidecarIds(); len(listed) != 1 || !bytes.Equal(listed[0], net.owner.sidecarId.Bytes()) {
+		t.Errorf("after the revocation the vault lists %x, want the genesis device alone", listed)
 	}
 	if rights := testConsentRowsRights(t, state, second.sidecarId, vaultId, AclTokenAudienceGkm); rights != 0 {
 		t.Errorf("the revoked device in the vault: %b", rights)
