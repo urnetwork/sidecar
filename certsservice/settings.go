@@ -83,11 +83,15 @@ type CertsSettings struct {
 	// ttl). By then the CA has handed back, one a day, every failure the backoff lets a name keep counted
 	// there. Default 8 d, as DESIGN-DETAILS 17.2.15 keeps a custom host's failures. Positive.
 	FailureBackoffRetention time.Duration
-	// How long past a CA's Retry-After the orders it holds wait, since the CA's clock and this one
-	// differ by seconds. Positive.
+	// How long past a Retry-After, a CA's or dns's on a challenge name (QD-1204), the orders it holds
+	// wait, since that clock and this one differ by seconds. Positive.
 	RetryAfterMargin time.Duration
 	// How long a CA's refusal on a limit holds when it names no Retry-After. Positive.
 	DefaultRetryAfter time.Duration
+	// How long dns's refusal of a challenge write past dns_challenges_per_name_hour holds the name's
+	// orders when its 429 names no Retry-After (QD-1204): an hour, the cap's window (§12.8), by which the
+	// name's oldest write in the window has left it. Positive.
+	NameWritesHold time.Duration
 
 	// A budget key lives this long past its newest order (cert-1: 7 d). At least every BudgetWindow.
 	BudgetTtl time.Duration
@@ -203,6 +207,7 @@ func DefaultCertsSettings() *CertsSettings {
 		FailureBackoffRetention:   8 * 24 * time.Hour,
 		RetryAfterMargin:          1 * time.Minute,
 		DefaultRetryAfter:         1 * time.Hour,
+		NameWritesHold:            1 * time.Hour,
 		BudgetTtl:                 7 * 24 * time.Hour,
 		RowRetention:              30 * 24 * time.Hour,
 		ChainRetention:            30 * 24 * time.Hour,
@@ -302,6 +307,7 @@ func (self *CertsSettings) Validate() error {
 		"FailureBackoffRetention":   int64(self.FailureBackoffRetention),
 		"RetryAfterMargin":          int64(self.RetryAfterMargin),
 		"DefaultRetryAfter":         int64(self.DefaultRetryAfter),
+		"NameWritesHold":            int64(self.NameWritesHold),
 		"BudgetTtl":                 int64(self.BudgetTtl),
 		"RowRetention":              int64(self.RowRetention),
 		"ChainRetention":            int64(self.ChainRetention),

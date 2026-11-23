@@ -38,6 +38,11 @@
 // pass may take it to another CA. A failed authorization counts against the order's names at its CA, and
 // an issuance ends their backoff there. A renewal skips the backoff, as it skips every limit.
 //
+// An order whose challenge write dns refused past dns_challenges_per_name_hour (a
+// *CertsDnsWriteRateLimitError, through the solver and acmez) queues again and holds the name the
+// refusal named until dns's Retry-After (QD-1204), so the admission pass sends no order of the name to a
+// CA before the name takes a write again.
+//
 // Each move publishes a TlsHint (hints.go).
 
 package certsservice
@@ -157,7 +162,8 @@ type CertsOrdersReport struct {
 	// Orders their CA issued.
 	Issued []sidecar.Id
 	// Orders that queue again: a CA's refusal on a limit, which holds the CA, a failed authorization,
-	// which counts against its names, a failure that may pass, or, with no CA asked, a backoff one of its
+	// which counts against its names, dns's refusal of a challenge write past the name's writes an hour,
+	// which holds the name (QD-1204), a failure that may pass, or, with no CA asked, a backoff one of its
 	// names began at its CA since its admission (QD-857).
 	Requeued []sidecar.Id
 	// Rows moved to failed: a CSR no CA can take, or an order past its give-up age (OrderGiveUpAge, never
@@ -345,6 +351,9 @@ func (self *CertsService) runOrder(ctx context.Context, order *certsRunOrder) ce
 			self.HoldCa(ca, rateLimit.RetryAfter)
 		case errors.As(err, &authorization):
 			outcome.err = self.recordOrderFailure(ctx, row, ca, authorization.Names)
+		case errors.Is(err, ErrCertsDnsWriteRateLimited):
+			// set before the row queues again, so no pass admits the name's next order meanwhile
+			self.holdRefusedChallengeNames(row, err)
 		}
 		// an order that keeps failing ends, never later than its CA keeps an order alive, so its device
 		// hears and may order again; a renewal of a certificate still valid keeps trying, since nothing

@@ -1,8 +1,9 @@
 // certsservice.CertsDns in memory, standing for TLS-M5-16's server.NewCertsDnsClient on §12.8's routes:
-// challenge writes committed at a rising serial, at most two values a name, at most CapPerHour writes
-// a name an hour (D-DNS-8), and Ready and CanaryClean answering what a test scripts, ready and clean
-// when it scripts nothing. Tied to a Pebble, a write serves its values to Pebble's validation authority
-// at once, as a ready serial would. Safe for concurrent use.
+// challenge writes committed at a rising serial, at most two values a name, at most ten writes a name an
+// hour (D-DNS-8), a write past them refused as the client answers dns's 429, naming the name and how long
+// until it takes a write again (QD-1204), and Ready and CanaryClean answering what a test scripts, ready
+// and clean when it scripts nothing. Tied to a Pebble, a write serves its values to Pebble's validation
+// authority at once, as a ready serial would. Safe for concurrent use.
 
 package sidecartest
 
@@ -21,15 +22,29 @@ import (
 
 var _ certsservice.CertsDns = (*FakeCertsDns)(nil)
 
-// What a name's write may hold at most, and writes a name an hour (§12.8, D-DNS-8).
-const (
-	fakeCertsDnsMaxValueCount = 2
-	fakeCertsDnsCapPerHour    = 10
-)
+// What a name's write may hold, and how many writes a name takes in a window: dns's route's numbers
+// (§12.8, D-DNS-8).
+type fakeCertsDnsSettings struct {
+	// The most values one write holds: 2.
+	valueMaxCount int
+	// The most writes a name takes in writeWindow, dns_challenges_per_name_hour: 10.
+	writeMaxCount int
+	// The window writeMaxCount counts over: an hour. A write leaves it once it is this old.
+	writeWindow time.Duration
+}
+
+func defaultFakeCertsDnsSettings() *fakeCertsDnsSettings {
+	return &fakeCertsDnsSettings{
+		valueMaxCount: 2,
+		writeMaxCount: 10,
+		writeWindow:   1 * time.Hour,
+	}
+}
 
 // One test's DNS-01 routes.
 type FakeCertsDns struct {
-	clock Clock
+	clock    Clock
+	settings *fakeCertsDnsSettings
 	// Pebble's DNS, nil when the fake stands alone
 	server *pebbleDns
 
@@ -53,7 +68,12 @@ func NewFakeCertsDns(clock Clock) *FakeCertsDns {
 	if clock == nil {
 		clock = sidecar.RealClock{}
 	}
-	return &FakeCertsDns{clock: clock, nameValues: map[string][]string{}, nameWrites: map[string][]time.Time{}}
+	return &FakeCertsDns{
+		clock:      clock,
+		settings:   defaultFakeCertsDnsSettings(),
+		nameValues: map[string][]string{},
+		nameWrites: map[string][]time.Time{},
+	}
 }
 
 func newFakeCertsDns(server *pebbleDns) *FakeCertsDns {
@@ -135,18 +155,25 @@ func (self *FakeCertsDns) WriteAcmeChallenge(ctx context.Context, name string, v
 		self.writeErrors = self.writeErrors[1:]
 		return 0, err
 	}
-	if len(values) == 0 || fakeCertsDnsMaxValueCount < len(values) {
+	if len(values) == 0 || self.settings.valueMaxCount < len(values) {
 		return 0, errors.New("a challenge write holds one or two values")
 	}
 	recent := []time.Time{}
 	for _, writeTime := range self.nameWrites[name] {
-		if now.Sub(writeTime) < time.Hour {
+		if now.Sub(writeTime) < self.settings.writeWindow {
 			recent = append(recent, writeTime)
 		}
 	}
-	if fakeCertsDnsCapPerHour <= len(recent) {
+	if self.settings.writeMaxCount <= len(recent) {
 		self.nameWrites[name] = recent
-		return 0, certsservice.ErrCertsDnsWriteRefused
+		rateErr := &certsservice.CertsDnsWriteRateLimitError{Name: name}
+		if 0 < self.settings.writeMaxCount {
+			// the name takes a write once the write whose leaving brings it below the cap has left the window
+			slices.SortFunc(recent, func(a time.Time, b time.Time) int { return a.Compare(b) })
+			freeTime := recent[len(recent)-self.settings.writeMaxCount].Add(self.settings.writeWindow)
+			rateErr.RetryAfter = freeTime.Sub(now)
+		}
+		return 0, rateErr
 	}
 	self.nameWrites[name] = append(recent, now)
 	self.serial += 1

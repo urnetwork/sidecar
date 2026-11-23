@@ -93,6 +93,9 @@ const (
 	// An order of another set that shares one of its _acme-challenge names is under way at a CA, as the
 	// network's pair alone and a set with a live alias's pair beside it share theirs (QD-1203).
 	CertsWaitNameUnderWay CertsWaitReason = "name_under_way"
+	// dns refused a write at one of its _acme-challenge names past dns_challenges_per_name_hour, which
+	// holds the name's orders until dns's Retry-After (QD-1204); a renewal waits on it too.
+	CertsWaitNameWrites CertsWaitReason = "name_writes"
 	// Its CSR no longer parses, or its predecessor's CA is unknown: it fails rather than waits.
 	CertsWaitUnusable CertsWaitReason = "unusable"
 )
