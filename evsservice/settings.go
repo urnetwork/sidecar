@@ -1,7 +1,10 @@
-// What tunes the evs engine (connect/CODESTYLE.md's settings rule): every timing, count and size that is policy
-// rather than format. A bound the design's argument needs, such as repo/'s 5 s cache inside step 7's window, is a
-// ceiling Validate holds, so a setting can shorten it and never stretch it. Format values (a batch's 256 KiB, a
-// head's 255 window entries, 8 refusal records) stay constants beside their codecs.
+// What tunes the evs engine (connect/CODESTYLE.md's settings rule): every timing, count and size, each a field here
+// and read where it is used. A bound the design's argument needs, such as repo/'s 5 s cache inside step 7's window,
+// is a field too, its default the design's value (QD-702), and a ceiling or floor Validate holds the setting it bounds
+// to, so a deployment can shorten such a setting and never stretch it, and raising the bound itself changes the
+// design's argument. Format limits move here as their files are touched, the protocol's value their default; the
+// rest still stand beside their codecs until QD-706's sweep, such as a batch's 256 KiB (evs_batch.go), a head's 255
+// window entries (evs_window.go), a log page's 1,000 statements (log.go) and a seal lease's 120 s (push_lease.go).
 
 package evsservice
 
@@ -15,39 +18,6 @@ import (
 
 // A settings value outside what the design allows.
 var ErrEvsSettings = errors.New("evs settings invalid")
-
-// §11.8's step-4 bound on a cached repo/: what linearization reads a repo's state through (§11.8's
-// linearizability), and the most RepoCacheTtl may be.
-const evsRepoCacheMaxTtl = 5 * time.Second
-
-// §11.9's cache row: a cached head is served only within 10 min of its cache time, which evs-24 publishes.
-const evsHeadCacheMaxServeAge = 10 * time.Minute
-
-// §11.7's stale row: a fold write's store deadline, 15 s after its head read, which the collection window's 15.3 s
-// wait counts on, so a setting may shorten it and never stretch it.
-const evsFoldMaxStaleDeadline = 15 * time.Second
-
-// §11.7's collect row: a fold writes over a covered marker only 150 ms past until_ms by its clock, so a setting may
-// lengthen the margin and never shorten it.
-const evsFoldMinCollectMargin = 150 * time.Millisecond
-
-// §11.8 step 7: the head If-Match is issued only within 5 s of step 4's reads, the bound linearization rests on
-// (repo/ and the authorization state read at most 5 s before the commit), so a setting may shorten it and never
-// stretch it.
-const evsPushMaxStepSevenWindow = 5 * time.Second
-
-// §11.8's fence row: an attempt ends 503 unknown on a fence_ms later than its arrival less 100 ms, the margin the
-// clocks' 50 ms bound needs, so a setting may widen it and never narrow it.
-const evsPushMinFenceMargin = 100 * time.Millisecond
-
-// §11.6's copy row: a copy rereads its head at least every 5 s (§11.7's stale rule), so a setting may shorten it and
-// never stretch it.
-const evsCopyMaxHeadRereadInterval = 5 * time.Second
-
-// DESIGN-DETAILS 14.2.4's settle age, which the takeover's and evacuation's DELETE of a slot wait out: the store's
-// second, by which a DELETE naming a LastModified also takes an object stored within it (QD-624), and a second for
-// the clocks, which the design holds to 50 ms. A setting may lengthen it and never shorten it.
-const evsSlotMinSettleAge = sidecar.BlobUnmodifiedSlack + time.Second
 
 // The engine's settings. Every field is read where it is used, from one instance.
 type EvsSettings struct {
@@ -68,7 +38,10 @@ type EvsSettings struct {
 	// nothing to it. Validate holds it to 1 or 2; it is a fact of the binary a test stands in for, not a knob.
 	InstanceFormat uint32
 
-	// How long a repo/ read stays cached in a process: §11.8 step 4's "cached at most 5 s". At most 5 s;
+	// §11.8's step-4 bound on a cached repo/, 5 s: what linearization reads a repo's state through (§11.8's
+	// linearizability), and the most RepoCacheTtl may be. The design's value (QD-702); positive.
+	RepoCacheMaxTtl time.Duration
+	// How long a repo/ read stays cached in a process: §11.8 step 4's "cached at most 5 s". At most RepoCacheMaxTtl;
 	// non-positive caches nothing, every read going to the cluster.
 	RepoCacheTtl time.Duration
 	// The most repo/ objects one process caches; past it one is evicted. Non-positive caches none.
@@ -101,8 +74,11 @@ type EvsSettings struct {
 	// Non-positive rereads at every check.
 	RevocationStreamInterval time.Duration
 
-	// §11.9's cache row: a cached head is served only within this of its cache time, 10 min. At most 10 min;
-	// non-positive serves no cached head.
+	// §11.9's cache row: a cached head is served only within 10 min of its cache time, which evs-24 publishes, and
+	// the most HeadCacheServeAge may be. The design's value (QD-702); positive.
+	HeadCacheMaxServeAge time.Duration
+	// §11.9's cache row: a cached head is served only within this of its cache time, 10 min. At most
+	// HeadCacheMaxServeAge; non-positive serves no cached head.
 	HeadCacheServeAge time.Duration
 	// {evsh_<repo_id>}'s ttl, which any ref's commit extends and which only bounds memory (§11.9; evs-24's
 	// ttl row): 10 min. Positive.
@@ -130,8 +106,12 @@ type EvsSettings struct {
 	// Non-positive keeps none, every creation rereading the chain's heads.
 	OverlayCacheCount int
 
+	// §11.7's stale row: a fold write's store deadline, 15 s after its head read, which the collection window's 15.3 s
+	// wait counts on, and the most FoldStaleDeadline may be. The design's value (QD-702); positive.
+	FoldMaxStaleDeadline time.Duration
 	// §11.7's stale row: every fold write carries a store deadline this long after the fold issued the cluster read
-	// of the head it relies on, 15 s, which a collection window's 15.3 s wait rests on. At most 15 s; positive.
+	// of the head it relies on, 15 s, which a collection window's 15.3 s wait rests on. At most FoldMaxStaleDeadline;
+	// positive.
 	FoldStaleDeadline time.Duration
 	// How long before that deadline a fold reads the head again rather than issue a write the store may refuse past
 	// it, 1 s. At least zero and below FoldStaleDeadline.
@@ -147,9 +127,12 @@ type EvsSettings struct {
 	// §11.7's when row (2): this long after a ref's last commit by this process, the process folds the rest, 10 min.
 	// Non-positive never.
 	FoldIdleDelay time.Duration
+	// §11.7's collect row: a fold writes over a covered marker only 150 ms past until_ms by its clock, and the least
+	// FoldCollectMargin may be. The design's value (QD-702); positive.
+	FoldMinCollectMargin time.Duration
 	// §11.7's collect row: a fold that read a head whose collection window is open writes over no marker the window
 	// covers until this long past until_ms by its own clock, 150 ms, which keeps it 100 ms past in UTC on a clock
-	// within 50 ms. At least 150 ms.
+	// within 50 ms. At least FoldMinCollectMargin.
 	FoldCollectMargin time.Duration
 	// retry_after_ms of §11.7's lag row's 429 FOLD_BEHIND, 1 s. Positive.
 	FoldBehindRetryAfter time.Duration
@@ -165,8 +148,12 @@ type EvsSettings struct {
 	// none.
 	LogPageCacheByteCount int64
 
+	// §11.8 step 7: the head If-Match is issued only within 5 s of step 4's reads, the bound linearization rests on
+	// (repo/ and the authorization state read at most 5 s before the commit), and the most PushStepSevenWindow may be.
+	// The design's value (QD-702); positive.
+	PushMaxStepSevenWindow time.Duration
 	// §11.8 step 7: the head If-Match is issued only within this of step 4's reads, else steps 4 and 5 run again,
-	// 5 s. At most 5 s; positive.
+	// 5 s. At most PushMaxStepSevenWindow; positive.
 	PushStepSevenWindow time.Duration
 	// What a page-out at step 6 leaves step 7 of that window: its deadline is this long before the window ends, 1 s.
 	// At least zero and below PushStepSevenWindow.
@@ -184,8 +171,11 @@ type EvsSettings struct {
 	// unknown, 3, and the wait between them, 200 ms. Positive count; the wait at least zero.
 	PushUnknownRereadCount    int
 	PushUnknownRereadInterval time.Duration
+	// §11.8's fence row: an attempt ends 503 unknown on a fence_ms later than its arrival less 100 ms, the margin the
+	// clocks' 50 ms bound needs, and the least PushFenceMargin may be. The design's value (QD-702); positive.
+	PushMinFenceMargin time.Duration
 	// §11.8's fence row: an attempt reading a fence_ms later than its arrival less this ends 503 unknown, 100 ms. At
-	// least 100 ms.
+	// least PushMinFenceMargin.
 	PushFenceMargin time.Duration
 	// §11.8's refuse row: a refusal meeting a refusal fence younger than this, by refused_ms, answers 429 instead
 	// of recording, 1 s. Positive.
@@ -298,8 +288,11 @@ type EvsSettings struct {
 	// sources stand, 150; the cluster's share comes from the write budget (WriteBudget.CopyOpsPerSecond). Positive.
 	CopyRepoOpsPerSecond        int
 	CopyRepoSourcesOpsPerSecond int
+	// §11.6's copy row: a copy rereads its head at least every 5 s (§11.7's stale rule), and the most
+	// CopyHeadRereadInterval may be. The design's value (QD-702); positive.
+	CopyMaxHeadRereadInterval time.Duration
 	// §11.6's copy row: a copy rereads its ref's head at least this often, 5 s, the stale rule's bound on what its
-	// writes rely on. At most 5 s; positive.
+	// writes rely on. At most CopyMaxHeadRereadInterval; positive.
 	CopyHeadRereadInterval time.Duration
 	// How many times one move reads its entry again after a 412 or an unknown outcome before the job gives the run
 	// up to its retry, 16. Positive.
@@ -352,9 +345,14 @@ type EvsSettings struct {
 	// DESIGN-DETAILS 14.2.3: step 6's rounds for one new slot, each a create If-None-Match and, on a 412 or a lost
 	// answer, a GET and maybe a takeover; past them the push answers 503: 4. Positive.
 	SlotWriteRoundCount int
+	// DESIGN-DETAILS 14.2.4's settle age, which the takeover's and evacuation's DELETE of a slot wait out: the store's
+	// second, by which a DELETE naming a LastModified also takes an object stored within it (QD-624), and a second for
+	// the clocks, which the design holds to 50 ms, and the least SlotSettleAge may be. The design's value (QD-702);
+	// positive.
+	SlotMinSettleAge time.Duration
 	// DESIGN-DETAILS 14.2.4 and 14.2.5: a slot object is deleted, by a takeover or by evacuation, only once evs's clock
 	// is this far past its LastModified, by a DELETE naming that LastModified, so the DELETE can take no object
-	// created after it: 2 s, the store's second and a second for the clocks. At least 2 s.
+	// created after it: 2 s, the store's second and a second for the clocks. At least SlotMinSettleAge.
 	SlotSettleAge time.Duration
 	// DESIGN-DETAILS 14.2.2: the longest slot origin a create writes or a reader takes, 190 B; a longer value reads as
 	// no statement's. A format limit, so both the writer and every reader keep the protocol's value. At least the
@@ -387,6 +385,7 @@ func DefaultEvsSettings() *EvsSettings {
 		CreateWriteCount:            2,
 		Drop:                        DefaultDropSettings(),
 		InstanceFormat:              sidecar.EvsRepoFormat2,
+		RepoCacheMaxTtl:             5 * time.Second,
 		RepoCacheTtl:                5 * time.Second,
 		RepoCacheCount:              100 * 1000,
 		PriceBlockByteCount:         4 * 1024,
@@ -397,6 +396,7 @@ func DefaultEvsSettings() *EvsSettings {
 		StoreProbeInterval:          5 * time.Second,
 		StoreProbeTimeout:           2 * time.Second,
 		RevocationStreamInterval:    60 * time.Second,
+		HeadCacheMaxServeAge:        10 * time.Minute,
 		HeadCacheServeAge:           10 * time.Minute,
 		HeadCacheTtl:                10 * time.Minute,
 		FenceRetryCount:             8,
@@ -406,18 +406,21 @@ func DefaultEvsSettings() *EvsSettings {
 		BatchWriteInFlightCount:     2,
 		RecordCacheByteCount:        64 * 1024 * 1024,
 		OverlayCacheCount:           100 * 1000,
+		FoldMaxStaleDeadline:        15 * time.Second,
 		FoldStaleDeadline:           15 * time.Second,
 		FoldHeadRereadMargin:        time.Second,
 		FoldUnfoldedTriggerCount:    96,
 		FoldVersionCount:            64,
 		FoldTriggerInterval:         10 * time.Second,
 		FoldIdleDelay:               10 * time.Minute,
+		FoldMinCollectMargin:        150 * time.Millisecond,
 		FoldCollectMargin:           150 * time.Millisecond,
 		FoldBehindRetryAfter:        time.Second,
 		FoldEntryRetryCount:         16,
 		FoldListPageCount:           1000,
 		FoldRefStateCount:           100 * 1000,
 		LogPageCacheByteCount:       16 * 1024 * 1024,
+		PushMaxStepSevenWindow:      5 * time.Second,
 		PushStepSevenWindow:         5 * time.Second,
 		PushPageOutReserve:          time.Second,
 		PushConflictRetryCount:      8,
@@ -425,6 +428,7 @@ func DefaultEvsSettings() *EvsSettings {
 		PushRefusalRetryCount:       8,
 		PushUnknownRereadCount:      3,
 		PushUnknownRereadInterval:   200 * time.Millisecond,
+		PushMinFenceMargin:          100 * time.Millisecond,
 		PushFenceMargin:             100 * time.Millisecond,
 		RefusalFenceInterval:        time.Second,
 		PushAttemptTimeout:          25 * time.Second,
@@ -469,6 +473,7 @@ func DefaultEvsSettings() *EvsSettings {
 
 		CopyRepoOpsPerSecond:        50,
 		CopyRepoSourcesOpsPerSecond: 150,
+		CopyMaxHeadRereadInterval:   5 * time.Second,
 		CopyHeadRereadInterval:      5 * time.Second,
 		CopyMoveRetryCount:          16,
 		CopyListPageCount:           1000,
@@ -494,6 +499,7 @@ func DefaultEvsSettings() *EvsSettings {
 		SlotMaxByteCount:             8 * 1024,
 		SlotExistingMaxAge:           23 * time.Hour,
 		SlotWriteRoundCount:          4,
+		SlotMinSettleAge:             sidecar.BlobUnmodifiedSlack + time.Second,
 		SlotSettleAge:                2 * time.Second,
 		SlotOriginMaxByteCount:       190,
 		ResolveStatementLife:         35 * time.Minute,
@@ -504,8 +510,12 @@ func DefaultEvsSettings() *EvsSettings {
 	}
 }
 
-// The ceilings the design's arguments rest on, and the fields that must be positive.
+// The ceilings and floors the design's arguments rest on, and the fields that must be positive.
 func (self *EvsSettings) Validate() error {
+	if self.RepoCacheMaxTtl <= 0 || self.HeadCacheMaxServeAge <= 0 || self.FoldMaxStaleDeadline <= 0 || self.FoldMinCollectMargin <= 0 ||
+		self.PushMaxStepSevenWindow <= 0 || self.PushMinFenceMargin <= 0 || self.CopyMaxHeadRereadInterval <= 0 || self.SlotMinSettleAge <= 0 {
+		return fmt.Errorf("%w: a ceiling or floor of the design's arguments not positive", ErrEvsSettings)
+	}
 	if self.Place == nil {
 		return fmt.Errorf("%w: no place settings", ErrEvsSettings)
 	}
@@ -527,8 +537,8 @@ func (self *EvsSettings) Validate() error {
 	if self.SlotWriteRoundCount <= 0 {
 		return fmt.Errorf("%w: step 6's slot rounds not positive", ErrEvsSettings)
 	}
-	if self.SlotSettleAge < evsSlotMinSettleAge {
-		return fmt.Errorf("%w: a slot's settle age %s, below DESIGN-DETAILS 14.2.4's %s", ErrEvsSettings, self.SlotSettleAge, evsSlotMinSettleAge)
+	if self.SlotSettleAge < self.SlotMinSettleAge {
+		return fmt.Errorf("%w: a slot's settle age %s, below DESIGN-DETAILS 14.2.4's %s", ErrEvsSettings, self.SlotSettleAge, self.SlotMinSettleAge)
 	}
 	if longest := evsSlotOriginLongestByteCount(); self.SlotOriginMaxByteCount < longest {
 		return fmt.Errorf("%w: a slot origin bound of %d B, below the %d B a version-1 origin can take", ErrEvsSettings, self.SlotOriginMaxByteCount, longest)
@@ -539,8 +549,8 @@ func (self *EvsSettings) Validate() error {
 	if self.InstanceFormat != sidecar.EvsRepoFormat1 && self.InstanceFormat != sidecar.EvsRepoFormat2 {
 		return fmt.Errorf("%w: instance format %d is neither 1 nor 2", ErrEvsSettings, self.InstanceFormat)
 	}
-	if evsRepoCacheMaxTtl < self.RepoCacheTtl {
-		return fmt.Errorf("%w: repo/ cached %s, past step 4's %s", ErrEvsSettings, self.RepoCacheTtl, evsRepoCacheMaxTtl)
+	if self.RepoCacheMaxTtl < self.RepoCacheTtl {
+		return fmt.Errorf("%w: repo/ cached %s, past step 4's %s", ErrEvsSettings, self.RepoCacheTtl, self.RepoCacheMaxTtl)
 	}
 	if self.Place.NotFoundTtl < 0 {
 		return fmt.Errorf("%w: a negative place/ 404 ttl", ErrEvsSettings)
@@ -548,8 +558,8 @@ func (self *EvsSettings) Validate() error {
 	if self.CreateWriteCount <= 0 {
 		return fmt.Errorf("%w: a create of place/ or repo/ sent %d times, not positive", ErrEvsSettings, self.CreateWriteCount)
 	}
-	if evsHeadCacheMaxServeAge < self.HeadCacheServeAge {
-		return fmt.Errorf("%w: a cached head served %s, past §11.9's %s", ErrEvsSettings, self.HeadCacheServeAge, evsHeadCacheMaxServeAge)
+	if self.HeadCacheMaxServeAge < self.HeadCacheServeAge {
+		return fmt.Errorf("%w: a cached head served %s, past §11.9's %s", ErrEvsSettings, self.HeadCacheServeAge, self.HeadCacheMaxServeAge)
 	}
 	if self.HeadCacheTtl <= 0 || self.BatchLightLoadWindow <= 0 || self.BatchWriteInFlightCount <= 0 {
 		return fmt.Errorf("%w: a head cache ttl, light-load window and batch write count must be positive", ErrEvsSettings)
@@ -563,27 +573,27 @@ func (self *EvsSettings) Validate() error {
 	if _, err := DefaultPriceTable(self.PriceBlockByteCount); err != nil {
 		return fmt.Errorf("%w: %v", ErrEvsSettings, err)
 	}
-	if self.FoldStaleDeadline <= 0 || evsFoldMaxStaleDeadline < self.FoldStaleDeadline {
-		return fmt.Errorf("%w: a fold write's deadline %s, outside (0, %s]", ErrEvsSettings, self.FoldStaleDeadline, evsFoldMaxStaleDeadline)
+	if self.FoldStaleDeadline <= 0 || self.FoldMaxStaleDeadline < self.FoldStaleDeadline {
+		return fmt.Errorf("%w: a fold write's deadline %s, outside (0, %s]", ErrEvsSettings, self.FoldStaleDeadline, self.FoldMaxStaleDeadline)
 	}
 	if self.FoldHeadRereadMargin < 0 || self.FoldStaleDeadline <= self.FoldHeadRereadMargin {
 		return fmt.Errorf("%w: a fold's reread margin %s against its deadline %s", ErrEvsSettings, self.FoldHeadRereadMargin, self.FoldStaleDeadline)
 	}
-	if self.FoldCollectMargin < evsFoldMinCollectMargin {
-		return fmt.Errorf("%w: a fold's collection margin %s, below §11.7's %s", ErrEvsSettings, self.FoldCollectMargin, evsFoldMinCollectMargin)
+	if self.FoldCollectMargin < self.FoldMinCollectMargin {
+		return fmt.Errorf("%w: a fold's collection margin %s, below §11.7's %s", ErrEvsSettings, self.FoldCollectMargin, self.FoldMinCollectMargin)
 	}
 	if self.FoldVersionCount <= 0 || self.FoldTriggerInterval <= 0 || self.FoldBehindRetryAfter <= 0 ||
 		self.FoldEntryRetryCount <= 0 || self.FoldListPageCount <= 0 {
 		return fmt.Errorf("%w: a fold's version count, trigger interval, retry after, retry count and list page must be positive", ErrEvsSettings)
 	}
-	if self.PushStepSevenWindow <= 0 || evsPushMaxStepSevenWindow < self.PushStepSevenWindow {
-		return fmt.Errorf("%w: step 7's window %s, outside (0, %s]", ErrEvsSettings, self.PushStepSevenWindow, evsPushMaxStepSevenWindow)
+	if self.PushStepSevenWindow <= 0 || self.PushMaxStepSevenWindow < self.PushStepSevenWindow {
+		return fmt.Errorf("%w: step 7's window %s, outside (0, %s]", ErrEvsSettings, self.PushStepSevenWindow, self.PushMaxStepSevenWindow)
 	}
 	if self.PushPageOutReserve < 0 || self.PushStepSevenWindow <= self.PushPageOutReserve {
 		return fmt.Errorf("%w: a page-out's reserve %s against step 7's window %s", ErrEvsSettings, self.PushPageOutReserve, self.PushStepSevenWindow)
 	}
-	if self.PushFenceMargin < evsPushMinFenceMargin {
-		return fmt.Errorf("%w: a fence margin %s, below §11.8's %s", ErrEvsSettings, self.PushFenceMargin, evsPushMinFenceMargin)
+	if self.PushFenceMargin < self.PushMinFenceMargin {
+		return fmt.Errorf("%w: a fence margin %s, below §11.8's %s", ErrEvsSettings, self.PushFenceMargin, self.PushMinFenceMargin)
 	}
 	if self.PushConflictRetryCount <= 0 || self.PushRerunCount <= 0 || self.PushRefusalRetryCount <= 0 ||
 		self.PushUnknownRereadCount <= 0 || self.PushUnknownRereadInterval < 0 || self.RefusalFenceInterval <= 0 ||
@@ -627,8 +637,8 @@ func (self *EvsSettings) Validate() error {
 		self.CopyListPageCount <= 0 || self.CopyLogPageCount <= 0 {
 		return fmt.Errorf("%w: a copy's rates, retry count and list page must be positive", ErrEvsSettings)
 	}
-	if self.CopyHeadRereadInterval <= 0 || evsCopyMaxHeadRereadInterval < self.CopyHeadRereadInterval {
-		return fmt.Errorf("%w: a copy's head reread %s, outside (0, %s]", ErrEvsSettings, self.CopyHeadRereadInterval, evsCopyMaxHeadRereadInterval)
+	if self.CopyHeadRereadInterval <= 0 || self.CopyMaxHeadRereadInterval < self.CopyHeadRereadInterval {
+		return fmt.Errorf("%w: a copy's head reread %s, outside (0, %s]", ErrEvsSettings, self.CopyHeadRereadInterval, self.CopyMaxHeadRereadInterval)
 	}
 	if self.PathEpochMaxSourceCount <= 0 || self.PathEpochBatchedMaxSourceCount <= 0 || self.PathEpochBatchedDelay <= 0 ||
 		self.PathMapMaxAge <= 0 || self.ReadPathMaxEpochCount <= 0 || self.PathEpochMaxCrossingCount <= 0 || self.PathMapListPageCount <= 0 {
