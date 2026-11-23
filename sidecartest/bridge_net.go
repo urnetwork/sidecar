@@ -845,15 +845,21 @@ func (self *BridgeNet) ConfigKey() *sidecar.EvsRepoKey {
 	return self.configKey
 }
 
-// The owner's device files block into the config head, with its base (`ur bridge block`).
+// The owner's device files block into the config head, with its base (`ur bridge block`), replacing the block the
+// bootstrap drew (§17.4's first block row): that base's pin, or the tip's where the bootstrap drew this very block,
+// which the owner's device signed alike, so the head holds it already.
 func (self *BridgeNet) SetBlock(block netip.Prefix) *bridge.AuthPin {
 	self.t.Helper()
 	signed := self.admission.Sign(self.admission.Owner(), bridge.SignedType_SIGNED_BRIDGE_BLOCK, &bridge.BridgeBlock{
 		Ipv4Prefix: BridgeNetPrefix(block),
 	})
-	return self.admission.SaveHead(func(head *sidecar.ConfigHead) (*sidecar.ConfigHead, error) {
+	pin := self.admission.SaveHeadIfAny(func(head *sidecar.ConfigHead) (*sidecar.ConfigHead, error) {
 		return head.WithFile(sidecar.ConfigHeadBridgeBlockPath, signed)
 	})
+	if pin == nil {
+		return self.admission.Tip()
+	}
+	return pin
 }
 
 // prefix as bridge.proto holds one.
