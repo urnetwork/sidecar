@@ -158,8 +158,8 @@ func (self *hintedReformWorld) formsPath() string {
 	return "/gkm/repos/" + hex.EncodeToString(self.world.RepoId.Bytes()) + "/forms"
 }
 
-// What device asks gkm from now on: each forms read answered by answer, given gkm's own reply and the reads before it,
-// the reads counted and told on formsRead once answered, and every other request listed.
+// What a device asked gkm since watchRequests: its forms reads, counted and each told on formsRead once answered, and
+// every other request, listed.
 type hintedReformRequests struct {
 	lock       sync.Mutex
 	formsReads int
@@ -167,6 +167,8 @@ type hintedReformRequests struct {
 	formsRead  chan struct{}
 }
 
+// Watches what device asks gkm from now on, each forms read answered by answer, which may change gkm's own reply and
+// is told how many reads came before it; nil answer leaves gkm's reply as it is.
 func (self *hintedReformWorld) watchRequests(device *FsKeysDevice, answer func(reply *protocol.GkmFormsReply, readCount int)) *hintedReformRequests {
 	world := self.world
 	requests := &hintedReformRequests{formsRead: make(chan struct{}, 64)}
