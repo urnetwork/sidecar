@@ -37,6 +37,12 @@
 // it is restored (gkm_reform.go's resume row; QD-1143). A join through this device's last-resort KeyPackage is noted
 // here: it owes a path-only commit at once (gkm_selfupdate.go), and upkeep replaces the package at its next pass,
 // reading LastResortJoinedAt through GkmUpkeepRole.
+//
+// A re-form names a new group, so the claim of its first generation hints the repo's readers on gkm:<new group>, a
+// group no member holds yet. A commit hint naming a group this device holds none of has it read the forms of the repos
+// it holds, and sync at once the one whose newest GroupForm names that group and verifies, which follows the form as a
+// resync's sync would (followHintedGroups). A group no verified newest form names is passed over, as every hint of a
+// group this device did not hold was before: the reads are all a forged one costs.
 
 package sidecar
 
@@ -55,6 +61,13 @@ import (
 
 // The keychain name of the time this device last joined through its last-resort KeyPackage.
 const gkmLastResortJoinedRecord = "last-resort-joined"
+
+// The hint work kind of the look for the repos hinted groups were re-formed from (followHintedGroups), one at a time
+// for the whole client.
+const gkmHintWorkHintedGroups = "hinted-groups"
+
+// The barrier where a look for the repos of hinted groups has ended (followHintedGroups), every follow it made done.
+const gkmBarrierHintedGroupsEnd = "gkm.hinted_groups.end"
 
 // What an external commit is checked on: the epoch a GroupInfo names, as its tree shows it. It is no group this
 // device holds, so nothing commits, processes or exports on it.
@@ -170,6 +183,166 @@ func (self *GkmGroupClient) SyncRepo(ctx context.Context, repoId Id) error {
 	// an epoch's GenWrap may have brought a generation this device had no delivery of
 	manager.walkLadderForLater(ctx, state, pins.groupId)
 	return nil
+}
+
+// The commit hint's handler, on the intake's goroutine (AttachHints): a group this device holds has its repo synced,
+// one sync at a time per repo; one it holds none of is queued for the look at its held repos' forms
+// (followHintedGroups), which runs on a goroutine of its own. Past HintPendingCount groups queued a new one is
+// dropped, which the resync covers.
+func (self *GkmGroupClient) takeCommitHint(ctx context.Context, wake *GkmHintWake) {
+	if wake.GroupId == nil {
+		return
+	}
+	groupId := *wake.GroupId
+	if repoId, ok := self.heldRepoOfGroup(groupId); ok {
+		kind := "commit"
+		if self.KeyDeliveryOnly() {
+			kind = "sync"
+		}
+		self.hintWork(ctx, kind, repoId, func() { self.logFlowError(kind, self.SyncRepo(ctx, repoId)) })
+		return
+	}
+	queued := func() bool {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		if _, ok := self.hintedGroupIdLooks[groupId]; ok {
+			return true
+		}
+		if self.settings.HintPendingCount <= len(self.hintedGroupIdLooks) {
+			return false
+		}
+		self.hintedGroupIdLooks[groupId] = 0
+		return true
+	}()
+	if queued {
+		self.hintWork(ctx, gkmHintWorkHintedGroups, Id{}, func() { self.followHintedGroups(ctx) })
+	}
+}
+
+// The look a commit hint naming a group this device holds none of asks for (takeCommitHint), one at a time for the
+// client. A re-form of a repo this device holds names a new group, and the claim of its first generation hints the
+// repo's readers on gkm:<new group> alone, so a member that passed the hint over followed the re-form only at its next
+// sync or resync, the hourly one at worst, holding no key of the new group's generations until then. Each pass takes
+// the groups queued and reads the forms of each repo this device holds a group of, once a pass, in the keychain's
+// order, until every group it took is followed. A repo whose newest
+// GroupForm names one of them, verifies under its signer's admitted key and re-forms another group, its signer allowed
+// to form the repo's group at the form's pin, is synced at once, as a resync syncs it: the sync follows the form,
+// checking it and the new group's ladder in full (adoptReformInFlow), and takes the new group's generations. A repo a
+// sync moved to one of them since its hint came is synced as a commit hint of a held group has it. Each sync runs on
+// the pass's goroutine, so a pass that ends, or waits, has finished every follow it made. A group no newest form names
+// so is looked for once more HintedGroupRecheckWait later, since a gkm process serves a repo's forms from a cache up
+// to its FormCacheTtl old, and then dropped: a hint is a wake and nothing more, so a forged one costs these reads and
+// changes nothing, and a form that does not verify, or whose signer the rule refuses, is left to the next sync, which
+// alarms it.
+func (self *GkmGroupClient) followHintedGroups(ctx context.Context) {
+	defer testHookBarrier(gkmBarrierHintedGroupsEnd, "")
+	for ctx.Err() == nil {
+		groupIdLooks := func() map[Id]int {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			taken := self.hintedGroupIdLooks
+			self.hintedGroupIdLooks = map[Id]int{}
+			return taken
+		}()
+		if len(groupIdLooks) == 0 {
+			return
+		}
+		repoIds, err := self.heldRepoIds()
+		if err != nil {
+			self.logFlowError("hinted groups", err)
+			return
+		}
+		followedGroupIds := map[Id]bool{}
+		for _, repoId := range repoIds {
+			if ctx.Err() != nil {
+				return
+			}
+			pins, err := self.repoPins(repoId)
+			if err != nil {
+				continue
+			}
+			groupId := pins.groupId
+			if _, hinted := groupIdLooks[groupId]; !hinted {
+				var reformed bool
+				if groupId, reformed = self.hintedReformOf(ctx, repoId, groupIdLooks); !reformed {
+					continue
+				}
+			}
+			followedGroupIds[groupId] = true
+			self.logFlowError("hinted re-form", self.SyncRepo(ctx, repoId))
+			if len(followedGroupIds) == len(groupIdLooks) {
+				// every group taken is followed: no other repo's forms are read
+				break
+			}
+		}
+		recheck := false
+		func() {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			for groupId, lookCount := range groupIdLooks {
+				if followedGroupIds[groupId] || self.settings.HintedGroupRecheckWait <= 0 || 0 < lookCount {
+					continue
+				}
+				if _, queued := self.hintedGroupIdLooks[groupId]; queued || self.settings.HintPendingCount <= len(self.hintedGroupIdLooks) {
+					continue
+				}
+				self.hintedGroupIdLooks[groupId] = lookCount + 1
+				recheck = true
+			}
+		}()
+		if recheck && self.wait(ctx, self.settings.HintedGroupRecheckWait) != nil {
+			return
+		}
+	}
+}
+
+// The group of groupIdLooks the repo's newest GroupForm at gkm names, where that form verifies under its signer's
+// admitted key, re-forms another group, and its signer may form the repo's group at the form's pin, as
+// adoptReformInFlow judges a form; false for none, for a form that fails, and for a gkm or a state that does not answer
+// now, which the next look or sync meets.
+func (self *GkmGroupClient) hintedReformOf(ctx context.Context, repoId Id, groupIdLooks map[Id]int) (Id, bool) {
+	state, err := self.keyState(repoId)
+	if err != nil {
+		return Id{}, false
+	}
+	reply, err := self.args.Api.Forms(ctx, repoId)
+	if err != nil {
+		if self.log.V(1).Enabled() {
+			self.log.Infof("[gkm]%s the forms a hinted group was looked for in did not read: %v", repoId, err)
+		}
+		return Id{}, false
+	}
+	signedForms := reply.GetForms()
+	if len(signedForms) == 0 {
+		return Id{}, false
+	}
+	newest := signedForms[len(signedForms)-1]
+	body := &protocol.GroupForm{}
+	if err := proto.Unmarshal(newest.GetBody(), body); err != nil {
+		return Id{}, false
+	}
+	groupId, err := IdFromBytes(body.GetGroupId())
+	if err != nil {
+		return Id{}, false
+	}
+	if _, hinted := groupIdLooks[groupId]; !hinted {
+		return Id{}, false
+	}
+	form, err := gkmParseGroupForm(state, repoId, newest)
+	if err != nil || form.previousGroupId == (Id{}) {
+		if self.log.V(1).Enabled() {
+			self.log.Infof("[gkm]%s the newest GroupForm names a hinted group and re-forms none that verifies: %v", repoId, err)
+		}
+		return Id{}, false
+	}
+	verdict, err := gkmJudgeFormSigner(state, repoId, form)
+	if err != nil || verdict.Refused {
+		if self.log.V(1).Enabled() {
+			self.log.Infof("[gkm]%s the newest GroupForm's signer is not judged allowed now: %s %v", repoId, verdict.Detail, err)
+		}
+		return Id{}, false
+	}
+	return groupId, true
 }
 
 // The behind, resync and probe rows for a device that holds, or held, a leaf of the repo's group. Nothing for one
