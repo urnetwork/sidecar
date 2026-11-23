@@ -254,7 +254,8 @@ type subprotocolStats struct {
 	panicCount atomic.Uint64
 	// Hellos this side refused
 	helloRefusedCount atomic.Uint64
-	// fresh Hellos run on a HelloResult no Hello of this side's awaited, from a sidecar it held no Hello with (QD-1197)
+	// fresh Hellos started on a HelloResult no Hello of this side's awaited, from a sidecar it held no Hello with and
+	// had none in flight to (QD-1197): one a Hello, however many such HelloResults came while it was in flight
 	helloUnaskedCount atomic.Uint64
 	// call sends connect refused before the deadline, sent again
 	callSendRetryCount atomic.Uint64

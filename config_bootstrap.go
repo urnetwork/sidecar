@@ -26,8 +26,15 @@
 // the push already carries. A kill after the draft and before base 1 drafts the same id and RK_1 again. A test's ref
 // that keys and sends the head itself (Heads) takes the draft's and the commit's place.
 //
+// The first head carries the network's first bridge block (§17.4's first block row; plan-BRIDGE-small-readings #13): a
+// /16 ChooseBridgeBlock draws, in a BridgeBlock this device signs, the Owner's untagged device every reader of base 1
+// takes a head's block from, unless the caller's files hold one already. Of two first devices racing, each draws its
+// own, and only the winner's head is ever pushed, so the network holds one block.
+//
 // A retry posts the same base 1 only where it signs the same genesis, head and push again, which this function does not
 // keep: a kill after base 1 leaves the device's own genesis at entry 0, so a retry with a new genesis answers Won false.
+// A retry draws another block too, so a caller whose Prepare gives back a push it kept restores that push's block in
+// Initialize, or passes it in Files.
 //
 // Every leg but the iOS extension's. Nothing here creates, derives or unwraps a key: the identity key signs through
 // Sign, and the draft's key is GkmClient's.
@@ -40,6 +47,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -73,8 +81,11 @@ type ConfigBootstrapArgs struct {
 	// EvsClient.CreateRepo for the config kind, by ConfigRepoId and filing nothing, since the Genesis names it:
 	// placement, KF1 at S(1) over the drafted RK_1 (GkmClient.CreateGroup), activation. Nil runs none.
 	CreateRepo func(ctx context.Context) error
-	// The first head's files beside its genesis, a policy or a ServiceSettings; nil for none.
+	// The first head's files beside its genesis, a policy or a ServiceSettings; nil for none. A bridge/block here stands,
+	// and no block is drawn.
 	Files map[string][]byte
+	// The first bridge block's draw (the file header); nil is crypto/rand's reader.
+	BridgeBlockRandom io.Reader
 	// The Genesis's time_ms; nil is real time.
 	Clock Clock
 }
@@ -151,6 +162,11 @@ func BootstrapNetwork(ctx context.Context, args *ConfigBootstrapArgs) (*ConfigBo
 		files[path] = bytes.Clone(data)
 	}
 	files[ConfigHeadGenesisPath] = signedGenesis
+	if files[ConfigHeadBridgeBlockPath] == nil {
+		if files[ConfigHeadBridgeBlockPath], err = bridgeFirstBlockRecord(args.Sign, args.BridgeBlockRandom); err != nil {
+			return nil, fmt.Errorf("config bootstrap: the first bridge block: %w", err)
+		}
+	}
 	head, err := NewConfigHead(files)
 	if err != nil {
 		return nil, err
