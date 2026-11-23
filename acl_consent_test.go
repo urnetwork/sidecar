@@ -5,10 +5,12 @@
 package sidecar
 
 import (
+	"cmp"
 	"crypto/sha256"
 	"embed"
 	"encoding/json"
 	"io/fs"
+	"slices"
 	"strings"
 	"testing"
 
@@ -122,14 +124,25 @@ func aclConsentVectorView(t *testing.T, vector *aclConsentVector) *aclTestView {
 		if sidecar.Invited {
 			row.Capabilities |= uint32(bridge.SidecarCapability_SIDECAR_CAPABILITY_INVITED)
 		}
+		// each confirmation joins the row's history too, in log order, as configConfirmSidecar records it: the history
+		// is what §8.5's replay reads (QD-1208)
 		if sidecar.OwnerConfirm != nil {
 			row.OwnerConfirmSigner = aclConsentVectorSigner(sidecar.OwnerConfirm.Signer)
 			row.OwnerConfirmedAt = sidecar.OwnerConfirm.At
+			row.Confirmations = append(row.Confirmations, &bridge.ConfirmationRow{
+				Kind: configConfirmOwner, Signer: row.OwnerConfirmSigner, At: row.OwnerConfirmedAt,
+			})
 		}
 		if sidecar.Confirm != nil {
 			row.ConfirmSigner = aclConsentVectorSigner(sidecar.Confirm.Signer)
 			row.ConfirmedAt = sidecar.Confirm.At
+			row.Confirmations = append(row.Confirmations, &bridge.ConfirmationRow{
+				Kind: configConfirmAdmission, Signer: row.ConfirmSigner, At: row.ConfirmedAt,
+			})
 		}
+		slices.SortStableFunc(row.Confirmations, func(a *bridge.ConfirmationRow, b *bridge.ConfirmationRow) int {
+			return cmp.Compare(a.GetAt(), b.GetAt())
+		})
 		view.sidecars[sidecarId] = &AclSidecar{Row: row, MemberId: aclConsentVectorId(sidecar.Member), Ephemeral: sidecar.Ephemeral}
 	}
 	for _, parked := range vector.Parked {
@@ -261,8 +274,7 @@ func TestAclOwnerBoundReadsFollowConsent(t *testing.T) {
 	adminDevice := fixture.invitedDevice(admin)
 	a := fixture.invitedDevice(member)
 	g := fixture.device(member, adminDevice.Bytes())
-	fixture.admission(g).Row.OwnerConfirmSigner = a.Bytes()
-	fixture.admission(g).Row.OwnerConfirmedAt = fixture.next()
+	fixture.confirm(g, configConfirmOwner, a.Bytes())
 	vaultId, vault := fixture.repo(protocol.RepoKind_REPO_KIND_VAULT, member)
 	vault.ConsentedSidecarIds = [][]byte{a.Bytes(), g.Bytes()}
 	if rights := aclTestRights(fixture.state(t), g, vaultId, AclTokenAudienceEvs); rights != AclEvsRead|AclEvsWrite|AclEvsDeposit {
