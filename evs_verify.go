@@ -452,6 +452,13 @@ func evsUnjudgedSignerKey(newest GkmAuthView, signerId Id, pin *bridge.AuthPin) 
 	return identityKey, nil
 }
 
+// evsUnjudgedSignerKey for a gate that takes a statement pinned before what its state retains as a reader does: evs's
+// re-seed (evsservice/reseed.go), whose gate state is a *ConfigState, so the same rows give the same key and the same
+// refusal on both sides.
+func EvsUnjudgedSignerKey(newest GkmAuthView, signerId Id, pin *bridge.AuthPin) ([]byte, error) {
+	return evsUnjudgedSignerKey(newest, signerId, pin)
+}
+
 // §11.8's refs table again over a verified statement's payload, as a replaying reader holds it: changes are the push's
 // own, each with its entry version, and pathOf gives each change's path as the reader's replay holds it, nil for a path
 // it holds none of. What VerifyStatement leaves a statement read alone to, a write on a base of a record-class stream,
