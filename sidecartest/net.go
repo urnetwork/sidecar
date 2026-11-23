@@ -1,6 +1,8 @@
 // T2's world in one process (§22.4): one clock, one fault queue, one barrier driver, the actors of a
 // schedule, and a ServiceHost, fake unless a test gives another. net_connect.go adds connect clients on
-// an in-process exchange. A Net is built per test and closed at its end.
+// an in-process exchange. A Net is built per test and closed at its end, and Close joins every connect
+// client the Net ran (QD-1224), so none returns pool buffers into the next test's window: whatever does
+// not join within NetSettings.ClientCloseTimeout is reported, failing the test unless the test takes it.
 //
 // T3 is the same Net with NetSettings.Engines and NetSettings.Platform set: server's sidecart3 hosts the
 // engines on its real stores and the connect clients on its exchange, so fault's rules, which build every
@@ -13,11 +15,16 @@ package sidecartest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
+	"runtime"
 	"slices"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/urnetwork/connect"
 
 	"github.com/urnetwork/sidecar"
 )
@@ -37,6 +44,22 @@ type NetSettings struct {
 	// How long, in real time, AddSubprotocolSidecars waits for each sidecar's dispatcher to attach: 30 s, only a
 	// failure's bound.
 	SubprotocolAttachTimeout time.Duration
+	// How long, in real time, AddSidecar and a restart wait for a sidecar to come Online: 30 s. Every such wait is on a
+	// monitor, so this only stops a broken test from hanging, since connect's own timers are real (X9).
+	SidecarOnlineTimeout time.Duration
+	// How long, in real time, the Net waits for each connect client it ends to join its workers (Client.CloseAndWait): a
+	// client of the exchange's from the exchange's end, a resident's or a platform's from its close, and a sidecar's
+	// whole close, its generation's client among it. 30 s, only a failure's bound: a join that ends takes milliseconds,
+	// and one that passes it leaves the client's goroutines running, which CloseFailed reports. Zero or negative bounds
+	// nothing, so a join waits however long it takes.
+	ClientCloseTimeout time.Duration
+	// Takes what the Net or a fixture of its ended that did not join within ClientCloseTimeout, its goroutines still
+	// running: every one at the end of Close, joined, and one after Close at once. Nil panics with it there, once
+	// everything else has ended and the hooks are off, so the test fails rather than passing with them left behind.
+	CloseFailed func(err error)
+	// The bytes the goroutine dump in CloseFailed's panic first takes, doubled until the dump fits: 1 MiB, more than a
+	// test process's goroutines usually fill. Non-positive starts at one byte.
+	CloseDumpByteCount int
 	// Builds the host engines run on, once the clock, fault queue, barriers and fakes exist: nil keeps
 	// the fakes' (T2). Server's T3 (sidecart3) gives one on its real stores, wrapped so the Net's fault
 	// plans reach them, with what closes it at the Net's end, after the engines close. An error panics
@@ -74,6 +97,9 @@ func DefaultNetSettings() *NetSettings {
 		LinkSeed:                 1,
 		SendTimeout:              30 * time.Second,
 		SubprotocolAttachTimeout: 30 * time.Second,
+		SidecarOnlineTimeout:     30 * time.Second,
+		ClientCloseTimeout:       30 * time.Second,
+		CloseDumpByteCount:       1024 * 1024,
 	}
 }
 
@@ -146,6 +172,11 @@ type Net struct {
 
 	// the requesting daemons' approval worlds (approval_suite.go), which FI-7's oracle reads
 	approvalWorlds []*ApprovalWorld
+
+	// what ended past ClientCloseTimeout, for Close to report at its end (closeFailed), and whether it has, after
+	// which closeFailed reports at once
+	closeFailures       []error
+	closeFailedReported bool
 }
 
 // A fresh world. settings may be nil for the defaults. The caller closes it. Under sidecar_testhooks
@@ -202,7 +233,9 @@ func NewNet(ctx context.Context, settings *NetSettings) *Net {
 	return self
 }
 
-// Ends everything: sidecars and engines close, held and parked goroutines leave, and the hooks come off.
+// Ends everything: sidecars and engines close, held and parked goroutines leave, every connect client the Net ran
+// joins its workers, and the hooks come off, so nothing the Net ran is running when this returns. Whatever did not join
+// within ClientCloseTimeout is reported last (NetSettings.CloseFailed).
 func (self *Net) Close() {
 	self.closeTestSidecars()
 	var engines []sidecar.Engine
@@ -219,14 +252,106 @@ func (self *Net) Close() {
 		self.closeHost()
 		self.closeHost = nil
 	}
-	self.exchange.close()
+	// held and parked goroutines leave before the exchange joins its clients, so no client's callback waits at a
+	// barrier for a release that would only come after the join's bound
 	self.barriers.Close()
+	self.exchange.close()
 	self.closePush()
 	self.fakes.Redis.Close()
 	self.cancel()
 	if self.removeHooks != nil {
 		self.removeHooks()
 		self.removeHooks = nil
+	}
+	self.reportCloseFailures()
+}
+
+// A context for one join, ending at NetSettings.ClientCloseTimeout, or never where that is not positive. Not the Net's
+// own, which a test's end cancels before Close runs.
+func (self *Net) clientCloseContext() (context.Context, context.CancelFunc) {
+	if timeout := self.settings.ClientCloseTimeout; 0 < timeout {
+		return context.WithTimeout(context.Background(), timeout)
+	}
+	return context.WithCancel(context.Background())
+}
+
+// Closes client and waits for its workers within NetSettings.ClientCloseTimeout, reporting one still running past it
+// (closeFailed). Never call it from one of client's own callbacks, whose return the join waits for (connect's
+// CODESTYLE, goroutine lifecycle): such a caller hands it to another goroutine.
+func (self *Net) joinClient(name string, client *connect.Client) {
+	ctx, cancel := self.clientCloseContext()
+	defer cancel()
+	if err := client.CloseAndWait(ctx); err != nil {
+		self.closeFailed(fmt.Errorf("client %s did not join within %s: %w", name, self.settings.ClientCloseTimeout, err))
+	}
+}
+
+// Takes what a close of the Net's, or of a fixture on it, left running past ClientCloseTimeout: Close reports it at its
+// end, and once Close has reported, it is reported at once.
+func (self *Net) closeFailed(err error) {
+	reported := func() bool {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		if !self.closeFailedReported {
+			self.closeFailures = append(self.closeFailures, err)
+		}
+		return self.closeFailedReported
+	}()
+	if reported {
+		self.reportCloseFailure(err)
+	}
+}
+
+// Reports every failure closeFailed took, joined, and has later ones reported at once.
+func (self *Net) reportCloseFailures() {
+	var failures []error
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		failures = self.closeFailures
+		self.closeFailures = nil
+		self.closeFailedReported = true
+	}()
+	if 0 < len(failures) {
+		self.reportCloseFailure(errors.Join(failures...))
+	}
+}
+
+// Hands err to NetSettings.CloseFailed, or panics with it and connect's goroutines still running where that is nil.
+func (self *Net) reportCloseFailure(err error) {
+	if self.settings.CloseFailed != nil {
+		self.settings.CloseFailed(err)
+		return
+	}
+	stacks := connectGoroutineStacks(self.settings.CloseDumpByteCount)
+	panic(fmt.Errorf("the Net's close left work running: %w\nconnect's goroutines still running:\n%s", err, stacks))
+}
+
+// The stack of every goroutine running connect's code, blank-line separated as runtime.Stack gives them, from a dump
+// whose buffer starts at dumpByteCount.
+func connectGoroutineStacks(dumpByteCount int) string {
+	stacks := []string{}
+	for _, stack := range goroutineStacks(dumpByteCount) {
+		if strings.Contains(stack, connectFramePrefix) {
+			stacks = append(stacks, stack)
+		}
+	}
+	return strings.Join(stacks, "\n\n")
+}
+
+// What a frame of connect's code starts with in runtime.Stack's text.
+const connectFramePrefix = "github.com/urnetwork/connect."
+
+// Every goroutine's stack, as runtime.Stack gives it, one apiece, the caller's first, from a buffer that starts at
+// dumpByteCount and doubles until the dump fits. Stops the world while it copies.
+func goroutineStacks(dumpByteCount int) []string {
+	dump := make([]byte, max(dumpByteCount, 1))
+	for {
+		if n := runtime.Stack(dump, true); n < len(dump) {
+			return strings.Split(string(dump[:n]), "\n\n")
+		}
+		// a full buffer is a cut dump
+		dump = make([]byte, 2*len(dump))
 	}
 }
 

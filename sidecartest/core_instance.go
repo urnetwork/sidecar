@@ -122,8 +122,7 @@ func (self *TestInstance) start() error {
 		networkId := record.NetworkId
 		running, err := self.startSidecar(ctx, instance, &networkId)
 		if err != nil {
-			self.stop()
-			return fmt.Errorf("network %s: %w", networkId, err)
+			return errors.Join(fmt.Errorf("network %s: %w", networkId, err), self.stop())
 		}
 		self.stateLock.Lock()
 		self.sidecars[networkId] = running
@@ -154,7 +153,7 @@ func (self *TestInstance) startSidecar(ctx context.Context, instance *sidecar.Si
 // Enrolls a further network's Sidecar on the instance from a one-use auth key the api mints for networkId, recording
 // anchor as an invite's where it is not nil, and waits for it to be Online.
 func (self *TestInstance) AddSidecarIn(networkId sidecar.Id, anchor *sidecar.SidecarEnrollAnchor) (*sidecar.Sidecar, error) {
-	ctx, cancel := context.WithTimeout(self.net.ctx, testSidecarOnlineTimeout)
+	ctx, cancel := context.WithTimeout(self.net.ctx, self.net.settings.SidecarOnlineTimeout)
 	defer cancel()
 	instance, instanceCtx, err := func() (*sidecar.SidecarInstance, context.Context, error) {
 		self.stateLock.Lock()
@@ -208,13 +207,16 @@ func (self *TestInstance) Instance() *sidecar.SidecarInstance {
 }
 
 // Stops every Sidecar and the instance, as a killed daemon is, and starts them again on the durable state alone, each
-// recorded network's Sidecar through Start. Waits for each to be Online.
+// recorded network's Sidecar through Start. Waits for each to be Online. An instance a Sidecar of which did not stop is
+// not started again, since that Sidecar still runs on the state: stop's error comes back instead.
 func (self *TestInstance) Restart() error {
-	self.stop()
+	if err := self.stop(); err != nil {
+		return err
+	}
 	if err := self.start(); err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(self.net.ctx, testSidecarOnlineTimeout)
+	ctx, cancel := context.WithTimeout(self.net.ctx, self.net.settings.SidecarOnlineTimeout)
 	defer cancel()
 	self.stateLock.Lock()
 	sidecars := []*sidecar.Sidecar{}
@@ -230,8 +232,10 @@ func (self *TestInstance) Restart() error {
 	return nil
 }
 
-// Stops every Sidecar and the instance, keeping the durable state.
-func (self *TestInstance) stop() {
+// Stops every Sidecar and the instance, keeping the durable state. Answers an error naming each Sidecar whose close did
+// not end within NetSettings.ClientCloseTimeout, what it ran then still running; each such Sidecar stays for the next
+// stop to wait for again, so a Close after a failed Restart reports one still running.
+func (self *TestInstance) stop() error {
 	running, instance, cancel := func() ([]*sidecar.Sidecar, *sidecar.SidecarInstance, context.CancelFunc) {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
@@ -240,9 +244,21 @@ func (self *TestInstance) stop() {
 		self.sidecars = map[sidecar.Id]*sidecar.Sidecar{}
 		return running, instance, cancel
 	}()
+	var errs []error
 	for _, each := range running {
-		closeCtx, closeCancel := context.WithTimeout(context.Background(), testSidecarOnlineTimeout)
-		each.CloseAndWait(closeCtx)
+		closeCtx, closeCancel := self.net.clientCloseContext()
+		if err := each.CloseAndWait(closeCtx); err != nil {
+			network := "no network"
+			if networkId := each.NetworkId(); networkId != nil {
+				network = fmt.Sprintf("network %s", *networkId)
+			}
+			errs = append(errs, fmt.Errorf("%s's sidecar of %s did not close within %s: %w", self.Name, network, self.net.settings.ClientCloseTimeout, err))
+			func() {
+				self.stateLock.Lock()
+				defer self.stateLock.Unlock()
+				self.running = append(self.running, each)
+			}()
+		}
 		closeCancel()
 	}
 	if instance != nil {
@@ -251,9 +267,11 @@ func (self *TestInstance) stop() {
 	if cancel != nil {
 		cancel()
 	}
+	return errors.Join(errs...)
 }
 
-// Ends every Sidecar and the instance. Safe to call again.
+// Ends every Sidecar and the instance, and reports a Sidecar that did not end in time (Net.closeFailed): a test closes
+// the instance before the Net, whose Close reports it. Safe to call again.
 func (self *TestInstance) Close() {
 	self.stateLock.Lock()
 	if self.closed {
@@ -262,7 +280,9 @@ func (self *TestInstance) Close() {
 	}
 	self.closed = true
 	self.stateLock.Unlock()
-	self.stop()
+	if err := self.stop(); err != nil {
+		self.net.closeFailed(err)
+	}
 }
 
 // Waits until running's state is state, or ctx ends.

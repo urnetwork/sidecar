@@ -20,16 +20,11 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
-	"time"
 
 	"github.com/urnetwork/connect"
 
 	"github.com/urnetwork/sidecar"
 )
-
-// How long, in real time, AddSidecar waits for a sidecar to be Online. Every wait is on a monitor; this only stops a
-// broken test from hanging, since connect's own timers are real (X9).
-const testSidecarOnlineTimeout = 30 * time.Second
 
 // The platform url a test sidecar names: a .example host nothing dials, since its platform is the exchange.
 const testSidecarPlatformUrl = "wss://platform.sidecartest.example"
@@ -404,16 +399,21 @@ func (self *TestSidecar) start() error {
 	return nil
 }
 
-// Stops the Sidecar and its instance and waits for them, keeping the durable state.
-func (self *TestSidecar) stop() {
+// Stops the Sidecar and its instance and waits for them, keeping the durable state. Answers an error naming the
+// sidecar when its close, its generation's client's join among it, did not end within NetSettings.ClientCloseTimeout,
+// what it ran then still running.
+func (self *TestSidecar) stop() error {
 	self.stateLock.Lock()
 	running := self.sidecar
 	instance := self.instance
 	cancel := self.cancel
 	self.stateLock.Unlock()
+	var err error
 	if running != nil {
-		closeCtx, closeCancel := context.WithTimeout(context.Background(), testSidecarOnlineTimeout)
-		running.CloseAndWait(closeCtx)
+		closeCtx, closeCancel := self.net.clientCloseContext()
+		if closeErr := running.CloseAndWait(closeCtx); closeErr != nil {
+			err = fmt.Errorf("sidecar %s did not close within %s: %w", self.Name, self.net.settings.ClientCloseTimeout, closeErr)
+		}
 		closeCancel()
 	}
 	if instance != nil {
@@ -422,16 +422,21 @@ func (self *TestSidecar) stop() {
 	if cancel != nil {
 		cancel()
 	}
+	return err
 }
 
 // Stops the sidecar as a killed daemon is, and starts it again on its durable state alone: the backend and the key
-// store.
+// store. A sidecar that did not stop is not started again, since its predecessor still runs on that state: stop's
+// error comes back instead.
 func (self *TestSidecar) Restart() error {
-	self.stop()
+	if err := self.stop(); err != nil {
+		return err
+	}
 	return self.start()
 }
 
-// Ends the sidecar, waiting for its generation and components. Safe to call again.
+// Ends the sidecar, waiting for its generation and components, and reports one that did not end in time
+// (Net.closeFailed). Safe to call again.
 func (self *TestSidecar) Close() {
 	self.stateLock.Lock()
 	if self.closed {
@@ -440,7 +445,9 @@ func (self *TestSidecar) Close() {
 	}
 	self.closed = true
 	self.stateLock.Unlock()
-	self.stop()
+	if err := self.stop(); err != nil {
+		self.net.closeFailed(err)
+	}
 }
 
 // The Net's api, which AddSidecar enrolls through, made on first use on the Net's host.
@@ -536,7 +543,7 @@ func (self *Net) AddSidecarIn(name string, networkId sidecar.Id, settings *sidec
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(self.ctx, testSidecarOnlineTimeout)
+	ctx, cancel := context.WithTimeout(self.ctx, self.settings.SidecarOnlineTimeout)
 	defer cancel()
 	if err := testSidecar.AwaitState(ctx, sidecar.SidecarStateUnenrolled); err != nil {
 		return nil, err

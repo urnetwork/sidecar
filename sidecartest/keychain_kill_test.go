@@ -170,15 +170,15 @@ func awaitKeychainKillState(ctx context.Context, testSidecar *TestSidecar, state
 }
 
 // Closes testSidecar, waiting under ctx for its generation and components to end, so none of it runs on beside the
-// next process on its directory: TestSidecar.stop's own wait is a fixed one, past which it goes on with the Sidecar
-// still closing.
+// next process on its directory: TestSidecar.stop's own wait is NetSettings.ClientCloseTimeout, past which it answers
+// with the Sidecar still closing.
 func closeKeychainKillSidecar(ctx context.Context, testSidecar *TestSidecar) error {
-	err := testSidecar.Sidecar().CloseAndWait(ctx)
-	testSidecar.stop()
-	if err != nil {
-		return fmt.Errorf("the sidecar did not close: %w", err)
+	closeErr := testSidecar.Sidecar().CloseAndWait(ctx)
+	stopErr := testSidecar.stop()
+	if closeErr != nil {
+		return errors.Join(fmt.Errorf("the sidecar did not close: %w", closeErr), stopErr)
 	}
-	return nil
+	return stopErr
 }
 
 // One process's view of its medium: alive until the writer's step killAt, then dead for every caller. Safe for
