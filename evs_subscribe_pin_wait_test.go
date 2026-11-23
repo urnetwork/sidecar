@@ -107,7 +107,7 @@ func evsTestAwaitPinReleases(t *testing.T, test *evsTestClient, count int) {
 	}
 }
 
-// main's pin on the subscriber, 0 for none.
+// The version the subscriber holds main pinned at, 0 for none.
 func (self *evsTestPinWaitWorld) mainPin() uint64 {
 	pin, ok, _ := self.subscriber.client.pins.Pin(self.repoId, self.world.refId)
 	if !ok {
