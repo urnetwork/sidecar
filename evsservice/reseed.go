@@ -44,6 +44,21 @@
 // re-seed uploads while reseed is on). Step 6 writes no slot: the bodies a payload carries are as old as the push,
 // and slots come last, stripped.
 //
+// A statement whose auth pin lies before what evs's state retains is taken unjudged, as a reader takes one (QD-1178,
+// QD-1182; evs_verify.go's VerifyStatement): bases land with every confirmed ACL save and each fold, and a new site's
+// gate cache starts at the newest base, so otherwise every call of a history a day or two old would answer 503 and
+// the walk would never finish. Its signature is checked under the key evs's oldest retained rows that admit its
+// signer give it (sidecar.EvsUnjudgedSignerKey), and refused 400 INVALID where none admits the signer at the pin: one
+// never admitted, one admitted after the pin, one revoked at or before it. Nothing else of the signer is judged at a
+// state evs no longer holds: the refs table holds the statement to its ref's own rules, kind, mode, owner, flags and
+// changes, asking its signer no right, and format 2's rules leave the repo's lock and a DROP's consent unjudged, the
+// repo's kind coming from repo/ (reseedUnjudgedAuth). A pin off evs's chain is still a fork wherever evs's state
+// holds a chain value it contradicts, and one above evs's state still answers 503 until the state reaches it
+// (QD-1202's reading of a pin ahead of the tip). The rest holds as for any re-seeded statement: 5a, the fence, the
+// pins never falling below the head's, 5e to 5h. As for a reader, such a history stands on its signatures alone: a
+// device holding a key the rows once admitted could re-seed statements no writer signed, which a reader whose pin
+// lies past them refuses as a fork.
+//
 // So a git-mode push, and a file-mode push on the head, chain onto the current head, base_version and base_chain
 // equal to it (QD-725), a git-mode one also waiting out another push's live seal lease. A file-mode push that a
 // concurrent writer built on an older base commits on that base as it first did: inside 5f's window below the head,
@@ -77,9 +92,8 @@
 // INVALID, so no reseed record keeps a key an ERASE may have destroyed, and the push's slots return by their own
 // calls, stripped.
 //
-// Format 2's rules, a format-2 push's at a format-2 instance, are reseed_format2.go's (EVS2-M10-13). Not built here,
-// refused before anything is written: a statement at an auth pin evs's state does not retain. A reading waits on its
-// question: a slot call names its version by the statement it carries (evs-reseed-route-slot-naming).
+// Format 2's rules, a format-2 push's at a format-2 instance, are reseed_format2.go's (EVS2-M10-13). A reading waits
+// on its question: a slot call names its version by the statement it carries (evs-reseed-route-slot-naming).
 
 package evsservice
 
@@ -91,6 +105,8 @@ import (
 	"net/http"
 	"slices"
 	"time"
+
+	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
@@ -394,8 +410,8 @@ func (self *EvsEngine) newReseedAttempt(request *EvsRequest, body *protocol.EvsR
 		attempt.recordPayloadBytes = recordPayload
 	}
 
-	// the signature before any store read, at the statement's own auth pin: a statement nobody the log admitted
-	// signed costs evs nothing
+	// the signature before any store read, at the statement's own auth pin, or under its signer's retained key for a
+	// pin evs no longer retains: a statement nobody the log admitted signed costs evs nothing
 	attempt.networkId = attempt.tokenNetworkId
 	if self.deps.GateViews == nil {
 		request.Unavailable(nil)
@@ -406,9 +422,9 @@ func (self *EvsEngine) newReseedAttempt(request *EvsRequest, body *protocol.EvsR
 		request.Unavailable(nil)
 		return nil, false
 	}
-	state, refusal := reseedPinState(gateView, push)
+	pin, refusal := reseedPinState(gateView, push)
 	if refusal == nil {
-		refusal = checkReseedSignature(&PushView{RepoId: attempt.repoId, Statement: statement, Auth: state})
+		refusal = checkReseedSignature(&PushView{RepoId: attempt.repoId, Statement: statement}, pin)
 	}
 	if refusal != nil {
 		reply := refusal.Reply(attempt.pushId)
@@ -424,30 +440,77 @@ func (self *EvsEngine) newReseedAttempt(request *EvsRequest, body *protocol.EvsR
 	return attempt, true
 }
 
-// The state at the statement's own auth pin on evs's chain: what its signature and the refs table are judged at. A
-// pin above evs's state, or one evs no longer retains, answers 503, refusing nothing; one off the chain is a fork.
-func reseedPinState(gateView sidecar.GkmAuthView, push *protocol.EvsPush) (sidecar.GkmAuthView, *EvsCheckRefusal) {
+// What a re-seeded statement is judged at on evs's chain (see the file header).
+type reseedPin struct {
+	// The state the checks read as the statement's: the state at its own auth pin, or for an unjudged statement evs's
+	// newest state as reseedUnjudgedAuth gives it.
+	auth sidecar.GkmAuthView
+	// evs's newest state, whose retained rows give an unjudged statement's signer its key.
+	newest sidecar.GkmAuthView
+	// The pin lies before what evs's state retains, so nothing of the signer is judged at it (QD-1178).
+	unjudged bool
+}
+
+// The state at the statement's own auth pin on evs's chain, which its signature, the refs table and format 2's rules
+// are judged at; for a pin before what evs's state retains, an unjudged pin, its statement taken on its signature
+// alone (QD-1178). A pin above evs's state answers 503, refusing nothing, since the state may not have reached it
+// yet; one off the chain, as far as evs's state holds chain values, is a fork.
+func reseedPinState(gateView sidecar.GkmAuthView, push *protocol.EvsPush) (*reseedPin, *EvsCheckRefusal) {
 	if gateView == nil {
 		return nil, newEvsCheckRefusal(EvsCheckReasonGateUnknown, "no authorization state")
 	}
 	state, err := gateView.At(push.GetAuth())
 	switch {
 	case err == nil && state != nil:
-		return state, nil
+		return &reseedPin{auth: state, newest: gateView}, nil
 	case err == nil:
 		return nil, newEvsCheckRefusal(EvsCheckReasonGateUnknown, "no state at the statement's auth pin")
 	case errors.Is(err, sidecar.ErrGkmAuthAhead):
 		return nil, newEvsCheckRefusal(EvsCheckReasonGateUnknown, "an auth pin above evs's state")
 	case errors.Is(err, sidecar.ErrGkmAuthNotRetained):
-		return nil, newEvsCheckRefusal(EvsCheckReasonUnchecked, "an auth pin evs's state does not retain")
+		return &reseedPin{auth: &reseedUnjudgedAuth{GkmAuthView: gateView}, newest: gateView, unjudged: true}, nil
 	}
 	return nil, newEvsCheckRefusal(EvsCheckReasonPinForked, "an auth pin off evs's chain")
 }
 
+// evs's newest state as the reseed checks read it for a statement taken unjudged (QD-1178; see the file header).
+// Every method is the newest state's but the two that would judge the signer at its pin through format 2's rules:
+// Repo answers the repo's row with its lock cleared, since whether the lock stood at the pin is not judged, so neither
+// CheckVersioning's lock row nor CheckDrop's refuses, as a reader's EvsVersioningContext.LockUnjudged takes the
+// version either way; and MayDrop answers D-ACL-25's consent allowed, since nothing of a DROP's signer is judged but
+// its repo's kind, which CheckDropRefs reads from repo/, as a reader's evsDropSignedBy has it. The signature is
+// checked against the newest state's retained rows (checkReseedSignature), never against this view's keys.
+type reseedUnjudgedAuth struct {
+	sidecar.GkmAuthView
+}
+
+// The newest state's row of the repo, its lock left unjudged; nil for a repo the state does not hold.
+func (self *reseedUnjudgedAuth) Repo(repoId sidecar.Id) *protocol.AclRepo {
+	repo := self.GkmAuthView.Repo(repoId)
+	if repo == nil {
+		return nil
+	}
+	// a copy: the state's rows are shared
+	unjudged := proto.Clone(repo).(*protocol.AclRepo)
+	unjudged.Lock = protocol.RepoVersioningLock_REPO_VERSIONING_LOCK_UNSPECIFIED
+	return unjudged
+}
+
+// D-ACL-25's consent at a pin evs no longer retains: not judged, so allowed.
+func (self *reseedUnjudgedAuth) MayDrop(subjectId sidecar.Id, repoId sidecar.Id, now time.Time) sidecar.AclDecision {
+	return sidecar.AclDecision{Allowed: true}
+}
+
 // The rights §11.8's refs table reads for a re-seeded statement's signer, from the state at the statement's pin as a
 // replaying reader holds them: rw for a writer the state lists, admin for a repo admin that stands, and deposit for a
-// deposit ref's push, which the table holds to its depositor's own ref.
-func reseedSignerRights(state sidecar.GkmAuthView, repoId sidecar.Id, signerId sidecar.Id, push *protocol.EvsPush) sidecar.AclEvsRights {
+// deposit ref's push, which the table holds to its depositor's own ref. An unjudged statement's signer is asked no
+// right (QD-1178): every right, so the table, and format 2's DROP and CUT rules beside it, hold the statement only to
+// the rules that refuse whatever right a signer holds, its ref's kind, mode, owner, flags and changes.
+func reseedSignerRights(pin *reseedPin, repoId sidecar.Id, signerId sidecar.Id, push *protocol.EvsPush) sidecar.AclEvsRights {
+	if pin.unjudged {
+		return sidecar.AclEvsAdmin | sidecar.AclEvsWrite | sidecar.AclEvsRead | sidecar.AclEvsDeposit
+	}
+	state := pin.auth
 	rights := sidecar.AclEvsRights(0)
 	if slices.Contains(state.RepoWriters(repoId), signerId) {
 		rights |= sidecar.AclEvsWrite | sidecar.AclEvsRead
@@ -470,24 +533,26 @@ func (self *pushAttempt) checkReseed() *EvsCheckRefusal {
 		return newEvsCheckRefusal(EvsCheckReasonUnchecked, "no statement or payload in the view")
 	}
 	push := self.statement.Push
-	state, refusal := reseedPinState(self.gateView, push)
+	pin, refusal := reseedPinState(self.gateView, push)
 	if refusal != nil {
 		return refusal
 	}
 	signerId := sidecar.Id(push.GetSignerSidecarId())
 	// the view step 4 built, judged for the statement's signer at the statement's own state in place of the token's
-	// at the newest
+	// at the newest, or for an unjudged statement asking nothing of its signer there
 	view := *self.reads.view
-	view.Auth = state
+	view.Auth = pin.auth
 	view.TokenSidecarId = signerId
 	view.TokenClientId = sidecar.Id(push.GetClientId())
-	view.Rights = reseedSignerRights(state, self.repoId, signerId, push)
+	view.Rights = reseedSignerRights(pin, self.repoId, signerId, push)
 	view.Receipts = nil
 	if refusal := self.readReseedSegments(); refusal != nil {
 		return refusal
 	}
 	checks := []func(view *PushView) *EvsCheckRefusal{
-		checkReseedSignature,
+		func(view *PushView) *EvsCheckRefusal {
+			return checkReseedSignature(view, pin)
+		},
 		self.checkReseedRepo,
 		checkRefTable,
 		// format 2's gate and 5c (reseed_format2.go); a format-1 push passes
@@ -514,8 +579,10 @@ func (self *pushAttempt) checkReseed() *EvsCheckRefusal {
 }
 
 // 5b without its time window and its token binding: the statement names the route's repo and verifies under the
-// identity key the state at its own auth pin, view.Auth, admits for its signer.
-func checkReseedSignature(view *PushView) *EvsCheckRefusal {
+// identity key the state at its own auth pin admits for its signer, or for an unjudged pin the key evs's oldest
+// retained rows that admit the signer give it, a signer none admits at the pin, never admitted, admitted after it or
+// revoked at or before it, refused as a signature that does not verify is (QD-1178).
+func checkReseedSignature(view *PushView, pin *reseedPin) *EvsCheckRefusal {
 	push := view.Statement.Push
 	if !bytes.Equal(push.GetRepoId(), view.RepoId.Bytes()) {
 		return newEvsCheckRefusal(EvsCheckReasonRepoMismatch, "a statement of another repo")
@@ -524,10 +591,18 @@ func checkReseedSignature(view *PushView) *EvsCheckRefusal {
 	if err != nil {
 		return newEvsCheckRefusal(EvsCheckReasonSignature, "a statement with no signer")
 	}
-	if view.Auth == nil {
+	if pin == nil || pin.auth == nil || pin.newest == nil {
 		return newEvsCheckRefusal(EvsCheckReasonGateUnknown, "no authorization state")
 	}
-	identityKey := view.Auth.IdentityKey(signerId)
+	var identityKey []byte
+	if pin.unjudged {
+		identityKey, err = sidecar.EvsUnjudgedSignerKey(pin.newest, signerId, push.GetAuth())
+		if err != nil {
+			return newEvsCheckRefusal(EvsCheckReasonSignature, fmt.Sprintf("a signer the rows evs retains do not admit at its pin: %v", err))
+		}
+	} else {
+		identityKey = pin.auth.IdentityKey(signerId)
+	}
 	if len(identityKey) == 0 {
 		return newEvsCheckRefusal(EvsCheckReasonSignature, "a signer the state at its pin admits no identity key for")
 	}
