@@ -34,11 +34,26 @@
 // (bridgeRuleEffect.StandingRule) stands under a standing grant of the policy in force, as every reader then holds it
 // (record_gate_standing.go), and otherwise asks a person. The effect is idempotent per key: it files nothing when the
 // ledger holds its rule id, and a re-signed retry of a filing whose answer was lost files the same id, which every
-// reader holds once (a filing of a held id activates nothing). A route names the §8 route rules of the head that hold
-// it for this advertiser (AclLocalPolicy's own predicate, StandingCovers), which QD-764's rows carry at id level: a
-// rule whose prefixes hold the route, and for a subnet route a rule that names no ip: destination and no
-// autogroup:internet whose via and subject destinations both name this advertiser, as Team's grant 1 names a member's
-// own device (owner decision 575).
+// reader holds once (a filing of a held id activates nothing).
+//
+// Under a standing grant the key is empty, so the effect is idempotent per effect instead: a second rule of the same
+// effect would stand beside the first, a map always and a route as an HA replica or a remap (D-BRIDGE-8), and
+// withdrawing one id would leave the other serving. It files nothing where the view holds a standing rule of this
+// host's with the effect (bridgeStandingEffectKey: a route's body and route rules, a remap's exposed prefix read only
+// as present since each draw takes the first free one; a map's body and expiry, its match prefix this host's address by
+// host bits, as the compile reads it into the block in force). Before it draws an id it reads the effect's marker,
+// standing/<effect key> in the filer's store, written under standingLock before the act: the id drawn, and the Signed
+// bytes of the newest statement filed under it. While the view holds no rule under that id the filing is pending,
+// posted and not yet followed, or never filed, so the effect posts those bytes again, which api answers with the entry
+// that holds them (§7.9's retry identity), and where none are kept or they never land it files again under the same id.
+// With no marker it takes the id of a statement of the effect still in the sidecar's pending records, where a kill or
+// an earlier build left no marker. A marker is spent once the view holds its rule withdrawn or void, or Close withdraws
+// its rule, and dropped StandingMarkerKeepTimeout after its newest filing, past which nothing filed under it can land.
+//
+// A route names the §8 route rules of the head that hold it for this advertiser (AclLocalPolicy's own predicate,
+// StandingCovers), which QD-764's rows carry at id level: a rule whose prefixes hold the route, and for a subnet route
+// a rule that names no ip: destination and no autogroup:internet whose via and subject destinations both name this
+// advertiser, as Team's grant 1 names a member's own device (owner decision 575).
 //
 // Every statement goes through sidecarAct (C-02), which signs only §5.8's own-resource filings for MCP, a hook or an
 // unconfirmed call. The filer refuses before that what is not this sidecar's own, as every verifier does after (§7.9,
@@ -54,8 +69,8 @@
 // RouteOwedKeepTimeout never will, and is dropped. Errors and logs name opaque ids alone, never a prefix, an address or
 // a port (I-13).
 //
-// Safe for concurrent use: a filer keeps its owed entries and egress markers in its store, and one lock across paying
-// an owed entry.
+// Safe for concurrent use: a filer keeps its owed entries, egress markers and standing markers in its store, one lock
+// across paying an owed entry and one across taking a standing filing's id.
 
 package sidecar
 
@@ -64,6 +79,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -138,6 +154,11 @@ type BridgeFilerSettings struct {
 	// component's Lookup answers: 32 days, past an approval's ledger file, kept 30 days past a not_after at most a day
 	// from its filing, so no use is reconciled past it. Non-positive keeps a marker only until the next egress change.
 	EgressMarkerKeepTimeout time.Duration
+	// How long a standing filing's marker is kept after its newest filing, by which an exposure asked again before the
+	// view shows its rule takes the same id: 8 days, past the 7 days a statement may wait to land (§7.9's not_after),
+	// so nothing filed under a marker's id can land once it is dropped. Non-positive keeps a marker until the view
+	// holds its rule withdrawn or void.
+	StandingMarkerKeepTimeout time.Duration
 	// The ledger the filer opens, nil its defaults.
 	Ledger *BridgeLedgerSettings
 }
@@ -145,23 +166,27 @@ type BridgeFilerSettings struct {
 // The values above.
 func DefaultBridgeFilerSettings() *BridgeFilerSettings {
 	return &BridgeFilerSettings{
-		AddressLandTimeout:       30 * time.Second,
-		AddressClaimAttemptCount: 3,
-		BlockDrainTimeout:        600 * time.Second,
-		BlockDrawAttemptCount:    16,
-		RouteOwedKeepTimeout:     8 * 24 * time.Hour,
-		EgressMarkerKeepTimeout:  32 * 24 * time.Hour,
+		AddressLandTimeout:        30 * time.Second,
+		AddressClaimAttemptCount:  3,
+		BlockDrainTimeout:         600 * time.Second,
+		BlockDrawAttemptCount:     16,
+		RouteOwedKeepTimeout:      8 * 24 * time.Hour,
+		EgressMarkerKeepTimeout:   32 * 24 * time.Hour,
+		StandingMarkerKeepTimeout: 8 * 24 * time.Hour,
 	}
 }
 
 // The filer's own store: its directory and class, the names in it, and their records' version. Format values.
 const (
-	bridgeFileDirectory     = "bridge"
-	bridgeFileClass         = "bridge"
-	bridgeFileEgressPrefix  = "egress/"
-	bridgeFileForwardPrefix = "forward/"
-	bridgeFileRoutePrefix   = "route/"
-	bridgeFileRecordVersion = 1
+	bridgeFileDirectory      = "bridge"
+	bridgeFileClass          = "bridge"
+	bridgeFileEgressPrefix   = "egress/"
+	bridgeFileForwardPrefix  = "forward/"
+	bridgeFileRoutePrefix    = "route/"
+	bridgeFileStandingPrefix = "standing/"
+	bridgeFileRecordVersion  = 1
+	// the domain of a standing filing's effect key, which names its marker in this store alone
+	bridgeStandingEffectDomain = "urnetwork-sidecar-v1/bridge-standing-effect"
 )
 
 // What a filer reads of the network's config: TEAM-M2-10's ConfigClient is one.
@@ -260,6 +285,8 @@ type BridgeFiler struct {
 	// held across appending an owed route entry and dropping it, so two passes append it once
 	owedLock    sync.Mutex
 	forwardLock sync.Mutex
+	// held across reading a standing filing's marker and writing it, so two filings of one effect take one id
+	standingLock sync.Mutex
 }
 
 // A filer over args, whose Sidecar and Config are required.
@@ -863,6 +890,8 @@ func (self *bridgeRuleEffect) Run(ctx context.Context, effectKey []byte) ([]byte
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrSidecarEffectNotDone, err)
 	}
+	// under a standing grant, the marker the act's signed bytes are kept in
+	markerName := ""
 	if ruleId != nil {
 		held, err := view.ownRule(ruleId)
 		if err != nil {
@@ -875,14 +904,16 @@ func (self *bridgeRuleEffect) Run(ctx context.Context, effectKey []byte) ([]byte
 			return ruleId, nil
 		}
 	} else {
-		if held := self.standingRule(view); held != nil {
+		standing, err := filer.standingId(ctx, view, self)
+		if err != nil {
+			return nil, err
+		}
+		if standing.answered {
+			// filed before: held in the view, or its kept bytes landed when posted again
 			self.address = view.address()
-			return bytes.Clone(held.RuleId), nil
+			return standing.ruleId, nil
 		}
-		ruleId = make([]byte, bridgeRuleIdByteCount)
-		if _, err := io.ReadFull(filer.random, ruleId); err != nil {
-			return nil, fmt.Errorf("%w: no randomness for a rule id: %w", ErrSidecarEffectNotDone, err)
-		}
+		ruleId, markerName = standing.ruleId, standing.markerName
 	}
 
 	var statement proto.Message
@@ -926,7 +957,14 @@ func (self *bridgeRuleEffect) Run(ctx context.Context, effectKey []byte) ([]byte
 	}
 	barrierKey := hex.EncodeToString(ruleId)
 	testHookBarrier("bridge_file.rule.before", barrierKey)
-	_, err = filer.fileSealed(ctx, self.origin, self.signedType, statement, body)
+	act, err := filer.statementAct(ctx, self.origin, self.signedType, statement, body)
+	if err == nil {
+		_, err = filer.runAct(ctx, act, self.origin)
+		if markerName != "" {
+			// landed, pending or refused alike: a filing asked again posts these bytes before it signs anew
+			filer.keepStandingSigned(markerName, ruleId, act.Signed())
+		}
+	}
 	testHookBarrier("bridge_file.rule.after", barrierKey)
 	if err != nil {
 		filer.settleRoute(owed, err)
@@ -936,40 +974,358 @@ func (self *bridgeRuleEffect) Run(ctx context.Context, effectKey []byte) ([]byte
 	return ruleId, nil
 }
 
-// Under a standing grant: a route or map of this host's the ledger holds with this body, filed with no approval and not
-// withdrawn, so asking again files nothing. Nil for none.
+// Under a standing grant: a route or map of this host's the view holds in force, filed with no approval, with the
+// effect this one files (bridgeStandingEffectKey), a map's match prefix this host's address by its host bits, which the
+// compile reads into the block in force, so a map filed before a block change still counts; so asking again files
+// nothing. Nil for none.
 func (self *bridgeRuleEffect) standingRule(view *bridgeFileView) *BridgeLedgerRule {
+	want, ok := bridgeStandingEffectKey(self.StandingRule())
+	if !ok {
+		return nil
+	}
+	held := view.ledger.Address(view.self)
 	for _, rule := range view.ledger.Rules(self.signedType) {
-		if rule.Owner != view.self || !rule.Standing || rule.Withdrawn != nil {
+		if rule.Owner != view.self || !rule.Standing || !rule.Active() {
 			continue
 		}
-		switch {
-		case rule.Route != nil && self.route != nil:
-			if proto.Equal(rule.Route, self.route) && bridgeIdsEqual(rule.RouteRuleIds, self.routeRuleIds) {
-				return rule
-			}
-		case rule.Map != nil && self.mapPlan != nil:
-			held := view.ledger.Address(view.self)
-			if held != nil && rule.Expires == self.mapPlan.expiresMs &&
-				proto.Equal(rule.Map, self.mapPlan.body(view.block.GetIpv4Prefix().GetAddress()|held.HostBits)) {
-				return rule
+		if key, ok := bridgeStandingEffectKey(rule); !ok || key != want {
+			continue
+		}
+		if rule.Map != nil {
+			match := rule.Map.GetMatchPrefix()
+			if held == nil || match.GetLength() != 32 || match.GetAddress()&0xffff != held.HostBits {
+				continue
 			}
 		}
+		return rule
 	}
 	return nil
 }
 
-// Whether two id lists are equal, in order.
-func bridgeIdsEqual(a [][]byte, b [][]byte) bool {
-	if len(a) != len(b) {
-		return false
+// The key of the rule a standing exposure files (the file's comment), by which a filing asked again finds the one it
+// filed before: SHA-256 over the domain, the rule's kind and owner, the deterministic bytes of its body with its
+// approval cleared, and a route's route rule ids or a map's expiry. A route's exposed prefix counts only as present,
+// since a remap draws the first free one each time it is asked; a map's match prefix not at all, since it is the
+// host's one address, which a first map files. False for a rule that is no route or map with a body. The key names a
+// marker in the filer's store and nothing else, so no reader computes it.
+func bridgeStandingEffectKey(rule *BridgeLedgerRule) ([sha256.Size]byte, bool) {
+	if rule == nil {
+		return [sha256.Size]byte{}, false
 	}
-	for i := range a {
-		if !bytes.Equal(a[i], b[i]) {
-			return false
+	var body proto.Message
+	switch {
+	case rule.SignedType == bridge.SignedType_SIGNED_BRIDGE_ROUTE && rule.Route != nil:
+		route := proto.Clone(rule.Route).(*bridge.BridgeRouteBody)
+		route.Approval = nil
+		if route.ExposedPrefix != nil {
+			route.ExposedPrefix = &bridge.BridgeIpv4Prefix{}
+		}
+		body = route
+	case rule.SignedType == bridge.SignedType_SIGNED_BRIDGE_MAP && rule.Map != nil:
+		mapBody := proto.Clone(rule.Map).(*bridge.BridgeMapBody)
+		mapBody.Approval, mapBody.MatchPrefix = nil, nil
+		body = mapBody
+	default:
+		return [sha256.Size]byte{}, false
+	}
+	encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(body)
+	if err != nil {
+		return [sha256.Size]byte{}, false
+	}
+	hash := sha256.New()
+	hash.Write([]byte(bridgeStandingEffectDomain))
+	hash.Write(binary.BigEndian.AppendUint32(nil, uint32(rule.SignedType)))
+	hash.Write(rule.Owner.Bytes())
+	hash.Write(binary.BigEndian.AppendUint64(nil, uint64(len(encoded))))
+	hash.Write(encoded)
+	hash.Write(binary.BigEndian.AppendUint64(nil, uint64(len(rule.RouteRuleIds))))
+	for _, routeRuleId := range rule.RouteRuleIds {
+		hash.Write(binary.BigEndian.AppendUint64(nil, uint64(len(routeRuleId))))
+		hash.Write(routeRuleId)
+	}
+	hash.Write(binary.BigEndian.AppendUint64(nil, uint64(rule.Expires)))
+	var key [sha256.Size]byte
+	hash.Sum(key[:0])
+	return key, true
+}
+
+// What a standing filing's marker keeps (the store's standing/<effect key>), JSON, its bytes in base64.
+type bridgeStandingMarker struct {
+	Version int `json:"version"`
+	// The rule id drawn for the effect, 32 random bytes.
+	RuleId []byte `json:"rule_id"`
+	// The Signed bytes of the newest statement filed under the id once its act signed them; empty before.
+	Signed []byte `json:"signed,omitempty"`
+	// When the marker was written, or its newest statement signed.
+	WrittenMs int64 `json:"written_ms"`
+}
+
+// What a standing exposure files under: answered, the id of the rule its effect filed before, which the view holds
+// or which posting its kept bytes again landed; else the id to file under, a marker's or one drawn and kept in a new
+// marker, and the marker's name, which keeps the bytes the act signs.
+type bridgeStandingId struct {
+	ruleId     []byte
+	answered   bool
+	markerName string
+}
+
+// The id a standing exposure files under (the file's comment), or the rule it filed before. An error wrapping
+// ErrSidecarEffectNotDone proves this run filed nothing; any other leaves it uncertain.
+func (self *BridgeFiler) standingId(ctx context.Context, view *bridgeFileView, effect *bridgeRuleEffect) (*bridgeStandingId, error) {
+	if held := effect.standingRule(view); held != nil {
+		return &bridgeStandingId{ruleId: bytes.Clone(held.RuleId), answered: true}, nil
+	}
+	key, ok := bridgeStandingEffectKey(effect.StandingRule())
+	if !ok {
+		return nil, fmt.Errorf("%w: %s names no rule", ErrSidecarEffectNotDone, effect.signedType)
+	}
+	markerName := bridgeFileStandingPrefix + hex.EncodeToString(key[:])
+	testHookBarrier("bridge_file.standing.before", markerName)
+	ruleId, signed, answered, err := self.takeStandingId(view, effect.signedType, key, markerName)
+	testHookBarrier("bridge_file.standing.after", markerName)
+	if err != nil {
+		return nil, err
+	}
+	if answered {
+		return &bridgeStandingId{ruleId: ruleId, answered: true}, nil
+	}
+	if len(signed) != 0 {
+		_, err := self.postAgain(ctx, signed)
+		switch {
+		case err == nil:
+			// the entry a kill or the lost answer left owed, appended once
+			kind := bridgeRouteRecordRoute
+			if effect.signedType == bridge.SignedType_SIGNED_BRIDGE_MAP {
+				kind = bridgeRouteRecordMap
+			}
+			self.payRoute(&bridgeRouteOwed{Event: bridgeRouteRecordOpened, Kind: kind, RuleId: ruleId})
+			return &bridgeStandingId{ruleId: ruleId, answered: true}, nil
+		case !errors.Is(err, errBridgeStatementNeverLands):
+			return nil, err
+		}
+		// api refuses those bytes and the log does not hold them: the effect files again under the same id
+	}
+	return &bridgeStandingId{ruleId: ruleId, markerName: markerName}, nil
+}
+
+// Under standingLock, after dropping the spent and aged markers: the id a standing filing of the effect key takes,
+// with the Signed bytes to post again first, none for none, or answered where the view holds the marker's rule in
+// force or pending. The marker's id where the view holds no rule under it, its kept bytes, else those of a statement
+// still pending under it; with no marker, or one the view holds spent (withdrawn or void), the id and bytes of a
+// statement of the effect still pending that the view holds nothing under, else 32 random bytes, kept in a new marker
+// before any act. A marker or a pending record that does not read refuses, since a filing of the effect may be in
+// flight.
+func (self *BridgeFiler) takeStandingId(view *bridgeFileView, signedType bridge.SignedType, key [sha256.Size]byte, markerName string) ([]byte, []byte, bool, error) {
+	self.standingLock.Lock()
+	defer self.standingLock.Unlock()
+	self.pruneStandingMarkersWithLock(view)
+	marker := &bridgeStandingMarker{}
+	found, err := self.loadRecord(markerName, marker)
+	if err != nil {
+		return nil, nil, false, fmt.Errorf("%w: the standing filing's marker does not read: %w", ErrSidecarEffectNotDone, err)
+	}
+	// a marker of an id no statement can carry (bridgeLogStatementOf) names no filing, and is written over
+	if found && len(marker.RuleId) == bridgeRuleIdByteCount {
+		held, err := view.ownRule(marker.RuleId)
+		switch {
+		case err != nil:
+			return nil, nil, false, fmt.Errorf("%w: %w", ErrSidecarEffectNotDone, err)
+		case held == nil:
+			// pending, posted and not yet followed, or never filed
+			signed := marker.Signed
+			if len(signed) == 0 {
+				// a kill between the act's pending record and the marker: what it left pending, if anything
+				if signed, _, err = self.pendingStandingStatement(view, signedType, marker.RuleId, key); err != nil {
+					return nil, nil, false, fmt.Errorf("%w: %w", ErrSidecarEffectNotDone, err)
+				}
+			}
+			return bytes.Clone(marker.RuleId), signed, false, nil
+		case held.Withdrawn == nil && !held.Void:
+			return bytes.Clone(marker.RuleId), nil, true, nil
+		}
+		// spent: a filing of the effect now is a new rule, under a new id
+	}
+	signed, ruleId, err := self.pendingStandingStatement(view, signedType, nil, key)
+	if err != nil {
+		return nil, nil, false, fmt.Errorf("%w: %w", ErrSidecarEffectNotDone, err)
+	}
+	if ruleId == nil {
+		ruleId = make([]byte, bridgeRuleIdByteCount)
+		if _, err := io.ReadFull(self.random, ruleId); err != nil {
+			return nil, nil, false, fmt.Errorf("%w: no randomness for a rule id: %w", ErrSidecarEffectNotDone, err)
 		}
 	}
-	return true
+	kept := &bridgeStandingMarker{Version: bridgeFileRecordVersion, RuleId: ruleId, Signed: signed, WrittenMs: self.clock.Now().UnixMilli()}
+	if err := self.saveRecord(markerName, kept); err != nil {
+		return nil, nil, false, fmt.Errorf("%w: the standing filing's marker: %w", ErrSidecarEffectNotDone, err)
+	}
+	return bytes.Clone(ruleId), signed, false, nil
+}
+
+// Keeps the Signed bytes a standing filing's act signed in its marker, with the time, so an exposure asked again posts
+// them before it signs anew: under standingLock, and only while the marker names ruleId, since another filing may have
+// found it spent and drawn another. An act that signed nothing leaves the marker as it was. A store that does not take
+// them is logged: an exposure asked again then files anew under the marker's id, which readers hold once.
+func (self *BridgeFiler) keepStandingSigned(markerName string, ruleId []byte, signed [][]byte) {
+	if len(signed) != 1 {
+		return
+	}
+	self.standingLock.Lock()
+	defer self.standingLock.Unlock()
+	marker := &bridgeStandingMarker{}
+	if found, err := self.loadRecord(markerName, marker); err != nil || !found || !bytes.Equal(marker.RuleId, ruleId) {
+		return
+	}
+	marker.Signed, marker.WrittenMs = bytes.Clone(signed[0]), self.clock.Now().UnixMilli()
+	if err := self.saveRecord(markerName, marker); err != nil {
+		self.log.Warningf("[bridge]a standing filing's statement was not kept in its marker: %v", err)
+	}
+}
+
+// Drops each standing filing's marker whose rule the view holds withdrawn or void, which no later filing of the id can
+// change, and each kept StandingMarkerKeepTimeout past its newest filing. Called with standingLock held. A store that
+// does not list or remove is logged: a marker kept longer gives its effect the same id, which readers hold once.
+func (self *BridgeFiler) pruneStandingMarkersWithLock(view *bridgeFileView) {
+	names, err := self.recordNames(bridgeFileStandingPrefix)
+	if err != nil {
+		self.log.Warningf("[bridge]the standing filings' markers do not list: %v", err)
+		return
+	}
+	nowMs := self.clock.Now().UnixMilli()
+	keepMs := self.settings.StandingMarkerKeepTimeout.Milliseconds()
+	for _, name := range names {
+		marker := &bridgeStandingMarker{}
+		if found, err := self.loadRecord(name, marker); err != nil || !found {
+			continue
+		}
+		spent := false
+		if held, err := view.ownRule(marker.RuleId); err == nil && held != nil {
+			spent = held.Withdrawn != nil || held.Void
+		}
+		if !spent && (keepMs <= 0 || nowMs-marker.WrittenMs < keepMs) {
+			continue
+		}
+		if err := self.removeRecord(name); err != nil {
+			self.log.Warningf("[bridge]a standing filing's marker was not dropped: %v", err)
+		}
+	}
+}
+
+// Drops each standing filing's marker naming ruleId, under standingLock, once Close withdrew the rule or tried to: Close
+// found the rule in the view, which from then on answers its effect asked again, by the rule in force or, withdrawn,
+// by a new one; a marker it left would name the withdrawn id until a filing found it spent or it aged out, past which the
+// rows may drop the id. A store that does not list or remove is logged: the next standing filing's pass drops it.
+func (self *BridgeFiler) spendStandingMarkers(ruleId []byte) {
+	self.standingLock.Lock()
+	defer self.standingLock.Unlock()
+	names, err := self.recordNames(bridgeFileStandingPrefix)
+	if err != nil {
+		self.log.Warningf("[bridge]the standing filings' markers do not list: %v", err)
+		return
+	}
+	for _, name := range names {
+		marker := &bridgeStandingMarker{}
+		if found, err := self.loadRecord(name, marker); err != nil || !found || !bytes.Equal(marker.RuleId, ruleId) {
+			continue
+		}
+		if err := self.removeRecord(name); err != nil {
+			self.log.Warningf("[bridge]a standing filing's marker was not dropped: %v", err)
+		}
+	}
+}
+
+// A statement in the sidecar's pending records, signed and not yet seen landed, that files a rule of signedType for
+// this host: the one under ruleId where it is set, else one under an id the view holds nothing under whose body, opened
+// under the config keys held, has the effect key and carries no approval. Its Signed bytes and its rule id; nil for
+// none. A record that does not parse, or a body that does not open here, is passed over.
+func (self *BridgeFiler) pendingStandingStatement(view *bridgeFileView, signedType bridge.SignedType, ruleId []byte, key [sha256.Size]byte) ([]byte, []byte, error) {
+	pendings, err := self.args.Sidecar.pendingStatements()
+	if err != nil {
+		return nil, nil, err
+	}
+	keys := self.args.Sidecar.configKeys()
+	for _, pending := range pendings {
+		rule, sealed := bridgePendingRule(pending.signed, signedType)
+		if rule == nil || rule.Owner != view.self {
+			continue
+		}
+		if ruleId != nil {
+			if bytes.Equal(rule.RuleId, ruleId) {
+				return bytes.Clone(pending.signed), bytes.Clone(rule.RuleId), nil
+			}
+			continue
+		}
+		if keys == nil || view.ledger.Rule(rule.RuleId) != nil {
+			continue
+		}
+		var approval *bridge.BridgeApproval
+		if signedType == bridge.SignedType_SIGNED_BRIDGE_ROUTE {
+			routeBody := &bridge.BridgeRouteBody{}
+			if _, err := OpenConfigBody(sealed.body, sealed.seal, keys.ConfigKeyAt, routeBody); err != nil {
+				continue
+			}
+			approval, rule.Route = routeBody.GetApproval(), bridgeBodyWithoutApproval(routeBody)
+		} else {
+			mapBody := &bridge.BridgeMapBody{}
+			if _, err := OpenConfigBody(sealed.body, sealed.seal, keys.ConfigKeyAt, mapBody); err != nil {
+				continue
+			}
+			approval, rule.Map = mapBody.GetApproval(), bridgeBodyWithoutApproval(mapBody)
+		}
+		if approval != nil {
+			continue
+		}
+		if held, ok := bridgeStandingEffectKey(rule); ok && held == key {
+			return bytes.Clone(pending.signed), bytes.Clone(rule.RuleId), nil
+		}
+	}
+	return nil, nil, nil
+}
+
+// A rule statement's sealed body and what it is bound to.
+type bridgePendingSealed struct {
+	body []byte
+	seal *ConfigSealContext
+}
+
+// The rule a pending statement's Signed bytes file at id level, a BridgeRoute's or a BridgeMap's of signedType, with
+// its sealed body; nil for bytes that are no such statement.
+func bridgePendingRule(signedBytes []byte, signedType bridge.SignedType) (*BridgeLedgerRule, *bridgePendingSealed) {
+	signed := &bridge.Signed{}
+	if err := proto.Unmarshal(signedBytes, signed); err != nil || bridge.SignedType(signed.GetType()) != signedType {
+		return nil, nil
+	}
+	rule := &BridgeLedgerRule{SignedType: signedType}
+	var owner []byte
+	var header *bridge.StatementHeader
+	sealed := &bridgePendingSealed{}
+	switch signedType {
+	case bridge.SignedType_SIGNED_BRIDGE_ROUTE:
+		route := &bridge.BridgeRoute{}
+		if err := proto.Unmarshal(signed.GetBody(), route); err != nil {
+			return nil, nil
+		}
+		rule.RuleId, owner, header, sealed.body = route.GetRouteId(), route.GetAdvertiser(), route.GetHeader(), route.GetSealedBody()
+		for _, routeRuleId := range route.GetRouteRuleIds() {
+			rule.RouteRuleIds = append(rule.RouteRuleIds, bytes.Clone(routeRuleId))
+		}
+	case bridge.SignedType_SIGNED_BRIDGE_MAP:
+		statement := &bridge.BridgeMap{}
+		if err := proto.Unmarshal(signed.GetBody(), statement); err != nil {
+			return nil, nil
+		}
+		rule.RuleId, owner, header, sealed.body = statement.GetMapId(), statement.GetHost(), statement.GetHeader(), statement.GetSealedBody()
+		rule.Expires = statement.GetExpires()
+	default:
+		return nil, nil
+	}
+	ownerId, err := IdFromBytes(owner)
+	if err != nil || len(rule.RuleId) != bridgeRuleIdByteCount || header == nil {
+		return nil, nil
+	}
+	rule.Owner, rule.RuleId = ownerId, bytes.Clone(rule.RuleId)
+	sealed.seal = NewConfigSealContext(signedType, header)
+	return rule, sealed
 }
 
 // This host's overlay address for its map: the ledger's, or one this run claims (§17.4's "the host's first map"),
@@ -1595,7 +1951,10 @@ func (self *BridgeFiler) Close(ctx context.Context, origin *BridgeFileOrigin, id
 		if err := self.oweRoute(owed); err != nil {
 			return nil, fmt.Errorf("%w: %w", ErrBridgeFileRefused, err)
 		}
-		if _, err := self.runAct(ctx, act, origin); err != nil {
+		_, err = self.runAct(ctx, act, origin)
+		// the view that found the rule answers its effect asked again from here, in force or withdrawn
+		self.spendStandingMarkers(id)
+		if err != nil {
 			self.settleRoute(owed, err)
 			return nil, err
 		}
@@ -1842,8 +2201,9 @@ type bridgeEgressMarker struct {
 	WrittenMs int64  `json:"written_ms"`
 }
 
-// The bytes of an egress change's statement never land: api refused them and the log does not hold them.
-var errBridgeEgressNeverLands = errors.New("the egress change's statement never lands")
+// The bytes of a statement posted again never land, an egress change's or a standing filing's: api refused them and the
+// log does not hold them.
+var errBridgeStatementNeverLands = errors.New("the statement posted again never lands")
 
 // Files the BridgeEgress (§16.6's step 5), once per effect key: its marker, written before the act signs, keeps the
 // statement's Signed bytes once signed, so a second run under the key posts those same bytes again, which api answers
@@ -1874,7 +2234,7 @@ func (self *bridgeEgressEffect) Run(ctx context.Context, effectKey []byte) ([]by
 		}
 		if found && len(marker.Signed) != 0 {
 			statementId, err := filer.postAgain(ctx, marker.Signed)
-			if !errors.Is(err, errBridgeEgressNeverLands) {
+			if !errors.Is(err, errBridgeStatementNeverLands) {
 				return statementId, err
 			}
 			// those bytes never land, so this run signs anew under the same key
@@ -1987,8 +2347,8 @@ func (self *BridgeFiler) logHolds(statementId [sha256.Size]byte) bool {
 }
 
 // Posts a statement's Signed bytes again (Sidecar.postSignedAgain): its id once the log holds it, by api's answer to
-// the same bytes or by the replay ring; errBridgeEgressNeverLands where api refuses them and the log does not hold them,
-// which they never will; any other error leaves the use uncertain.
+// the same bytes or by the replay ring; errBridgeStatementNeverLands where api refuses them and the log does not hold
+// them, which they never will; any other error leaves the use uncertain.
 func (self *BridgeFiler) postAgain(ctx context.Context, signedBytes []byte) ([]byte, error) {
 	statementId, err := bridgeSignedStatementId(signedBytes)
 	if err != nil {
@@ -2006,7 +2366,7 @@ func (self *BridgeFiler) postAgain(ctx context.Context, signedBytes []byte) ([]b
 			// a replay of bytes the log holds, which its replay row refuses
 			return statementId[:], nil
 		}
-		return nil, fmt.Errorf("%w: %w", errBridgeEgressNeverLands, err)
+		return nil, fmt.Errorf("%w: %w", errBridgeStatementNeverLands, err)
 	}
 	return nil, fmt.Errorf("%w: %w", ErrBridgeFileUncertain, err)
 }
