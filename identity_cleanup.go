@@ -25,7 +25,8 @@
 //	         device last showed for the item, then one act: SidecarRevoke{removed} of each listed Worker, an AdminSet
 //	         member's at k > 1 as an AuthorityProposal of its own (§7.9's several row), which other AdminSet devices
 //	         cosign as `ur approve <proposal_id>` does (identity_revoke_cosign.go), all under one presence check where
-//	         §7.9's presence row covers the act
+//	         §7.9's presence row covers the act; then, where any landed, the bridge block's head where one is needed
+//	         (Sidecar.saveBridgeBlockAfter; QD-1205)
 //	deny     dismisses the item, until the count rises past it again
 //
 // Whether this device's member may revoke each Worker is the verifier's rule (§7.9's signers row: an Owner's, Admin's
@@ -530,7 +531,7 @@ func (self *Sidecar) revokeCleanupItem(ctx context.Context, authority SidecarAut
 	}
 
 	testHookBarrier("identity.cleanup.sign.before", item.ItemId.String())
-	_, runErr := act.Run(ctx, check)
+	pins, runErr := act.Run(ctx, check)
 	testHookBarrier("identity.cleanup.sign.after", item.ItemId.String())
 	switch {
 	case errors.Is(runErr, ErrSidecarActPresence):
@@ -543,5 +544,16 @@ func (self *Sidecar) revokeCleanupItem(ctx context.Context, authority SidecarAut
 	}
 	// signed: the shown list is spent, whatever its posts' answers
 	self.dropCleanupPreview(item.ItemId)
+	// the revocations that landed, as a device's does (QD-1205): a proposal's lands at its completing cosign, whose
+	// device saves then (identity_revoke_cosign.go)
+	var newest *bridge.AuthPin
+	for _, pin := range pins {
+		if pin != nil && (newest == nil || newest.GetVersion() < pin.GetVersion()) {
+			newest = pin
+		}
+	}
+	if newest != nil {
+		self.saveBridgeBlockAfter(ctx, newest)
+	}
 	return revocation, runErr
 }

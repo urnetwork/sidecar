@@ -20,7 +20,17 @@
 //	effects   from the revocation's entry, at k > 1 its completing cosign's, which this device sees applied with the
 //	          proposal's row gone from PendingProposal: this device commits its Removes first (KEYS-M2-21's commit,
 //	          SidecarRevokeEffects.CommitRevocation), then shows the revocation unwitnessed until a HeadCheck peer holds
-//	          its position (§6.4's revoker row, TrackRevocation)
+//	          its position (§6.4's revoker row, TrackRevocation), then, once its follower applied the entry, saves a
+//	          head where the network's bridge block needs one, its record signed again where the revocation left its
+//	          signer no longer standing (saveBridgeBlockAfter; QD-1205)
+//
+// That last save is the revocation's own, on the device that made it: ur daemon runs no general config writer, only the
+// one for what a person confirmed (ConfigClient.ConfirmedWriter), so no other head would come until the next `ur acl
+// push`, and meanwhile a reader holding no block, a new device's, would hold none. A member's removal
+// (runMemberRevokeEffects) and a cleanup's revocations (revokeCleanupItem) save alike. Those that cannot leave the
+// block's signer standing save nothing: an agent's, which is tagged, and a leaked Delegation's parks, which reach its
+// agents alone, sign no block; and a device's own sign-out leaves it no writer, so another Owner's or Admin's next head
+// re-signs, whichever head it lands on (WithBridgeBlock).
 //
 // A target already revoked signs no second SidecarRevoke where the standing one covers the plan; the call then
 // revokes its selected keys alone, under Presence, or answers the standing entry.
@@ -113,7 +123,7 @@ func (self *Sidecar) InstallRevokeEffects(effects SidecarRevokeEffects) func() {
 }
 
 // §5.6's effects row for a revocation of sidecarId that landed at entry: this device's Removes first, then the
-// revoker's tracking.
+// revoker's tracking, then the bridge block's head where it needs one.
 func (self *Sidecar) runRevokeEffects(ctx context.Context, sidecarId Id, entry *bridge.AuthPin) {
 	effects := func() SidecarRevokeEffects {
 		self.revokePlans.stateLock.Lock()
@@ -129,7 +139,45 @@ func (self *Sidecar) runRevokeEffects(ctx context.Context, sidecarId Id, entry *
 		}
 		effects.TrackRevocation(entry.GetVersion())
 	}
+	self.saveBridgeBlockAfter(ctx, entry)
 	testHookBarrier("identity.revoke.effects.after", sidecarId.String())
+}
+
+// A revocation's own save (the file's effects row; QD-1205): once this device's follower applied entry, the config
+// writer it keeps for confirmed saves saves a head where the network's bridge block needs one, its record signed again
+// where the revocation left its signer no longer standing, so a reader holding none, a new device's, takes it from that
+// head on. Nothing where no ConfigClient is installed, no writer runs, this device writes no config head, or the block
+// needs no head; a failure is logged, and the next Owner's or Admin's head re-signs it, whichever head that lands on.
+// Each wait is bounded by the writer's PublishTimeout.
+func (self *Sidecar) saveBridgeBlockAfter(ctx context.Context, entry *bridge.AuthPin) {
+	authority, ok := self.authority().(*ConfigAuthority)
+	if !ok || entry == nil {
+		return
+	}
+	client := authority.client
+	writer := client.ConfirmedWriter()
+	if writer == nil {
+		return
+	}
+	state, err := func() (*ConfigState, error) {
+		waitCtx, cancel := context.WithTimeout(ctx, writer.settings.PublishTimeout)
+		defer cancel()
+		return client.WaitFor(waitCtx, entry.GetVersion())
+	}()
+	if err != nil {
+		self.log.Warningf("[identity]the bridge block was not looked at after the revocation at %d: %s", entry.GetVersion(), err)
+		return
+	}
+	if !state.IsConfigWriter(writer.args.SidecarId) {
+		return
+	}
+	pin, err := writer.SaveBridgeBlock(ctx)
+	switch {
+	case err != nil:
+		self.log.Warningf("[identity]the bridge block's head after the revocation at %d was not saved: %s", entry.GetVersion(), err)
+	case pin != nil:
+		self.log.Infof("[identity]the bridge block carried in the base at %d after the revocation at %d", pin.GetVersion(), entry.GetVersion())
+	}
 }
 
 // The watcher's step for one applied entry: a SidecarRevoke of a watched target that took effect, its proposal's row

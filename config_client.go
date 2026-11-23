@@ -264,6 +264,17 @@ func (self *ConfigClient) Writer() *ConfigWriter {
 	return self.writer.Load()
 }
 
+// This device's config writer for a save a person's confirmed command makes, or that command's own flow: the general
+// writer where one runs, else the one a host keeps for those saves alone (ConfirmedAclConfigRefProvider), ur daemon's,
+// which runs no fold loop and signs each push exact-head; nil for none. `ur acl push`, `ur bridge block` and a
+// revocation's re-signed bridge block save through it (QD-1205).
+func (self *ConfigClient) ConfirmedWriter() *ConfigWriter {
+	if writer := self.Writer(); writer != nil {
+		return writer
+	}
+	return self.confirmedAclWriter
+}
+
 // A config head this device verified at a base.
 type configVerifiedHead struct {
 	configVersion   uint64
