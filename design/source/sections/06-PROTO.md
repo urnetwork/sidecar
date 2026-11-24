@@ -480,8 +480,8 @@ enum MessageType {
   reserved 0x1402 to 0x1403;                  // withdrawn EvsHeadCheck: ref pins ride HeadCheck; never reused
   reserved "EVS_HEAD_CHECK", "EVS_HEAD_CHECK_RESULT";
   SEARCH = 0x1404; SEARCH_RESULT = 0x1405;    // §11.14; peer RPC, remote search (owner decision 175)
-  // DESIGN-COMPUTE.md adds EVIDENCE 0x1406 and EVIDENCE_RESULT 0x1407 (owner decision 752), which types.proto
-  // declares and protocol's fence additions hold until this fence takes them
+  EVIDENCE = 0x1406; EVIDENCE_RESULT = 0x1407; // DESIGN-COMPUTE.md §11.6, §11.10; peer RPC, a member's device
+                                              // asking the indexer enclave for its evidence (owner decision 752)
   TLS_EDGE_OPEN = 0x1501; TLS_HINT = 0x1502;  // §13; StreamOpen metadata; push tls
   SMTP_PREAMBLE = 0x1601; SMTP_PREAMBLE_RESULT = 0x1602; SMTP_OUTCOME = 0x1603; // §14; stream to smtpedge, the
                                               // outcome a NO_REPLY envelope to the ticket's listener
@@ -490,8 +490,9 @@ enum MessageType {
   SMTP_HANDSHAKE = 0x1607; SMTP_HANDSHAKE_RESULT = 0x1608;                    // §14; TLS 1.3's disclosed SHTS, RPC to smtpedge, M9
   MAIL_INGRESS = 0x1701; MAIL_HINT = 0x1702;  // §15; StreamOpen metadata; push mail
   // 0x18 §16 MCP: none in v0 or v1; the directory's notices ride §11's hints (§16.11)
-  // 0x19 §17: none; bridge rules ride the config repo (owner decision 5); DESIGN-COMPUTE.md adds LISTENERS
-  // 0x1901 and LISTENERS_RESULT 0x1902 (owner decision 770), declared and held as EVIDENCE is
+  // 0x19 §17: bridge rules ride the config repo (owner decision 5); listeners' live ask is DESIGN-COMPUTE.md's
+  LISTENERS = 0x1901; LISTENERS_RESULT = 0x1902; // DESIGN-COMPUTE.md §26.8; peer RPC on the control class too
+                                              // (owner decision 770)
   CORE_HINT = 0x1A01;                         // §5; push core
   DNS_ZONE_CHANGED = 0x1B01;                  // §12; push dns
 }

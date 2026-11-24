@@ -3888,8 +3888,8 @@ type SidecarAction struct { // every outward action (I-8)
 	                            // decision 436), new kinds appending: DESIGN-COMPUTE.md's 19 enclave_create,
 	                            // 20 enclave_egress_direct, 21 compute_budget_raise, 22 enclave_delete,
 	                            // 23 fetch_unlisted_url, 24 tainted_send, 25 calendar_write, 26 service_write
-	                            // (owner decisions 737, 749, 756, 768, 772), which record.proto takes with
-	                            // their code; publish and
+	                            // (owner decisions 737, 749, 756, 768, 772), at CanonicalAction version 5
+	                            // alone (§16.8); publish and
 	                            // listen cover tls/ and smtp/ alike, since host and socket_name say which
 	Canonical []byte            // built by the daemon; payload_sha256 = SHA-256(Canonical)
 	Risk      SidecarRisk       // 1 normal, 2 high, the wire's values (§16.8); every action is normal: no policy
@@ -5349,8 +5349,8 @@ enum MessageType {
   reserved 0x1402 to 0x1403;                  // withdrawn EvsHeadCheck: ref pins ride HeadCheck; never reused
   reserved "EVS_HEAD_CHECK", "EVS_HEAD_CHECK_RESULT";
   SEARCH = 0x1404; SEARCH_RESULT = 0x1405;    // §11.14; peer RPC, remote search (owner decision 175)
-  // DESIGN-COMPUTE.md adds EVIDENCE 0x1406 and EVIDENCE_RESULT 0x1407 (owner decision 752), which types.proto
-  // declares and protocol's fence additions hold until this fence takes them
+  EVIDENCE = 0x1406; EVIDENCE_RESULT = 0x1407; // DESIGN-COMPUTE.md §11.6, §11.10; peer RPC, a member's device
+                                              // asking the indexer enclave for its evidence (owner decision 752)
   TLS_EDGE_OPEN = 0x1501; TLS_HINT = 0x1502;  // §13; StreamOpen metadata; push tls
   SMTP_PREAMBLE = 0x1601; SMTP_PREAMBLE_RESULT = 0x1602; SMTP_OUTCOME = 0x1603; // §14; stream to smtpedge, the
                                               // outcome a NO_REPLY envelope to the ticket's listener
@@ -5359,8 +5359,9 @@ enum MessageType {
   SMTP_HANDSHAKE = 0x1607; SMTP_HANDSHAKE_RESULT = 0x1608;                    // §14; TLS 1.3's disclosed SHTS, RPC to smtpedge, M9
   MAIL_INGRESS = 0x1701; MAIL_HINT = 0x1702;  // §15; StreamOpen metadata; push mail
   // 0x18 §16 MCP: none in v0 or v1; the directory's notices ride §11's hints (§16.11)
-  // 0x19 §17: none; bridge rules ride the config repo (owner decision 5); DESIGN-COMPUTE.md adds LISTENERS
-  // 0x1901 and LISTENERS_RESULT 0x1902 (owner decision 770), declared and held as EVIDENCE is
+  // 0x19 §17: bridge rules ride the config repo (owner decision 5); listeners' live ask is DESIGN-COMPUTE.md's
+  LISTENERS = 0x1901; LISTENERS_RESULT = 0x1902; // DESIGN-COMPUTE.md §26.8; peer RPC on the control class too
+                                              // (owner decision 770)
   CORE_HINT = 0x1A01;                         // §5; push core
   DNS_ZONE_CHANGED = 0x1B01;                  // §12; push dns
 }
@@ -7338,7 +7339,8 @@ mail:<alias>                         send, listen; checked only by clients
 model:<canonical name>               infer: a remote model (DESIGN-COMPUTE.md §16.2), under its compute_policy
                                      feature (§7.9), local models needing none (owner decisions 741, 750)
 compute:enclave                      create, admin: an enclave, a start being its sponsor's (owner decision 775)
-compute:buy                          buy credits, redeem promotion codes, set auto-renew (owner decision 774)
+compute:buy                          buy: buy credits, redeem promotion codes and set auto-renew, one word for the
+                                     three (owner decision 774)
 compute:search                       query: a web search, every member device and its agents by default
 a subject (an enclave)               ssh, with users agent, root and edit and an optional check period
 listener:<selector>                  dial: each listed socket and map entry of the subjects named, at their
@@ -7532,6 +7534,26 @@ message AclRows {
                                           // as each AclRequestRule's evidence is: the ApprovalDecision.channel
                                           // values accepted for an action no requests rule names; default
                                           // all three (owner decision 342)
+  AclComputeRows compute_rows = 11;       // DESIGN-COMPUTE.md §16.4's compute block as the broker enforces it,
+                                          // once the network's compute_policy feature is on (§7.9); unset, the
+                                          // broker applies DESIGN-COMPUTE.md §16.5's defaults (owner decision 750)
+}
+// What the broker reads of the compute block, ids and amounts only, each list sorted so one block compiles to
+// one encoding; the rest of the block (fetch, calendar, connect, approvals, history, disclosures) stays out
+message AclComputeRows {
+  ComputeAssurance assurance_floor = 1;   // 0 reads as the default, none for inference
+  ComputeAssurance enclave_assurance_floor = 2;   // 0 reads as AP for enclaves
+  repeated string providers = 3;          // remote inference providers' slugs, * for all
+  repeated string enclave_shapes = 4;
+  bool search_enabled = 5;
+  uint32 search_day_max = 6;              // a network's searches a UTC day
+  repeated AclComputeBudgetRow budgets = 7;
+}
+message AclComputeBudgetRow {             // a cap on what its subjects are charged, in nano-USD, 0 none
+  bytes subject = 1;                      // an atom, as AclRule.src_atoms holds one
+  uint32 per = 2;                         // 1 subject, 2 agent, 3 member, 4 network
+  uint64 day_nano_usd = 3;
+  uint64 month_nano_usd = 4;
 }
 message AclRequestRule {
   bytes rule_id = 1; repeated bytes src_atoms = 2; repeated AclTarget targets = 3;
@@ -7564,6 +7586,11 @@ message AclTarget {                       // exactly one kind set (owner decisio
   bool mail_send = 9;
   bytes client_id = 10;                   // a client no binding names, a legacy client among them: D-ACL-5's
                                           // naming it, under an unrestricted grant
+  string model_glob = 11;                 // DESIGN-COMPUTE.md §16.2's model:<glob>, a glob within canonical
+                                          // names, never read as a label (owner decision 750)
+  AclComputeResource compute_resource = 12;   // compute:enclave, compute:buy or compute:search
+  bytes listener = 13;                    // listener:<selector>: an atom, as atom holds one, whose subjects'
+                                          // listed sockets and map entries the target names (owner decision 770)
 }
 // The rows above as Atoms, Folded grants and Repo rows below give them, and §8.4's and §11.12's named lists
 message AclAtom {                         // Atoms
@@ -7617,6 +7644,8 @@ message AclRepo {                         // every row keeps its signer and the 
   uint64 holders_shrunk_at = 11;
   repeated AclRepoPrefixRulesRow prefix_rules = 12;   // RepoPrefixRules (owner decision 345)
   int64 holders_shrunk_time_ms = 13;      // §7.9's t_s (owner decision 557)
+  RepoInbox inbox = 14;                   // the repo's RepoCreate's inbox marker, immutable (the table's
+                                          // RepoCreate row)
 }
 message AclRepoAdminRow {
   bytes sidecar_id = 1;
@@ -7653,6 +7682,17 @@ enum AclAction {                          // §8.4; AclRule.actions and AclReque
   ACL_ACTION_UNSPECIFIED = 0; ACL_ACTION_DIAL = 1; ACL_ACTION_LISTEN = 2; ACL_ACTION_ROUTE = 3;
   ACL_ACTION_READ = 4; ACL_ACTION_WRITE = 5; ACL_ACTION_ADMIN = 6; ACL_ACTION_DEPOSIT = 7;
   ACL_ACTION_PUBLISH = 8; ACL_ACTION_SEND = 9;
+  // DESIGN-COMPUTE.md §16.2's, in §8.4's order, each under its feature (§7.9): infer on model:, create on
+  // compute:enclave, buy on compute:buy, query on compute:search, ssh on a subject (owner decisions 750, 774, 775)
+  ACL_ACTION_INFER = 10; ACL_ACTION_CREATE = 11; ACL_ACTION_BUY = 12; ACL_ACTION_QUERY = 13; ACL_ACTION_SSH = 14;
+}
+enum AclComputeResource {                 // DESIGN-COMPUTE.md §16.2's compute: resources, AclTarget's kind 12
+  ACL_COMPUTE_RESOURCE_UNSPECIFIED = 0; ACL_COMPUTE_RESOURCE_ENCLAVE = 1; ACL_COMPUTE_RESOURCE_BUY = 2;
+  ACL_COMPUTE_RESOURCE_SEARCH = 3;
+}
+enum ComputeAssurance {                   // DESIGN-COMPUTE.md §4.3's labels as a floor names them, in order
+  COMPUTE_ASSURANCE_UNSPECIFIED = 0; COMPUTE_ASSURANCE_NONE = 1; COMPUTE_ASSURANCE_AP = 2;
+  COMPUTE_ASSURANCE_A1 = 3; COMPUTE_ASSURANCE_A2 = 4;
 }
 enum AclAudience {                        // zero reads as members
   ACL_AUDIENCE_UNSPECIFIED = 0; ACL_AUDIENCE_MEMBERS = 1; ACL_AUDIENCE_MEMBERS_DEVICE = 2;
@@ -7663,6 +7703,9 @@ enum RepoKind {                           // §11.12's kinds, fixed at creation
   REPO_KIND_UNSPECIFIED = 0; REPO_KIND_GENERAL = 1; REPO_KIND_RECORD = 2; REPO_KIND_CONFIG = 3;
   REPO_KIND_DIRECTORY = 4; REPO_KIND_TEAM_RECORD = 5; REPO_KIND_MAILCFG = 6; REPO_KIND_VAULT = 7;
   REPO_KIND_MAILBOX = 8; REPO_KIND_SECRET = 9;
+  // DESIGN-COMPUTE.md's, each under its feature (§7.9): agent_repos' agents, one a member, and agent, one an
+  // agent, and listeners', one a network (8.5; owner decisions 744, 747, 770)
+  REPO_KIND_AGENTS = 10; REPO_KIND_AGENT = 11; REPO_KIND_LISTENERS = 12;
 }
 ```
 
@@ -7713,12 +7756,12 @@ OwnerConfirm{sidecar_id}                                           a consented d
                                                                    (8.5; owner decision 126)
 access log of one repo_id (owner decision 8):
 RepoCreate{repo_id, kind, inbox}                                   a sidecar the kind lets create it, which
-  inbox (RepoInbox: 0 none, 1 group, 2 admin) marks a group        becomes the repo's admin: general or record, a
-  inbox (8.5): valid only with kind general; 2 only from a         member device (untagged, not ephemeral, not
-  config writer, once a network, api and readers refusing a        read_only), or a tagged or ephemeral sidecar
-  second; the marker is server-visible in the log (§2.8            only under a rule giving it admin on evs:* or
-  api-7); acl.proto takes it as field 4, before M2's freeze        that repo, within 8.6's ceiling; owner-bound
-                                                                   kinds, a consented device of the owner;
+  inbox (RepoInbox: 0 none, 1 group, 2 admin, 3 team) marks a      becomes the repo's admin: general or record, a
+  group inbox (8.5): valid only with kind general; 2 only from     member device (untagged, not ephemeral, not
+  a config writer, once a network, api and readers refusing a      read_only), or a tagged or ephemeral sidecar
+  second; 3 the Team inbox, a config writer's, under               only under a rule giving it admin on evs:* or
+  agent_repos (§7.9; DESIGN-COMPUTE.md §20.4); the marker is       that repo, within 8.6's ceiling; owner-bound
+  server-visible in the log (§2.8 api-7), acl.proto's field 4      kinds, a consented device of the owner;
   a tagged or ephemeral creator's repo stays keying until a        directory, team_record and the network's
   config writer that reads it and holds its admin forms its        mailcfg, a config writer (D-TEAM-28); a Team
   group (§10.7's KF1; owner decision 365), which §8.5's            scope's mailcfg, a consented device of the
@@ -7877,8 +7920,13 @@ message RepoCreate {
   StatementHeader header = 1;
   bytes repo_id = 2;
   RepoKind kind = 3;
-  // inbox = 4 (RepoInbox: 0 none, 1 group, 2 admin; the table's RepoCreate row) joins this fence once acl.proto
-  // declares it
+  RepoInbox inbox = 4;                    // the table's RepoCreate row: only a general repo; admin only from a
+                                          // config writer, once a network
+}
+enum RepoInbox {                          // a group inbox's marker (8.5)
+  REPO_INBOX_NONE = 0; REPO_INBOX_GROUP = 1; REPO_INBOX_ADMIN = 2;
+  REPO_INBOX_TEAM = 3;                    // DESIGN-COMPUTE.md §20.4's Team inbox, under agent_repos (§7.9;
+                                          // owner decision 744)
 }
 message RepoAdmin {
   StatementHeader header = 1;
@@ -11844,7 +11892,7 @@ listeners    network                            below          every admitted si
                                                                read_only writes only its own s/<sidecar_id>
 ```
 
-DESIGN-COMPUTE.md's three kinds (owner decisions [744](#od-744), [747](#od-747), [770](#od-770); DESIGN-COMPUTE.md §20.4, §26.6) join each under its feature (§7.9), `agents` and `agent` under `agent_repos` and `listeners` under `listeners`, with the classes, labels and readers those sections give, `RepoKind` in acl.proto taking them with their code; in a Team the policy's default lets members' devices and their agents deposit into `agent` repos, another tagged subject only where a rule names it; `RepoAdmin` adds, `RepoGrant`, `RepoRevoke`, `RepoVersioning` and the search index are refused on `listeners`, whose versionless files only the config writers delete, and only for removed sidecars (§8.5).
+DESIGN-COMPUTE.md's three kinds (owner decisions [744](#od-744), [747](#od-747), [770](#od-770); DESIGN-COMPUTE.md §20.4, §26.6) join each under its feature (§7.9), `agents` and `agent` under `agent_repos` and `listeners` under `listeners`, with the classes, labels and readers those sections give, `RepoKind` in acl.proto declaring them as 10, 11 and 12 (§8.8); in a Team the policy's default lets members' devices and their agents deposit into `agent` repos, another tagged subject only where a rule names it; `RepoAdmin` adds, `RepoGrant`, `RepoRevoke`, `RepoVersioning` and the search index are refused on `listeners`, whose versionless files only the config writers delete, and only for removed sidecars (§8.5).
 
 **Owner-bound** repos carry `owner_member_id` (D-EVS-11). The first consented, not read_only device of member M with an entry to write files RepoCreate{kind vault} (§10's KF1), and M's vault is M's live vault repo whose RepoCreate has the lowest log position, live as RECORD.md section 4.2 reads it, by which writers, depositors and readers all judge at their pin; once its RepoCreate lands, and before its first write, a device reads the log, and if another repo is the vault it ingests any deposit into that one and files RepoDelete{now} for its own empty repo. Only the owner's consented devices (§8.5) read and write them, so one admin signature never makes a reader; others read through a consented device's `EvsShare` or as a Team's visible audit reader, the only reader admins may add, though they may revoke (owner decisions [63](#od-63), [126](#od-126)); the owner's other sidecars deposit into its vault and mailbox, and a `secret` takes only read receipts; MCP's evs tools reach no `secret` repo and never read the config's contents (§16.6). Members refuse, and no writer commits, any other Add or wrap; KF2 parks such a device with `approval_pending`, and the owner's devices alarm on admissions under the owner they did not sign (§10.7, §5.4).
 
@@ -13999,7 +14047,7 @@ never     a query, which documents match it, or which trigrams documents share: 
 
 - **Provides:** `EvsClient` and `EvsRepo` (`evs_*.go`: `CreateRepo`, `ReadHead`, `List`, `History`, `Write`, `Deposit`, `Consume`, `Subscribe`, `Shred`, `Erasures`, `Delete`, `Restore`, `Import`, `Export`, `Mount`, `PathEpochStatus` (a ref's epoch, sources, due and mapper state, which `ur status` prints), and v1's `IndexSettings`, `IndexStatus` and `IndexRebuild`; the mapper and its `EvsNameIndex` seam, every name of a ref at one replayed head, which a mirror or a listing gives it (11.6's map row); `EVS_PATH_EPOCH_DUE`, a retryable error for a creation that outwaits a mapper's block (11.6's block row); `Write` takes a versioning setting and, per path, the path version its caller read, `IfVersion` (none as before, 0 absent or removed), answering PATH_CONFLICT where they differ, so a write is a path CAS from the caller's read to the commit, §15.7's created-only-if-absent writes taking 0 ([owner decision 407](#od-407)), and `List` and `History` report it and `collected`, 11.7), whose per-path version, signer and git oid answer §16.6's `Lookup(effect_key)` for an evs effect (D-MCP-11); the index writer the push builder calls, its format (`evs_index_*.go`, `sidecar/protocol/evsindex.proto`) and the partitions §16.10's engine reads (11.14); remote search, asking and serving, in the root engine (`search_remote_*.go`, `sidecar/protocol/search.proto`; 11.14); ref modes (11.7); the drop-history engine behind `ur history` and `SidecarEvs`'s four drop calls (`DropHistoryPreview`, `DropHistory`, `CancelDrop`, `Drops`; 11.7, 11.13, §18.5); the `directory` kind (11.12); the sync engine, local git server, `git-remote-ur` and v1's git-lfs transfer agent and tip check (11.11), with `EvsLocalPublish`, the one builder of a git-mode push that the receive path, an owned ref's queue and an import share, `EvsRepo.Import(EvsImportArgs{Dir, Ref, Target, Cuts, Force, Abandon})`, `ur evs retry`, which releases an owned ref's held queue, and the receive path's `ng <ref>` reasons: `non-fast-forward`, `busy`, `remote outcome pending`, `committed remotely, local update pending`, `too slow`, `too large for one push: ur evs import`, `lfs objects missing`, `tag exists`, `tag of a non-commit`, `ref refused at version <u>`, `import helper` and an evs refusal's code; the `sidecar/evsservice` engine ([owner decision 104](#od-104)); the push sequence that versions §6.8's `evs:<repo_id>`; `place/` and storage for `proj/`, `projrows/`, `rev/`, `hold/` and `gkm/`; 11.13's write budget, its classes, accounts and wallet, and fair share, shared with gkm, api and taskworker; §2.8's evs-1 to evs-26 and evs-28, and connect-5 (evs-10 is §19.6's, evs-27 §16.11's; evs-20 withdrawn).
 - **Consumes:** §3.6's indexers; §5 `ServiceToken`, binding log, `git` hello, §5.9's index cache and served record; §6 hints, `Signed`, `HeadCheck` and `RefHead`, `PushReset`, §6.6's RPC and §6.4's control contracts; §7 token exchange and its re-seed mode, `rev/`, the authorization log and its `{acl_}e` cache, `AuthPin`, bootstrap, §7.9's `VersioningRules` and `IndexerSet`; §8 `RepoReaders`, writer sets, kind defaults, §8.5's consent (`consented`), `audit`, access logs (`RepoDelete`, `RepoRestore`, `RepoVersioning`), `EvsShare`, `OwnerConfirm`; §10 `GkmClient`, `DeriveKey`, `GenRotate`, the gate predicate, the `index` purpose; §12 `ResolveNetworkLabel`; §13 certificates; §16.11's path rules and fields; §18 wakes and §18.4's fetch policies and remote mode; §19 clusters, drive counters, `{nvb_<set>}` and §19.6's `{nvb_<cluster>}`, §19.11's `format2` gate and its `purge` and `drop` modes; §20 `ReportUsage`; §21.9 holds.
-- **Subprotocol messages:** `EvsHeadChanged` (0x1401; server→client in §6 `PushHint`; a ref moved); `RefHead` inside §6's `HeadCheck` (compare ref pins); 0x1402-0x1403 stay reserved, never reused; `SearchRequest` in `SEARCH` (0x1404) and `SearchReply` in `SEARCH_RESULT` (0x1405) (app host to indexer and back over §6.6's RPC; remote search, 11.14; §6.11).
+- **Subprotocol messages:** `EvsHeadChanged` (0x1401; server→client in §6 `PushHint`; a ref moved); `RefHead` inside §6's `HeadCheck` (compare ref pins); 0x1402-0x1403 stay reserved, never reused; `SearchRequest` in `SEARCH` (0x1404) and `SearchReply` in `SEARCH_RESULT` (0x1405) (app host to indexer and back over §6.6's RPC; remote search, 11.14; §6.11); DESIGN-COMPUTE.md's `EVIDENCE` (0x1406) and `EVIDENCE_RESULT` (0x1407), a member's device asking the indexer enclave for its evidence ([owner decision 752](#od-752); §6.11).
 - **API routes:** Client class, authorized by a service token with aud `evs`, specified in connect/api/bringyour.yml.
 
   ```text
@@ -16637,7 +16685,9 @@ message CanonicalAction {                   // built by the daemon; hashed as st
   uint32 version = 12;                      // 1; 2 with field 37; 3 for kind access_request (16.11), in fields 8,
                                             // 10, 11, 14, 26, 29 and 38; 4 for a dial or route grant, in fields 8,
                                             // 10, 11, 28, 29 and 38, a share's also 40 (owner decisions 220,
-                                            // 457); approvers that do not know a version refuse it
+                                            // 457); 5 for DESIGN-COMPUTE.md's kinds 19 to 26, in fields 3, 5,
+                                            // 29, 38, 39 and 42 to 70, and for kind 5 with field 49 (owner
+                                            // decisions 737, 749); approvers that do not know a version refuse it
   bool scope = 13;                          // a multi-use template (16.6), which an agent asks for only through
                                             // mail_send's uses (owner decision 613)
   bytes repo_id = 14; string path = 15; bytes content_sha256 = 16; uint64 base_version = 17;  // O-tier evs_write,
@@ -16659,10 +16709,16 @@ message CanonicalAction {                   // built by the daemon; hashed as st
                                             // SignedType is SIGNED_GRANT_ACTIVATE and network the action's, and
                                             // in a header nonce's place the first 16 bytes of SHA-256 over this
                                             // action as stored with field 38 left out, so it opens only beside
-                                            // the clear fields it was sealed with (owner decisions 220, 457)
+                                            // the clear fields it was sealed with (owner decisions 220, 457);
+                                            // version 5: a CanonicalActionDetail5, kinds 19's and 21's alone,
+                                            // sealed as version 4's is but its aad's SignedType
+                                            // SIGNED_APPROVAL_DECISION, so no broker gate reads a name or a grant
   uint32 egress_mode = 39;                  // egress_change: BridgeEgressMode, beside its subject (29) and,
                                             // under exits, its exits in grant_dst (sidecar:<id> entries or one
-                                            // tag entry); version 1, on no server path (owner decision 462)
+                                            // tag entry); version 1, on no server path (owner decision 462);
+                                            // version 5: the mode at create (19) or the receiving enclave's (24),
+                                            // auto, exits or none, and on 24 also 4, direct, the enclave's default
+                                            // egress off (DESIGN-COMPUTE.md §11.8), a value no other version takes
   bytes share_network_id = 40;              // a share's grant (§8.11): the other network, 16 bytes, on a dial or
                                             // route grant alone, beside its subject, the requesting sidecar; an
                                             // admin's approval covers it as it covers every field (§8.8; owner
@@ -16675,6 +16731,113 @@ message CanonicalAction {                   // built by the daemon; hashed as st
                                             // approver that cannot name it refuses the action (owner decision 607);
                                             // a template binds it set or empty, so one that leaves it empty covers
                                             // only uses that leave it unset (16.6; owner decision 614)
+  // Version 5's fields (DESIGN-COMPUTE.md §16.3; Compute's record primitives, below), each set only at version 5.
+  // There field 3 is SHA-256 of exactly what the effect sends, field 46 as stored, the node list a continuation
+  // or crossing names, or kind 26's request body; field 5 the composed URL's host (23) or the API host (26), in
+  // punycode; field 29 the enclave's running incarnation or the receiving sidecar (20, 22, 24)
+  EnclaveFields enclave = 42;               // 19, 20, 22, 24; on 19 its name rides in field 38
+  BudgetFields budget = 43;                 // 21
+  string url = 44;                          // 23: the whole URL as the agent composed it
+  string tool = 45;                         // 24: the tool or ur command that sends
+  SendFields send = 46;                     // 24: the whole of what is sent, rendered as untrusted text
+  ContextFields context = 47;               // 24: harness_continue's, or a run's crossing
+  repeated string taint_reasons = 48;       // 23, 24, 26: the requesting run's taint reasons (16.6)
+  bool took_tainted = 49;                   // kind 5 alone, of an enclave leaving none: it took tainted input there
+  string calendar_label = 50;               // 25: the link's label, daemon-built
+  string calendar_host = 51;                // 25: the provider's host, daemon-built
+  string calendar_audience = 52;            // 25: the sharing or publishing the provider reports, else empty
+  repeated CalendarEventAction calendar_events = 53;   // 25: 1 to 20 events, each with its switch on the card
+  bytes calendar_link = 54;                 // 25: the link's repo id
+  bytes calendar_target = 55;               // 25: the SHA-256 that names the link's account and calendar
+  string calendar_name = 56;                // 25: the calendar's display name as the provider reports it
+  reserved 57 to 59;                        // kind 25's
+  ServiceCallFields service_call = 60;      // 26 (owner decision 768)
+  reserved 61 to 69;                        // kind 26's
+  AutoFields auto = 70;                     // 23 to 26: daemon-built, rendered on the card (owner decision 772)
+  reserved 71 to 79;
+}
+// What field 42 holds: the enclave an action creates, removes, sends into or turns default egress off for
+message EnclaveFields {
+  bytes enclave_id = 1;
+  string name = 2;                          // empty on kind 19, whose name rides in field 38
+  string shape = 3; string provider = 4;
+  string label = 5;                         // DESIGN-COMPUTE.md §4.3's label, as the catalog writes it
+  uint64 price_per_hour = 6;                // nano-USD
+  uint64 incarnation = 7;
+}
+// What field 43 holds, and a launch's budget in field 46: an amount over a period
+message BudgetFields {
+  bytes agent_id = 1;
+  uint32 period = 2;                        // 1 day, 2 month, 3 run
+  uint64 amount = 3;                        // nano-USD
+  uint64 current = 4;                       // nano-USD
+}
+// What field 46 holds: the whole of what a kind-24 action sends
+message SendFields {
+  string target_agent = 1; bytes target_agent_id = 2; bytes target_member_id = 3;
+  uint32 mode = 4;                          // prompt 1, steer 2, follow_up 3; 0 a message
+  string text = 5;
+  string stdin = 6;                         // at most 32 KiB
+  string cwd = 7;
+  repeated RefFields refs = 8;
+  string model = 9;
+  repeated string tools = 10;
+  BudgetFields budget = 11;
+}
+message RefFields { bytes repo_id = 1; string path = 2; uint64 version = 3; }   // one version a send names
+// What field 47 holds: a continuation's or a crossing's run and node, and counts of what its context holds
+message ContextFields {
+  bytes run_id = 1; bytes entry_id = 2;
+  uint32 nodes = 3; uint32 flagged = 4; uint32 untrusted = 5;
+  uint32 mail_messages = 6; uint32 calendar_events = 7; uint32 fetched_pages = 8; uint32 service_results = 9;
+  uint32 act = 10;                          // 1 continue, 2 cross
+}
+// One event of field 53, every string rendered as untrusted text
+message CalendarEventAction {
+  uint32 operation = 1;                     // 1 add, 2 change, 3 remove
+  string uid = 2;
+  string occurrence = 3;
+  string expected = 4;                      // the revision a change or removal expects
+  string title = 5;
+  string start = 6; string end = 7; string zone = 8; bool all_day = 9;
+  string recurrence = 10;
+  string location = 11;
+  repeated string reminders = 12;
+  repeated string attendees = 13;
+  repeated string mails = 14;               // what the provider will mail, and to whom
+  string description = 15;                  // whole
+  CalendarEventFields before = 16;          // a change's prior values
+  string source = 17;                       // the message the agent cites, as its claim
+}
+// A changed event's values before the change, in CalendarEventAction's order, so no message holds itself
+message CalendarEventFields {
+  string title = 1;
+  string start = 2; string end = 3; string zone = 4; bool all_day = 5;
+  string recurrence = 6;
+  string location = 7;
+  repeated string reminders = 8;
+  repeated string attendees = 9;
+  string description = 10;
+}
+// What field 60 holds: the one request a kind-26 action sends
+message ServiceCallFields {
+  bytes connection = 1;                     // the connection's repo id
+  string label = 2; string service = 3; string account = 4;
+  string method = 5; string path = 6; string query = 7; string content_type = 8;
+  string body = 9;                          // whole, at most 32 KiB; field 3 is its SHA-256
+  uint32 class = 10;                        // 1 write, 2 send
+  string feature = 11;
+}
+message AutoFields {                        // what field 70 holds
+  uint32 basis = 1;                         // 1 taint: outward only because its run is tainted; 2 always
+  repeated uint32 rules = 2;                // the auto rules that follow from the action alone, by their numbers
+}
+// What sealed_detail opens to at version 5: what the broker's gates, kinds 19 and 21, do not see
+message CanonicalActionDetail5 {
+  string name = 1;                          // kind 19's enclave name
+  uint32 role = 2;                          // kind 19's: 1 agents, 2 indexer
+  string harness = 3;
+  bytes grant_id = 4;                       // kind 21's gateway grant
 }
 // Rendering (D-MCP-17): approver devices render only these daemon-built fields as the action, with the
 // request's daemon-built 14 to 17 and an opened sealed_detail, and ApprovalRequest.summary and preview as
@@ -16716,7 +16879,12 @@ message ApprovalDecision {                  // inside §6 Signed, purpose approv
                                             // riding in Signed.webauthn
   bytes requester_sidecar_id = 11;          // the only sidecar that may spend it (16.6)
   AuthPin auth_pin = 12;                    // §7.9's pin the approver evaluated the request under
-  uint32 version = 13;                      // 1
+  uint32 version = 13;                      // 1; 2 adds selected; 3, channel 4's alone, adds DESIGN-COMPUTE.md's
+                                            // auto (15) and auto_verdict (16), which its own fence holds as it
+                                            // extends this one, and may carry selected; a reader that does not
+                                            // know a version refuses it whole (owner decisions 756, 772)
+  repeated uint32 selected = 14;            // version 2's: the indexes of the events a kind-25 decision approves,
+                                            // ascending, an empty list approving none
 }
 message ApprovalCancel { bytes approval_id = 1; }  // inside §6 Signed, purpose approval (16.6's ledger)
 message ReachReceipt {                      // coalesced per (grant, peer) per 5 min, and a TLS front's publish
@@ -16749,14 +16917,19 @@ enum SidecarActionKind {                    // §5.4's order, new kinds appendin
   SIDECAR_ACTION_KIND_DNS_SET = 12; SIDECAR_ACTION_KIND_DNS_DELETE = 13; SIDECAR_ACTION_KIND_MAIL_SEND = 14;
   SIDECAR_ACTION_KIND_ACCESS_REQUEST = 15; SIDECAR_ACTION_KIND_PAYMENT = 16; SIDECAR_ACTION_KIND_RESTORE = 17;
   SIDECAR_ACTION_KIND_MAIL_TLS_UNAUTHENTICATED = 18;   // §14.4's TL4 allowance (owner decision 436)
-  // DESIGN-COMPUTE.md appends 19 to 26 (§5.4), which record.proto takes with their code
+  // DESIGN-COMPUTE.md §16.3's (§5.4), each at version 5 alone (owner decisions 737, 749, 756, 768, 772)
+  SIDECAR_ACTION_KIND_ENCLAVE_CREATE = 19; SIDECAR_ACTION_KIND_ENCLAVE_EGRESS_DIRECT = 20;
+  SIDECAR_ACTION_KIND_COMPUTE_BUDGET_RAISE = 21; SIDECAR_ACTION_KIND_ENCLAVE_DELETE = 22;
+  SIDECAR_ACTION_KIND_FETCH_UNLISTED_URL = 23; SIDECAR_ACTION_KIND_TAINTED_SEND = 24;
+  SIDECAR_ACTION_KIND_CALENDAR_WRITE = 25; SIDECAR_ACTION_KIND_SERVICE_WRITE = 26;
 }
 enum SidecarRisk { SIDECAR_RISK_UNSPECIFIED = 0; SIDECAR_RISK_NORMAL = 1; SIDECAR_RISK_HIGH = 2; }
 enum ApprovalVerdict { APPROVAL_VERDICT_UNSPECIFIED = 0; APPROVAL_VERDICT_APPROVE = 1; APPROVAL_VERDICT_DENY = 2; }
 enum ApprovalChannel {                      // ApprovalDecision.channel and AclRequestRule.evidence
   APPROVAL_CHANNEL_UNSPECIFIED = 0; APPROVAL_CHANNEL_DEVICE = 1; APPROVAL_CHANNEL_PRESENCE = 2;
   APPROVAL_CHANNEL_HARNESS = 3;
-  // DESIGN-COMPUTE.md appends APPROVAL_CHANNEL_AUTO = 4 (owner decision 772), its own fence holding it
+  // DESIGN-COMPUTE.md appends APPROVAL_CHANNEL_AUTO = 4, at decision version 3 alone (owner decision 772),
+  // which record.proto declares and its own fence holds as it extends this one
 }
 ```
 
@@ -16767,11 +16940,12 @@ bytes      the leaf hash covers Signed.body, the header's bytes exactly as store
 kinds      RECORD.md's v1 registry; an unknown kind is kept, verified and shown generically, never refused
 values     CanonicalAction.kind, ApprovalRequest.risk and ApprovalDecision.decision and channel stay uint32, and
            record.proto declares their four enums, each 0 UNSPECIFIED, written by no one: SidecarActionKind 1
-           to 18 in §5.4's order, new kinds appending, 18 being §14.4's TL4 allowance (owner decision
-           436), DESIGN-COMPUTE.md's 19 to 26 and channel 4 auto joining with their code (Compute's record
+           to 26 in §5.4's order, new kinds appending, 18 being §14.4's TL4 allowance (owner decision
+           436) and 19 to 26 DESIGN-COMPUTE.md's, at CanonicalAction version 5 alone (Compute's record
            primitives, below); SidecarRisk 1 normal, 2 high; ApprovalVerdict
            (decision) 1 approve, 2 deny; ApprovalChannel (channel, and AclRequestRule.evidence) 1 device,
-           2 presence, 3 harness, as RECORD.md section 6.2; audience and app_mode hold acl.proto's
+           2 presence, 3 harness, 4 auto, DESIGN-COMPUTE.md's, at ApprovalDecision version 3 alone, as
+           RECORD.md section 6.2; audience and app_mode hold acl.proto's
            AclAudience and AclAppMode, a publish's action always writing the resolved non-zero value
            (members 1, http 1) and a gate mapping a request's 0 to 1 before it compares; an approver,
            spender or gate refuses 0 or an unknown value of any of these, the kinds row's "kept" covering
@@ -16782,7 +16956,9 @@ values     CanonicalAction.kind, ApprovalRequest.risk and ApprovalDecision.decis
 server     a CanonicalAction bound for a GrantActivate or a gate sets only kind, version, scope and the fields
            that path's gate sees: a grant 8, 10, 11, 28 and 29, version 4's also 38, sealed, and a share's
            40, a publish's also 5, 6, 7, 33 and 35; a version-3 access_request 8, 10, 11, 14, 26, 29 and 38;
-           a dns_* action 8 and 18 to 21; api, every reader's GrantActivate check and each gate parse the
+           a dns_* action 8 and 18 to 21; at version 5 only the broker's two, kind 19's create 38, sealed,
+           39 and 42, and kind 21's raise 38, sealed, and 43, every other version-5 action taking no server
+           path (DESIGN-COMPUTE.md §16.3); api, every reader's GrantActivate check and each gate parse the
            stored bytes and refuse any other set field, so a socket_listen's grant carries only its grant_dst's
            sock: entry and an egress_change goes to no server; AD4 stands (16.6)
 order      within one stream, (evs push version, position in the push), each push's entries sorted by
@@ -16804,7 +16980,7 @@ semantics  DESIGN.md's, which RECORD.md may not change: the logs' reader and wri
            request_sha256 and payload_sha256
 ```
 
-**Compute's record primitives** (owner decisions [737](#od-737), [749](#od-749), [756](#od-756), [757](#od-757), [768](#od-768), [772](#od-772); DESIGN-COMPUTE.md §16.3, §23.9, §24.5, §25.10, §27.9). `CanonicalAction` version 5, which approvers, spenders and gates that do not know it refuse, adds fields 42-49 and `CanonicalActionDetail5` in field 38 for kinds 19-24, field 49 on kind 5; for kind 25 fields 50 `calendar_label`, 51 `calendar_host`, 52 `calendar_audience` and 53, a repeated `CalendarEventAction` (operation, uid, occurrence, the revision a change or removal expects, title, start, end, zone, all-day, recurrence, location, reminders, attendees, what the provider mails to whom, the whole description, the fields before a change, the cited source), all rendered as untrusted text, 54 `calendar_link`, the link's repo id, 55 `calendar_target`, the SHA-256 that names its account and calendar, which an approving device recomputes from its own copy of the link, signing nothing where they differ, and 56 `calendar_name`, 57-59 reserved; 60-69 for kind 26; and 70, `AutoFields{basis, rules}`, on kinds 23-26, 71-79 reserved. `ApprovalDecision.selected` (field 14), at decision version 2, holds the indexes of the events a kind-25 decision approves, an empty list approving none, `ur approve <id> --events <i>,…` selecting them at a terminal; version 3, for channel 4 `auto` alone, sets field 15 `auto` and carries 16 `auto_verdict`, an `AutoVerdict` (verdict, reason, score, threshold, the model and its SHA-256, the inputs' SHA-256, windows, the run's and the day's counts), its `evidence_sha256` that of its `auto_verdict` entry, and a reader that predates version 3 refuses it whole. `Coverage` takes field 8, `bodies_dropped`, repeated `SeqRange{first, last}`, the writer's seqs in its log whose session bodies its spool dropped, gap `spool_drop`. RECORD.md section 12's evidence level 4 is a verified TEE platform, `ModelCallBody` takes fields 11 to 15, the last, `CallContext`, its `request_sha256` covering parts by hash, and RECORD.md's compute section adds kinds 54 `session_entry`, 55 `session_blob` and 56 `auto_verdict` and class 8 `bulk`. The fences above and record.proto take each with its code; until then DESIGN-COMPUTE.md's fences hold them, which protocol's fence test reads as unbuilt.
+**Compute's record primitives** (owner decisions [737](#od-737), [749](#od-749), [756](#od-756), [757](#od-757), [768](#od-768), [772](#od-772); DESIGN-COMPUTE.md §16.3, §23.9, §24.5, §25.10, §27.9). `CanonicalAction` version 5, which approvers, spenders and gates that do not know it refuse, adds fields 42-49 for kinds 19-24, field 49 on kind 5, and `CanonicalActionDetail5` in field 38 for kinds 19 and 21 alone, the two whose actions reach a broker gate; for kind 25 fields 50 `calendar_label`, 51 `calendar_host`, 52 `calendar_audience` and 53, a repeated `CalendarEventAction` (operation, uid, occurrence, the revision a change or removal expects, title, start, end, zone, all-day, recurrence, location, reminders, attendees, what the provider mails to whom, the whole description, the fields before a change, the cited source), all rendered as untrusted text, 54 `calendar_link`, the link's repo id, 55 `calendar_target`, the SHA-256 that names its account and calendar, which an approving device recomputes from its own copy of the link, signing nothing where they differ, and 56 `calendar_name`, 57-59 reserved; 60-69 for kind 26; and 70, `AutoFields{basis, rules}`, on kinds 23-26, 71-79 reserved. `ApprovalDecision.selected` (field 14), at decision version 2, holds the indexes of the events a kind-25 decision approves, an empty list approving none, `ur approve <id> --events <i>,…` selecting them at a terminal; version 3, for channel 4 `auto` alone, sets field 15 `auto` and carries 16 `auto_verdict`, an `AutoVerdict` (verdict, reason, score, threshold, the model and its SHA-256, the inputs' SHA-256, windows, the run's and the day's counts), its `evidence_sha256` that of its `auto_verdict` entry, and a reader that predates version 3 refuses it whole. `Coverage` takes field 8, `bodies_dropped`, repeated `SeqRange{first, last}`, the writer's seqs in its log whose session bodies its spool dropped, gap `spool_drop`. RECORD.md section 12's evidence level 4 is a verified TEE platform, `ModelCallBody` takes fields 11 to 15, the last, `CallContext`, its `request_sha256` covering parts by hash, and RECORD.md's compute section adds kinds 54 `session_entry`, 55 `session_blob` and 56 `auto_verdict` and class 8 `bulk`. record.proto declares version 5's fields and messages, kinds 19 to 26, `selected`, `auto`, `auto_verdict` and channel 4, and the fences above write them, all but `auto`, `auto_verdict` and channel 4, which DESIGN-COMPUTE.md's own fence holds as it extends §16.8's; `Coverage`'s field 8, `ModelCallBody`'s fields 11 to 15, kinds 54 to 56 and class 8 join the fences, RECORD.md and record.proto with their code, DESIGN-COMPUTE.md's fences holding them until then, which protocol's fence test reads as unbuilt.
 
 - **Storage (Q-ARCH-9 (a); [owner decision 2](#od-2)).** Entries are named by a stream's own counter n from 1, at `e/<n div 4,194,304>/<(n div 2,048) mod 2,048>/<n>`, each part decimal (RECORD.md section 5.2), 2,048 to a leaf directory and about 15 billion to a stream, n equal to seq in a stream that holds no ingested entry; a directory's name table (about 128 B a row: child token, kind, and a sealed name with its nonce and tag; up to 140 B while a path-epoch copy carries it with its `EvsName.epoch`) stays within 256 KiB, 280 KiB carried, inside §11.7's 4,096 children and 448 KiB of name table; per entry evs sees only a token path, padded size, key slot and push time, never record kinds, agents, runs or bodies. A push carries up to 64 entries or 1 s of them into the append-only stream, in one part, their keys 64 to a slot object (owner decisions [137](#od-137), [140](#od-140)), spilling inline bodies to segments (§11.8). Slot ids are random per push statement (§11.6): a retry of the same statement keeps them, and a push rebuilt after a refusal, such as a deposit re-wrapped to a newer drop key after 412 GATE_CLOSED, draws new ones; `key_slot_id` and `key_index` lie outside the signed header, so re-slotting re-signs no entry.
 - **Chain.** `seq` and `prev_sha256` chain each writer's entries, so writers never contend and work offline. Readers verify chains after decrypting and pin each writer's head (I-16): a withheld or rewritten entry shows as a gap or a fork. Ingested deposits keep their writer's chain.
@@ -18998,7 +19174,7 @@ ipv6     ::/0 goes through the tun too, with IPv6 copies of the two rules on Lin
 
 - **Provides:** `device.Bridge`, `device.BridgeEgressPolicy`, `device.BridgeHost`, `BridgeStatus`; the compiler and forwarding's signer, which apps' VPN components link (§18.6, §18.10); `protocol/bridge/bridge.proto`'s `BridgeState`, `BridgeIdentity`, `BridgeShareKey`, `Pending`, `BridgeRows`, `WindowDelegation`, `ShareCert`, `BridgeShareSigner`, share pins' `BridgeShareGrant`, the share seal's `BridgeShareTargets`, `BridgeShareAliases` and `BridgeShareAccept`, the config head's bridge ledger (`BridgeLedgerManifest`, `BridgeLedgerAddresses`, `BridgeLedgerRules`, `BridgeLedgerEgressSpecs` and `BridgeLedgerAliases` under `bridge/ledger/`), and 17.8's statements; 17.8's states, route export, reach events (§16), the `ur tun` resolver (§12.9), `ur bridge activate` and `ur tun`'s exits routes (17.11).
 - **Consumes:** §7.9's config repo, authorization log (`AuthPin`, entries, `StatementHeader`), deltas and `team` hints, and its forwarding Delegations ([owner decision 197](#od-197)); §7.4's `strict_exp`; §8 grant chains, `AclEngine`, approvals, suspension, contract gate, shares; §10's generations; §11.12's `secret` kind; §6 `Signed` and §6.11's `SignedType`, Required, §6.10.1; §5 identities, the binding log, `GET /sidecar/identity/<sidecar_id>`, `Sidecar.Authorize`, `SidecarEvent`; §16.6's decisions and `effect_key`; §12.9; §18 `deviceBridge`, forwarding's setup and the device RPC's status mirror; §20.6 debits; §4 C5, C6a, C13, C14, C15, C16, C18.
-- **Subprotocol messages:** none; rules ride the config repo (§6.11 leaves MessageType 0x19 unused). `Signed` types 0x1901-0x1909 are 17.8's statements, `WindowDelegation` and `ShareCert`; `BridgeShareSigner`, a config file, takes none (17.9).
+- **Subprotocol messages:** DESIGN-COMPUTE.md's `LISTENERS` and `LISTENERS_RESULT` (0x1901, 0x1902; §6.11), a peer RPC asking a host for its listeners ([owner decision 770](#od-770)); rules ride the config repo. `Signed` types 0x1901-0x1909 are 17.8's statements, `WindowDelegation` and `ShareCert`; `BridgeShareSigner`, a config file, takes none (17.9).
 - **API routes:** statements through §7's `POST /network/config/delta`; shares through §8's `POST /acl/invite` and `POST /acl/accept-invite`, which carry the sealed tables, the accept status included, the accept in §8.11's two forms, a claim that answers the share's id with the sealed targets and a completion that stores the sealed accept and the status once ([owner decision 350](#od-350)); `GET|PUT /network/bridge/share/<share_id>` (Client, a sidecar of either network: read both tables, or replace its own at a higher version).
 - **Tables:** `network_bridge_share` (api): share_id, both network ids, sealed target and alias tables, versions, `accept_status enum{active, refused_too_large, refused_no_space}`; kept until revoked.
 - **Services and config:** no new service and no `sidecar_abuse:` caps; sdk flag `EnableBridge` and §19's `bridge` gate, which keep the bridge dark until its release (§19.11) and are no setting: released, an app's forwarding runs whenever its VPN component runs ([owner decision 197](#od-197)); `ur tun` needs CAP_NET_ADMIN or root.
