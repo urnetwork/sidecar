@@ -1,5 +1,5 @@
 // §7.8's token exchange on the fake api (RFC 8693): a sidecar trades its client token for a 15-minute service token
-// for evs, gkm, dns, certs, mail or sockets (QD-1029).
+// for evs, gkm, dns, certs, mail, sockets (QD-1029) or compute (DESIGN-COMPUTE §14.2, CSRV-M12-03).
 //
 //	POST <AuthOrigin>/oauth/token  grant_type=urn:ietf:params:oauth:grant-type:token-exchange
 //	     subject_token=<client token>  subject_token_type=urn:ur:params:oauth:token-type:client-jwt
@@ -55,7 +55,7 @@ const (
 	fakeApiStrictExpRefusedText = "A sidecar token cannot call this route."
 )
 
-// The audiences a service token may name (§7.8; sockets', QD-1029). The api's is never one.
+// The audiences a service token may name (§7.8; sockets', QD-1029; compute's, CSRV-M12-03). The api's is never one.
 var fakeApiServiceAudiences = map[string]bool{
 	"evs":     true,
 	"gkm":     true,
@@ -63,6 +63,7 @@ var fakeApiServiceAudiences = map[string]bool{
 	"certs":   true,
 	"mail":    true,
 	"sockets": true,
+	"compute": true,
 }
 
 // A scope the exchange will not grant (RFC 6749 §5.2): 400 invalid_scope. A FakeApiScopeSource refuses with an error

@@ -51,6 +51,13 @@
       "requirement": "dns"
     },
     {
+      "host": "compute.bringyour.com",
+      "tcp": 443,
+      "need": "with remote models, enclaves and web searches",
+      "service": "compute",
+      "requirement": "compute"
+    },
+    {
       "host": "api.certspotter.com",
       "tcp": 443,
       "need": "with tls: the CT watch",

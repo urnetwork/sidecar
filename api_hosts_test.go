@@ -360,3 +360,74 @@ func TestIssuerSpkiDigestsDecode(t *testing.T) {
 		t.Errorf("address %s", entry.Address())
 	}
 }
+
+// The broker is optional by the format: the embedded list names it, needed with compute, its url https://<host>; a
+// fixture list without it still applies with an empty url, one with it gives its url, on a port where it has one, and a
+// list that makes it required or names it twice is refused. The published copy carries the host and not the service.
+func TestHostListComputeIsOptional(t *testing.T) {
+	list, err := SidecarHostListV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, ok := list.ServiceEntry(SidecarHostServiceCompute)
+	if !ok || entry.Requirement != SidecarHostWithCompute || entry.Tcp != 443 {
+		t.Fatalf("the embedded broker entry is %+v", entry)
+	}
+	if computeUrl := list.ComputeUrl(); computeUrl != "https://"+entry.Host {
+		t.Errorf("the embedded broker's url is %q", computeUrl)
+	}
+	if slices.Contains(sidecarHostServices, SidecarHostServiceCompute) {
+		t.Error("the broker is required of every list")
+	}
+
+	without, err := ParseSidecarHostList([]byte(testSidecarHostListJson()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if computeUrl := without.ComputeUrl(); computeUrl != "" {
+		t.Errorf("a list with no broker gives %q", computeUrl)
+	}
+	if err := without.ApplyServiceUrls(DefaultSidecarSettings()); err != nil {
+		t.Errorf("a list with no broker does not apply: %v", err)
+	}
+
+	computeEntry := `{"host": "compute.hosttest.example", "tcp": 443, "need": "with compute", "service": "compute", "requirement": "compute"},
+    {"host": "hosttest.example"`
+	withCompute := strings.Replace(testSidecarHostListJson(), `{"host": "hosttest.example"`, computeEntry, 1)
+	with, err := ParseSidecarHostList([]byte(withCompute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if computeUrl := with.ComputeUrl(); computeUrl != "https://compute.hosttest.example" {
+		t.Errorf("the broker's url is %q", computeUrl)
+	}
+	if err := with.ApplyServiceUrls(DefaultSidecarSettings()); err != nil {
+		t.Errorf("a list with a broker does not apply: %v", err)
+	}
+	onPort, err := ParseSidecarHostList([]byte(strings.Replace(withCompute, `"compute.hosttest.example", "tcp": 443`, `"compute.hosttest.example", "tcp": 8443`, 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if computeUrl := onPort.ComputeUrl(); computeUrl != "https://compute.hosttest.example:8443" {
+		t.Errorf("the broker's url on a port is %q", computeUrl)
+	}
+	published, err := with.PublishedJson()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(published, []byte("compute.hosttest.example")) || bytes.Contains(published, []byte(`"compute"`)) {
+		t.Errorf("published %s", published)
+	}
+	for name, data := range map[string]string{
+		"required": strings.Replace(withCompute, `"service": "compute", "requirement": "compute"`, `"service": "compute", "requirement": "required"`, 1),
+		"optional": strings.Replace(withCompute, `"service": "compute", "requirement": "compute"`, `"service": "compute", "requirement": "optional"`, 1),
+		"twice":    strings.Replace(withCompute, `{"host": "ct.hosttest.example", "tcp": 443, "need": "with tls", "requirement": "tls"}`, `{"host": "ct.hosttest.example", "tcp": 443, "need": "with tls", "service": "compute", "requirement": "compute"}`, 1),
+	} {
+		if data == withCompute {
+			t.Fatalf("%s: the fixture moved", name)
+		}
+		if _, err := ParseSidecarHostList([]byte(data)); !errors.Is(err, ErrSidecarHostList) {
+			t.Errorf("%s: parsed, %v", name, err)
+		}
+	}
+}
