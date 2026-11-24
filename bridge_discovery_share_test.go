@@ -255,8 +255,10 @@ func TestBridgeDiscoverySwitchesAndHides(t *testing.T) {
 		}
 	}
 	// the daemon's unhide method is the person's confirmed act alone, and the plain method cannot unhide
+	underHarness := false
 	methods := NewDaemonBridgeDiscovery(&DaemonBridgeDiscoveryArgs{
-		Component: func(networkId Id, running *Sidecar) *BridgeDiscoveryComponent { return component },
+		Component:       func(networkId Id, running *Sidecar) *BridgeDiscoveryComponent { return component },
+		HarnessAncestor: func(ctx context.Context, call *DaemonCall) bool { return underHarness },
 	}).Methods()
 	byName := map[string]*DaemonMethod{}
 	for _, method := range methods {
@@ -271,6 +273,16 @@ func TestBridgeDiscoverySwitchesAndHides(t *testing.T) {
 		t.Errorf("an unconfirmed unhide: %v", err)
 	}
 	confirmed := &DaemonCall{Params: []byte(`{"setting":"hide","value":"51820/udp"}`), Confirmed: true}
+	underHarness = true
+	if _, err := byName[DaemonMethodBridgeDiscoveryUnhide].Handler(context.Background(), confirmed); !errors.Is(err, ErrBridgeDiscoveryRefused) {
+		t.Errorf("a confirmed unhide under a harness: %v", err)
+	}
+	if _, err := NewDaemonBridgeDiscovery(&DaemonBridgeDiscoveryArgs{
+		Component: func(networkId Id, running *Sidecar) *BridgeDiscoveryComponent { return component },
+	}).Methods()[3].Handler(context.Background(), confirmed); !errors.Is(err, ErrBridgeDiscoveryRefused) {
+		t.Errorf("a confirmed unhide with no Sidecar to ask: %v", err)
+	}
+	underHarness = false
 	if _, err := byName[DaemonMethodBridgeDiscoveryUnhide].Handler(context.Background(), confirmed); err != nil {
 		t.Errorf("a confirmed unhide: %v", err)
 	}

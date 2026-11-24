@@ -147,6 +147,21 @@ type DaemonBridgeDiscoveryParams struct {
 type DaemonBridgeDiscoveryArgs struct {
 	// The network's discovery component; nil, or a nil answer, where none runs (ErrDaemonBridgeDiscoveryUnwired).
 	Component func(networkId Id, running *Sidecar) *BridgeDiscoveryComponent
+	// Whether the call's process has a harness among its ancestors, which a share and an unhide refuse (DESIGN-COMPUTE.md
+	// §26.6). Nil asks the call's Sidecar by the pid its socket gave, refusing where there is none.
+	HarnessAncestor func(ctx context.Context, call *DaemonCall) bool
+}
+
+// Whether call comes from under a harness, which the person's own acts refuse: the args' answer, else the Sidecar's,
+// and true where neither can tell, the closed direction.
+func (self *DaemonBridgeDiscovery) underHarness(ctx context.Context, call *DaemonCall) bool {
+	if self.args != nil && self.args.HarnessAncestor != nil {
+		return self.args.HarnessAncestor(ctx, call)
+	}
+	if call.Sidecar == nil || call.Hello == nil {
+		return true
+	}
+	return call.Sidecar.HarnessAncestor(ctx, int(call.Hello.PeerPid))
 }
 
 // The daemon's discovery methods.
@@ -202,6 +217,9 @@ func (self *DaemonBridgeDiscovery) Methods() []*DaemonMethod {
 				if err != nil {
 					return nil, err
 				}
+				if self.underHarness(ctx, call) {
+					return nil, fmt.Errorf("%w: a share is refused under a harness process", ErrBridgeDiscoveryRefused)
+				}
 				if params.Disclosure {
 					disclosure, err := component.ShareDisclosure(params.Device)
 					if err != nil {
@@ -253,7 +271,7 @@ func (self *DaemonBridgeDiscovery) Methods() []*DaemonMethod {
 				if err != nil {
 					return nil, err
 				}
-				if daemonBridgeOrigin(call).Act != SidecarActConfirmed {
+				if daemonBridgeOrigin(call).Act != SidecarActConfirmed || self.underHarness(ctx, call) {
 					return nil, fmt.Errorf("%w: an unhide is the person's confirmed act alone", ErrBridgeDiscoveryRefused)
 				}
 				return component.Devices(), component.Set(DaemonBridgeDiscoveryHide, params.Value, true)

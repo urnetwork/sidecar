@@ -795,3 +795,11 @@ func (self *BridgeDiscoveryComponent) View() []*BridgeDiscoveryViewInstance {
 	defer self.stateLock.Unlock()
 	return slices.Clone(self.view)
 }
+
+// What the gatherer holds now, its LocalOnly answers included: a copy the caller owns, for the advertising proxy's
+// names rule (bridge_discovery_names.go).
+func (self *BridgeDiscoveryComponent) Gathered() []*BridgeDiscoveryGathered {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return slices.Clone(self.gathered)
+}
