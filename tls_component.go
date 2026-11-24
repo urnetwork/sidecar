@@ -18,6 +18,15 @@
 // which reads why one could not be had as evs's and gkm's clients do: a refusal for good ends the call at once, and
 // what may change goes again within SidecarTlsSettings' bound.
 //
+// certs' 401 refuses nothing by itself: api's certs routes answer it at the token, one that does not authenticate
+// there (past its life by api's clock, which may run ahead of this device's, or signed under a key api no longer
+// holds), or one whose subject a rev/ object voids, before the route does anything (server's tlsCertsPrincipal). So a
+// call under a certs token, the manager's order and status read on each generation's api (tlsCertRenewingApi) and each
+// of an ordering desktop's custom routes, drops the token it presented through the keeper's ForgetServiceToken and goes
+// once more at once, with its same body, under a token minted after the answer, as the keeper's contract has a caller
+// do and evs's and gkm's clients do on their 401 (owner decision 411). A 401 to that token ends the call, a refusal for
+// good, and the new token is asked as the first was, read by why it could not be had (tlsCertsRenewingCall).
+//
 // Two kinds of host make one (§18.4). A host that stays up, a desktop or CLI daemon, takes TlsComponentArgs, which runs
 // D-TLS-8's CT watch while it listens (tls_ct.go). An app's sidecar role runs only while the app is open (owner
 // decision 197), so it takes TlsForegroundComponentArgs, which runs no watch and makes no CT client: the network's
@@ -46,6 +55,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"strings"
 	"sync"
 
@@ -74,6 +84,11 @@ const tlsListenerTargetAddress = "0.0.0.0:0"
 type TlsComponentArgs struct {
 	// The manager's parts.
 	Manager *TlsCertManagerArgs
+	// Sidecar.ForgetServiceToken: drops a token certs answered 401 to the manager, so the call's one retry presents a
+	// token minted after the answer (the file's comment). Nil for a Manager.ServiceToken that keeps no token, as one
+	// exchanging at each call does, whose retry mints a new one anyway; beside one that keeps a token, nil retries
+	// with the token refused.
+	ForgetServiceToken func(resource string, scopes []string)
 	// Sidecar.setTlsCertificateSource: installs the manager behind TlsDeviceCertificate, nil removing it.
 	SetSource func(source TlsCertificateSource) error
 	// D-TLS-8's CT watch (tls_ct.go). nil runs none. Its NetworkId, Rows, Names, Store, Settings, Clock and Log are
@@ -97,8 +112,12 @@ type TlsComponent struct {
 	manager   *TlsCertManager
 	networkId Id
 	// the names the manager orders for, which an app listener's server names come from
-	names     func(ctx context.Context) (*TlsCertNames, error)
-	setSource func(source TlsCertificateSource) error
+	names func(ctx context.Context) (*TlsCertNames, error)
+	// the manager's service token, which a call certs answered 401 asks again, and the keeper's drop of the token
+	// refused, nil for a serviceToken that keeps none
+	serviceToken       func(ctx context.Context, resource string, scopes []string) (string, error)
+	forgetServiceToken func(resource string, scopes []string)
+	setSource          func(source TlsCertificateSource) error
 	// nil when the component runs no CT watch
 	ctWatch        *tlsCtWatch
 	setCtWatch     func(watch sidecarCtWatch)
@@ -230,7 +249,8 @@ func (self *Sidecar) certsServiceToken(ctx context.Context, resource string, sco
 }
 
 // The args a TlsComponent takes from this Sidecar for the network it is enrolled in, on a host that stays up (a
-// desktop or CLI daemon): its settings, device key, Sign, certs' ServiceToken (certsServiceToken), zone, sealed
+// desktop or CLI daemon): its settings, device key, Sign, certs' ServiceToken (certsServiceToken) and the keeper's
+// ForgetServiceToken, which drops a token certs answered 401 so the call's one retry presents a new one, zone, sealed
 // directory, clock and log, and D-TLS-8's CT watch on a keyless client, which passes while this sidecar listens.
 func (self *Sidecar) TlsComponentArgs() (*TlsComponentArgs, error) {
 	return self.tlsComponentArgs(true)
@@ -270,8 +290,9 @@ func (self *Sidecar) tlsComponentArgs(watchCt bool) (*TlsComponentArgs, error) {
 			Clock:        self.clock,
 			Log:          self.log,
 		},
-		SetSource: self.setTlsCertificateSource,
-		sidecar:   self,
+		ForgetServiceToken: self.ForgetServiceToken,
+		SetSource:          self.setTlsCertificateSource,
+		sidecar:            self,
 	}
 	if !watchCt {
 		return args, nil
@@ -323,14 +344,16 @@ func NewTlsComponent(ctx context.Context, args *TlsComponentArgs) (*TlsComponent
 		}
 	}
 	self := &TlsComponent{
-		ctx:            ctx,
-		manager:        manager,
-		networkId:      args.Manager.NetworkId,
-		names:          args.Manager.Names,
-		setSource:      args.SetSource,
-		setCtWatch:     args.SetCtWatch,
-		closeCtSources: args.CloseCtSources,
-		listeners:      map[*TlsListener]bool{},
+		ctx:                ctx,
+		manager:            manager,
+		networkId:          args.Manager.NetworkId,
+		names:              args.Manager.Names,
+		serviceToken:       args.Manager.ServiceToken,
+		forgetServiceToken: args.ForgetServiceToken,
+		setSource:          args.SetSource,
+		setCtWatch:         args.SetCtWatch,
+		closeCtSources:     args.CloseCtSources,
+		listeners:          map[*TlsListener]bool{},
 	}
 	if args.sidecar != nil {
 		self.publisher = newTlsPublisher(&sidecarTlsPublishBackend{sidecar: args.sidecar, args: args.Publish, settings: args.Manager.Settings}, args.Manager.Settings)
@@ -376,9 +399,10 @@ func (self *TlsComponent) Name() string {
 	return tlsComponentName
 }
 
-// Follows one generation: the manager calls the certificate routes on its token until env.Ctx ends, and its push
-// feed's notices on topic tls ask for the rows at once. A generation whose dispatcher has no push client yet attaches
-// without hints, and the hourly resync carries it. A generation of another network is refused.
+// Follows one generation: the manager calls the certificate routes on its api until env.Ctx ends, an order or a status
+// read certs answered 401 going once more under a new token (tlsCertRenewingApi), and its push feed's notices on topic
+// tls ask for the rows at once. A generation whose dispatcher has no push client yet attaches without hints, and the
+// hourly resync carries it. A generation of another network is refused.
 func (self *TlsComponent) Attach(env *SidecarEnv) error {
 	if env == nil || env.SidecarApi == nil || env.Identity == nil {
 		return fmt.Errorf("%w: tls needs the generation's api and identity", errInvalidSettings)
@@ -395,7 +419,7 @@ func (self *TlsComponent) Attach(env *SidecarEnv) error {
 		self.api = env.SidecarApi
 		return self.generationSeq
 	}()
-	self.manager.SetApi(env.SidecarApi)
+	self.manager.SetApi(&tlsCertRenewingApi{api: env.SidecarApi, renew: self.renewServiceToken})
 	var subscriptions []func()
 	if env.Subprotocol != nil {
 		for _, topic := range []string{PushTopicTls, PushTopicDns} {
@@ -418,6 +442,76 @@ func (self *TlsComponent) Attach(env *SidecarEnv) error {
 		}
 	}()
 	return nil
+}
+
+// Drops the certs token the manager presented, which certs answered 401, and mints the call's next: the manager's
+// ServiceToken for its certs audience with no scope, as the manager asks its own.
+func (self *TlsComponent) renewServiceToken(ctx context.Context) (string, error) {
+	resource := self.manager.settings.CertsResource
+	if self.forgetServiceToken != nil {
+		self.forgetServiceToken(resource, nil)
+	}
+	return self.serviceToken(ctx, resource, nil)
+}
+
+// §13.15's routes as the certificate manager calls them on one generation's api: an order and its status read, under
+// a certs token, go once more under a new one where certs answered 401 (tlsCertsRenewingCall); the rows and a
+// revocation, under the client's own token, go as they are.
+type tlsCertRenewingApi struct {
+	api TlsCertApi
+	// drops the token certs refused and mints the call's next
+	renew func(ctx context.Context) (string, error)
+}
+
+// See TlsCertApi.
+func (self *tlsCertRenewingApi) TlsCertOrder(ctx context.Context, serviceToken string, args *TlsCertOrderArgs) (*TlsCertOrderResult, error) {
+	return tlsCertsRenewingCall(ctx, serviceToken, self.renew, func(serviceToken string) (*TlsCertOrderResult, error) {
+		return self.api.TlsCertOrder(ctx, serviceToken, args)
+	})
+}
+
+// See TlsCertApi.
+func (self *tlsCertRenewingApi) TlsCertOrderStatus(ctx context.Context, serviceToken string, certId Id) (*TlsCertOrderStatus, error) {
+	return tlsCertsRenewingCall(ctx, serviceToken, self.renew, func(serviceToken string) (*TlsCertOrderStatus, error) {
+		return self.api.TlsCertOrderStatus(ctx, serviceToken, certId)
+	})
+}
+
+// See TlsCertApi.
+func (self *tlsCertRenewingApi) TlsCerts(ctx context.Context) (*TlsCertsResult, error) {
+	return self.api.TlsCerts(ctx)
+}
+
+// See TlsCertApi.
+func (self *tlsCertRenewingApi) TlsCertRevoke(ctx context.Context, args *TlsCertRevokeArgs) error {
+	return self.api.TlsCertRevoke(ctx, args)
+}
+
+// Whether certs answered a route's call 401, its guard refusing the token presented before the route did anything: a
+// *SidecarApiError as api's router answers one, or a custom route's *TlsCustomError should one carry that status.
+func tlsCertsTokenRefused(err error) bool {
+	var apiErr *SidecarApiError
+	if errors.As(err, &apiErr) {
+		return apiErr.Status == http.StatusUnauthorized
+	}
+	var refusal *TlsCustomError
+	return errors.As(err, &refusal) && refusal.Status == http.StatusUnauthorized
+}
+
+// send's answer under serviceToken, or where certs answered that 401, send's answer under the token renew answers,
+// which drops the one refused and mints one after the answer: the call's one retry (the file's comment), whose answer
+// stands, a 401 included. A token renew could not have ends the call with renew's error, read by why as any other.
+func tlsCertsRenewingCall[T any](ctx context.Context, serviceToken string, renew func(ctx context.Context) (string, error), send func(serviceToken string) (T, error)) (T, error) {
+	result, err := send(serviceToken)
+	if !tlsCertsTokenRefused(err) {
+		return result, err
+	}
+	serviceToken, err = renew(ctx)
+	if err != nil {
+		var none T
+		return none, err
+	}
+	return send(serviceToken)
 }
 
 // The certificate manager.
