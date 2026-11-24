@@ -33,7 +33,10 @@
 // times the last compiled state's size (12.7, stricter than QD-620's rule) and CompileEstimateOverheadByteCount. Past
 // CompileMemoryMaxByteCount the compile never runs on this device (compile_over_budget); under it, with the process's
 // heap in use the estimate must fit under CompileHeapCeilingByteCount, or the compile is deferred and retried
-// (compile_deferred). Either way the last verified state stays in force and nothing goes pending (QD-621).
+// (compile_deferred). Either way the last verified state stays in force and nothing goes pending (QD-621). A judge
+// that restores at the base before the newest, so it judges back as far as a long-running member does
+// (bridge_forward_compile.go), holds both bases' rows, and its estimate counts both; where that one is not admitted and
+// the newest base's alone is, the compile restores at the newest base, as a new device does.
 //
 // Logs and alarms name opaque ids and positions, never a prefix, an address, a name or a key (I-13). On every leg,
 // with no connect import: an app's VPN component links this file (DESIGN-DETAILS 4.2.3).
@@ -232,7 +235,7 @@ func (self *ForwarderSettings) Validate() error {
 
 // What a compile would read, in bytes, as the store holds it.
 type ForwarderCompileSize struct {
-	// The rows-only log's rows at its newest base.
+	// The rows-only log's rows at its newest base, and at the base before it where the judge restores there.
 	RowsByteCount int64
 	// The head the compile reads.
 	HeadByteCount int64

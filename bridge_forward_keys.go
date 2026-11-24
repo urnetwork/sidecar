@@ -32,12 +32,13 @@
 // Signed verified under its signer's identity key in the judged state, and its signer held to §10.6's rule, a repo
 // admin's device, in an owner-bound repo only the owner's consented device, or a network admin's outside owner-bound
 // kinds (GkmFormSignerAllowed), at the auth pin the form carries: at the state there where the judged log reaches it,
-// which is from its newest base on, judging nothing of one before, which counts against no one; waiting for the log at
-// one above it; and refusing one off its chain as a fork. The judged log starts at its newest base, a long-running
-// member's at its previous one, so a form pinned between the two counts against no one here and is judged at such a
-// member (config_state_at.go's window). A form the rule refuses, or that waits, is not followed: the generations a
-// compile wants past it wait with the forms that do not lead on as their cause, which config_key_waiting names once one
-// has waited (owner decision 716), and a form pinned off the judged chain raises head_alarm (fork) as well, with the
+// judging nothing of one before, which counts against no one; waiting for the log at one above it; and refusing one off
+// its chain as a fork. The judged log reaches back to the base before its newest, as a long-running member's does
+// (config_state_at.go's window; bridge_forward_compile.go's step 1), so a form pinned between the two bases is judged
+// here as it is there; where the store or the admission rule keeps the judge at the newest base, such a form counts
+// against no one, as at a new device. A form the rule refuses, or that waits, is not followed: the generations a compile
+// wants past it wait with the forms that do not lead on as their cause, which config_key_waiting names once one has
+// waited (owner decision 716), and a form pinned off the judged chain raises head_alarm (fork) as well, with the
 // compile's pin and the form's, once while the walks that retry meet it. A form that makes the group listed in carries
 // its ladder's statements only once it is judged so.
 //
