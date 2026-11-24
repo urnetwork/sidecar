@@ -244,6 +244,9 @@ sealed_messages:
   TlsEdgeLogin: "a members-device login's statement, from a member's app or extension through the visitor's browser to the publishing device's front alone, posted inside TLS, which tlsedge carries as records it cannot read (§13.7, X1)"
   AgentCert: "an agent subkey's certificate, riding only inside the sealed provenance it vouches for, RECORD.md 5.3's AgentSignedBody and a push's sealed metadata, never a statement or record a server reads (QD-159, D-CORE-6)"
   AttestationResult: "the device's own verdict, carried only in the record's model_call and enclave entries, each a sealed file in its writer's stream, and in the device's own events; no server writes or reads one (DESIGN-COMPUTE §5.8, §6.8, §11.12; ATTEST-M11-01)"
+  ComputePolicyTicketFile: "URnetwork's own signed freshness ticket, the same bytes for every device and naming none, which ur.io serves as a static file at compute/policy/v1/tickets/<day>.bin and only devices decode; the ticket host's release step reads only its own batch's times (DESIGN-COMPUTE §5.4; compute-plan-ticket-distribution, QD-1379; ATTEST-M12-01, ATTEST-M12-02)"
+  ComputePolicyTicket: "inside ComputePolicyTicketFile, URnetwork's own signed file naming no user, network or device (DESIGN-COMPUTE §5.4)"
+  ComputePolicyTicketBatch: "inside ComputePolicyTicket (DESIGN-COMPUTE §5.4)"
 
 sealed_files:
   protocol/directory.proto: "plaintext inside the directory's sealed files and entries (§16.11)"

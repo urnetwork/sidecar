@@ -15,9 +15,11 @@
 //     decides what that stops (ATTEST-M12-01).
 //   - Before enrollment, or while the keychain is locked, the store's file cannot be read: the release's copy serves
 //     alone, nothing new is taken, and the file is read at the first call that can.
+//   - The gate's state lives here too (ATTEST-M12-01), in the same file so one commit moves it whole: the newest
+//     current ticket taken, and the clock's floor, the instant now never reads earlier than (attest_gate.go).
 //
-// The state file is reverified as it is read, at the instant it was first taken, so a build whose format or pins
-// changed drops what it no longer takes rather than trusting it. Safe for concurrent use: writeLock serializes every
+// The state file is reverified as it is read, the policy and the ticket each at the instant it was first taken, so a
+// build whose format or pins changed drops what it no longer takes rather than trusting it. Safe for concurrent use: writeLock serializes every
 // read and write of the file and is held across that I/O, stateLock guards the snapshot readers take, never across
 // I/O, and writeLock is always taken first.
 
@@ -77,6 +79,11 @@ type computePolicyStateFile struct {
 	AcceptedMs int64 `json:"accepted_ms,omitempty"`
 	// The highest version anything verified has named.
 	HighestSeen uint64 `json:"highest_seen"`
+	// The newest current ticket taken, its file, and when it was taken, unix milliseconds.
+	Ticket           []byte `json:"ticket,omitempty"`
+	TicketAcceptedMs int64  `json:"ticket_accepted_ms,omitempty"`
+	// The instant now never reads earlier than, unix milliseconds.
+	ClockFloorMs int64 `json:"clock_floor_ms,omitempty"`
 }
 
 // What readers see.
@@ -85,6 +92,11 @@ type computePolicyState struct {
 	// When this device first took newest, unix milliseconds: for the release's copy, when this process verified it.
 	acceptedMs  int64
 	highestSeen uint64
+	// The newest current ticket taken, or nil, and when it was taken.
+	ticket           *ComputePolicyTicket
+	ticketAcceptedMs int64
+	// The instant now never reads earlier than; zero for none.
+	clockFloor time.Time
 }
 
 // The newest verified compute policy and the highest version seen, persisted.
@@ -196,11 +208,10 @@ func (self *ComputePolicyStore) Offer(document []byte, signature []byte) (*Compu
 			return nil, fmt.Errorf("%w: version %d", ErrComputePolicyConflict, policy.Version)
 		}
 	}
-	next := computePolicyState{
-		newest:      policy,
-		acceptedMs:  now.UnixMilli(),
-		highestSeen: max(state.highestSeen, policy.Version),
-	}
+	next := state
+	next.newest = policy
+	next.acceptedMs = now.UnixMilli()
+	next.highestSeen = max(state.highestSeen, policy.Version)
 	versionKey := strconv.FormatUint(policy.Version, 10)
 	testHookBarrier("attest_policy_store.commit.before", versionKey)
 	if err := self.writeStateWithWriteLock(next); err != nil {
@@ -242,9 +253,91 @@ func (self *ComputePolicyStore) newestAccepted() (*ComputePolicy, int64) {
 	return state.newest, state.acceptedMs
 }
 
-// The time the store judges at: the device's clock.
+// The time and one snapshot the gate judges by, so the policy, the version seen and the ticket it reads agree.
+func (self *ComputePolicyStore) judged() (time.Time, computePolicyState) {
+	self.tryLoad()
+	state := self.snapshot()
+	now := self.clock.Now()
+	if now.Before(state.clockFloor) {
+		now = state.clockFloor
+	}
+	return now, state
+}
+
+// The time the store and the gate judge at: the device's clock, but never earlier than the clock's floor (§5.4's
+// clock rule, attest_gate.go).
 func (self *ComputePolicyStore) now() time.Time {
-	return self.clock.Now()
+	self.tryLoad()
+	now := self.clock.Now()
+	if floor := self.snapshot().clockFloor; now.Before(floor) {
+		return floor
+	}
+	return now
+}
+
+// The newest current ticket taken, or nil. It may have lapsed since; the gate judges that.
+func (self *ComputePolicyStore) heldTicket() *ComputePolicyTicket {
+	self.tryLoad()
+	return self.snapshot().ticket
+}
+
+// Takes ticket, verified and current, where it is newer than the one held, raising the clock's floor to its start and
+// the highest version seen to what it names, in one commit; returns the ticket held after. An older one changes
+// nothing. The store's error, while its file cannot be written, takes nothing but what memory holds of the version
+// and the floor, which only stop more.
+func (self *ComputePolicyStore) keepTicket(ticket *ComputePolicyTicket) (*ComputePolicyTicket, error) {
+	self.writeLock.Lock()
+	defer self.writeLock.Unlock()
+	if err := self.loadWithWriteLock(); err != nil {
+		self.raiseHighestSeen(ticket.PolicyVersion)
+		self.raiseClockFloorInMemory(ticket.NotBefore)
+		return nil, err
+	}
+	state := self.snapshot()
+	if state.ticket != nil && !ticket.newerThan(state.ticket) {
+		return state.ticket, nil
+	}
+	next := state
+	next.ticket = ticket
+	next.ticketAcceptedMs = self.clock.Now().UnixMilli()
+	next.highestSeen = max(next.highestSeen, ticket.PolicyVersion)
+	if next.clockFloor.Before(ticket.NotBefore) {
+		next.clockFloor = ticket.NotBefore
+	}
+	startKey := strconv.FormatInt(ticket.NotBefore.UnixMilli(), 10)
+	testHookBarrier("attest_policy_store.ticket.before", startKey)
+	if err := self.writeStateWithWriteLock(next); err != nil {
+		self.raiseHighestSeen(ticket.PolicyVersion)
+		self.raiseClockFloorInMemory(ticket.NotBefore)
+		return nil, err
+	}
+	self.setState(next)
+	testHookBarrier("attest_policy_store.ticket.after", startKey)
+	return ticket, nil
+}
+
+// Raises the clock's floor to floor, persisting it where it rises; in memory even when the write fails, whose error
+// is returned.
+func (self *ComputePolicyStore) raiseClockFloor(floor time.Time) error {
+	if !self.snapshot().clockFloor.Before(floor) {
+		return nil
+	}
+	self.raiseClockFloorInMemory(floor)
+	self.writeLock.Lock()
+	defer self.writeLock.Unlock()
+	if err := self.loadWithWriteLock(); err != nil {
+		return err
+	}
+	return self.writeStateWithWriteLock(self.snapshot())
+}
+
+// Raises the clock's floor in memory alone.
+func (self *ComputePolicyStore) raiseClockFloorInMemory(floor time.Time) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.state.clockFloor.Before(floor) {
+		self.state.clockFloor = floor
+	}
 }
 
 // A copy of the state.
@@ -308,6 +401,14 @@ func (self *ComputePolicyStore) loadWithWriteLock() error {
 			persisted = nil
 		}
 	}
+	var ticket *ComputePolicyTicket
+	if file.Ticket != nil {
+		ticket, err = self.verifier.VerifyTicket(file.Ticket, time.UnixMilli(file.TicketAcceptedMs))
+		if err != nil {
+			self.log.Errorf("[attest]the freshness ticket held is refused by this build, and is dropped: %s", err)
+			ticket = nil
+		}
+	}
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	if persisted != nil && (self.state.newest == nil || self.state.newest.Version < persisted.Version) {
@@ -317,6 +418,14 @@ func (self *ComputePolicyStore) loadWithWriteLock() error {
 	self.state.highestSeen = max(self.state.highestSeen, file.HighestSeen)
 	if self.state.newest != nil {
 		self.state.highestSeen = max(self.state.highestSeen, self.state.newest.Version)
+	}
+	if ticket != nil && (self.state.ticket == nil || ticket.newerThan(self.state.ticket)) {
+		self.state.ticket = ticket
+		self.state.ticketAcceptedMs = file.TicketAcceptedMs
+		self.state.highestSeen = max(self.state.highestSeen, ticket.PolicyVersion)
+	}
+	if floor := time.UnixMilli(file.ClockFloorMs).UTC(); 0 < file.ClockFloorMs && self.state.clockFloor.Before(floor) {
+		self.state.clockFloor = floor
 	}
 	self.loaded = true
 	return nil
@@ -332,6 +441,13 @@ func (self *ComputePolicyStore) writeStateWithWriteLock(state computePolicyState
 		file.Document = state.newest.document
 		file.Signature = state.newest.signature
 		file.AcceptedMs = state.acceptedMs
+	}
+	if state.ticket != nil {
+		file.Ticket = state.ticket.file
+		file.TicketAcceptedMs = state.ticketAcceptedMs
+	}
+	if !state.clockFloor.IsZero() {
+		file.ClockFloorMs = state.clockFloor.UnixMilli()
 	}
 	data, err := json.Marshal(file)
 	if err != nil {

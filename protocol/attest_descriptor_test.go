@@ -1,6 +1,6 @@
-// attest.proto held to numbers written here (ATTEST-M11-01): design_fence_test.go holds AttestationResult to
-// DESIGN-COMPUTE.md §5.8's fence, which moves with the design until the format freezes, so this keeps the fields as
-// §5.8 prints them, and a change to both at once still fails.
+// attest.proto held to numbers written here (ATTEST-M11-01, ATTEST-M12-01): design_fence_test.go holds
+// AttestationResult to DESIGN-COMPUTE.md §5.8's fence and the tickets to testUnfencedFence, each of which moves with
+// the design until the format freezes, so this keeps the fields as written, and a change to both at once still fails.
 
 package protocol
 
@@ -22,9 +22,16 @@ var testAttestFields = map[protoreflect.Name][]string{
 		"10 evidence_sha256 bytes", "11 key_sha256 bytes", "12 instance_id string", "13 verified_millis int64",
 		"14 verifier string", "15 provider_model_id string",
 	},
+	// §5.4's freshness tickets, numbered in the order §5.4 writes their fields (QD-1379; ATTEST-M12-01)
+	"ComputePolicyTicketBatch": {"1 batch_id bytes", "2 signed_at_ms int64", "3 expires_ms int64"},
+	"ComputePolicyTicket": {
+		"1 format uint32", "2 batch ComputePolicyTicketBatch", "3 policy_version uint64", "4 not_before_ms int64",
+		"5 not_after_ms int64",
+	},
+	"ComputePolicyTicketFile": {"1 ticket bytes", "2 signature bytes"},
 }
 
-// §5.8's fields 1 to 15, each at the number the design prints, in its order, with nothing else in the file.
+// §5.8's fields 1 to 15 and the tickets', each at its number, in its order, with nothing else in the file.
 func TestAttestationResultDescriptor(t *testing.T) {
 	file := testFile(t, testAttestProtoPath)
 	messages := file.Messages()
