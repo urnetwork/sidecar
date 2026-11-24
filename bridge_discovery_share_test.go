@@ -64,6 +64,12 @@ type discoveryTestShareHost struct {
 
 func newDiscoveryTestShareHost(t *testing.T) *discoveryTestShareHost {
 	t.Helper()
+	return newDiscoveryTestShareHostWith(t, nil)
+}
+
+// A share host whose settings edit adjusts, nil for the defaults.
+func newDiscoveryTestShareHostWith(t *testing.T, edit func(settings *BridgeDiscoverySettings)) *discoveryTestShareHost {
+	t.Helper()
 	printer := discoveryTestGathered("Synthetic Printer", "_ipp._tcp", 631, "printer", "192.168.50.20")
 	phone := discoveryTestGathered("Synthetic Phone", "_remotepairing._tcp", 49152, "phone", "192.168.80.5")
 	for _, gathered := range []*BridgeDiscoveryGathered{printer, phone} {
@@ -77,12 +83,17 @@ func newDiscoveryTestShareHost(t *testing.T) *discoveryTestShareHost {
 		confirmed: &BridgeFileOrigin{Act: SidecarActConfirmed},
 	}
 	routes := discoveryTestRoutes()
+	settings := DefaultBridgeDiscoverySettings()
+	if edit != nil {
+		edit(settings)
+	}
 	component, err := NewBridgeDiscoveryComponent(&BridgeDiscoveryArgs{
 		SidecarId: Id{0xA1},
 		Routes:    func() *BridgeDiscoveryRoutes { return routes },
 		Gatherer:  host.gatherer,
 		Filer:     host.filer,
 		Clock:     host.clock,
+		Settings:  settings,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -184,16 +195,18 @@ func TestBridgeDiscoverySharesFollowTheirDevice(t *testing.T) {
 		t.Fatalf("the moved share: %+v", share)
 	}
 
-	absent := newDiscoveryTestShareHost(t)
+	// the gatherer looks the whole time, so the device's absence counts: the person's view keeps it running for 30 days
+	absent := newDiscoveryTestShareHostWith(t, func(settings *BridgeDiscoverySettings) {
+		settings.GatherDemandTimeout = 30 * 24 * time.Hour
+	})
 	if _, err := absent.component.Share(context.Background(), absent.confirmed, "phone"); err != nil {
 		t.Fatal(err)
 	}
 	absent.gatherer.set()
 	settings := DefaultBridgeDiscoverySettings()
-	for elapsed := time.Duration(0); elapsed <= settings.ShareRouteAbsentTimeout; elapsed += settings.ShareUpkeepInterval * 60 {
-		absent.component.Devices()
-		absent.clock.Advance(settings.ShareUpkeepInterval * 60)
-	}
+	// the host loop waits on its upkeep timer, which the move past the absence fires
+	absent.clock.awaitWaitAt(t, absent.clock.Now().Add(settings.ShareUpkeepInterval))
+	absent.clock.Advance(settings.ShareRouteAbsentTimeout + settings.ShareUpkeepInterval)
 	select {
 	case <-absent.filer.closed:
 	case <-time.After(time.Minute):
