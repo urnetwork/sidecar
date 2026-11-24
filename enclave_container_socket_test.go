@@ -205,10 +205,14 @@ func (self *enclaveSocketTestGateway) MintContainerToken(ctx context.Context, ca
 }
 
 // The pids of the fake tree: the daemon and the runtime outside; the container's first process, a harness, its MCP
-// relay, a hook's shell and its ur hook inside; and the Harness's own pig outside.
+// relay, a hook's shell and its ur hook inside; the Harness's own pig outside; and an Exec's nsenter outside, with a
+// shell and an MCP relay it started inside.
 const (
 	enclaveSocketTestDaemon  = 5
 	enclaveSocketTestNspawn  = 10
+	enclaveSocketTestNsenter = 20
+	enclaveSocketTestBash    = 21
+	enclaveSocketTestExecMcp = 22
 	enclaveSocketTestInit    = 100
 	enclaveSocketTestClaude  = 200
 	enclaveSocketTestRelay   = 300
@@ -243,9 +247,13 @@ func newEnclaveSocketTest(t *testing.T, gateway EnclaveContainerGateway, inboxGu
 	processes.add(enclaveSocketTestShell, enclaveSocketTestClaude, 3050, "sh")
 	processes.add(enclaveSocketTestHook, enclaveSocketTestShell, 3100, "ur")
 	processes.add(enclaveSocketTestOutside, enclaveSocketTestDaemon, 4000, "pig")
+	processes.add(enclaveSocketTestNsenter, enclaveSocketTestDaemon, 5000, "nsenter")
+	processes.add(enclaveSocketTestBash, enclaveSocketTestNsenter, 5100, "bash")
+	processes.add(enclaveSocketTestExecMcp, enclaveSocketTestBash, 5200, "ur")
 	scope := &enclaveSocketTestScope{
 		namespacePids: map[int]int{
 			enclaveSocketTestInit: 1, enclaveSocketTestClaude: 7, enclaveSocketTestRelay: 12, enclaveSocketTestShell: 13, enclaveSocketTestHook: 14,
+			enclaveSocketTestBash: 21, enclaveSocketTestExecMcp: 22,
 		},
 		uidBase:  enclaveSocketTestUid,
 		uidCount: 65536,
@@ -438,10 +446,9 @@ func TestEnclaveContainerSocketRunBinding(t *testing.T) {
 	if caller.Harness != test.harness || caller.NamespacePid != 14 || !caller.Tainted {
 		t.Errorf("the hook bound as %+v", caller)
 	}
-	for _, ancestor := range caller.Ancestors {
-		if ancestor.Pid == enclaveSocketTestNspawn || ancestor.Pid == enclaveSocketTestDaemon {
-			t.Errorf("the caller's ancestors run past the container: %v", caller.Ancestors)
-		}
+	// its ancestors end at the container's entry, the runtime, and never reach the daemon above
+	if last := caller.Ancestors[len(caller.Ancestors)-1]; last.Pid != enclaveSocketTestNspawn {
+		t.Errorf("the caller's ancestors end at %v", caller.Ancestors)
 	}
 	bound, err := test.socket.taintCaller(context.Background(), caller)
 	if err != nil || bound == nil || *bound != runId || !test.runs.TaintRecorded(runId) {
@@ -457,6 +464,32 @@ func TestEnclaveContainerSocketRunBinding(t *testing.T) {
 	bound, err = test.socket.taintCaller(context.Background(), caller)
 	if err != nil || bound != nil || !caller.Tainted || !test.runs.Tainted(NewId()) {
 		t.Errorf("an unknown caller bound to %v, %v", bound, err)
+	}
+
+	// an Exec's shell and relay, whose harness the run binder takes to be the Exec's nsenter outside: a run of that
+	// nsenter is the relay's, and tainted, while the daemon's and the Harness's above stay as they are
+	entryRunId := NewId()
+	daemonRunId := NewId()
+	for runId, pid := range map[Id]int{entryRunId: enclaveSocketTestNsenter, daemonRunId: enclaveSocketTestDaemon} {
+		startMillis := map[int]int64{enclaveSocketTestNsenter: 5000, enclaveSocketTestDaemon: 50}[pid]
+		if err := test.runs.Create(context.Background(), &RunFile{RunId: runId, Harness: "claude-code", ProcessId: pid, ProcessStartMillis: startMillis}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	test.setPeer(server, enclaveSocketTestPeer(enclaveSocketTestExecMcp))
+	caller, err = test.socket.bind(server)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if caller.Harness.Pid != enclaveSocketTestNsenter {
+		t.Errorf("the Exec's relay's harness is %v, want the Exec's nsenter", caller.Harness)
+	}
+	bound, err = test.socket.taintCaller(context.Background(), caller)
+	if err != nil || bound == nil || *bound != entryRunId || !test.runs.TaintRecorded(entryRunId) {
+		t.Errorf("the Exec's relay bound to %v, %v, want the nsenter's run tainted", bound, err)
+	}
+	if test.runs.TaintRecorded(daemonRunId) || test.runs.TaintRecorded(test.outsideRunId) {
+		t.Error("a run above the container's entry was tainted")
 	}
 
 	// a hello naming its own pid in the container is served

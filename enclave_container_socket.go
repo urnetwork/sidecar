@@ -9,8 +9,10 @@
 //
 //	caller     bound by SO_PEERCRED, never by what it says: its pid must run in the container's PID namespace and
 //	           its uid be one the container maps, else it is refused; its ancestry is read as the daemon sees it,
-//	           and only its ancestors inside the container count, so the Harness and the daemon above them never
-//	           take a container's taint; its harness process is the nearest of them that is no shell
+//	           and counts up to the container's entry, the first ancestor outside it (the runtime above its first
+//	           process, or an Exec's nsenter, which the daemon's run binder takes for the harness when only shells
+//	           stand between), so the Harness and the daemon above never take a container's taint; its harness
+//	           process is the nearest of those that is no shell
 //	claims     a hello's pid that is not the caller's own pid in the container names another process, and the session
 //	           is refused; a hello's working directory is a path in the container's mount namespace, which the
 //	           daemon's would misread, so it is dropped; a request asking for a person's confirmation is refused,
@@ -90,7 +92,8 @@ type EnclaveContainerCaller struct {
 	Peer EnclaveContainerPeer
 	// Its pid in the container's PID namespace, which a hello's pid must name.
 	NamespacePid int
-	// Its ancestors inside the container, the caller first, as the daemon sees them.
+	// Its ancestors inside the container and the container's entry above them, the caller first, as the daemon sees
+	// them.
 	Ancestors []ProcessIdentity
 	// The nearest of them that is no shell: the harness process whose runs the caller's calls are. Zero for none.
 	Harness ProcessIdentity
@@ -423,24 +426,25 @@ func (self *EnclaveContainerSocket) bind(conn net.Conn) (*EnclaveContainerCaller
 		// its ancestry unread, it acts in an unknown run, which reads tainted
 		return caller, nil
 	}
-	inContainer := []*ProcessInfo{}
+	chain := []*ProcessInfo{}
 	for _, ancestor := range ancestors {
+		chain = append(chain, ancestor)
+		caller.Ancestors = append(caller.Ancestors, ancestor.Identity)
 		if _, inside := self.container.Contains(ancestor.Identity.Pid); !inside {
-			// the container's ancestry ends at its first process; the runtime, the daemon and the Harness above it
+			// the container's entry, which the run binder may take for a harness; the daemon and the Harness above it
 			// never take a container's taint
 			break
 		}
-		inContainer = append(inContainer, ancestor)
-		caller.Ancestors = append(caller.Ancestors, ancestor.Identity)
 	}
-	if harness := HarnessProcessOf(inContainer, self.ingest.ShellNames); harness != nil {
+	if harness := HarnessProcessOf(chain, self.ingest.ShellNames); harness != nil {
 		caller.Harness = harness.Identity
 	}
 	return caller, nil
 }
 
-// Taints, write-ahead, every run whose harness process is among the caller's ancestors in the container, and answers
-// the newest, the caller's run; nil with none, an unknown run. Every run is tried; the answer joins the failures.
+// Taints, write-ahead, every run whose harness process is among the caller's ancestors up to the container's entry,
+// and answers the newest, the caller's run; nil with none, an unknown run. Every run is tried; the answer joins the
+// failures.
 func (self *EnclaveContainerSocket) taintCaller(ctx context.Context, caller *EnclaveContainerCaller) (*Id, error) {
 	runs, err := self.host.Runs()
 	if err != nil {
