@@ -61,13 +61,11 @@ const (
 )
 
 // A ReaderKey record's format: version | signed_at_ms | not_after_ms | uploaded | seed | signed, integers big
-// endian, the signed bytes after their u32 length.
+// endian, the signed bytes after their u32 length, which GkmSettings.ReaderKeySignedMaxByteCount bounds.
 const (
 	gkmUpkeepRecordVersion       = 1
 	gkmUpkeepSeedByteCount       = 32
 	gkmUpkeepRecordHeadByteCount = 1 + 8 + 8 + 1 + gkmUpkeepSeedByteCount + 4
-	// a ReaderKey's Signed: its key's 1,216 B, its fields and a signature
-	gkmUpkeepSignedMaxByteCount = 4 * 1024
 )
 
 // What a device is, as upkeep needs it: whether it uploads KeyPackages at all.
@@ -169,13 +167,14 @@ func (self *gkmReaderKeyRecord) encode() []byte {
 	return append(encoded, self.signed...)
 }
 
-// A record from its bytes, which have passed the keychain's AEAD; the decoder stays total all the same.
-func decodeGkmReaderKeyRecord(encoded []byte) (*gkmReaderKeyRecord, error) {
+// A record from its bytes, which have passed the keychain's AEAD, its Signed at most signedMaxByteCount; the decoder
+// stays total all the same.
+func decodeGkmReaderKeyRecord(encoded []byte, signedMaxByteCount int) (*gkmReaderKeyRecord, error) {
 	if len(encoded) < gkmUpkeepRecordHeadByteCount || encoded[0] != gkmUpkeepRecordVersion {
 		return nil, fmt.Errorf("%w: a ReaderKey record", ErrGkmMalformed)
 	}
 	signedLength := binary.BigEndian.Uint32(encoded[gkmUpkeepRecordHeadByteCount-4:])
-	if gkmUpkeepSignedMaxByteCount < signedLength || len(encoded) != gkmUpkeepRecordHeadByteCount+int(signedLength) {
+	if uint64(max(0, signedMaxByteCount)) < uint64(signedLength) || len(encoded) != gkmUpkeepRecordHeadByteCount+int(signedLength) {
 		return nil, fmt.Errorf("%w: a ReaderKey record's length", ErrGkmMalformed)
 	}
 	record := &gkmReaderKeyRecord{
@@ -481,7 +480,7 @@ func (self *GkmUpkeep) readerKeyRecords() ([]*gkmReaderKeyRecord, error) {
 		if err != nil {
 			return nil, err
 		}
-		record, err := decodeGkmReaderKeyRecord(encoded)
+		record, err := decodeGkmReaderKeyRecord(encoded, self.settings.ReaderKeySignedMaxByteCount)
 		clear(encoded)
 		if err != nil {
 			self.log.Warningf("[gkm] erasing a ReaderKey record that does not decode")
@@ -630,7 +629,7 @@ func (self *GkmUpkeep) ReaderPrivateKey(keySha256 []byte) (hpke.PrivateKey, erro
 		return nil, err
 	}
 	defer clear(encoded)
-	record, err := decodeGkmReaderKeyRecord(encoded)
+	record, err := decodeGkmReaderKeyRecord(encoded, self.settings.ReaderKeySignedMaxByteCount)
 	if err != nil {
 		return nil, err
 	}

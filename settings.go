@@ -670,6 +670,9 @@ type GkmSettings struct {
 	// How often a sidecar reads its own ReaderKey back from gkm to compare it with those it signed: 24 h
 	// (g0-recheck-0-readerkey-forgery #2).
 	ReaderKeySelfCheckInterval time.Duration
+	// The most bytes the Signed ReaderKey in one of upkeep's keychain records may take: 4 KiB, past its key's 1,216 B,
+	// its fields and a signature. A record holding more is malformed.
+	ReaderKeySignedMaxByteCount int
 	// A ReaderKey upload that failed is tried again this long after, between passes, so a device whose upload went
 	// before its state gave it a scope to present, or while the token exchange or gkm was still loading its network's
 	// state, publishes its key within seconds and not at the next pass an hour on: no holder seals a delivery to a
@@ -821,6 +824,7 @@ func DefaultGkmSettings() *GkmSettings {
 		ReaderKeyLifetime:            7 * 24 * time.Hour,
 		ReaderKeyKeepAfterNotAfter:   30 * 24 * time.Hour,
 		ReaderKeySelfCheckInterval:   24 * time.Hour,
+		ReaderKeySignedMaxByteCount:  4 * 1024,
 		ReaderKeyRetryWait:           1 * time.Second,
 		ReaderKeyRetryFactor:         2,
 		ReaderKeyRetryMaxWait:        1 * time.Minute,

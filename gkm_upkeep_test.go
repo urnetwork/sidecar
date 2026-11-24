@@ -229,7 +229,7 @@ func (self *gkmUpkeepFixture) heldDigests() [][]byte {
 	}
 	digests := [][]byte{}
 	for _, name := range names {
-		record, err := decodeGkmReaderKeyRecord(self.secrets.nameValues[name])
+		record, err := decodeGkmReaderKeyRecord(self.secrets.nameValues[name], DefaultGkmSettings().ReaderKeySignedMaxByteCount)
 		if err != nil {
 			self.t.Fatal(err)
 		}
@@ -855,5 +855,35 @@ func TestGkmSettingsRefuseWhatTheDesignCannotTake(t *testing.T) {
 		if err := settings.validate(); !errors.Is(err, errInvalidSettings) {
 			t.Errorf("a refused value passed: %v", err)
 		}
+	}
+}
+
+// A ReaderKey record's Signed is held to GkmSettings.ReaderKeySignedMaxByteCount (QD-702), which replaced a constant
+// of upkeep's: at the default 4 KiB a record of a real key's size decodes, and with the bound below its Signed the same
+// bytes are refused as malformed.
+func TestGkmReaderKeyRecordIsHeldToItsSettingsBound(t *testing.T) {
+	body, err := proto.Marshal(&protocol.ReaderKey{XwingPublicKey: bytes.Repeat([]byte{7}, 1216)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	signed, err := proto.Marshal(&bridge.Signed{Body: body, Signature: bytes.Repeat([]byte{8}, 64)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := &gkmReaderKeyRecord{
+		signedAt: time.UnixMilli(1_800_000_000_000),
+		notAfter: time.UnixMilli(1_800_000_000_000).Add(7 * 24 * time.Hour),
+		seed:     bytes.Repeat([]byte{9}, gkmUpkeepSeedByteCount),
+		signed:   signed,
+	}
+	encoded := record.encode()
+	if _, err := decodeGkmReaderKeyRecord(encoded, DefaultGkmSettings().ReaderKeySignedMaxByteCount); err != nil {
+		t.Fatalf("a record at the default bound: %v", err)
+	}
+	if _, err := decodeGkmReaderKeyRecord(encoded, len(signed)-1); !errors.Is(err, ErrGkmMalformed) || !strings.Contains(err.Error(), "length") {
+		t.Errorf("a record past a bound of %d bytes: %v", len(signed)-1, err)
+	}
+	if _, err := decodeGkmReaderKeyRecord(encoded, len(signed)); err != nil {
+		t.Errorf("a record at a bound of its own size: %v", err)
 	}
 }
