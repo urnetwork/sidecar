@@ -15,7 +15,7 @@
 // A re-form of the config's group (plan-KEYS-reform-ladder rules 7 and 8 as QD-074 decided them; §10.8) draws a new
 // group, carries the old ladder into it byte for byte and claims every later generation there, so the group a hand-off
 // named lists none of those, and after a site loss lists nothing. So each listing reads the repo's GroupForms first and
-// lists in the group the newest makes, which it moves to only along a chain of verified forms from the group it lists
+// lists in the group the newest makes, which it moves to only along a chain of judged forms from the group it lists
 // in, or from the hand-off's while it has not followed past it, no form on it re-forming below the newest generation
 // held (the pin never falls); the groups it followed are kept in the groups record, so a restart opens its keys from
 // the store with no read of gkm. A listed statement stands under the rows evs resolves by (GkmParseServedGeneration,
@@ -24,12 +24,26 @@
 // parent_commitment from the one below it, the newest held below the listing's first among them, and one at a held
 // generation is the one held, so a listing that leaves this component's chain stops where it leaves it and raises
 // head_alarm (fork), as a conflicting GenRotate is a member's (QD-1210; DESIGN-DETAILS 6.2.6), with the compile's pin
-// for evidence. Deliveries are read in the group listed, whose id a carried generation's body names too (rule 7).
+// for evidence: once for that generation while the listings that retry meet it, ended by one that reads it on the
+// chain, or that gkm answers whole with none off it (bridge_forward.go's conditions). Deliveries are read in the group
+// listed, whose id a carried generation's body names too (rule 7).
+//
+// A form is judged as a member device judges one before it adopts its group (gkm_reform.go's member row; QD-643): its
+// Signed verified under its signer's identity key in the judged state, and its signer held to §10.6's rule, a repo
+// admin's device, in an owner-bound repo only the owner's consented device, or a network admin's outside owner-bound
+// kinds (GkmFormSignerAllowed), at the auth pin the form carries: at the state there where the judged log reaches it,
+// which is from its newest base on, judging nothing of one before, which counts against no one; waiting for the log at
+// one above it; and refusing one off its chain as a fork. The judged log starts at its newest base, a long-running
+// member's at its previous one, so a form pinned between the two counts against no one here and is judged at such a
+// member (config_state_at.go's window). A form the rule refuses, or that waits, is not followed: the generations a
+// compile wants past it wait with the forms that do not lead on as their cause, which config_key_waiting names once one
+// has waited (owner decision 716), and a form pinned off the judged chain raises head_alarm (fork) as well, with the
+// compile's pin and the form's, once while the walks that retry meet it. A form that makes the group listed in carries
+// its ladder's statements only once it is judged so.
 //
 // The Forwarder holds a GenRotate, a GroupForm and a wrap to their signers' identity keys in the judged state, the
-// wrap to the Delegation and key it names, and RK_g to gen/<g>'s commitment. §10.9's rotation and delivery checks and
-// §10.6's form signer rule, who may rotate, deliver and re-form at each one's own state, need states a transient
-// rows-only log does not retain, and are not run here.
+// wrap to the Delegation and key it names, and RK_g to gen/<g>'s commitment. §10.9's rotation and delivery checks, who
+// may rotate and deliver at each one's own state, are not run here.
 //
 // testHookSecret sees each RK_g where it is opened (OpenEvsRepoKey). No key reaches a log line.
 
@@ -44,6 +58,8 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
+	"strings"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -210,8 +226,8 @@ func (self *Forwarder) loadGenerations() (map[uint64]*forwarderGeneration, error
 	return held, nil
 }
 
-// The group a listing reads the config's generations in, and the verified GroupForm that makes it, nil where gkm
-// serves none that verifies.
+// The group a listing reads the config's generations in, and the judged GroupForm that makes it, nil where gkm serves
+// none that stands.
 type forwarderListing struct {
 	groupId Id
 	form    *GkmGroupFormFacts
@@ -219,12 +235,65 @@ type forwarderListing struct {
 	stayed string
 }
 
-// Reads the config repo's GroupForms and moves groups.current to the group the newest makes where a chain of verified
+// A GroupForm that verifies and that the walk does not take: §10.6's rule does not allow its signer at its pin, or its
+// pin is off the judged chain, as gkmJudgeFormSigner's verdict says (the file's comment).
+type forwarderFormRefusal struct {
+	detail string
+}
+
+// The verdict's detail: ids and positions only.
+func (self *forwarderFormRefusal) Error() string {
+	return self.detail
+}
+
+// What a GroupForm the walk does not take fails at, as a wait's cause names it: its signer or its pin under §10.6's
+// rule, a pin the judged state has not reached, or its signature or shape.
+func forwarderFormFailure(err error) string {
+	var refusal *forwarderFormRefusal
+	switch {
+	case errors.As(err, &refusal):
+		return "is refused: " + refusal.detail
+	case errors.Is(err, ErrGkmAuthAhead):
+		return fmt.Sprintf("is pinned past the judged state and waits for the log: %v", err)
+	}
+	return fmt.Sprintf("does not verify: %v", err)
+}
+
+// A Signed GroupForm of the config repo, judged as the walk takes one (the file's comment): verified under its signer's
+// admitted key in state, the compile's judged state, and its signer held to §10.6's rule at the auth pin the form
+// carries (gkmJudgeFormSigner), its facts answered where the rule allows the signer there or the pin lies before what
+// the judged log reaches. ErrGkmAuthAhead, to wait on, for a pin above state; a forwarderFormRefusal for a signer the
+// rule does not allow, and for a pin off the judged chain, which raises head_alarm (fork) with the compile's pin and
+// the form's, its condition added to forked.
+func (self *Forwarder) judgeForm(state *ConfigState, signed *bridge.Signed, forked map[string]bool) (*GkmGroupFormFacts, error) {
+	form, err := gkmParseGroupForm(state, self.args.ConfigRepoId, signed)
+	if err != nil {
+		return nil, err
+	}
+	verdict, err := gkmJudgeFormSigner(state, self.args.ConfigRepoId, form)
+	if err != nil {
+		return nil, err
+	}
+	if verdict.Refused {
+		self.log.Warningf("[forward]%s the GroupForm of %s by %s is refused: %s", self.args.NetworkId, form.groupId, form.signerId, verdict.Detail)
+		if verdict.Fork {
+			formSha256 := sha256.Sum256(form.signedBytes)
+			condition := forwarderConditionForm + hex.EncodeToString(formSha256[:])
+			forked[condition] = true
+			self.raiseHeadAlarm(condition, SidecarHeadAlarmFork, state.Pin(), form.auth)
+		}
+		return nil, &forwarderFormRefusal{detail: verdict.Detail}
+	}
+	return &GkmGroupFormFacts{GroupId: form.groupId, PreviousGroupId: form.previousGroupId, Generation: form.generation}, nil
+}
+
+// Reads the config repo's GroupForms and moves groups.current to the group the newest makes where a chain of judged
 // forms leads there by previous_group_id from groups.current, or from the hand-off's group while it is not one followed
 // past, and no form on it re-forms at a generation below newestHeld (the file's comment). Anything else leaves the
 // group as it is: a newest form naming a group followed past is an older list, and the pin never falls. The groups
 // record is written before any key is kept under a group it adds. An error is a read of gkm or a write of the store
-// that failed; gkm's refusal of the forms reads as no form.
+// that failed; gkm's refusal of the forms reads as no form. A walk over the forms gkm served ends each form's head_alarm
+// condition it did not meet again, and one with no form ends them all.
 func (self *Forwarder) followGroups(ctx context.Context, state *ConfigState, groups *forwarderGroups, newestHeld uint64) (*forwarderListing, error) {
 	reply, err := self.args.Gkm.Forms(ctx, self.args.ConfigRepoId)
 	if gkmError, ok := GkmErrorOf(err); ok && !gkmError.RefusesNothing() {
@@ -237,14 +306,17 @@ func (self *Forwarder) followGroups(ctx context.Context, state *ConfigState, gro
 		return nil, fmt.Errorf("gkm's GroupForms of the config: %w", err)
 	}
 	signedForms := reply.GetForms()
-	if len(signedForms) == 0 {
-		// a gkm that holds no form of the repo lists in the group held
-		return &forwarderListing{groupId: groups.current}, nil
-	}
 	if self.settings.ConfigFormMaxCount < len(signedForms) {
 		detail := fmt.Sprintf("the config's %d GroupForms are past %d", len(signedForms), self.settings.ConfigFormMaxCount)
 		self.log.Warningf("[forward]%s generations stay listed in %s: %s", self.args.NetworkId, groups.current, detail)
 		return &forwarderListing{groupId: groups.current, stayed: detail}, nil
+	}
+	// the forms this walk met pinned off the judged chain: once it returns, every other one standing has ended
+	forked := map[string]bool{}
+	defer self.endHeadConditions(forwarderConditionForm, func(condition string) bool { return forked[condition] })
+	if len(signedForms) == 0 {
+		// a gkm that holds no form of the repo lists in the group held
+		return &forwarderListing{groupId: groups.current}, nil
 	}
 	// each form's group as its body names it, unverified, so a chain finds its next form
 	formGroupIds := make([]Id, len(signedForms))
@@ -256,21 +328,16 @@ func (self *Forwarder) followGroups(ctx context.Context, state *ConfigState, gro
 			}
 		}
 	}
-	// the newest form naming groupId, verified under its signer's admitted key; nil for none
+	// the newest form naming groupId, judged (judgeForm); nil for none
 	formOf := func(groupId Id) (*GkmGroupFormFacts, error) {
 		for index := len(signedForms) - 1; 0 <= index; index -= 1 {
-			if formGroupIds[index] != groupId {
-				continue
+			if formGroupIds[index] == groupId {
+				return self.judgeForm(state, signedForms[index], forked)
 			}
-			signedBytes, err := forwarderMarshal(signedForms[index])
-			if err != nil {
-				return nil, err
-			}
-			return GkmVerifyGroupForm(state, self.args.ConfigRepoId, signedBytes)
 		}
 		return nil, nil
 	}
-	// where the group stays: its own form carries its ladder's statements, where one verifies
+	// where the group stays: its own form carries its ladder's statements, where one stands
 	stay := func(detail string) (*forwarderListing, error) {
 		self.log.Warningf("[forward]%s generations stay listed in %s: %s", self.args.NetworkId, groups.current, detail)
 		form, err := formOf(groups.current)
@@ -285,7 +352,7 @@ func (self *Forwarder) followGroups(ctx context.Context, state *ConfigState, gro
 	}
 	newest, err := formOf(newestGroupId)
 	if err != nil {
-		return stay(fmt.Sprintf("the newest GroupForm, of %s, does not verify: %v", newestGroupId, err))
+		return stay(fmt.Sprintf("the newest GroupForm, of %s, %s", newestGroupId, forwarderFormFailure(err)))
 	}
 	if newest.GroupId == groups.current {
 		// listed in already: the group it re-forms is one its ladder's statements name
@@ -309,7 +376,7 @@ func (self *Forwarder) followGroups(ctx context.Context, state *ConfigState, gro
 		}
 		form, err := formOf(previousGroupId)
 		if err != nil {
-			return stay(fmt.Sprintf("the GroupForm of %s, on the chain to %s, does not verify: %v", previousGroupId, newest.GroupId, err))
+			return stay(fmt.Sprintf("the GroupForm of %s, on the chain to %s, %s", previousGroupId, newest.GroupId, forwarderFormFailure(err)))
 		}
 		if form == nil {
 			return stay(fmt.Sprintf("no GroupForm makes %s, on the chain to %s", previousGroupId, newest.GroupId))
@@ -427,6 +494,8 @@ func (self *Forwarder) openGenerations(ctx context.Context, state *ConfigState, 
 	signedRotates := [][]byte{}
 	// where the list stopped short of what gkm served, and why: the cause of each wanted generation from there on
 	stoppedAt, stopped := uint64(0), ""
+	// where a statement off the held chain stopped it, 0 for none: head_alarm (fork)'s condition (settleGenerationForks)
+	forkedAt := uint64(0)
 	for i, signed := range reply.GetGenerations() {
 		generation := since + 1 + uint64(i)
 		signedBytes, err := forwarderMarshal(signed)
@@ -457,20 +526,19 @@ func (self *Forwarder) openGenerations(ctx context.Context, state *ConfigState, 
 		rotate := parsed.Rotate
 		if 1 < generation && !bytes.Equal(rotate.GetParentCommitment(), below) {
 			self.log.Warningf("[forward]%s gen/%d in %s does not chain from the generation below it: the list stops there", self.args.NetworkId, generation, listing.groupId)
-			self.emitHeadAlarm(SidecarHeadAlarmFork, state.Pin(), state.Pin())
-			stoppedAt, stopped = generation, fmt.Sprintf("gen/%d in %s does not chain from the generation below it", generation, listing.groupId)
+			forkedAt, stoppedAt, stopped = generation, generation, fmt.Sprintf("gen/%d in %s does not chain from the generation below it", generation, listing.groupId)
 			break
 		}
 		if kept := held[generation]; kept != nil && !bytes.Equal(rotate.GetCommitment(), kept.generation.Rotate.GetCommitment()) {
 			self.log.Warningf("[forward]%s gen/%d in %s is not the statement held: the list stops there", self.args.NetworkId, generation, listing.groupId)
-			self.emitHeadAlarm(SidecarHeadAlarmFork, state.Pin(), state.Pin())
-			stoppedAt, stopped = generation, fmt.Sprintf("gen/%d in %s is not the statement held", generation, listing.groupId)
+			forkedAt, stoppedAt, stopped = generation, generation, fmt.Sprintf("gen/%d in %s is not the statement held", generation, listing.groupId)
 			break
 		}
 		below = rotate.GetCommitment()
 		listed = append(listed, parsed)
 		signedRotates = append(signedRotates, signedBytes)
 	}
+	self.settleGenerationForks(state.Pin(), stoppedAt, forkedAt)
 	readerKeys, err := self.args.Keys.ReaderKeys()
 	if err != nil {
 		return failed(0, fmt.Errorf("the forwarding reader keys: %w", err))
@@ -546,6 +614,28 @@ func (self *Forwarder) openGenerations(ctx context.Context, state *ConfigState, 
 	}()
 	self.alarmKeyWaits(now)
 	return opened, nil
+}
+
+// A listing's head_alarm conditions, each a generation gkm lists off the held chain (the file's comment), with the
+// compile's pin for evidence (owner decision 716): the one at forkedAt, where the list stopped, raised unless it
+// stands; every other one at or below stoppedAt ended, since the list read that generation and found it on the chain or
+// failing otherwise; and every one ended by a list that stopped nowhere, gkm listing no statement off the chain. One
+// past where the list stopped stands, unread.
+func (self *Forwarder) settleGenerationForks(pin *bridge.AuthPin, stoppedAt uint64, forkedAt uint64) {
+	forkCondition := forwarderConditionGeneration + strconv.FormatUint(forkedAt, 10)
+	self.endHeadConditions(forwarderConditionGeneration, func(condition string) bool {
+		if stoppedAt == 0 {
+			return false
+		}
+		if 0 < forkedAt && condition == forkCondition {
+			return true
+		}
+		generation, err := strconv.ParseUint(strings.TrimPrefix(condition, forwarderConditionGeneration), 10, 64)
+		return err == nil && stoppedAt < generation
+	})
+	if 0 < forkedAt {
+		self.raiseHeadAlarm(forkCondition, SidecarHeadAlarmFork, pin, pin)
+	}
 }
 
 // A Delegation as a wrap's recipient: d:<delegation_id>, as the wrap path writes it.

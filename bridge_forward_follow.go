@@ -3,7 +3,9 @@
 // A follow reads the projection after the newest stored entry with the forwarding client's token, a page at a time. It
 // keeps a page only when its entries are this network's, at consecutive positions and chained onto what the store
 // holds, so the store is always one chain from the anchored genesis: a page that breaks the chain is head_alarm fork
-// and nothing of it is kept. Rows are stored before the entries that name them. Each kept page goes to the sink's
+// and nothing of it is kept. The fork is raised once, however often the follow is retried while api serves it, and
+// ends at the first follow that api answers on the anchored chain, as another genesis does (bridge_forward.go's
+// conditions). Rows are stored before the entries that name them. Each kept page goes to the sink's
 // ApplyDeltas while it is enforcing, tier 1's chain, base and denial checks, and a compile is wanted when the sink took
 // an entry it did not apply as a denial, when it is pending on its anchor, or while narrowing entries wait.
 //
@@ -344,6 +346,10 @@ func (self *Forwarder) followNow() {
 		self.followRetryCount = 0
 		self.followAt = now.Add(self.settings.FollowInterval)
 		self.clearAlarm(SidecarBridgeAlarm(ForwarderAlarmForwardClientLapsed))
+		// api served a continuation of the anchored chain, or nothing past the tip: no genesis or page it serves now is
+		// off that chain
+		self.endHeadConditions(forwarderConditionGenesis, nil)
+		self.endHeadConditions(forwarderConditionPage, nil)
 		return
 	}
 	if self.ctx.Err() != nil {
@@ -452,7 +458,7 @@ func (self *Forwarder) keepGenesis(signedGenesis []byte) error {
 	}
 	chain := bridge.GenesisChain(signedGenesis)
 	if !bytes.Equal(chain[:], self.args.Pending.GetGenesisSha256()) {
-		self.emitHeadAlarm(SidecarHeadAlarmFork, &bridge.AuthPin{Chain: bytes.Clone(self.args.Pending.GetGenesisSha256())}, &bridge.AuthPin{Chain: chain[:]})
+		self.raiseHeadAlarm(forwarderConditionGenesis, SidecarHeadAlarmFork, &bridge.AuthPin{Chain: bytes.Clone(self.args.Pending.GetGenesisSha256())}, &bridge.AuthPin{Chain: chain[:]})
 		return fmt.Errorf("%w: another genesis than the anchor's", errForwarderPageRefused)
 	}
 	held, err := self.records.read(forwarderGenesisName)
@@ -498,7 +504,7 @@ func (self *Forwarder) checkPage(tip *bridge.AuthPin, pageEntries [][]byte) ([]*
 			previous = &bridge.AuthPin{Chain: self.args.Pending.GetGenesisSha256()}
 		}
 		if previous != nil && !bytes.Equal(entry.GetPrevChain(), previous.GetChain()) {
-			self.emitHeadAlarm(SidecarHeadAlarmFork, previous, &bridge.AuthPin{Version: previous.GetVersion(), Chain: bytes.Clone(entry.GetPrevChain())})
+			self.raiseHeadAlarm(forwarderConditionPage+strconv.FormatUint(entry.GetN(), 10), SidecarHeadAlarmFork, previous, &bridge.AuthPin{Version: previous.GetVersion(), Chain: bytes.Clone(entry.GetPrevChain())})
 			return nil, fmt.Errorf("%w: entry %d does not chain onto the one before", errForwarderPageRefused, entry.GetN())
 		}
 		entries = append(entries, &forwarderPageEntry{entry: entry, chain: chain})
@@ -564,7 +570,10 @@ func (self *Forwarder) handDeltas(from uint64, through uint64) {
 }
 
 // DESIGN-DETAILS 4.2.5's Witness: follows up to the app's pin, raises head_alarm where that pin is off this chain
-// (fork, with both pins) or past what api serves (withheld), and sets the sink's fork. On run's goroutine.
+// (fork, with both pins) or past what api serves (withheld), and sets the sink's fork. Each is raised once while it
+// stands: the app's sidecar role witnessing again while api still serves less, or while its chain and this one still
+// disagree, raises nothing, and a witness at a pin the store holds on its own chain ends both. A pin before what the
+// store holds tells nothing either way. On run's goroutine.
 func (self *Forwarder) witness(pin *bridge.AuthPin, fork bool) {
 	self.followNow()
 	if 0 < pin.GetVersion() {
@@ -574,11 +583,19 @@ func (self *Forwarder) witness(pin *bridge.AuthPin, fork bool) {
 			self.log.Warningf("[forward]%s the stored log did not read at a witness: %v", self.args.NetworkId, err)
 		case through < pin.GetVersion():
 			tip, _ := self.records.tip()
-			self.emitHeadAlarm(SidecarHeadAlarmWithheld, tip, pin)
+			self.raiseHeadAlarm(forwarderConditionWitnessWithheld, SidecarHeadAlarmWithheld, tip, pin)
 		case from <= pin.GetVersion():
 			held, err := self.records.pinAt(pin.GetVersion())
-			if err == nil && !bytes.Equal(held.GetChain(), pin.GetChain()) {
-				self.emitHeadAlarm(SidecarHeadAlarmFork, held, pin)
+			switch {
+			case err != nil:
+				// a held pin that does not read tells nothing either way
+			case !bytes.Equal(held.GetChain(), pin.GetChain()):
+				// api serves through the pin, on another chain than the app's
+				self.endHeadConditions(forwarderConditionWitnessWithheld, nil)
+				self.raiseHeadAlarm(forwarderConditionWitnessFork, SidecarHeadAlarmFork, held, pin)
+			default:
+				self.endHeadConditions(forwarderConditionWitnessWithheld, nil)
+				self.endHeadConditions(forwarderConditionWitnessFork, nil)
 			}
 		}
 	}
