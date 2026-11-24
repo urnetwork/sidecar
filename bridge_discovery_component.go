@@ -144,9 +144,10 @@ type BridgeDiscoveryComponent struct {
 	stateErr error
 	store    SidecarStore
 	gathered []*BridgeDiscoveryGathered
-	// until when a watch served, and the person's own view, keep the gatherer running
+	// until when a watch served, and the person's own view, keep the gatherer running; whether it runs
 	watchDemandEnd time.Time
 	viewDemandEnd  time.Time
+	gatherRunning  bool
 	// each host's last answer, and how many of its instances the checks dropped
 	answers      map[Id]*bridgeDiscoveryHostAnswer
 	droppedCount map[Id]int
@@ -344,11 +345,17 @@ func (self *BridgeDiscoveryComponent) run() {
 	defer close(self.done)
 	var gatherCancel context.CancelFunc
 	var gatherTypes []string
+	setRunning := func(running bool) {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.gatherRunning = running
+	}
 	stopGather := func() {
 		if gatherCancel != nil {
 			gatherCancel()
 			gatherCancel = nil
 			gatherTypes = nil
+			setRunning(false)
 		}
 	}
 	defer stopGather()
@@ -372,6 +379,7 @@ func (self *BridgeDiscoveryComponent) run() {
 			gatherCancel = cancel
 			gatherTypes = input.types
 			go self.args.Gatherer.Gather(gatherCtx, slices.Clone(input.types), self.gatheredReport(gatherCtx))
+			setRunning(true)
 		case !wantGather:
 			stopGather()
 			func() {

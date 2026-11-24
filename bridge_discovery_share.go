@@ -303,14 +303,20 @@ func (self *BridgeDiscoveryComponent) upkeepShares(input *bridgeDiscoveryHostInp
 			}
 		}
 	}
+	// absence counts only while the gatherer looks: with none running, nothing says a device left
+	gathering := self.gathering()
 	withdrawn := []*bridgeDiscoveryShare{}
 	changed := false
 	edit := func(state *bridgeDiscoveryState) {
 		for _, share := range state.Shares {
 			address, isSeen := seen[share.HostLabel]
-			if isSeen && share.SeenMs < now.UnixMilli() {
+			// the sealed file takes a sighting at most once an upkeep interval, not at every report
+			if (isSeen || !gathering) && self.settings.ShareUpkeepInterval <= now.Sub(time.UnixMilli(share.SeenMs)) {
 				share.SeenMs = now.UnixMilli()
 				changed = true
+			}
+			if !gathering {
+				continue
 			}
 			if share.State != bridgeDiscoveryShareActive || share.RuleId == "" {
 				continue
@@ -343,6 +349,13 @@ func (self *BridgeDiscoveryComponent) upkeepShares(input *bridgeDiscoveryHostInp
 			}
 		}()
 	}
+}
+
+// Whether the gatherer runs now, so its snapshot says what the LAN holds.
+func (self *BridgeDiscoveryComponent) gathering() bool {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.gatherRunning
 }
 
 // The sealed settings as they stand, for an edit: refused while the file does not read or before the first generation.
