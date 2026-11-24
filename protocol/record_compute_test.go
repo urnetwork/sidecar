@@ -11,10 +11,14 @@ import (
 	"slices"
 	"testing"
 
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 )
+
+// record.proto's path, as protoc registers it.
+const testRecordProtoPath = "protocol/record.proto"
 
 // A field as "number name type", a list's type read "repeated type", a message's by its name.
 func testComputeFieldLine(field protoreflect.FieldDescriptor) string {
@@ -31,8 +35,8 @@ func testComputeFieldLine(field protoreflect.FieldDescriptor) string {
 	return fmt.Sprintf("%d %s %s", field.Number(), field.Name(), typeName)
 }
 
-// The registered message of this package named name.
-func testComputeMessage(t *testing.T, name string) protoreflect.MessageDescriptor {
+// The registered message of this package named name, which the file at path declares.
+func testComputeMessage(t *testing.T, path string, name string) protoreflect.MessageDescriptor {
 	t.Helper()
 	descriptor, err := protoregistry.GlobalFiles.FindDescriptorByName(protoreflect.FullName("urnetwork.sidecar." + name))
 	if err != nil {
@@ -42,17 +46,17 @@ func testComputeMessage(t *testing.T, name string) protoreflect.MessageDescripto
 	if !ok {
 		t.Fatalf("%s is no message", name)
 	}
-	if message.ParentFile().Path() != "protocol/record.proto" {
+	if message.ParentFile().Path() != path {
 		t.Errorf("%s is in %s", name, message.ParentFile().Path())
 	}
 	return message
 }
 
-// Holds message's fields whose numbers lie in [first, last] to want, in number order, and holds that it nests and
-// carries nothing a fence cannot write: no oneof, no optional field, no nested message or enum, no option.
-func testComputeMessageFields(t *testing.T, name string, first protoreflect.FieldNumber, last protoreflect.FieldNumber, want []string) {
+// Holds the fields of path's message name whose numbers lie in [first, last] to want, in number order, and holds that
+// it nests and carries nothing a fence cannot write: no oneof, no optional field, no nested message or enum, no option.
+func testComputeMessageFields(t *testing.T, path string, name string, first protoreflect.FieldNumber, last protoreflect.FieldNumber, want []string) {
 	t.Helper()
-	message := testComputeMessage(t, name)
+	message := testComputeMessage(t, path, name)
 	inRange := []protoreflect.FieldDescriptor{}
 	fields := message.Fields()
 	for i := range fields.Len() {
@@ -107,7 +111,7 @@ func testComputeNumbers(first protoreflect.FieldNumber, last protoreflect.FieldN
 // 69 reserved, §27.9's 70 with 71 to 79 reserved, and what field 38 opens to at version 5; DESIGN's 1 to 41 stay as
 // they were, 23, 24, 25 and 34 reserved, and no message holds a oneof.
 func TestCanonicalActionVersion5Descriptor(t *testing.T) {
-	testComputeMessageFields(t, "CanonicalAction", 42, 79, []string{
+	testComputeMessageFields(t, testRecordProtoPath, "CanonicalAction", 42, 79, []string{
 		"42 enclave EnclaveFields",
 		"43 budget BudgetFields",
 		"44 url string",
@@ -126,7 +130,7 @@ func TestCanonicalActionVersion5Descriptor(t *testing.T) {
 		"60 service_call ServiceCallFields",
 		"70 auto AutoFields",
 	})
-	action := testComputeMessage(t, "CanonicalAction")
+	action := testComputeMessage(t, testRecordProtoPath, "CanonicalAction")
 	if action.Fields().Len() != 41-4+17 {
 		t.Errorf("CanonicalAction holds %d fields", action.Fields().Len())
 	}
@@ -144,41 +148,41 @@ func TestCanonicalActionVersion5Descriptor(t *testing.T) {
 		t.Errorf("CanonicalAction reserves %v", got)
 	}
 
-	testComputeMessageFields(t, "EnclaveFields", 1, 536870911, []string{
+	testComputeMessageFields(t, testRecordProtoPath, "EnclaveFields", 1, protowire.MaxValidNumber, []string{
 		"1 enclave_id bytes", "2 name string", "3 shape string", "4 provider string", "5 label string",
 		"6 price_per_hour uint64", "7 incarnation uint64",
 	})
-	testComputeMessageFields(t, "BudgetFields", 1, 536870911, []string{
+	testComputeMessageFields(t, testRecordProtoPath, "BudgetFields", 1, protowire.MaxValidNumber, []string{
 		"1 agent_id bytes", "2 period uint32", "3 amount uint64", "4 current uint64",
 	})
-	testComputeMessageFields(t, "SendFields", 1, 536870911, []string{
+	testComputeMessageFields(t, testRecordProtoPath, "SendFields", 1, protowire.MaxValidNumber, []string{
 		"1 target_agent string", "2 target_agent_id bytes", "3 target_member_id bytes", "4 mode uint32", "5 text string",
 		"6 stdin string", "7 cwd string", "8 refs repeated RefFields", "9 model string", "10 tools repeated string",
 		"11 budget BudgetFields",
 	})
-	testComputeMessageFields(t, "RefFields", 1, 536870911, []string{"1 repo_id bytes", "2 path string", "3 version uint64"})
-	testComputeMessageFields(t, "ContextFields", 1, 536870911, []string{
+	testComputeMessageFields(t, testRecordProtoPath, "RefFields", 1, protowire.MaxValidNumber, []string{"1 repo_id bytes", "2 path string", "3 version uint64"})
+	testComputeMessageFields(t, testRecordProtoPath, "ContextFields", 1, protowire.MaxValidNumber, []string{
 		"1 run_id bytes", "2 entry_id bytes", "3 nodes uint32", "4 flagged uint32", "5 untrusted uint32",
 		"6 mail_messages uint32", "7 calendar_events uint32", "8 fetched_pages uint32", "9 service_results uint32",
 		"10 act uint32",
 	})
-	testComputeMessageFields(t, "CalendarEventAction", 1, 536870911, []string{
+	testComputeMessageFields(t, testRecordProtoPath, "CalendarEventAction", 1, protowire.MaxValidNumber, []string{
 		"1 operation uint32", "2 uid string", "3 occurrence string", "4 expected string", "5 title string",
 		"6 start string", "7 end string", "8 zone string", "9 all_day bool", "10 recurrence string", "11 location string",
 		"12 reminders repeated string", "13 attendees repeated string", "14 mails repeated string",
 		"15 description string", "16 before CalendarEventFields", "17 source string",
 	})
-	testComputeMessageFields(t, "CalendarEventFields", 1, 536870911, []string{
+	testComputeMessageFields(t, testRecordProtoPath, "CalendarEventFields", 1, protowire.MaxValidNumber, []string{
 		"1 title string", "2 start string", "3 end string", "4 zone string", "5 all_day bool", "6 recurrence string",
 		"7 location string", "8 reminders repeated string", "9 attendees repeated string", "10 description string",
 	})
-	testComputeMessageFields(t, "ServiceCallFields", 1, 536870911, []string{
+	testComputeMessageFields(t, testRecordProtoPath, "ServiceCallFields", 1, protowire.MaxValidNumber, []string{
 		"1 connection bytes", "2 label string", "3 service string", "4 account string", "5 method string",
 		"6 path string", "7 query string", "8 content_type string", "9 body string", "10 class uint32",
 		"11 feature string",
 	})
-	testComputeMessageFields(t, "AutoFields", 1, 536870911, []string{"1 basis uint32", "2 rules repeated uint32"})
-	testComputeMessageFields(t, "CanonicalActionDetail5", 1, 536870911, []string{
+	testComputeMessageFields(t, testRecordProtoPath, "AutoFields", 1, protowire.MaxValidNumber, []string{"1 basis uint32", "2 rules repeated uint32"})
+	testComputeMessageFields(t, testRecordProtoPath, "CanonicalActionDetail5", 1, protowire.MaxValidNumber, []string{
 		"1 name string", "2 role uint32", "3 harness string", "4 grant_id bytes",
 	})
 
@@ -211,13 +215,13 @@ func TestCanonicalActionVersion5Descriptor(t *testing.T) {
 // §23.9's selected at decision version 2, §27.9's auto and auto_verdict at version 3, and channel 4; DESIGN's 1 to 13
 // stay as they were.
 func TestApprovalDecisionVersions2And3Descriptor(t *testing.T) {
-	testComputeMessageFields(t, "ApprovalDecision", 1, 536870911, []string{
+	testComputeMessageFields(t, testRecordProtoPath, "ApprovalDecision", 1, protowire.MaxValidNumber, []string{
 		"1 approval_id bytes", "2 request_sha256 bytes", "3 payload_sha256 bytes", "4 decision uint32", "5 uses uint32",
 		"6 not_after_millis int64", "7 approver_member_id bytes", "8 channel uint32", "9 sshsig bytes",
 		"10 evidence_sha256 bytes", "11 requester_sidecar_id bytes", "12 auth_pin AuthPin", "13 version uint32",
 		"14 selected repeated uint32", "15 auto bool", "16 auto_verdict AutoVerdict",
 	})
-	if len(testComputeReserved(testComputeMessage(t, "ApprovalDecision"))) != 0 {
+	if len(testComputeReserved(testComputeMessage(t, testRecordProtoPath, "ApprovalDecision"))) != 0 {
 		t.Error("ApprovalDecision reserves a number")
 	}
 	if ApprovalChannel_name[4] != "APPROVAL_CHANNEL_AUTO" || len(ApprovalChannel_name) != 5 {
@@ -235,11 +239,11 @@ func TestApprovalDecisionVersions2And3Descriptor(t *testing.T) {
 
 // §27.9's AutoVerdict, field for field as its fence writes it.
 func TestAutoVerdictDescriptor(t *testing.T) {
-	testComputeMessageFields(t, "AutoVerdict", 1, 536870911, []string{
+	testComputeMessageFields(t, testRecordProtoPath, "AutoVerdict", 1, protowire.MaxValidNumber, []string{
 		"1 verdict uint32", "2 reason uint32", "3 score uint32", "4 threshold uint32", "5 model string",
 		"6 model_sha256 bytes", "7 inputs_sha256 bytes", "8 windows uint32", "9 run_count uint32", "10 day_count uint32",
 	})
-	if len(testComputeReserved(testComputeMessage(t, "AutoVerdict"))) != 0 {
+	if len(testComputeReserved(testComputeMessage(t, testRecordProtoPath, "AutoVerdict"))) != 0 {
 		t.Error("AutoVerdict reserves a number")
 	}
 }

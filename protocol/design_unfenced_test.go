@@ -16,8 +16,25 @@ package protocol
 // that gains a real fence is then written twice, which says to take it out of here.
 const testUnfencedFence = `
 // sidecar/protocol/acl.proto
-// §8.8's RepoCreate row and QD-102 fix the values of the creation marker.
-enum RepoInbox { REPO_INBOX_NONE = 0; REPO_INBOX_GROUP = 1; REPO_INBOX_ADMIN = 2; }
+// §8.8's RepoCreate row and QD-102 fix the values of the creation marker, and DESIGN-COMPUTE.md §20.4 adds the Team
+// inbox's, under agent_repos (§16.6), numbered after them (CACL-M11-05).
+enum RepoInbox { REPO_INBOX_NONE = 0; REPO_INBOX_GROUP = 1; REPO_INBOX_ADMIN = 2; REPO_INBOX_TEAM = 3; }
+// DESIGN-COMPUTE.md §16.4's compute block as the projection's rows carry it, and §16.2's compute: resources, which the
+// design gives as field and value lists without numbers; numbered in the order written (CACL-M11-05).
+message AclComputeRows {
+  ComputeAssurance assurance_floor = 1; ComputeAssurance enclave_assurance_floor = 2; repeated string providers = 3;
+  repeated string enclave_shapes = 4; bool search_enabled = 5; uint32 search_day_max = 6;
+  repeated AclComputeBudgetRow budgets = 7;
+}
+message AclComputeBudgetRow { bytes subject = 1; uint32 per = 2; uint64 day_nano_usd = 3; uint64 month_nano_usd = 4; }
+enum ComputeAssurance {
+  COMPUTE_ASSURANCE_UNSPECIFIED = 0; COMPUTE_ASSURANCE_NONE = 1; COMPUTE_ASSURANCE_AP = 2; COMPUTE_ASSURANCE_A1 = 3;
+  COMPUTE_ASSURANCE_A2 = 4;
+}
+enum AclComputeResource {
+  ACL_COMPUTE_RESOURCE_UNSPECIFIED = 0; ACL_COMPUTE_RESOURCE_ENCLAVE = 1; ACL_COMPUTE_RESOURCE_BUY = 2;
+  ACL_COMPUTE_RESOURCE_SEARCH = 3;
+}
 // sidecar/protocol/envelope.proto
 // §6.5: each result has its request's fields.
 message HelloResult {
@@ -672,6 +689,15 @@ message AutoFields { uint32 basis = 1; repeated uint32 rules = 2; }
 message CanonicalActionDetail5 { string name = 1; uint32 role = 2; string harness = 3; bytes grant_id = 4; }
 `
 
+// Where an acl.proto addition comes from: DESIGN-COMPUTE.md's section for it, which design-records folds into §8.8's
+// fence.
+const (
+	testAclComputeSource   = "DESIGN-COMPUTE.md §16.2's resources and actions (owner decisions 735, 737, 748, 750; CACL-M11-05)"
+	testAclRowsSource      = "DESIGN-COMPUTE.md §16.4's projected compute block, api-7 and compute-6 (CACL-M11-05)"
+	testAclListenersSource = "DESIGN-COMPUTE.md §16.2's listener: and §26.6's kind (owner decision 770; CACL-M11-05)"
+	testAclAgentsSource    = "DESIGN-COMPUTE.md §20.4's agent repos (owner decisions 744, 747; CACL-M11-05)"
+)
+
 // Where a version-5 CanonicalAction field comes from: DESIGN-COMPUTE.md's text fence for it, which design-records
 // folds into §16.8's fence.
 const (
@@ -711,6 +737,11 @@ var testFenceAdditions = []struct {
 	{message: "CanonicalAction", field: testFenceField{name: "auto", number: 70, typeName: "AutoFields"}, question: testVersion5AutoSource},
 	// §23.9's selection, at decision version 2; §27.9's fence writes version 3's auto and auto_verdict
 	{message: "ApprovalDecision", field: testFenceField{name: "selected", number: 14, typeName: "uint32", repeated: true}, question: testVersion5CalendarSource},
+	// acl.proto's compute rows and §16.2's targets, which §8.8's fence names only in prose until design-records folds them
+	{message: "AclRows", field: testFenceField{name: "compute_rows", number: 11, typeName: "AclComputeRows"}, question: testAclRowsSource},
+	{message: "AclTarget", field: testFenceField{name: "model_glob", number: 11, typeName: "string"}, question: testAclComputeSource},
+	{message: "AclTarget", field: testFenceField{name: "compute_resource", number: 12, typeName: "AclComputeResource"}, question: testAclComputeSource},
+	{message: "AclTarget", field: testFenceField{name: "listener", number: 13, typeName: "bytes"}, question: testAclListenersSource},
 }
 
 // Numbers an owner's answer reserves in a message the design fences, ahead of design-records' fold, each with the
@@ -772,6 +803,15 @@ var testFenceValueAdditions = []testFenceValueAddition{
 	{enum: "SidecarActionKind", name: "SIDECAR_ACTION_KIND_TAINTED_SEND", number: 24, question: testVersion5Source},
 	{enum: "SidecarActionKind", name: "SIDECAR_ACTION_KIND_CALENDAR_WRITE", number: 25, question: testVersion5CalendarSource},
 	{enum: "SidecarActionKind", name: "SIDECAR_ACTION_KIND_SERVICE_WRITE", number: 26, question: testVersion5ServiceSource},
+	// §16.2's actions and the repo kinds DESIGN-COMPUTE.md's features turn on, which §8.8's fence names only in prose
+	{enum: "AclAction", name: "ACL_ACTION_INFER", number: 10, question: testAclComputeSource},
+	{enum: "AclAction", name: "ACL_ACTION_CREATE", number: 11, question: testAclComputeSource},
+	{enum: "AclAction", name: "ACL_ACTION_BUY", number: 12, question: testAclComputeSource},
+	{enum: "AclAction", name: "ACL_ACTION_QUERY", number: 13, question: testAclComputeSource},
+	{enum: "AclAction", name: "ACL_ACTION_SSH", number: 14, question: testAclComputeSource},
+	{enum: "RepoKind", name: "REPO_KIND_AGENTS", number: 10, question: testAclAgentsSource},
+	{enum: "RepoKind", name: "REPO_KIND_AGENT", number: 11, question: testAclAgentsSource},
+	{enum: "RepoKind", name: "REPO_KIND_LISTENERS", number: 12, question: testAclListenersSource},
 }
 
 // One value an owner's answer takes out of an enum the design fences, its number reserved.

@@ -98,16 +98,20 @@ func TestRepoActivateListsGkmsFormKeys(t *testing.T) {
 }
 
 // §11.12's kinds: each of the nine creates, the directory included, with an owner exactly for the owner-bound kinds;
-// a kind this build does not know, or an owner on the wrong kind, is refused before anything is placed.
+// a kind this build does not know, the kinds acl.proto declares under an authorization feature among them until their
+// readers land (DESIGN-COMPUTE.md §16.6; CACL-M11-05), or an owner on the wrong kind, is refused before anything is
+// placed.
 func TestRepoKindsKnownOrRefusedAtCreation(t *testing.T) {
 	fixture := newEvsFixture(t)
 	admin := testId("sidecar-a")
 	owner := testId("owner member")
+	createdCount := 0
 	for kindNumber := range protocol.RepoKind_name {
 		kind := protocol.RepoKind(kindNumber)
-		if kind == protocol.RepoKind_REPO_KIND_UNSPECIFIED {
+		if kind == protocol.RepoKind_REPO_KIND_UNSPECIFIED || !sidecar.EvsRepoKindKnown(kind) {
 			continue
 		}
+		createdCount += 1
 		repoId := testId(kind.String()[10:])
 		facts := &EvsRepoFacts{Kind: kind, NetworkId: sidecar.Id(fixture.networkId)}
 		if sidecar.EvsRepoKindOwnerBound(kind) {
@@ -123,10 +127,16 @@ func TestRepoKindsKnownOrRefusedAtCreation(t *testing.T) {
 			t.Errorf("%s: repo/ %v", kind, object)
 		}
 	}
+	if createdCount != 9 {
+		t.Errorf("%d kinds created, and §11.12 has nine", createdCount)
+	}
 	refused := []*EvsRepoFacts{
 		{Kind: protocol.RepoKind(99), NetworkId: sidecar.Id(fixture.networkId)},
 		{Kind: protocol.RepoKind_REPO_KIND_VAULT, NetworkId: sidecar.Id(fixture.networkId)},
 		{Kind: protocol.RepoKind_REPO_KIND_DIRECTORY, OwnerMemberId: owner, NetworkId: sidecar.Id(fixture.networkId)},
+		{Kind: protocol.RepoKind_REPO_KIND_AGENTS, NetworkId: sidecar.Id(fixture.networkId)},
+		{Kind: protocol.RepoKind_REPO_KIND_AGENT, NetworkId: sidecar.Id(fixture.networkId)},
+		{Kind: protocol.RepoKind_REPO_KIND_LISTENERS, NetworkId: sidecar.Id(fixture.networkId)},
 	}
 	for i, facts := range refused {
 		repoId := testId("refused " + string(rune('a'+i)))

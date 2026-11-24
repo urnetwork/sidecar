@@ -59,7 +59,9 @@ func ConfigPlatformVersioningRules() *protocol.VersioningRules {
 	}}
 }
 
-// Checks a record's rules: each with a known on or off, 16-byte repo ids, known repo kinds and a glob that parses.
+// Checks a record's rules: each with a known on or off, 16-byte repo ids, known repo kinds and a glob that parses. A
+// kind acl.proto declares under an authorization feature (agents, agent, listeners; aclRepoKindKnown) is no known kind
+// here, as it was none to a reader that predates its value, so no head names one that such a reader would refuse.
 func CheckVersioningRules(rules *protocol.VersioningRules) error {
 	for i, rule := range rules.GetRules() {
 		switch rule.GetVersioning() {
@@ -73,7 +75,8 @@ func CheckVersioningRules(rules *protocol.VersioningRules) error {
 			}
 		}
 		for _, kind := range rule.GetKinds() {
-			if _, known := protocol.RepoKind_name[int32(kind)]; !known {
+			// 0 reads as before, and every other value only as one of §11.12's nine
+			if kind != uint32(protocol.RepoKind_REPO_KIND_UNSPECIFIED) && !aclRepoKindKnown(protocol.RepoKind(kind)) {
 				return fmt.Errorf("%w: rule %d names kind %d", ErrConfigVersioningMalformed, i, kind)
 			}
 		}

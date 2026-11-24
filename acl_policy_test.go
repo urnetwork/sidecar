@@ -1241,10 +1241,18 @@ func TestAclSourcePosition(t *testing.T) {
 }
 
 // Each kind protocol numbers reads by the name §11.12 gives it, its enum name lowercased, as an audit
-// block's kind: entry writes it: a kind added there, or a name drifting here, fails.
+// block's kind: entry writes it: a kind added there, or a name drifting here, fails. The kinds acl.proto declares under
+// an authorization feature (DESIGN-COMPUTE.md §16.6; CACL-M11-05) read by no name until their readers land under it,
+// so a document naming one is refused alike by a reader that predates the value and by this one.
 func TestEveryRepoKindHasAName(t *testing.T) {
-	if len(aclNameRepoKinds) != len(protocol.RepoKind_name)-1 {
-		t.Errorf("%d names for %d kinds", len(aclNameRepoKinds), len(protocol.RepoKind_name)-1)
+	knownCount := 0
+	for number := range protocol.RepoKind_name {
+		if aclRepoKindKnown(protocol.RepoKind(number)) {
+			knownCount += 1
+		}
+	}
+	if len(aclNameRepoKinds) != knownCount || knownCount != 9 {
+		t.Errorf("%d names for %d kinds", len(aclNameRepoKinds), knownCount)
 	}
 	for number, enumName := range protocol.RepoKind_name {
 		if number == 0 {
@@ -1252,6 +1260,12 @@ func TestEveryRepoKindHasAName(t *testing.T) {
 		}
 		name := strings.ToLower(strings.TrimPrefix(enumName, "REPO_KIND_"))
 		policy, err := ParseAclPolicy([]byte(`{"audit": {"reader": "tag:a", "repos": ["kind:` + name + `"]}}`))
+		if !aclRepoKindKnown(protocol.RepoKind(number)) {
+			if err == nil {
+				t.Errorf("kind:%s, which a feature turns on, reads as %v", name, policy.Audit.RepoKinds)
+			}
+			continue
+		}
 		if err != nil {
 			t.Errorf("kind:%s: %v", name, err)
 			continue
