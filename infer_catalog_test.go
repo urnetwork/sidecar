@@ -393,6 +393,25 @@ func TestInferLocalCatalogWithoutAnEngine(t *testing.T) {
 	}
 }
 
+// The local view takes only a whole manifest, however it was made: one not parsed is checked as a parse would.
+func TestInferLocalCatalogRefusesAManifestNotWhole(t *testing.T) {
+	device := testInferDevice("darwin/arm64", InferDeviceClassDesktop, 64, true)
+	changes := []func(manifest *InferManifest){
+		func(m *InferManifest) { m.Models[0].Files[0].Sha256 = "" },
+		func(m *InferManifest) { m.Models[0].Files[0] = nil },
+		func(m *InferManifest) { m.Engines[0].Platform = "darwin/amd64" },
+		func(m *InferManifest) { m.Models[1].Model = m.Models[0].Model },
+		func(m *InferManifest) { m.Version = 0 },
+	}
+	for i, change := range changes {
+		manifest := testInferManifest()
+		change(manifest)
+		if _, err := NewInferLocalCatalog(manifest, device, DefaultInferSettings()); !errors.Is(err, ErrInferManifestInvalid) {
+			t.Errorf("change %d: %v", i, err)
+		}
+	}
+}
+
 // A local model with no build for the device's platform, or none for its accelerators, is listed unavailable with
 // the reason; a device's CPU counts though it lists none, and only the files that serve its platform are its entry's.
 func TestInferLocalEntryUnavailableWithoutABuild(t *testing.T) {

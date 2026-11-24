@@ -113,11 +113,15 @@ type InferLocalModel struct {
 	DecodeRates []*InferDecodeRate `json:"decode_rates,omitempty"`
 }
 
-// A copy sharing nothing.
+// A copy sharing nothing. A nil file or rate stays nil, for the entry's check to refuse, since an entry is copied
+// before it is checked.
 func (self *InferLocalModel) clone() *InferLocalModel {
 	clone := *self
 	clone.Files = make([]*InferManifestModelFile, len(self.Files))
 	for i, file := range self.Files {
+		if file == nil {
+			continue
+		}
 		fileClone := *file
 		fileClone.Platforms = slices.Clone(file.Platforms)
 		clone.Files[i] = &fileClone
@@ -125,6 +129,9 @@ func (self *InferLocalModel) clone() *InferLocalModel {
 	clone.Accelerators = slices.Clone(self.Accelerators)
 	clone.DecodeRates = make([]*InferDecodeRate, len(self.DecodeRates))
 	for i, rate := range self.DecodeRates {
+		if rate == nil {
+			continue
+		}
 		rateClone := *rate
 		clone.DecodeRates[i] = &rateClone
 	}
@@ -294,6 +301,10 @@ func (self *InferCatalogEntry) fault(settings *InferSettings) string {
 	if fault := inferModelPartFault(self.Model); fault != "" {
 		return "an entry with " + fault
 	}
+	// bounded before any message names it
+	if settings.NameMaxByteCount < len(self.Provider)+len(self.Model)+1 {
+		return fmt.Sprintf("an entry whose name passes %d bytes", settings.NameMaxByteCount)
+	}
 	name := self.Provider + "-" + self.Model
 	switch self.Kind {
 	case InferCatalogKindLocal:
@@ -350,12 +361,6 @@ func (self *InferCatalogEntry) fault(settings *InferSettings) string {
 	return ""
 }
 
-// A name the catalog answers: its entry, and for a full name its effort.
-type inferCatalogName struct {
-	entry  *InferCatalogEntry
-	effort InferEffort
-}
-
 // The catalog this device sees. Built by NewInferCatalog, NewInferLocalCatalog or Join, and never changed after.
 type InferCatalog struct {
 	entries []*InferCatalogEntry
@@ -366,10 +371,10 @@ type InferCatalog struct {
 	// why it offers no remote entry, or empty
 	remoteUnavailable string
 	settings          *InferSettings
-	// every canonical name, alias and search id, to what it names
-	names map[string]*inferCatalogName
+	// every canonical name, alias and search id, to the entry it names
+	nameEntries map[string]*InferCatalogEntry
 	// each model's entry, by <provider>-<model>
-	models map[string]*InferCatalogEntry
+	modelEntries map[string]*InferCatalogEntry
 }
 
 // A catalog of remote entries and search endpoints, with no device and no local entry: each entry copied, checked
@@ -400,17 +405,17 @@ func newInferCatalog(entries []*InferCatalogEntry, device *InferDeviceCapabiliti
 		entries:          make([]*InferCatalogEntry, 0, len(entries)),
 		localUnavailable: localUnavailable,
 		settings:         settings,
-		names:            map[string]*inferCatalogName{},
-		models:           map[string]*InferCatalogEntry{},
+		nameEntries:      map[string]*InferCatalogEntry{},
+		modelEntries:     map[string]*InferCatalogEntry{},
 	}
 	if device != nil {
 		catalog.device = device.clone()
 	}
-	name := func(name string, entry *InferCatalogEntry, effort InferEffort) error {
-		if _, ok := catalog.names[name]; ok {
+	name := func(name string, entry *InferCatalogEntry) error {
+		if _, ok := catalog.nameEntries[name]; ok {
 			return fmt.Errorf("%w: two entries named %s", ErrInferCatalogInvalid, name)
 		}
-		catalog.names[name] = &inferCatalogName{entry: entry, effort: effort}
+		catalog.nameEntries[name] = entry
 		return nil
 	}
 	for _, given := range entries {
@@ -422,7 +427,7 @@ func newInferCatalog(entries []*InferCatalogEntry, device *InferDeviceCapabiliti
 			return nil, fmt.Errorf("%w: %s", ErrInferCatalogInvalid, fault)
 		}
 		if entry.Kind == InferCatalogKindSearch {
-			if err := name(entry.SearchId(), entry, ""); err != nil {
+			if err := name(entry.SearchId(), entry); err != nil {
 				return nil, err
 			}
 			catalog.entries = append(catalog.entries, entry)
@@ -433,17 +438,17 @@ func newInferCatalog(entries []*InferCatalogEntry, device *InferDeviceCapabiliti
 			entry.ToolBudget = entry.ContextWindow / settings.ToolBudgetWindowDivisor
 		}
 		model := entry.Provider + "-" + entry.Model
-		if _, ok := catalog.models[model]; ok {
+		if _, ok := catalog.modelEntries[model]; ok {
 			return nil, fmt.Errorf("%w: the model %s twice", ErrInferCatalogInvalid, model)
 		}
-		catalog.models[model] = entry
+		catalog.modelEntries[model] = entry
 		for _, effort := range entry.Efforts {
-			if err := name(entry.Name(effort), entry, effort); err != nil {
+			if err := name(entry.Name(effort), entry); err != nil {
 				return nil, err
 			}
 		}
 		if alias := entry.Alias(); alias != "" {
-			if err := name(alias, entry, ""); err != nil {
+			if err := name(alias, entry); err != nil {
 				return nil, err
 			}
 		}
@@ -455,26 +460,28 @@ func newInferCatalog(entries []*InferCatalogEntry, device *InferDeviceCapabiliti
 // The local view (§6.3, §6.5): manifest's models as this device sees them, each listed unavailable, with the reason,
 // where the device lacks the memory, a build for its platform or an accelerator the model runs on. A platform with no
 // engine build, one the manifest pins no engine for, a device whose platform is unknown, or a manifest with no model
-// lists no local entry, and LocalUnavailable says which.
+// lists no local entry, and LocalUnavailable says which. A manifest that is not whole is refused, however it was
+// made, with ErrInferManifestInvalid.
 func NewInferLocalCatalog(manifest *InferManifest, device *InferDeviceCapabilities, settings *InferSettings) (*InferCatalog, error) {
 	if manifest == nil {
 		return nil, fmt.Errorf("%w: no manifest", ErrInferCatalogInvalid)
 	}
-	entries, localUnavailable := inferLocalEntries(manifest, device, settings)
-	return newInferCatalog(entries, device, localUnavailable, settings)
-}
-
-// The local entries of manifest for device, or why there are none.
-func inferLocalEntries(manifest *InferManifest, device *InferDeviceCapabilities, settings *InferSettings) ([]*InferCatalogEntry, string) {
+	if err := manifest.validate(settings); err != nil {
+		return nil, err
+	}
+	localUnavailable := ""
 	switch {
 	case len(manifest.Models) == 0:
-		return nil, "this build's release manifest lists no local model"
+		localUnavailable = "this build's release manifest lists no local model"
 	case device == nil || device.Platform == "":
-		return nil, "this device's platform is unknown"
+		localUnavailable = "this device's platform is unknown"
 	case slices.Contains(inferUnbuiltPlatforms, device.Platform):
-		return nil, "no local engine is built for " + device.Platform + ", which gets remote models only"
+		localUnavailable = "no local engine is built for " + device.Platform + ", which gets remote models only"
 	case manifest.Engine(device.Platform) == nil:
-		return nil, "this build pins no local engine for this device's platform"
+		localUnavailable = "this build pins no local engine for this device's platform"
+	}
+	if localUnavailable != "" {
+		return newInferCatalog(nil, device, localUnavailable, settings)
 	}
 	// every device has a CPU, whatever else it lists
 	deviceAccelerators := slices.Clone(device.Accelerators)
@@ -509,7 +516,8 @@ func inferLocalEntries(manifest *InferManifest, device *InferDeviceCapabilities,
 		case !runnable:
 			unavailable = "no build of it runs on this device's accelerators"
 		}
-		entry := &InferCatalogEntry{
+		// newInferCatalog copies each entry, so the catalog shares none of the manifest's slices
+		entries = append(entries, &InferCatalogEntry{
 			Provider:         computeLocalProvider,
 			Model:            model.Model,
 			Kind:             InferCatalogKindLocal,
@@ -529,11 +537,9 @@ func inferLocalEntries(manifest *InferManifest, device *InferDeviceCapabilities,
 				DecodeRates:        model.DecodeRates,
 			},
 			Unavailable: unavailable,
-		}
-		// newInferCatalog copies each entry, so nothing here shares the manifest's slices after it
-		entries = append(entries, entry)
+		})
 	}
-	return entries, ""
+	return newInferCatalog(entries, device, "", settings)
 }
 
 // This catalog with entries added, its device and local view kept: how the remote catalog and the search endpoints
@@ -600,7 +606,7 @@ func (self *InferCatalog) Resolve(name string, requestEffort string) (*InferCata
 		return nil, err
 	}
 	model := parsed.Provider + "-" + parsed.Model
-	entry, ok := self.models[model]
+	entry, ok := self.modelEntries[model]
 	if !ok {
 		return nil, fmt.Errorf("%w: %s", ErrInferModelUnknown, parsed.String())
 	}
@@ -635,11 +641,11 @@ func (self *InferCatalog) SearchEndpoint(id string) (*InferCatalogEntry, error) 
 	if err != nil {
 		return nil, err
 	}
-	named, ok := self.names[parsed.String()]
-	if !ok || named.entry.Kind != InferCatalogKindSearch {
+	entry, ok := self.nameEntries[parsed.String()]
+	if !ok || entry.Kind != InferCatalogKindSearch {
 		return nil, fmt.Errorf("%w: %s", ErrInferModelUnknown, parsed.String())
 	}
-	return named.entry.clone(), nil
+	return entry.clone(), nil
 }
 
 // The local model §6.5's defaults recommend for this device, by its class and memory, and its entry, a copy: the
@@ -722,21 +728,21 @@ func (self *InferCatalog) subset(entries []*InferCatalogEntry) *InferCatalog {
 		localUnavailable:  self.localUnavailable,
 		remoteUnavailable: self.remoteUnavailable,
 		settings:          self.settings,
-		names:             map[string]*inferCatalogName{},
-		models:            map[string]*InferCatalogEntry{},
+		nameEntries:       map[string]*InferCatalogEntry{},
+		modelEntries:      map[string]*InferCatalogEntry{},
 	}
 	kept := map[*InferCatalogEntry]bool{}
 	for _, entry := range entries {
 		kept[entry] = true
 	}
-	for name, named := range self.names {
-		if kept[named.entry] {
-			catalog.names[name] = named
+	for name, entry := range self.nameEntries {
+		if kept[entry] {
+			catalog.nameEntries[name] = entry
 		}
 	}
-	for model, entry := range self.models {
+	for model, entry := range self.modelEntries {
 		if kept[entry] {
-			catalog.models[model] = entry
+			catalog.modelEntries[model] = entry
 		}
 	}
 	return catalog

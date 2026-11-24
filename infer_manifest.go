@@ -332,11 +332,12 @@ func (self *InferManifestModel) validate(settings *InferSettings) error {
 	if fault := inferModelPartFault(self.Model); fault != "" {
 		return inferManifestFault("a model with %s", fault)
 	}
+	// bounded before any message names it
+	if settings.NameMaxByteCount < len(computeLocalProvider)+len(self.Model)+inferEffortMaxByteCount()+2 {
+		return inferManifestFault("a model whose names pass %d bytes", settings.NameMaxByteCount)
+	}
 	fault := func(format string, a ...any) error {
 		return inferManifestFault("the model %s: %s", self.Model, fmt.Sprintf(format, a...))
-	}
-	if settings.NameMaxByteCount < len(computeLocalProvider)+len(self.Model)+inferEffortMaxByteCount()+2 {
-		return fault("a name longer than %d bytes", settings.NameMaxByteCount)
 	}
 	if len(self.Efforts) == 0 {
 		return fault("no effort")
