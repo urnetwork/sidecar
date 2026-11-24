@@ -152,3 +152,21 @@ func urLinuxUpstreamServers(routed func(address netip.Addr) bool) []netip.Addr {
 	}
 	return servers
 }
+
+// Turns systemd-resolved's mDNS on the link index on or off (SetLinkMulticastDNS), within timeout. resolved runs it
+// only where its own MulticastDNS setting allows, which is the host's choice.
+func urTunLinuxSetMulticastDns(index int, on bool, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	conn, err := dbus.ConnectSystemBus(dbus.WithContext(ctx))
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	mode := "no"
+	if on {
+		mode = "yes"
+	}
+	return conn.Object(urResolvedDestination, urResolvedPath).CallWithContext(ctx, urResolvedManager+".SetLinkMulticastDNS", 0,
+		int32(index), mode).Err
+}

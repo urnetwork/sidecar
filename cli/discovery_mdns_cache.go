@@ -1,17 +1,28 @@
 // The mDNS querier's cache (discovery_gather_mdns.go; §17.7.1, owner decision 778), apart from its sockets so it runs
-// and is tested on every platform: PTRs by type, each instance's SRV and TXT, and each target's IPv4 addresses, every
-// record with its own TTL, a goodbye (TTL 0) withdrawing it at once (RFC 6762 §10.1), at most RecordCount records.
+// and is tested on every platform: what one link's responses say, read with discovery_mdns_wire.go so a label holding
+// a dot stays one label.
+//
+//	records   PTRs by their owner, a type or a subtype's <sub>._sub.<type>.local., each instance's SRV and TXT, and each
+//	          target's IPv4 addresses, every record with its own TTL; a goodbye (TTL 0) withdraws a record at once
+//	          (RFC 6762 §10.1), and a record past its TTL leaves at the next read
+//	bounds    at most RecordCount records over all of them, a new one past it refused until others leave
+//	known     the PTRs a type's next query lists as known answers, those with more than half their TTL left (§7.1)
+//	missing   the follow-up questions an instance needs where its responder left records out of a browse's answer:
+//	          SRV or TXT for its name, A for its target (RFC 6763 §12 lets a responder omit additionals)
+//	report    every instance of a listed type whose PTR, SRV, TXT and target's address all stand, with the subtypes its
+//	          subtype PTRs name, expiring with the first of its records
+//
+// Safe for concurrent use. Names and TXT are the LAN's words, kept as they came and logged nowhere (I-13).
 
 package main
 
 import (
+	"fmt"
 	"net/netip"
 	"slices"
 	"strings"
 	"sync"
 	"time"
-
-	"golang.org/x/net/dns/dnsmessage"
 
 	"github.com/urnetwork/sidecar"
 )
@@ -22,10 +33,12 @@ type urMdnsSettings struct {
 	// min.
 	QueryInterval    time.Duration
 	QueryMaxInterval time.Duration
-	// The largest datagram read or sent: 9,000 B, RFC 6762 §17's bound on a multicast DNS message.
+	// The largest datagram read: 9,000 B, RFC 6762 §17's bound on a multicast DNS message.
 	MessageByteCount int
-	// How long a record of an instance the cache holds may go unrefreshed past its own TTL: none; a TTL is the
-	// record's own. The most records the cache keeps: 4,096, the rest dropped.
+	// The largest query sent: 1,472 B, an Ethernet frame's 1,500 less IPv4's and UDP's headers, so no query fragments;
+	// known answers past it are left out, which costs a redundant answer at most (RFC 6762 §7.2).
+	QueryByteCount int
+	// The most records the cache keeps over a link: 4,096, a new one past it refused.
 	RecordCount int
 }
 
@@ -35,266 +48,403 @@ func defaultUrMdnsSettings() *urMdnsSettings {
 		QueryInterval:    1 * time.Second,
 		QueryMaxInterval: 60 * time.Minute,
 		MessageByteCount: 9000,
+		QueryByteCount:   1472,
 		RecordCount:      4096,
 	}
 }
 
-// mDNS's group and port (RFC 6762 §3): protocol identifiers.
-var urMdnsGroup = netip.AddrPortFrom(netip.AddrFrom4([4]byte{224, 0, 0, 251}), 5353)
-
-// One instance's records as the cache holds them, each with its end.
-type urMdnsInstance struct {
-	// the instance's full name, "<name>.<type>.local.", in the case its PTR gave it
-	fullName string
-	service  string
-	subtypes []string
-	target   string
-	port     uint16
-	txt      []byte
-	ends     time.Time
+// One record's end, and the TTL it came with.
+type urMdnsHeld struct {
+	ends time.Time
+	ttl  uint32
 }
 
-// What one interface's querier knows: PTRs by type, instances by full name, addresses by target. Safe for concurrent
-// use.
+// What the cache holds of one instance: its full name, its SRV and its TXT.
+type urMdnsCachedInstance struct {
+	name   urMdnsName
+	target urMdnsName
+	port   uint16
+	srv    *urMdnsHeld
+	txt    []byte
+	txtSet *urMdnsHeld
+}
+
+// A PTR the cache holds: the instance it names, and its end.
+type urMdnsCachedPointer struct {
+	instance urMdnsName
+	held     urMdnsHeld
+}
+
+// The PTRs of one owner, a type or a subtype, by instance key, with the owner's name.
+type urMdnsCachedOwner struct {
+	name     urMdnsName
+	pointers map[string]*urMdnsCachedPointer
+}
+
+// One link's cache. See the file's comment.
 type urMdnsCache struct {
+	settings *urMdnsSettings
+
 	stateLock sync.Mutex
-	settings  *urMdnsSettings
-	// type to instance full names, each with its end
-	pointers map[string]map[string]time.Time
-	// instance full name to its SRV and TXT
-	instances map[string]*urMdnsInstance
-	// target to its IPv4 addresses, each with its end
-	addresses map[string]map[netip.Addr]time.Time
-	count     int
+	// owner key to its PTRs
+	owners map[string]*urMdnsCachedOwner
+	// instance key to its SRV and TXT
+	instances map[string]*urMdnsCachedInstance
+	// target key to its addresses, with the target's name
+	addresses   map[string]map[netip.Addr]*urMdnsHeld
+	targetNames map[string]urMdnsName
 }
 
 func newUrMdnsCache(settings *urMdnsSettings) *urMdnsCache {
 	return &urMdnsCache{
-		settings:  settings,
-		pointers:  map[string]map[string]time.Time{},
-		instances: map[string]*urMdnsInstance{},
-		addresses: map[string]map[netip.Addr]time.Time{},
+		settings:    settings,
+		owners:      map[string]*urMdnsCachedOwner{},
+		instances:   map[string]*urMdnsCachedInstance{},
+		addresses:   map[string]map[netip.Addr]*urMdnsHeld{},
+		targetNames: map[string]urMdnsName{},
 	}
 }
 
-// A name as the cache keys it: lowercased in ASCII, with its trailing dot.
-func urMdnsKey(name string) string {
-	if !strings.HasSuffix(name, ".") {
-		name += "."
-	}
-	return strings.ToLower(name)
+// A type's name in local.: "_ipp._tcp" to _ipp._tcp.local.
+func urMdnsTypeName(serviceType string) urMdnsName {
+	return urMdnsNameParse(serviceType).append(urMdnsLocalName...)
 }
 
-// Takes one response's records at now, answering whether anything changed. A record of a type no one asked about is
-// kept only as part of an instance a PTR named.
+// The records held now, past ends pruned first. Called with stateLock held.
+func (self *urMdnsCache) countWithLock(now time.Time) int {
+	count := 0
+	for ownerKey, owner := range self.owners {
+		for key, pointer := range owner.pointers {
+			if !pointer.held.ends.After(now) {
+				delete(owner.pointers, key)
+				continue
+			}
+			count += 1
+		}
+		if len(owner.pointers) == 0 {
+			delete(self.owners, ownerKey)
+		}
+	}
+	for key, instance := range self.instances {
+		if instance.srv != nil && !instance.srv.ends.After(now) {
+			instance.srv, instance.target, instance.port = nil, nil, 0
+		}
+		if instance.txtSet != nil && !instance.txtSet.ends.After(now) {
+			instance.txtSet, instance.txt = nil, nil
+		}
+		if instance.srv == nil && instance.txtSet == nil {
+			delete(self.instances, key)
+			continue
+		}
+		if instance.srv != nil {
+			count += 1
+		}
+		if instance.txtSet != nil {
+			count += 1
+		}
+	}
+	for target, held := range self.addresses {
+		for address, record := range held {
+			if !record.ends.After(now) {
+				delete(held, address)
+				continue
+			}
+			count += 1
+		}
+		if len(held) == 0 {
+			delete(self.addresses, target)
+			delete(self.targetNames, target)
+		}
+	}
+	return count
+}
+
+// Takes one response's records at now, answering whether anything changed. A malformed message changes nothing.
 func (self *urMdnsCache) take(message []byte, now time.Time) bool {
-	var parser dnsmessage.Parser
-	header, err := parser.Start(message)
-	if err != nil || !header.Response {
-		return false
-	}
-	if err := parser.SkipAllQuestions(); err != nil {
+	parsed, err := parseUrMdnsMessage(message)
+	if err != nil || !parsed.response {
 		return false
 	}
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
+	count := self.countWithLock(now)
 	changed := false
-	// the answers, then past the authority section, the additionals, which RFC 6763 §12 fills with what a browse needs
-	sections := []struct {
-		header func() (dnsmessage.ResourceHeader, error)
-		skip   func() error
-	}{
-		{header: parser.AnswerHeader, skip: parser.SkipAnswer},
-		{header: parser.AdditionalHeader, skip: parser.SkipAdditional},
-	}
-	for i, section := range sections {
-		if i == 1 {
-			if err := parser.SkipAllAuthorities(); err != nil {
-				return changed
+	for _, section := range [][]urMdnsRecord{parsed.answers, parsed.additionals} {
+		for i := range section {
+			taken, added := self.takeRecordWithLock(&section[i], now, count < self.settings.RecordCount)
+			changed = changed || taken
+			if added {
+				count += 1
 			}
-		}
-		for {
-			recordHeader, err := section.header()
-			if err != nil {
-				break
-			}
-			taken, ok := self.takeRecordWithLock(&parser, recordHeader, now)
-			if !ok {
-				if err := section.skip(); err != nil {
-					return changed
-				}
-				continue
-			}
-			changed = taken || changed
 		}
 	}
 	return changed
 }
 
-// Takes one record the parser stands at: whether it changed the cache, and false for a type it does not read, which
-// the caller skips. Called with stateLock held.
-func (self *urMdnsCache) takeRecordWithLock(parser *dnsmessage.Parser, recordHeader dnsmessage.ResourceHeader, now time.Time) (bool, bool) {
-	ends := now.Add(time.Duration(recordHeader.TTL) * time.Second)
-	name := urMdnsKey(recordHeader.Name.String())
-	switch recordHeader.Type {
-	case dnsmessage.TypePTR:
-		body, err := parser.PTRResource()
-		if err != nil {
-			return false, true
+// Takes one record: whether it changed the cache, and whether it added a record the count did not hold. A new record
+// is kept only where room is.
+func (self *urMdnsCache) takeRecordWithLock(record *urMdnsRecord, now time.Time, room bool) (bool, bool) {
+	held := &urMdnsHeld{ends: now.Add(time.Duration(record.ttl) * time.Second), ttl: record.ttl}
+	goodbye := record.ttl == 0
+	name := record.name.key()
+	switch record.rrtype {
+	case urMdnsTypePtr:
+		owner := self.owners[name]
+		key := record.target.key()
+		if goodbye {
+			if owner != nil && owner.pointers[key] != nil {
+				delete(owner.pointers, key)
+				return true, false
+			}
+			return false, false
 		}
-		instanceName := body.PTR.String()
-		if recordHeader.TTL != 0 {
-			self.instanceWithLock(urMdnsKey(instanceName)).fullName = instanceName
+		if owner != nil && owner.pointers[key] != nil {
+			owner.pointers[key].held = *held
+			return false, false
 		}
-		return self.setPointerWithLock(name, urMdnsKey(instanceName), ends, recordHeader.TTL == 0), true
-	case dnsmessage.TypeSRV:
-		body, err := parser.SRVResource()
-		if err != nil {
-			return false, true
+		if !room {
+			return false, false
 		}
-		if recordHeader.TTL == 0 {
-			delete(self.instances, name)
-			return true, true
+		if owner == nil {
+			owner = &urMdnsCachedOwner{name: record.name, pointers: map[string]*urMdnsCachedPointer{}}
+			self.owners[name] = owner
 		}
-		instance := self.instanceWithLock(name)
-		instance.target, instance.port, instance.ends = urMdnsKey(body.Target.String()), body.Port, ends
+		owner.pointers[key] = &urMdnsCachedPointer{instance: record.target, held: *held}
 		return true, true
-	case dnsmessage.TypeTXT:
-		body, err := parser.TXTResource()
-		if err != nil {
-			return false, true
+	case urMdnsTypeSrv:
+		instance := self.instances[name]
+		if goodbye {
+			if instance != nil && instance.srv != nil {
+				instance.srv, instance.target, instance.port = nil, nil, 0
+				return true, false
+			}
+			return false, false
 		}
-		txt := []byte{}
-		for _, text := range body.TXT {
-			txt = append(txt, byte(len(text)))
-			txt = append(txt, text...)
+		added := instance == nil || instance.srv == nil
+		if added && !room {
+			return false, false
 		}
-		self.instanceWithLock(name).txt = txt
-		return true, true
-	case dnsmessage.TypeA:
-		body, err := parser.AResource()
-		if err != nil {
-			return false, true
+		if instance == nil {
+			instance = &urMdnsCachedInstance{name: record.name}
+			self.instances[name] = instance
 		}
-		address := netip.AddrFrom4(body.A)
-		held := self.addresses[name]
-		if held == nil {
-			held = map[netip.Addr]time.Time{}
-			self.addresses[name] = held
+		changed := added || !instance.target.equal(record.target) || instance.port != record.port
+		instance.srv, instance.target, instance.port = held, record.target, record.port
+		return changed, added
+	case urMdnsTypeTxt:
+		instance := self.instances[name]
+		if goodbye {
+			if instance != nil && instance.txtSet != nil {
+				instance.txtSet, instance.txt = nil, nil
+				return true, false
+			}
+			return false, false
 		}
-		if recordHeader.TTL == 0 {
-			delete(held, address)
-		} else if self.count < self.settings.RecordCount {
-			held[address] = ends
-			self.count += 1
+		added := instance == nil || instance.txtSet == nil
+		if added && !room {
+			return false, false
 		}
+		if instance == nil {
+			instance = &urMdnsCachedInstance{name: record.name}
+			self.instances[name] = instance
+		}
+		changed := added || string(instance.txt) != string(record.txt)
+		instance.txtSet, instance.txt = held, slices.Clone(record.txt)
+		return changed, added
+	case urMdnsTypeA:
+		addresses := self.addresses[name]
+		if goodbye {
+			if addresses != nil && addresses[record.address] != nil {
+				delete(addresses, record.address)
+				return true, false
+			}
+			return false, false
+		}
+		if addresses != nil && addresses[record.address] != nil {
+			addresses[record.address] = held
+			return false, false
+		}
+		if !room {
+			return false, false
+		}
+		if addresses == nil {
+			addresses = map[netip.Addr]*urMdnsHeld{}
+			self.addresses[name] = addresses
+			self.targetNames[name] = record.name
+		}
+		addresses[record.address] = held
 		return true, true
 	}
 	return false, false
 }
 
-// The instance of a full name, made where the cache holds none. Called with stateLock held.
-func (self *urMdnsCache) instanceWithLock(fullName string) *urMdnsInstance {
-	instance := self.instances[fullName]
-	if instance == nil {
-		instance = &urMdnsInstance{fullName: fullName}
-		// past RecordCount a new instance is written to and kept nowhere
-		if self.count < self.settings.RecordCount {
-			self.instances[fullName] = instance
-			self.count += 1
+// The PTRs a type's next query lists as known answers: those of its name with more than half their TTL left at now
+// (RFC 6762 §7.1).
+func (self *urMdnsCache) knownAnswers(serviceType string, now time.Time) []urMdnsRecord {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	typeName := urMdnsTypeName(serviceType)
+	known := []urMdnsRecord{}
+	owner := self.owners[typeName.key()]
+	if owner == nil {
+		return known
+	}
+	for _, pointer := range owner.pointers {
+		remaining := pointer.held.ends.Sub(now)
+		if time.Duration(pointer.held.ttl)*time.Second < 2*remaining {
+			known = append(known, urMdnsRecord{
+				name: typeName, rrtype: urMdnsTypePtr, ttl: uint32(remaining / time.Second), target: pointer.instance,
+			})
 		}
 	}
-	return instance
+	slices.SortFunc(known, func(a urMdnsRecord, b urMdnsRecord) int { return strings.Compare(a.target.key(), b.target.key()) })
+	return known
 }
 
-// A PTR from a type, or a subtype, to an instance, or its goodbye. Called with stateLock held.
-func (self *urMdnsCache) setPointerWithLock(owner string, instance string, ends time.Time, goodbye bool) bool {
-	held := self.pointers[owner]
-	if held == nil {
-		held = map[string]time.Time{}
-		self.pointers[owner] = held
+// The follow-up questions the types' instances need at now: SRV and TXT for an instance whose PTR stands without them,
+// A for a target an SRV names with no address (RFC 6763 §12 lets a responder leave them out of a browse's answer).
+func (self *urMdnsCache) missing(types []string, now time.Time) []urMdnsQuestion {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.countWithLock(now)
+	questions := []urMdnsQuestion{}
+	asked := map[string]bool{}
+	ask := func(name urMdnsName, qtype uint16) {
+		key := fmt.Sprintf("%s\x00%d", name.key(), qtype)
+		if !asked[key] {
+			asked[key] = true
+			questions = append(questions, urMdnsQuestion{name: name, qtype: qtype})
+		}
 	}
-	if goodbye {
-		delete(held, instance)
-		return true
+	for _, serviceType := range types {
+		owner := self.owners[urMdnsTypeName(serviceType).key()]
+		if owner == nil {
+			continue
+		}
+		for _, pointer := range owner.pointers {
+			instance := self.instances[pointer.instance.key()]
+			if instance == nil || instance.srv == nil {
+				ask(pointer.instance, urMdnsTypeSrv)
+			}
+			if instance == nil || instance.txtSet == nil {
+				ask(pointer.instance, urMdnsTypeTxt)
+			}
+			if instance != nil && instance.srv != nil && len(self.addresses[instance.target.key()]) == 0 {
+				ask(instance.target, urMdnsTypeA)
+			}
+		}
 	}
-	if self.settings.RecordCount <= self.count {
-		return false
-	}
-	held[instance] = ends
-	self.count += 1
-	return true
+	slices.SortFunc(questions, func(a urMdnsQuestion, b urMdnsQuestion) int {
+		if order := strings.Compare(a.name.key(), b.name.key()); order != 0 {
+			return order
+		}
+		return int(a.qtype) - int(b.qtype)
+	})
+	return questions
 }
 
-// The instances of types whose records all stand at now, each with its target's addresses.
+// The instances of types whose records all stand at now, each with its subtypes and its target's addresses, own where
+// one of them is localAddresses'.
 func (self *urMdnsCache) gathered(types []string, now time.Time, localAddresses []netip.Addr) []*sidecar.BridgeDiscoveryGathered {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
+	self.countWithLock(now)
 	out := []*sidecar.BridgeDiscoveryGathered{}
 	for _, serviceType := range types {
-		owner := urMdnsKey(serviceType + ".local")
-		for fullName, pointerEnds := range self.pointers[owner] {
-			instance := self.instances[fullName]
-			if !pointerEnds.After(now) || instance == nil || instance.target == "" || !instance.ends.After(now) {
+		typeName := urMdnsTypeName(serviceType)
+		owner := self.owners[typeName.key()]
+		if owner == nil {
+			continue
+		}
+		for instanceKey, pointer := range owner.pointers {
+			instance := self.instances[instanceKey]
+			// the instance is its type's: its name one label before the type's
+			if instance == nil || instance.srv == nil || instance.txtSet == nil || len(pointer.instance) != len(typeName)+1 ||
+				!pointer.instance.hasSuffix(typeName) {
 				continue
 			}
-			addresses := []netip.Addr{}
-			ends := pointerEnds
-			if instance.ends.Before(ends) {
-				ends = instance.ends
+			ends := pointer.held.ends
+			for _, record := range []*urMdnsHeld{instance.srv, instance.txtSet} {
+				if record.ends.Before(ends) {
+					ends = record.ends
+				}
 			}
-			for address, addressEnds := range self.addresses[instance.target] {
-				if addressEnds.After(now) {
-					addresses = append(addresses, address)
-					if addressEnds.Before(ends) {
-						ends = addressEnds
-					}
+			addresses := []netip.Addr{}
+			for address, record := range self.addresses[instance.target.key()] {
+				addresses = append(addresses, address)
+				if record.ends.Before(ends) {
+					ends = record.ends
 				}
 			}
 			if len(addresses) == 0 {
 				continue
 			}
 			slices.SortFunc(addresses, netip.Addr.Compare)
-			// the label as its PTR gave it: the full name less the type and local.
-			display := instance.fullName
-			if !strings.HasSuffix(strings.ToLower(display), "."+owner) {
-				display = fullName
-			}
-			name := display[:len(display)-len(owner)-1]
 			out = append(out, &sidecar.BridgeDiscoveryGathered{
-				Name:      urMdnsUnescape(name),
+				Name:      pointer.instance[0],
 				Service:   serviceType,
+				Subtypes:  self.subtypesWithLock(typeName, instanceKey),
 				Port:      instance.port,
 				Txt:       slices.Clone(instance.txt),
-				HostName:  instance.target,
+				HostName:  strings.ToLower(strings.Join(instance.target, ".")) + ".",
 				Addresses: addresses,
 				Own:       slices.ContainsFunc(addresses, func(address netip.Addr) bool { return slices.Contains(localAddresses, address) }),
 				Expires:   ends,
 			})
 		}
 	}
+	slices.SortFunc(out, func(a *sidecar.BridgeDiscoveryGathered, b *sidecar.BridgeDiscoveryGathered) int {
+		return strings.Compare(a.Service+"\x00"+a.Name, b.Service+"\x00"+b.Name)
+	})
 	return out
 }
 
-// An instance label in its presentation form, its escapes undone (RFC 1035 §5.1): \. and \\ and \DDD.
-func urMdnsUnescape(label string) string {
-	if !strings.Contains(label, "\\") {
-		return label
+// The subtypes whose PTRs, <sub>._sub.<type>.local., name the instance, as its responder announced them. Called with
+// stateLock held.
+func (self *urMdnsCache) subtypesWithLock(typeName urMdnsName, instanceKey string) []string {
+	subtypeSuffix := urMdnsNameOf(urMdnsSubtypeLabel).append(typeName...)
+	subtypes := []string{}
+	for _, owner := range self.owners {
+		if owner.pointers[instanceKey] != nil && len(owner.name) == len(subtypeSuffix)+1 && owner.name.hasSuffix(subtypeSuffix) {
+			subtypes = append(subtypes, owner.name[0])
+		}
 	}
-	out := []byte{}
-	for i := 0; i < len(label); i += 1 {
-		if label[i] != '\\' || i+1 == len(label) {
-			out = append(out, label[i])
+	slices.Sort(subtypes)
+	return subtypes
+}
+
+// A type's PTR query in local., with known answers as many as fit byteCount (RFC 6762 §7.1, §7.2): one message.
+func urMdnsBrowseQuery(serviceType string, known []urMdnsRecord, byteCount int) [][]byte {
+	message := &urMdnsMessage{
+		questions: []urMdnsQuestion{{name: urMdnsTypeName(serviceType), qtype: urMdnsTypePtr}},
+		answers:   known,
+	}
+	packed := message.pack(byteCount)
+	if len(packed) == 0 {
+		return nil
+	}
+	return packed[:1]
+}
+
+// The follow-up questions as queries, as many questions to a message as fit byteCount.
+func urMdnsFollowUps(questions []urMdnsQuestion, byteCount int) [][]byte {
+	messages := [][]byte{}
+	for at := 0; at < len(questions); {
+		message := &urMdnsMessage{}
+		for at < len(questions) {
+			message.questions = append(message.questions, questions[at])
+			if len(message.pack(byteCount)) == 0 {
+				message.questions = message.questions[:len(message.questions)-1]
+				break
+			}
+			at += 1
+		}
+		if len(message.questions) == 0 {
+			// a question past byteCount alone is left out
+			at += 1
 			continue
 		}
-		if i+3 < len(label) && '0' <= label[i+1] && label[i+1] <= '9' {
-			value := int(label[i+1]-'0')*100 + int(label[i+2]-'0')*10 + int(label[i+3]-'0')
-			out = append(out, byte(value))
-			i += 3
-			continue
-		}
-		out = append(out, label[i+1])
-		i += 1
+		messages = append(messages, message.pack(byteCount)...)
 	}
-	return string(out)
+	return messages
 }

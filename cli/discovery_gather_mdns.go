@@ -2,17 +2,16 @@
 
 // §17.7.1's gatherer on Linux and Windows (owner decision 778): the sidecar's own mDNS querier, UDP 5353 shared with
 // the platform's responder, on each interface that is up, multicast-capable and not point-to-point, never loopback,
-// ur tun's link or another tun. For each type of the effective list it sends RFC 6762 §5.2's continuous PTR queries,
-// at intervals from QueryInterval doubling to QueryMaxInterval, at most QueryRate a second on an interface (RFC 8766
-// §9.3), and takes each instance's SRV, TXT and its target's A from the answers' additional records, which responders
-// send with a browse's PTR (RFC 6763 §12). What arrives keeps each record's own TTL; a goodbye, TTL 0, withdraws it at
-// once (§10.1).
+// ur tun's link or another tun (discovery_links.go). For each type of the effective list it sends RFC 6762 §5.2's
+// continuous PTR queries, at intervals from QueryInterval doubling to QueryMaxInterval, each listing the PTRs it holds
+// with more than half their TTL left as known answers (§7.1), at most QueryRate a second on an interface (RFC 8766
+// §9.3), and takes each instance's SRV, TXT and its target's A from the answers and the additionals, which responders
+// send with a browse's PTR (RFC 6763 §12). Where a responder left one out, the querier asks for it after each round:
+// SRV and TXT by the instance's name, A by its target's. A responder's announcements bring an instance's subtype PTRs,
+// which give its subtypes. What arrives keeps each record's own TTL; a goodbye, TTL 0, withdraws it at once (§10.1).
 //
-// Not built in this draft, and so not claimed: §7.1's known-answer lists in the queries, and the follow-up SRV, TXT
-// and A queries for an instance whose responder left them out, which such an instance stays ungathered without.
-//
-// The cache (discovery_mdns_cache.go) is pure and tested apart; the sockets around it are thin. Names and TXT are the
-// LAN's words, kept as they came and logged nowhere (I-13).
+// The cache (discovery_mdns_cache.go) and the wire (discovery_mdns_wire.go) are pure and tested apart; the sockets
+// around them are thin. Names and TXT are the LAN's words, kept as they came and logged nowhere (I-13).
 
 package main
 
@@ -22,7 +21,6 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/net/dns/dnsmessage"
 	"golang.org/x/net/ipv4"
 
 	"github.com/urnetwork/sidecar"
@@ -74,7 +72,7 @@ func (self *urMdnsGatherer) Gather(ctx context.Context, types []string, report f
 		}()
 		go func() {
 			defer running.Done()
-			self.query(ctx, conn, types)
+			self.query(ctx, conn, cache, types)
 		}()
 		context.AfterFunc(ctx, func() { conn.Close() })
 	}
@@ -114,21 +112,30 @@ func (self *urMdnsGatherer) read(ctx context.Context, conn *net.UDPConn, cache *
 	}
 }
 
-// Sends each type's continuous queries, its interval doubling, at most QueryRate a second.
-func (self *urMdnsGatherer) query(ctx context.Context, conn *net.UDPConn, types []string) {
+// Sends each type's continuous queries, its interval doubling, then the follow-ups the cache's instances need, at most
+// QueryRate messages a second.
+func (self *urMdnsGatherer) query(ctx context.Context, conn *net.UDPConn, cache *urMdnsCache, types []string) {
 	interval := self.queries.QueryInterval
 	spacing := time.Second / time.Duration(max(1, self.settings.QueryRate))
-	for ctx.Err() == nil {
-		for _, serviceType := range types {
-			message, err := urMdnsQuery(serviceType)
-			if err == nil {
-				conn.WriteToUDPAddrPort(message, urMdnsGroup)
-			}
+	send := func(messages [][]byte) bool {
+		for _, message := range messages {
+			conn.WriteToUDPAddrPort(message, urMdnsGroup)
 			select {
 			case <-ctx.Done():
-				return
+				return false
 			case <-time.After(spacing):
 			}
+		}
+		return true
+	}
+	for ctx.Err() == nil {
+		for _, serviceType := range types {
+			if !send(urMdnsBrowseQuery(serviceType, cache.knownAnswers(serviceType, time.Now()), self.queries.QueryByteCount)) {
+				return
+			}
+		}
+		if !send(urMdnsFollowUps(cache.missing(types, time.Now()), self.queries.QueryByteCount)) {
+			return
 		}
 		select {
 		case <-ctx.Done():
@@ -137,20 +144,4 @@ func (self *urMdnsGatherer) query(ctx context.Context, conn *net.UDPConn, types 
 		}
 		interval = min(2*interval, self.queries.QueryMaxInterval)
 	}
-}
-
-// A PTR query for a type in local.
-func urMdnsQuery(serviceType string) ([]byte, error) {
-	name, err := dnsmessage.NewName(serviceType + ".local.")
-	if err != nil {
-		return nil, err
-	}
-	builder := dnsmessage.NewBuilder(nil, dnsmessage.Header{})
-	if err := builder.StartQuestions(); err != nil {
-		return nil, err
-	}
-	if err := builder.Question(dnsmessage.Question{Name: name, Type: dnsmessage.TypePTR, Class: dnsmessage.ClassINET}); err != nil {
-		return nil, err
-	}
-	return builder.Finish()
 }

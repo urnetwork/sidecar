@@ -8,7 +8,8 @@
 //	          and, where the platform has one and the person left it on, the advertising proxy, under the names rule
 //	          (sidecar.BridgeDiscoveryRegistrations)
 //	viewing   while ur tun carries the network, the device can send into the overlay, so it watches (§17.7.1's viewer
-//	          row); the macOS app's VPN component is no daemon's to know of
+//	          row); the tun is also the link a Linux advertising proxy answers on (discovery_proxy_mdns.go); on macOS a
+//	          paired network's app VPN component routing its block is a way in too (bridge_discovery_app.go)
 //	gather    the platform's gatherer (discovery_gather_*.go), none where it is not built, which gathers nothing
 //	filer     the network's BridgeFiler, whose Expose and Close a share files through
 //
@@ -34,9 +35,10 @@ import (
 // host publishes nothing but listed entries.
 var urDiscoveryGathererOf func(log sidecar.Logger, settings *sidecar.BridgeDiscoverySettings) sidecar.BridgeDiscoveryGatherer
 
-// The platform's advertising proxy (discovery_proxy_*.go), nil where none runs (§17.7.1's advertising proxy rows;
-// Windows' is Later).
-var urDiscoveryProxyOf func(ctx context.Context, log sidecar.Logger) urDiscoveryProxy
+// The platform's advertising proxy (discovery_proxy_*.go) on the tun that carries the network, nil where none runs
+// (§17.7.1's advertising proxy rows; Windows' is Later): macOS's registers with mDNSResponder and reads nothing of the
+// tun, and Linux's answers on the tun's own link, so it takes none without one.
+var urDiscoveryProxyOf func(ctx context.Context, log sidecar.Logger, link urDiscoveryProxyLink) urDiscoveryProxy
 
 // An advertising proxy: registers each instance the viewer keeps on this machine alone.
 type urDiscoveryProxy interface {
@@ -64,7 +66,10 @@ type urBridgeDiscovery struct {
 	viewing atomic.Bool
 
 	stateLock sync.Mutex
+	// the tun that carries the network, nil while none does, and the proxy on it
+	link      urDiscoveryProxyLink
 	proxy     urDiscoveryProxy
+	proxyLink urDiscoveryProxyLink
 }
 
 // A network's discovery over its bridge, its Sidecar, its local policy and its filer, added to the Sidecar.
@@ -124,6 +129,7 @@ func newUrBridgeDiscovery(wire *urBridgeWire, running *sidecar.Sidecar, aclLocal
 		OnView:      self.onView,
 		Filer:       filer,
 		ProxyStatus: self.proxyStatus,
+		RoutePorts:  self.bridge.DiscoveryRoutePorts,
 		Log:         wire.args.Log,
 		Settings:    settings,
 	})
@@ -206,18 +212,20 @@ func (self *urBridgeDiscovery) refreshProxy(view []*sidecar.BridgeDiscoveryViewI
 	wanted := urDiscoveryProxyOf != nil && self.viewing.Load() && self.component.ProxyOn()
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
+	// a proxy on a tun that has since gone goes with it
+	if self.proxy != nil && (!wanted || self.proxyLink != self.link) {
+		self.proxy.Close()
+		self.proxy, self.proxyLink = nil, nil
+	}
 	if !wanted {
-		if self.proxy != nil {
-			self.proxy.Close()
-			self.proxy = nil
-		}
 		return
 	}
 	if self.proxy == nil {
-		self.proxy = urDiscoveryProxyOf(self.ctx, self.log)
+		self.proxy = urDiscoveryProxyOf(self.ctx, self.log, self.link)
 		if self.proxy == nil {
 			return
 		}
+		self.proxyLink = self.link
 	}
 	registrations := sidecar.BridgeDiscoveryRegistrations(view, self.component.Gathered(), sidecar.DefaultBridgeDiscoverySettings().Wire.NameByteCount)
 	self.proxy.Set(registrations, self.bridge.TranslatedAddress)
@@ -244,13 +252,39 @@ func (self *urBridgeDiscovery) proxyStatus() *sidecar.BridgeDiscoveryProxyStatus
 	return &sidecar.BridgeDiscoveryProxyStatus{}
 }
 
-// ur tun started or stopped carrying the network.
-func (self *urBridgeDiscovery) setViewing(viewing bool) {
+// The app's VPN component started or stopped carrying the network (bridge_discovery_app.go): a view through it while
+// ur tun does not carry the network, whose own link wins.
+func (self *urBridgeDiscovery) setAppViewing(viaApp bool) {
+	current := func() urDiscoveryProxyLink {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		return self.link
+	}()
+	_, throughApp := current.(urAppDiscoveryLink)
+	switch {
+	case viaApp && current == nil:
+		self.setViewing(urAppDiscoveryLink{})
+	case !viaApp && throughApp:
+		self.setViewing(nil)
+	}
+}
+
+// ur tun started carrying the network on link, or stopped where link is nil.
+func (self *urBridgeDiscovery) setViewing(link urDiscoveryProxyLink) {
+	viewing := link != nil
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.link = link
+	}()
 	if self.viewing.Swap(viewing) != viewing {
 		self.component.ViewingChanged()
-		if !viewing {
-			self.refreshProxy(nil)
-		}
+	}
+	// the proxy follows the tun: on a new one with the view as it stands, and off with none
+	if viewing {
+		self.refreshProxy(self.component.View())
+	} else {
+		self.refreshProxy(nil)
 	}
 }
 

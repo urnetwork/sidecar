@@ -40,7 +40,7 @@ import (
 )
 
 func init() {
-	urDiscoveryProxyOf = func(ctx context.Context, log sidecar.Logger) urDiscoveryProxy {
+	urDiscoveryProxyOf = func(ctx context.Context, log sidecar.Logger, link urDiscoveryProxyLink) urDiscoveryProxy {
 		return newUrDarwinDiscoveryProxy(ctx, log, defaultUrDiscoveryProxySettings(), func() (urDarwinDnsSdConnection, error) {
 			return newDarwinDnsSdConnection()
 		}, nil)
@@ -239,40 +239,6 @@ func urDarwinProxyWantOf(registrations []*sidecar.BridgeDiscoveryRegistration, t
 		})
 	}
 	return want
-}
-
-// A registration's target as a full name in local., "<label>.<client-name>.local.": false where it is not a host name
-// of LDH labels within DNS's lengths.
-func urDiscoveryProxyTarget(target string) (string, bool) {
-	target = strings.TrimSuffix(strings.ToLower(target), ".")
-	if target == "" {
-		return "", false
-	}
-	for _, label := range strings.Split(target, ".") {
-		if !urDiscoveryProxyHostLabel(label) {
-			return "", false
-		}
-	}
-	full := target + ".local."
-	// a name's 255 octets less its length and root bytes (RFC 1035 §2.3.4)
-	if 253 < len(full)-1 {
-		return "", false
-	}
-	return full, true
-}
-
-// Whether label is an LDH label of one to 63 octets with no hyphen at either end.
-func urDiscoveryProxyHostLabel(label string) bool {
-	if label == "" || 63 < len(label) || label[0] == '-' || label[len(label)-1] == '-' {
-		return false
-	}
-	for i := 0; i < len(label); i += 1 {
-		c := label[i]
-		if !('a' <= c && c <= 'z' || '0' <= c && c <= '9' || c == '-') {
-			return false
-		}
-	}
-	return true
 }
 
 // Brings the registrations to each set handed over until the proxy closes, building the connection again after a
