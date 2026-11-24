@@ -10,6 +10,8 @@
 //	            builds the packet is refused and stays the caller's; an entry no link can carry rejects, and never falls
 //	            back to a broader prefix or the default route (§17.7's HA)
 //	unassigned  rejects: an address of the block nobody holds is unreachable
+//	translate   IPv6 to the translator's /96, while ur tun runs it, goes to the translator, which routes its IPv4 form
+//	            (bridge_translate.go; owner decision 778)
 //	service     UDP and TCP to <block>.0.53 port 53 go to the resolver (§12.9); the rest of <block>.0.0/24 rejects
 //	revoked     an entry left with no advertiser rejects for RejectEntryHoldTimeout, then leaves the table (§17.8's
 //	            revocation row): a link the rules dropped with no drain was revoked, so its pins drop at once
@@ -140,6 +142,12 @@ func (self *Bridge) Route(packet []byte) connect.UserNatClient {
 	state := self.routeState.Load()
 	if state == nil {
 		return nil
+	}
+	// §17.5's translator takes IPv6 to the instances' /96 before the table classifies it (bridge_translate.go)
+	if bridgeRouteIpv6(packet) {
+		if translator := self.translator.Load(); translator != nil && translator.outbound(packet) {
+			return self.translate
+		}
 	}
 	entry := state.table.Classify(packet)
 	if entry == nil {

@@ -355,7 +355,7 @@ every answer and denial                             TTL 10 s, RFC 8766 §5.5.1's
 
 The reverse zone of the overlay block answers on the device too: `b._dns-sd._udp` and `db._dns-sd._udp` under the name RFC 6763 §11 derives from the tun's address and mask point at the zone, an assigned address's PTR names its private name, and every other name there is NXDOMAIN, so no reverse query for an overlay address leaves the device. `ur tun` sends the zones and the block's reverse zone to its resolver at `<block>.0.53` by the platform's split DNS: systemd-resolved's route-only domains (`~<net>.<root>`), a supplemental resolver per domain on macOS, NRPT rules on Windows. It never adds the zone to the search list, from which mDNSResponder learns its automatic browse domains (mDNSResponder's mDNSCore/uDNS.c), so a default browse never shows an instance twice. A client that names the zone browses it: `dns-sd -B _ipp._tcp <net>.<root>` on macOS, `avahi-browse -d <net>.<root>` where Avahi's wide-area browsing is on (avahi-daemon.conf's `enable-wide-area`), or `resolvectl query --type=PTR` on systemd-resolved.
 
-A viewer's discovery view comes from §17.7.1's watches, whose messages are `DNS_SD_WATCH` (0x1B02) and `DNS_SD_WATCH_RESULT` (0x1B03) in §6.11's catalog, `sidecar/protocol/dns.proto` taking them with their code track (owner decision 273):
+A viewer's discovery view comes from §17.7.1's watches, whose messages are `DNS_SD_WATCH` (0x1B02) and `DNS_SD_WATCH_RESULT` (0x1B03) in §6.11's catalog, which types.proto and `sidecar/protocol/dns.proto` declare:
 
 ```text
 DnsSdWatch        since uint64 = 1      the host's view version the viewer holds; 0 for none

@@ -1,0 +1,20 @@
+# The curated port table a listed entry's Bonjour type comes from where its person set none (§17.7.1's listed row,
+# DESIGN-COMPUTE.md §26.8, Q-LSTN-12; owner decision 778): one <port>/tcp <type> a line. A UDP entry takes a type only
+# from its label. Lines that are blank or start with # say nothing.
+
+22/tcp _ssh._tcp
+80/tcp _http._tcp
+3000/tcp _http._tcp
+5173/tcp _http._tcp
+8000/tcp _http._tcp
+8080/tcp _http._tcp
+8888/tcp _http._tcp
+443/tcp _https._tcp
+8443/tcp _https._tcp
+445/tcp _smb._tcp
+548/tcp _afpovertcp._tcp
+631/tcp _ipp._tcp
+2049/tcp _nfs._tcp
+3389/tcp _rdp._tcp
+5900/tcp _rfb._tcp
+9100/tcp _pdl-datastream._tcp
