@@ -117,6 +117,15 @@ const (
 	SignedType_SIGNED_RETENTION_POLICY  SignedType = 6148
 	SignedType_SIGNED_DIRECTORY_CARD    SignedType = 6149
 	SignedType_SIGNED_DIRECTORY_REPO    SignedType = 6150 // its body RepoAnnouncement
+	// DESIGN-COMPUTE's three, as its Appendix D numbers them, 0x1807 left untouched, reserved once by CARCH-M11-05
+	// (CONTRACTS C-25): each owner builds its body and gives its purpose with its statement, and until then no
+	// signer takes the type and no reader knows it. An attach link's origin, purpose attach-origin (§7.10, §12.5;
+	// HARN); an Owner's or Admin's acknowledgment of a disclosure for the network, purpose disclosure-ack, by an
+	// approval-capable device's identity key (§2.8; CTRUST); an indexer incarnation's sponsor's statement of what
+	// its device installed over SSH, purpose enclave-setup (§11.7, §11.10; ENC).
+	SignedType_SIGNED_ATTACH_ORIGIN  SignedType = 6152
+	SignedType_SIGNED_DISCLOSURE_ACK SignedType = 6153
+	SignedType_SIGNED_ENCLAVE_SETUP  SignedType = 6154
 	// 0x19xx §17: 17.8's statements in row order (purpose bridge), then WindowDelegation and ShareCert
 	// (purpose window-delegation).
 	SignedType_SIGNED_BRIDGE_BLOCK      SignedType = 6401
@@ -195,6 +204,9 @@ var (
 		6148: "SIGNED_RETENTION_POLICY",
 		6149: "SIGNED_DIRECTORY_CARD",
 		6150: "SIGNED_DIRECTORY_REPO",
+		6152: "SIGNED_ATTACH_ORIGIN",
+		6153: "SIGNED_DISCLOSURE_ACK",
+		6154: "SIGNED_ENCLAVE_SETUP",
 		6401: "SIGNED_BRIDGE_BLOCK",
 		6402: "SIGNED_BRIDGE_ADDRESS",
 		6403: "SIGNED_BRIDGE_ROUTE",
@@ -268,6 +280,9 @@ var (
 		"SIGNED_RETENTION_POLICY":    6148,
 		"SIGNED_DIRECTORY_CARD":      6149,
 		"SIGNED_DIRECTORY_REPO":      6150,
+		"SIGNED_ATTACH_ORIGIN":       6152,
+		"SIGNED_DISCLOSURE_ACK":      6153,
+		"SIGNED_ENCLAVE_SETUP":       6154,
 		"SIGNED_BRIDGE_BLOCK":        6401,
 		"SIGNED_BRIDGE_ADDRESS":      6402,
 		"SIGNED_BRIDGE_ROUTE":        6403,
@@ -509,7 +524,7 @@ const file_protocol_bridge_signed_proto_rawDesc = "" +
 	"\tsignature\x18\x04 \x01(\fR\tsignature\x12\x19\n" +
 	"\bact_size\x18\x05 \x01(\rR\aactSize\x12\x1b\n" +
 	"\tact_index\x18\x06 \x01(\rR\bactIndex\x12\x19\n" +
-	"\bact_path\x18\a \x03(\fR\aactPath*\xf2\x0e\n" +
+	"\bact_path\x18\a \x03(\fR\aactPath*\xc4\x0f\n" +
 	"\n" +
 	"SignedType\x12\x14\n" +
 	"\x10SIGNED_TYPE_NONE\x10\x00\x12\x1f\n" +
@@ -573,7 +588,10 @@ const file_protocol_bridge_signed_proto_rawDesc = "" +
 	"\x16SIGNED_APPROVAL_CANCEL\x10\x830\x12\x1c\n" +
 	"\x17SIGNED_RETENTION_POLICY\x10\x840\x12\x1a\n" +
 	"\x15SIGNED_DIRECTORY_CARD\x10\x850\x12\x1a\n" +
-	"\x15SIGNED_DIRECTORY_REPO\x10\x860\x12\x18\n" +
+	"\x15SIGNED_DIRECTORY_REPO\x10\x860\x12\x19\n" +
+	"\x14SIGNED_ATTACH_ORIGIN\x10\x880\x12\x1a\n" +
+	"\x15SIGNED_DISCLOSURE_ACK\x10\x890\x12\x19\n" +
+	"\x14SIGNED_ENCLAVE_SETUP\x10\x8a0\x12\x18\n" +
 	"\x13SIGNED_BRIDGE_BLOCK\x10\x812\x12\x1a\n" +
 	"\x15SIGNED_BRIDGE_ADDRESS\x10\x822\x12\x18\n" +
 	"\x13SIGNED_BRIDGE_ROUTE\x10\x832\x12\x16\n" +

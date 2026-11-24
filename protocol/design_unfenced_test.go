@@ -674,6 +674,12 @@ type testFenceValueAddition struct {
 // that holds its answer. Each joins the fence it extends, as testFenceAdditions' fields do, and one the design comes
 // to write fails until its line here leaves.
 var testFenceValueAdditions = []testFenceValueAddition{
+	// DESIGN-COMPUTE.md's MessageType values, reserved once by CARCH-M11-05 (CONTRACTS C-25) ahead of design-records' fold
+	// of its Appendix D rows: the indexer enclave's evidence beside SEARCH, and listeners' live ask in service 0x19
+	{enum: "MessageType", name: "EVIDENCE", number: 0x1406, question: "DESIGN-COMPUTE.md Appendix D's §6.6 row (CA-60), compute-plan-enc-readings (QD-1243)"},
+	{enum: "MessageType", name: "EVIDENCE_RESULT", number: 0x1407, question: "DESIGN-COMPUTE.md Appendix D's §6.6 row (CA-60), compute-plan-enc-readings (QD-1243)"},
+	{enum: "MessageType", name: "LISTENERS", number: 0x1901, question: "DESIGN-COMPUTE.md Appendix D's §6.11 MessageType 0x19 row (CA-61)"},
+	{enum: "MessageType", name: "LISTENERS_RESULT", number: 0x1902, question: "DESIGN-COMPUTE.md Appendix D's §6.11 MessageType 0x19 row (CA-61)"},
 }
 
 // One value an owner's answer takes out of an enum the design fences, its number reserved.
