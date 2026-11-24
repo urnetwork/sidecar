@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"google.golang.org/protobuf/encoding/protowire"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/connect"
 
@@ -186,12 +187,17 @@ func TestComputeAuthStateMapsRevocations(t *testing.T) {
 	}
 }
 
-// ProjectionSettings' field 3 read by number: none is no feature, an unknown field 3 carries its bits, the last one
-// standing, and a value of the wrong wire type, a broken varint or one past 32 bits does not parse.
+// ProjectionSettings' field 3, which bridge/auth.proto declares since CACL-M11-02's reservation, read as every reader
+// of the rows reads it, through protobuf's own parse of the settings the rows carry: none is no feature, the last of two
+// occurrences stands, a field 3 of another wire type is an unknown field and turns nothing on, a value past 32 bits keeps
+// its low 32 as a uint32 does, and a broken varint never parses into rows at all. So the broker reads the bits the
+// config log holds a base to (configRowsAuthFeatures), whatever the bytes.
 func TestComputeProjectionFeaturesReadsField3(t *testing.T) {
-	withUnknown := func(unknown []byte) *bridge.ProjectionSettings {
-		settings := &bridge.ProjectionSettings{SelfAdmit: 1}
-		settings.ProtoReflect().SetUnknown(unknown)
+	parsed := func(wire []byte) *bridge.ProjectionSettings {
+		settings := &bridge.ProjectionSettings{}
+		if err := proto.Unmarshal(wire, settings); err != nil {
+			t.Fatal(err)
+		}
 		return settings
 	}
 	varint := func(value uint64) []byte {
@@ -205,20 +211,22 @@ func TestComputeProjectionFeaturesReadsField3(t *testing.T) {
 	}
 	twice := append(varint(uint64(ComputeAuthFeatureAgentRepos)), varint(uint64(ComputeAuthFeatureComputePolicy|ComputeAuthFeatureEnclaves))...)
 	other := protowire.AppendBytes(protowire.AppendTag(nil, 9, protowire.BytesType), []byte("later field"))
-	if features, ok := computeProjectionFeatures(withUnknown(append(other, twice...))); !ok || features != ComputeAuthFeatureComputePolicy|ComputeAuthFeatureEnclaves {
-		t.Fatalf("an unknown field 3: %d %v", features, ok)
+	if features, ok := computeProjectionFeatures(parsed(append(other, twice...))); !ok || features != ComputeAuthFeatureComputePolicy|ComputeAuthFeatureEnclaves {
+		t.Fatalf("field 3 twice: %d %v", features, ok)
 	}
 	if computeFeaturesLacking(ComputeAuthFeatureComputePolicy|ComputeAuthFeatureEnclaves) != ComputeAuthFeatureEnclaves {
 		t.Fatal("enclaves is implemented already")
 	}
-	for label, unknown := range map[string][]byte{
+	for label, wire := range map[string][]byte{
 		"a field 3 of bytes": protowire.AppendBytes(protowire.AppendTag(nil, computeProjectionAuthFeaturesField, protowire.BytesType), []byte{8}),
-		"a broken varint":    protowire.AppendTag(nil, computeProjectionAuthFeaturesField, protowire.VarintType),
 		"past 32 bits":       varint(1 << 33),
 	} {
-		if _, ok := computeProjectionFeatures(withUnknown(unknown)); ok {
-			t.Errorf("%s parsed", label)
+		if features, ok := computeProjectionFeatures(parsed(wire)); !ok || features != 0 {
+			t.Errorf("%s: %d %v", label, features, ok)
 		}
+	}
+	if err := proto.Unmarshal(protowire.AppendTag(nil, computeProjectionAuthFeaturesField, protowire.VarintType), &bridge.ProjectionSettings{}); err == nil {
+		t.Fatal("a broken varint parsed")
 	}
 }
 

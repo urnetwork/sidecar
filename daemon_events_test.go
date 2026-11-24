@@ -374,6 +374,9 @@ func fullTestSidecarEvent(t *testing.T) SidecarEvent {
 			field.SetInt(int64(100 + i))
 		case reflect.Uint64:
 			field.SetUint(uint64(200 + i))
+		case reflect.Uint32:
+			// a set of bits, such as AuthFeatures, each value a set the event names
+			field.SetUint(uint64(1 + i%8))
 		case reflect.Pointer:
 			switch field.Type() {
 			case reflect.TypeFor[*Id]():
@@ -418,7 +421,7 @@ var testDaemonEventKeys = map[string][]string{
 	"EvsAlarm": {"evs_alarm"}, "EvsAlarmDetail": {"evs_alarm_detail"}, "Version": {"version"}, "PushId": {"push_id"},
 	"Count": {"count"}, "VerifiedSince": {"verified_since_ms"}, "RecordAlarm": {"record_alarm"},
 	"BridgeAlarm": {"bridge_alarm"}, "DnsAlarm": {"dns_alarm"}, "CtAlarm": {"ct_alarm"},
-	"MailReceiverAlarm": {"mail_receiver_alarm"},
+	"MailReceiverAlarm": {"mail_receiver_alarm"}, "AuthFeatures": {"auth_features"},
 }
 
 // Every field an event carries reaches the reply under its key, its times in milliseconds, and the reply shares

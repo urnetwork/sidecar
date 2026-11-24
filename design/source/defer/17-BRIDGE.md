@@ -28,12 +28,22 @@ Stage: Later
 - **Held:** Nothing: no task or track waits on it.
 - **To bring back:** An address plan for IPv6 in the overlay, new statement fields, and the conflict and HA rules of §17.7 for them.
 
+### bridge-discovery-other-platforms: The advertising proxy on Windows, and discovery in the apps
+Stage: Later
+- **Deferred:** §17.7.1's advertising proxy on Windows, and gathering, sharing, watching and the advertising proxy in the apps, named in §17.18's Later row and §17.7.1 (owner decision 778).
+- **Why:** Windows' DNS-SD API browses `.local` names alone and documents no registration scoped to the machine (learn.microsoft.com's `DNS_SERVICE_BROWSE_REQUEST` and `DnsServiceRegister`). Android's NsdManager browses `local.` alone and runs no mDNS on a VPN service's tun, which Android brings up without the multicast flag (AOSP's MdnsSocketProvider.java and com_android_server_connectivity_Vpn.cpp). On iOS, raw multicast needs Apple's `com.apple.developer.networking.multicast` entitlement, and Bonjour browsing needs local network access, which a packet tunnel provider has but its container app may not (Apple's TN3179). App devices host only after C16, and Android's sidecar role runs only while the app is open (owner decision 197).
+- **Launch instead:** `ur daemon` gathers, shares and watches on Linux, macOS and Windows, and runs the advertising proxy on macOS and Linux; a Windows desktop answers §12.9.1's names under `ur tun`; an app's VPN component owns those names and answers each NODATA (§12.9.1).
+- **Lost:** On Windows, apps that browse only multicast do not see the network's instances; a phone neither publishes the devices on its own LAN nor shows the network's.
+- **Dark in code:** Nothing is built for these platforms.
+- **Held:** Nothing: no task or track waits on it.
+- **To bring back:** For Windows, a registration the DNS Client keeps on the machine, or a responder on `ur tun`'s adapter if the system's mDNS uses it, each measured; for iOS, a LocalOnly registration from the app process or the entitlement; for Android, a path NsdManager uses, which a VPN service's tun does not give; and for the apps, the sidecar role's view handed to the VPN component (DESIGN-DEFER.md's dns-service-discovery-app-paths entry).
+
 ### bridge-v1: §17's v1 set
 Stage: v1 (M6)
-- **Deferred:** §17.18's v1 row: cross-network shares through C18, with ShareKeys, per-generation ShareSigners and the preflight; `ur tun` on macOS and Windows; P2P, built at M6 behind `EnablePeerP2p` and off until an owner call (owner decision 296).
+- **Deferred:** §17.18's v1 row: cross-network shares through C18, with ShareKeys, per-generation ShareSigners and the preflight; `ur tun` on macOS and Windows; service discovery across hosts, with sharing, watches, the advertising proxy on macOS and Linux and its IPv6 translator (§17.7.1; owner decision 778); P2P, built at M6 behind `EnablePeerP2p` and off until an owner call (owner decision 296).
 - **Why:** Shares and the other platforms' tun belong to M6 (owner decision 86).
 - **Launch instead:** v0 at M4, same network, Linux and WSL2 first; at M8, forwarding in every app's VPN component (owner decision 197).
-- **Lost:** Until M6: sharing across networks, and `ur tun` on macOS and Windows.
+- **Lost:** Until M6: sharing across networks, `ur tun` on macOS and Windows, and finding a device on another host's LAN.
 - **Dark in code:** Built in the same run on the `sidecar` branches. P2P's switch has its own entry under §6.
 - **Held:** Nothing.
 - **To bring back:** Nothing to bring back: it ships when M6's gate passes (§23.6).

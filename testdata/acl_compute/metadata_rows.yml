@@ -21,3 +21,9 @@ AclComputeBudgetRow.month_nano_usd: {number: 4, type: uint64, row: api-7, sees: 
 AclTarget.model_glob: {number: 11, type: string, row: api-7, sees: "rules with targets"}
 AclTarget.compute_resource: {number: 12, type: AclComputeResource, row: api-7, sees: "rules with targets"}
 AclTarget.listener: {number: 13, type: bytes, row: api-7, sees: "rules with targets"}
+
+# protocol/bridge/auth.proto's authorization features (CACL-M11-02, §16.6): the bits a head turns on, which every base's
+# rows carry beside self_admit and scim_signer (testdata/config's lines), in api-7's words since metadata_list.yml v68.
+# ServiceSettings.auth_features, their source, rides config heads, which evs holds as ciphertext; capability bit 3 is a
+# value of SidecarRow.capabilities, which api-7 already shows.
+ProjectionSettings.auth_features: {number: 3, type: uint32, row: api-7, sees: "ProjectionSettings.auth_features, the authorization features a head turns on"}

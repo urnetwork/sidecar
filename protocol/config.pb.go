@@ -1712,7 +1712,8 @@ type ServiceSettings struct {
 	RecordCost     RecordCostMode `protobuf:"varint,8,opt,name=record_cost,json=recordCost,proto3,enum=urnetwork.sidecar.RecordCostMode" json:"record_cost,omitempty"` // on (owner decision 302)
 	RecordRequired bool           `protobuf:"varint,9,opt,name=record_required,json=recordRequired,proto3" json:"record_required,omitempty"`                           // false; read from M6 and never set through MCP: each member's
 	// ur install-harness writes fail-closed hooks (§16.7; owner decision 305)
-	TeamScopes    []*bridge.TeamScopeRow `protobuf:"bytes,10,rep,name=team_scopes,json=teamScopes,proto3" json:"team_scopes,omitempty"` // Team scopes' first bindings, in label order (QD-1163)
+	TeamScopes    []*bridge.TeamScopeRow `protobuf:"bytes,10,rep,name=team_scopes,json=teamScopes,proto3" json:"team_scopes,omitempty"`        // Team scopes' first bindings, in label order (QD-1163)
+	AuthFeatures  uint32                 `protobuf:"varint,11,opt,name=auth_features,json=authFeatures,proto3" json:"auth_features,omitempty"` // the authorization features the network turned on (DESIGN-COMPUTE §16.6;
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1815,6 +1816,13 @@ func (x *ServiceSettings) GetTeamScopes() []*bridge.TeamScopeRow {
 		return x.TeamScopes
 	}
 	return nil
+}
+
+func (x *ServiceSettings) GetAuthFeatures() uint32 {
+	if x != nil {
+		return x.AuthFeatures
+	}
+	return 0
 }
 
 // An empty selector matches all.
@@ -3809,7 +3817,7 @@ const file_protocol_config_proto_rawDesc = "" +
 	"\atag_ids\x18\a \x03(\fR\x06tagIds\"\x97\x01\n" +
 	"\x18ServiceDirectorySettings\x128\n" +
 	"\x04runs\x18\x01 \x01(\x0e2$.urnetwork.sidecar.DirectoryRunsModeR\x04runs\x12A\n" +
-	"\aworkers\x18\x02 \x01(\x0e2'.urnetwork.sidecar.DirectoryWorkersModeR\aworkers\"\xa4\x04\n" +
+	"\aworkers\x18\x02 \x01(\x0e2'.urnetwork.sidecar.DirectoryWorkersModeR\aworkers\"\xc9\x04\n" +
 	"\x0fServiceSettings\x12<\n" +
 	"\tteam_mail\x18\x01 \x01(\x0e2\x1f.urnetwork.sidecar.TeamMailModeR\bteamMail\x12&\n" +
 	"\x0fstale_leaf_days\x18\x02 \x01(\rR\rstaleLeafDays\x12?\n" +
@@ -3826,7 +3834,8 @@ const file_protocol_config_proto_rawDesc = "" +
 	"\x0frecord_required\x18\t \x01(\bR\x0erecordRequired\x12@\n" +
 	"\vteam_scopes\x18\n" +
 	" \x03(\v2\x1f.urnetwork.sidecar.TeamScopeRowR\n" +
-	"teamScopes\"\xcb\x01\n" +
+	"teamScopes\x12#\n" +
+	"\rauth_features\x18\v \x01(\rR\fauthFeatures\"\xcb\x01\n" +
 	"\x0eVersioningRule\x12\x14\n" +
 	"\x05kinds\x18\x01 \x03(\rR\x05kinds\x12\x19\n" +
 	"\brepo_ids\x18\x02 \x03(\fR\arepoIds\x12\x1b\n" +

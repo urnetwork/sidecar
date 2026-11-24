@@ -2815,3 +2815,34 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     "amending @@OD:142@@, and @@OD:775@@'s enclave as its sponsor's device, amending @@OD:83@@ and @@OD:126@@; and "
     "an answer recorded while it ran, a refused DelegationWrap at the Forwarder poisoning no generation (777), "
     "following @@OD:716@@. ")
+
+# Owner decision 778 (2026-11-24): service discovery across hosts. The owner asked whether mDNS forwards between hosts
+# running the sidecar, was answered no, with a recommended design, and had it folded into DESIGN.md, then gave the use
+# case it must carry: Xcode on one host finding and reaching an iPhone on another's LAN.
+INDEX += [
+    (778, 'Service discovery across hosts',
+     "Services mDNS finds on one host's link are discoverable, as DNS-SD over unicast records, on the network's hosts "
+     'that may reach them.'),
+]
+for _n, _note in [
+        (85, ' Extended by @@OD:778@@: the private zone also answers DNS-SD names on the device.'),
+        (770, ' Extended by @@OD:778@@: listed entries also take Bonjour names per viewer, and one hide set '
+              'serves both views.'),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 779))
+DATES[778] = '2026-11-24'
+_D777 = "poisoning no generation (777), following @@OD:716@@. "
+assert DECISIONS_INTRO.count(_D777) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D777, _D777 + "On 2026-11-24 the owner asked whether mDNS forwards between hosts that run the sidecar, and had the "
+    "design recommended in answer folded in: services found on one host's link discoverable as DNS-SD over unicast "
+    "records on the network's hosts that may reach them, with an advertising proxy on each device's own machine, so "
+    "that Xcode on one host finds and reaches an iPhone on another's (778), extending @@OD:85@@, its listed services "
+    "taking Bonjour names per viewer beside @@OD:770@@'s listeners. ")
+_S197 = "as the design-records tracks fold them. "
+assert STATUS.count(_S197) == 1, 'status moved'
+STATUS = STATUS.replace(_S197, "as the design-records tracks fold them, and on 2026-11-24 with owner decision 778, "
+                        "service discovery across hosts. ")

@@ -71,7 +71,8 @@ mail:<alias>                         send, listen; checked only by clients
 model:<canonical name>               infer: a remote model (DESIGN-COMPUTE.md §16.2), under its compute_policy
                                      feature (§7.9), local models needing none (owner decisions 741, 750)
 compute:enclave                      create, admin: an enclave, a start being its sponsor's (owner decision 775)
-compute:buy                          buy credits, redeem promotion codes, set auto-renew (owner decision 774)
+compute:buy                          buy: buy credits, redeem promotion codes and set auto-renew, one word for the
+                                     three (owner decision 774)
 compute:search                       query: a web search, every member device and its agents by default
 a subject (an enclave)               ssh, with users agent, root and edit and an optional check period
 listener:<selector>                  dial: each listed socket and map entry of the subjects named, at their
@@ -88,7 +89,7 @@ acl.proto numbers `AclAutogroup` and `AclAction` from 1 in the order the lists a
 
 ### 8.5 Policy document and worked examples
 
-The policy is HuJSON in the config repo, parsed in-repo: `aclStandardizeHujson` (sidecar/acl_hujson.go) turns `//` and `/* */` comments and trailing commas into spaces, keeping byte offsets, refuses invalid UTF-8 and hands the result to `encoding/json`, on every leg, with no new module and no dependencies.yml row; a change to it counts as a format change, since every reader must parse one source alike, and §22.6's compiler fuzz target covers it. Beyond the example it has `hosts`, with Tailscale's meaning: a name for an address or CIDR, used as `ip:<name>` and resolved at parse, so an unknown name is refused; grant fields `id`, `via`, `sock`, `audience`, `app_mode`, `link_spki_sha256` (8.4) and `note`; an `approvers` count on `requests`, which subjects or a team directory request (§16.11) file, a harness `reach:` block (recurd-app.html:1743-1749) filing none until [a later design](DESIGN-DEFER.md#mcp-harness-config-keys) (§16.7; owner decision 452); and document-level `expiresDefault` (1 h) and `evidenceDefault` (all §16.6 channels; harness only in untainted runs unless a rule names it, owner decision 142, §16.6). A `requests` rule refuses `ip`, `via`, `sock`, `audience`, `app_mode`, `link_spki_sha256` and `expires`: a rule names who may ask and who answers, and the filed request names ports, audience and expiry, so a Team narrows a rule through `dst`, `src` and `evidence`.
+The policy is HuJSON in the config repo, parsed in-repo: `aclStandardizeHujson` (sidecar/acl_hujson.go) turns `//` and `/* */` comments and trailing commas into spaces, keeping byte offsets, refuses invalid UTF-8 and hands the result to `encoding/json`, on every leg, with no new module and no dependencies.yml row; a change to it counts as a format change, since every reader must parse one source alike, and §22.6's compiler fuzz target covers it. Beyond the example it has `hosts`, with Tailscale's meaning: a name for an address or CIDR, used as `ip:<name>` and resolved at parse, so an unknown name is refused; grant fields `id`, `via`, `sock`, `audience`, `app_mode`, `link_spki_sha256` (8.4) and `note`; an `approvers` count on `requests`, which subjects or a team directory request (§16.11) file, a harness `reach:` block (recurd-app.html:1743-1749) filing none until [a later design](DESIGN-DEFER.md#mcp-harness-config-keys) (§16.7; owner decision 452); document-level `expiresDefault` (1 h) and `evidenceDefault` (all §16.6 channels; harness only in untainted runs unless a rule names it, owner decision 142, §16.6); and a `discovery` block, `{"allow": [...], "deny": [...]}`, the DNS-SD service types the network's hosts gather and publish beyond or short of §17.7.1's default list, for LAN devices and listed entries' Bonjour names alike, which stays on devices and never enters rows, since no gate reads it, while §7.9's `listeners` block governs the listeners list (owner decision 778). A `requests` rule refuses `ip`, `via`, `sock`, `audience`, `app_mode`, `link_spki_sha256` and `expires`: a rule names who may ask and who answers, and the filed request names ports, audience and expiry, so a Team narrows a rule through `dst`, `src` and `evidence`.
 
 ```hujson
 {
@@ -265,6 +266,26 @@ message AclRows {
                                           // as each AclRequestRule's evidence is: the ApprovalDecision.channel
                                           // values accepted for an action no requests rule names; default
                                           // all three (owner decision 342)
+  AclComputeRows compute_rows = 11;       // DESIGN-COMPUTE.md §16.4's compute block as the broker enforces it,
+                                          // once the network's compute_policy feature is on (§7.9); unset, the
+                                          // broker applies DESIGN-COMPUTE.md §16.5's defaults (owner decision 750)
+}
+// What the broker reads of the compute block, ids and amounts only, each list sorted so one block compiles to
+// one encoding; the rest of the block (fetch, calendar, connect, approvals, history, disclosures) stays out
+message AclComputeRows {
+  ComputeAssurance assurance_floor = 1;   // 0 reads as the default, none for inference
+  ComputeAssurance enclave_assurance_floor = 2;   // 0 reads as AP for enclaves
+  repeated string providers = 3;          // remote inference providers' slugs, * for all
+  repeated string enclave_shapes = 4;
+  bool search_enabled = 5;
+  uint32 search_day_max = 6;              // a network's searches a UTC day
+  repeated AclComputeBudgetRow budgets = 7;
+}
+message AclComputeBudgetRow {             // a cap on what its subjects are charged, in nano-USD, 0 none
+  bytes subject = 1;                      // an atom, as AclRule.src_atoms holds one
+  uint32 per = 2;                         // 1 subject, 2 agent, 3 member, 4 network
+  uint64 day_nano_usd = 3;
+  uint64 month_nano_usd = 4;
 }
 message AclRequestRule {
   bytes rule_id = 1; repeated bytes src_atoms = 2; repeated AclTarget targets = 3;
@@ -297,6 +318,11 @@ message AclTarget {                       // exactly one kind set (owner decisio
   bool mail_send = 9;
   bytes client_id = 10;                   // a client no binding names, a legacy client among them: D-ACL-5's
                                           // naming it, under an unrestricted grant
+  string model_glob = 11;                 // DESIGN-COMPUTE.md §16.2's model:<glob>, a glob within canonical
+                                          // names, never read as a label (owner decision 750)
+  AclComputeResource compute_resource = 12;   // compute:enclave, compute:buy or compute:search
+  bytes listener = 13;                    // listener:<selector>: an atom, as atom holds one, whose subjects'
+                                          // listed sockets and map entries the target names (owner decision 770)
 }
 // The rows above as Atoms, Folded grants and Repo rows below give them, and §8.4's and §11.12's named lists
 message AclAtom {                         // Atoms
@@ -350,6 +376,8 @@ message AclRepo {                         // every row keeps its signer and the 
   uint64 holders_shrunk_at = 11;
   repeated AclRepoPrefixRulesRow prefix_rules = 12;   // RepoPrefixRules (owner decision 345)
   int64 holders_shrunk_time_ms = 13;      // §7.9's t_s (owner decision 557)
+  RepoInbox inbox = 14;                   // the repo's RepoCreate's inbox marker, immutable (the table's
+                                          // RepoCreate row)
 }
 message AclRepoAdminRow {
   bytes sidecar_id = 1;
@@ -386,6 +414,17 @@ enum AclAction {                          // §8.4; AclRule.actions and AclReque
   ACL_ACTION_UNSPECIFIED = 0; ACL_ACTION_DIAL = 1; ACL_ACTION_LISTEN = 2; ACL_ACTION_ROUTE = 3;
   ACL_ACTION_READ = 4; ACL_ACTION_WRITE = 5; ACL_ACTION_ADMIN = 6; ACL_ACTION_DEPOSIT = 7;
   ACL_ACTION_PUBLISH = 8; ACL_ACTION_SEND = 9;
+  // DESIGN-COMPUTE.md §16.2's, in §8.4's order, each under its feature (§7.9): infer on model:, create on
+  // compute:enclave, buy on compute:buy, query on compute:search, ssh on a subject (owner decisions 750, 774, 775)
+  ACL_ACTION_INFER = 10; ACL_ACTION_CREATE = 11; ACL_ACTION_BUY = 12; ACL_ACTION_QUERY = 13; ACL_ACTION_SSH = 14;
+}
+enum AclComputeResource {                 // DESIGN-COMPUTE.md §16.2's compute: resources, AclTarget's kind 12
+  ACL_COMPUTE_RESOURCE_UNSPECIFIED = 0; ACL_COMPUTE_RESOURCE_ENCLAVE = 1; ACL_COMPUTE_RESOURCE_BUY = 2;
+  ACL_COMPUTE_RESOURCE_SEARCH = 3;
+}
+enum ComputeAssurance {                   // DESIGN-COMPUTE.md §4.3's labels as a floor names them, in order
+  COMPUTE_ASSURANCE_UNSPECIFIED = 0; COMPUTE_ASSURANCE_NONE = 1; COMPUTE_ASSURANCE_AP = 2;
+  COMPUTE_ASSURANCE_A1 = 3; COMPUTE_ASSURANCE_A2 = 4;
 }
 enum AclAudience {                        // zero reads as members
   ACL_AUDIENCE_UNSPECIFIED = 0; ACL_AUDIENCE_MEMBERS = 1; ACL_AUDIENCE_MEMBERS_DEVICE = 2;
@@ -396,6 +435,9 @@ enum RepoKind {                           // §11.12's kinds, fixed at creation
   REPO_KIND_UNSPECIFIED = 0; REPO_KIND_GENERAL = 1; REPO_KIND_RECORD = 2; REPO_KIND_CONFIG = 3;
   REPO_KIND_DIRECTORY = 4; REPO_KIND_TEAM_RECORD = 5; REPO_KIND_MAILCFG = 6; REPO_KIND_VAULT = 7;
   REPO_KIND_MAILBOX = 8; REPO_KIND_SECRET = 9;
+  // DESIGN-COMPUTE.md's, each under its feature (§7.9): agent_repos' agents, one a member, and agent, one an
+  // agent, and listeners', one a network (8.5; owner decisions 744, 747, 770)
+  REPO_KIND_AGENTS = 10; REPO_KIND_AGENT = 11; REPO_KIND_LISTENERS = 12;
 }
 ```
 
@@ -446,12 +488,12 @@ OwnerConfirm{sidecar_id}                                           a consented d
                                                                    (8.5; owner decision 126)
 access log of one repo_id (owner decision 8):
 RepoCreate{repo_id, kind, inbox}                                   a sidecar the kind lets create it, which
-  inbox (RepoInbox: 0 none, 1 group, 2 admin) marks a group        becomes the repo's admin: general or record, a
-  inbox (8.5): valid only with kind general; 2 only from a         member device (untagged, not ephemeral, not
-  config writer, once a network, api and readers refusing a        read_only), or a tagged or ephemeral sidecar
-  second; the marker is server-visible in the log (§2.8            only under a rule giving it admin on evs:* or
-  api-7); acl.proto takes it as field 4, before M2's freeze        that repo, within 8.6's ceiling; owner-bound
-                                                                   kinds, a consented device of the owner;
+  inbox (RepoInbox: 0 none, 1 group, 2 admin, 3 team) marks a      becomes the repo's admin: general or record, a
+  group inbox (8.5): valid only with kind general; 2 only from     member device (untagged, not ephemeral, not
+  a config writer, once a network, api and readers refusing a      read_only), or a tagged or ephemeral sidecar
+  second; 3 the Team inbox, a config writer's, under               only under a rule giving it admin on evs:* or
+  agent_repos (§7.9; DESIGN-COMPUTE.md §20.4); the marker is       that repo, within 8.6's ceiling; owner-bound
+  server-visible in the log (§2.8 api-7), acl.proto's field 4      kinds, a consented device of the owner;
   a tagged or ephemeral creator's repo stays keying until a        directory, team_record and the network's
   config writer that reads it and holds its admin forms its        mailcfg, a config writer (D-TEAM-28); a Team
   group (§10.7's KF1; owner decision 365), which §8.5's            scope's mailcfg, a consented device of the
@@ -610,8 +652,13 @@ message RepoCreate {
   StatementHeader header = 1;
   bytes repo_id = 2;
   RepoKind kind = 3;
-  // inbox = 4 (RepoInbox: 0 none, 1 group, 2 admin; the table's RepoCreate row) joins this fence once acl.proto
-  // declares it
+  RepoInbox inbox = 4;                    // the table's RepoCreate row: only a general repo; admin only from a
+                                          // config writer, once a network
+}
+enum RepoInbox {                          // a group inbox's marker (8.5)
+  REPO_INBOX_NONE = 0; REPO_INBOX_GROUP = 1; REPO_INBOX_ADMIN = 2;
+  REPO_INBOX_TEAM = 3;                    // DESIGN-COMPUTE.md §20.4's Team inbox, under agent_repos (§7.9;
+                                          // owner decision 744)
 }
 message RepoAdmin {
   StatementHeader header = 1;
