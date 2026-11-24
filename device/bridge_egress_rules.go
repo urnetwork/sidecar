@@ -18,7 +18,9 @@
 //	8                                                                              -> Deny: LAN with no route rule
 //
 // Rule 0 also holds every map's target and rule 3's 127.0.0.1:port, so a map never reaches the daemon, and a map never
-// targets an address of a block. Maps and remaps rewrite ranges by offset, and port 0 keeps the port. A served route's
+// targets an address of a block but one of this host's exposed prefixes, which it dials at the prefix's served address,
+// host bits kept (§17.6's exposed prefixes; owner decision 778), so a map onto a shared device's exposed /32 reaches the
+// device. Maps and remaps rewrite ranges by offset, and port 0 keeps the port. A served route's
 // exposed prefix is read as hosted here, so rule 2 does not refuse it and rule 4 cannot pass it unmapped; its route rows
 // match the destination as sent, the exposed address, which the network names uniquely where real prefixes repeat
 // across sites. The sdk provider runs rules 0, 4, 5, 7 and 8, with any address of a block denied in place of rules 1
@@ -824,8 +826,16 @@ func (self *bridgePolicyState) resolve(
 				return deny
 			}
 			target, ok := policyMap.mapTarget(addr, port)
-			if !ok || self.inBlock(target.Addr()) || self.daemonListener(target.Addr(), target.Port()) {
+			if !ok || self.daemonListener(target.Addr(), target.Port()) {
 				return deny
+			}
+			if self.inBlock(target.Addr()) {
+				// an exposed address dials its served one; any other is another host's, never dialed
+				served, remapped := self.matchExposed(target.Addr(), now)
+				if served == nil || self.daemonListener(remapped, target.Port()) {
+					return deny
+				}
+				target = netip.AddrPortFrom(remapped, target.Port())
 			}
 			return admit(connect.EgressVerdictMap, target, policyMap.mapId, row, BridgeReachKindForward)
 		}
