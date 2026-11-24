@@ -525,6 +525,20 @@ func TestGatewayHostedSearchNoticeCounts(t *testing.T) {
 	}
 }
 
+// A refusal whose grant names no harness counts under the empty name, and its warning gives the fix with a placeholder
+// for the harness, never an empty command.
+func TestGatewayHostedSearchWarnsForAnUnnamedHarness(t *testing.T) {
+	hostedSearch, _ := newGatewaySearchTest(nil)
+	if _, err := hostedSearch.FilterResponses("", []byte(`{"tools":[{"type":"web_search"}]}`)); err != nil {
+		t.Fatal(err)
+	}
+	warnings := hostedSearch.Notice().Warnings()
+	if len(warnings) != 1 || !strings.HasPrefix(warnings[0], "a harness with no name sent hosted web search") ||
+		!strings.Contains(warnings[0], "`ur install-harness <harness> --gateway`") || strings.Contains(warnings[0], "  ") {
+		t.Errorf("warnings %q, want one naming no harness with the fix's placeholder", warnings)
+	}
+}
+
 // A request with no hosted search goes on as the same bytes, the same slice, and counts nothing: a function or MCP
 // tool named web_search, a Messages request without tools, and a Chat Completions request.
 func TestGatewayHostedSearchLeavesOtherRequestsAsTheyAre(t *testing.T) {

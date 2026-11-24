@@ -569,6 +569,7 @@ type GatewayHostedSearchNoticeSnapshot struct {
 	Recent    []*GatewayHostedSearchNoticeEntry  `json:"recent,omitempty"`
 }
 
+// An empty notice bounded by settings, its times read from clock.
 func newGatewayHostedSearchNotice(settings *GatewayHostedSearchSettings, clock Clock) *GatewayHostedSearchNotice {
 	return &GatewayHostedSearchNotice{
 		settings:      settings,
@@ -662,11 +663,11 @@ func (self *GatewayHostedSearchNoticeSnapshot) Warnings() []string {
 			who, count.Dropped, count.Answered, count.Last.UTC().Format(time.RFC3339), fix))
 	}
 	for _, count := range self.Harnesses {
-		who := count.Harness
-		if who == "" {
-			who = "a harness with no name"
+		who, name := count.Harness, count.Harness
+		if name == "" {
+			who, name = "a harness with no name", "<harness>"
 		}
-		line(who, fmt.Sprintf("`ur install-harness %s --gateway` turns its own search off.", count.Harness), count)
+		line(who, fmt.Sprintf("`ur install-harness %s --gateway` turns its own search off.", name), count)
 	}
 	if self.Other != nil {
 		line("other harnesses", "the settings `ur install-harness <harness> --gateway` writes turn their own search off.", self.Other)
