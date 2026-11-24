@@ -440,13 +440,13 @@ Progress at this update (2026-11-23), in `server/sidecare2e` and `server/sidecar
   - a personal network's second device got no vault scope at the token exchange;
   - group mail answered delivered was lost at ingest (QD-1196);
   - a key rotation racing a re-form stranded a device on the old group (QD-1186 to QD-1188).
-- **Decisions.** QD-1170 to QD-1232 and QD-1384 to QD-1386 were recorded under the owner's standing acceptance of
+- **Decisions.** QD-1170 to QD-1232 and QD-1384 to QD-1387 were recorded under the owner's standing acceptance of
   recommended options, each in `.stack/decisions/RESOLUTIONS.md`, and design-records tracks have folded them all
   into DESIGN.md: `dr14-late-fold` QD-1170 to QD-1175 as owner decisions 685 to 690, `dr15-late-fold` QD-1176 to
   QD-1209 as 691 to 715 (QD-1195, a one-time landing allowance, as an unnumbered owner instruction),
   `dr16-late-fold` QD-1210 to QD-1225 as 716 to 725, and `dr17-late-fold` QD-1226 to QD-1232, QD-1384 and QD-1385
-  as 726 to 732 (QD-1227, landcheck's rules timeout, as an unnumbered owner instruction, and QD-1386, the compute
-  catalog's tie rule, in DESIGN-COMPUTE-AMENDMENTS.md beside the compute plan's answers):
+  as 726 to 732 and QD-1387 as 777 (QD-1227, landcheck's rules timeout, as an unnumbered owner instruction, and
+  QD-1386, the compute catalog's tie rule, in DESIGN-COMPUTE-AMENDMENTS.md beside the compute plan's answers):
   - a forwarding role alarms a config generation it cannot open, and a listing off its chain (716);
   - a team member's removal ends the auth keys and API keys it made, so a re-join revives none (717);
   - topic `sock` is a raised clock (718);
@@ -469,7 +469,16 @@ Progress at this update (2026-11-23), in `server/sidecare2e` and `server/sidecar
   - an owned ref's queue holds on the token exchange's refusal for good whichever client asked (729);
   - connect answers a restarted edge's first stream without its resend backoff (730), decided ahead of its code;
   - the zone watch runs where the CT watch does, in `ur daemon` and the sdk's desktop class (731);
-  - the golang.org/x modules move together, normalizer 1 re-pinned at x/text v0.44.0 (732).
+  - the golang.org/x modules move together, normalizer 1 re-pinned at x/text v0.44.0 (732);
+  - a DelegationWrap the delivery checks refuse poisons no generation at a VPN component's Forwarder (777), built on
+    `forwarder-rotation-delivery-checks`, which had not landed when the fold numbered it.
+- **The compute design.** The owner wrote DESIGN-COMPUTE.md on 2026-11-23 and 2026-11-24 (inference, the Harness,
+  the compute balance, the gateway, enclaves, web search and fetch, mail and calendar for agents, context history,
+  connected services, listeners and automatic approvals) and asked that it be drafted, which the compute tracks do on
+  the `sidecar` branches (`.stack/plan/COMPUTE-PLAN.md`). `dr17-late-fold` entered its owner statements CO-1 to CO-44
+  as owner decisions 733 to 776 and folded its Appendix D's amendments into DESIGN.md and RECORD.md; its wire
+  additions join DESIGN.md's fences with their code. The answers to the compute planner's questions, QD-1233 to
+  QD-1383, and QD-1386 are in DESIGN-COMPUTE-AMENDMENTS.md until the owner revises DESIGN-COMPUTE.md.
 - **Still to do in this phase:** the queued fix tracks (`.stack/scratch/lanes/pending-fix-tracks.json`), among them
   `connect-restart-first-stream`, which builds 730 (`net-close-joins-clients` and `abuse-notice-names-network` have
   built 724 and 725), and the plan's step 5, a nightly leg that runs a bounded e2e subset and the sidecar-related

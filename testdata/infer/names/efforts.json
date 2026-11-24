@@ -1,0 +1,17 @@
+{
+  "about": "Ids that end in an effort word take no alias (§6.3): qwen4-max's alias would read as the full name of a model qwen4 at max, so only its full names name it.",
+  "provider": "chutes",
+  "ids": [
+    {"id": "Qwen/Qwen4-Max", "label": "none", "model": "qwen4-max"},
+    {"id": "Qwen/Qwen3.8-Max-0902", "label": "none", "model": "qwen3.8-max-0902"},
+    {"id": "zai-org/GLM-5.2-Fast", "label": "none", "model": "glm-5.2-fast"}
+  ],
+  "names": [
+    {"name": "chutes-qwen4-max", "provider": "chutes", "model": "qwen4", "effort": "max"},
+    {"name": "chutes-qwen4-max-high", "provider": "chutes", "model": "qwen4-max", "effort": "high"},
+    {"name": "chutes-qwen3.8-max-0902", "provider": "chutes", "model": "qwen3.8-max-0902"},
+    {"name": "chutes-glm-5.2-fast", "provider": "chutes", "model": "glm-5.2-fast"},
+    {"name": "chutes-high", "invalid": true},
+    {"name": "chutes-max-off", "provider": "chutes", "model": "max", "effort": "off"}
+  ]
+}

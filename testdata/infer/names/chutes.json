@@ -1,0 +1,25 @@
+{
+  "about": "Chutes' confidential compute models as its catalog gave them on 2026-11-23: -TEE ids under organization prefixes, labeled AP (§4.4), whose own -tee mark stays in the name (§6.3).",
+  "provider": "chutes",
+  "ids": [
+    {"id": "Qwen/Qwen3.8-27B-TEE", "label": "AP", "model": "qwen3.8-27b-tee"},
+    {"id": "google/gemma-4-31B-turbo-TEE", "label": "AP", "model": "gemma-4-31b-turbo-tee"},
+    {"id": "Qwen/Qwen3.5-27B-TEE", "label": "AP", "model": "qwen3.5-27b-tee"},
+    {"id": "Qwen/Qwen3.6-27B-TEE", "label": "AP", "model": "qwen3.6-27b-tee"},
+    {"id": "moonshotai/Kimi-K2.6-TEE", "label": "AP", "model": "kimi-k2.6-tee"},
+    {"id": "deepseek-ai/DeepSeek-V4-Flash-0731-TEE", "label": "AP", "model": "deepseek-v4-flash-0731-tee"},
+    {"id": "Qwen/Qwen3.5-397B-A17B-TEE", "label": "AP", "model": "qwen3.5-397b-a17b-tee"},
+    {"id": "zai-org/GLM-5.1-TEE", "label": "AP", "model": "glm-5.1-tee"},
+    {"id": "deepseek-ai/DeepSeek-V3.2-TEE", "label": "AP", "model": "deepseek-v3.2-tee"},
+    {"id": "zai-org/GLM-5.2-TEE", "label": "AP", "model": "glm-5.2-tee"},
+    {"id": "moonshotai/Kimi-K3-TEE", "label": "AP", "model": "kimi-k3-tee"}
+  ],
+  "names": [
+    {"name": "chutes-qwen3.8-27b-tee-high", "provider": "chutes", "model": "qwen3.8-27b-tee", "effort": "high"},
+    {"name": "chutes-qwen3.8-27b-tee", "provider": "chutes", "model": "qwen3.8-27b-tee"},
+    {"name": "chutes-kimi-k3-tee-max", "provider": "chutes", "model": "kimi-k3-tee", "effort": "max"},
+    {"name": "chutes-deepseek-v4-flash-0731-tee-off", "provider": "chutes", "model": "deepseek-v4-flash-0731-tee", "effort": "off"},
+    {"name": "chutes-Qwen3.8-27B-TEE-high", "invalid": true},
+    {"name": "chutes-qwen/qwen3.8-27b-tee-high", "invalid": true}
+  ]
+}

@@ -217,6 +217,8 @@ barrier edge.server_record.after smtpproof/edge.go
 barrier edge.server_record.before smtpproof/edge.go
 barrier edge.verify.after smtpproof/edge.go
 barrier edge.verify.before smtpproof/edge.go
+barrier enclave_container_socket.answer.after enclave_container_socket.go
+barrier enclave_container_socket.answer.before enclave_container_socket.go
 barrier envelope.reassembly_complete.after envelope_reassembly.go
 barrier envelope.reassembly_complete.before envelope_reassembly.go
 barrier envelope.reassembly_expire.after envelope_reassembly.go

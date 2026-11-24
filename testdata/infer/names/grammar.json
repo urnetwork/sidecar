@@ -1,0 +1,26 @@
+{
+  "about": "The grammar alone: what parses, and how, with no provider's ids. none is a request's word and never a name's effort, so a name ending in it is an alias.",
+  "names": [
+    {"name": "local-gemma-4-e4b-off", "provider": "local", "model": "gemma-4-e4b", "effort": "off"},
+    {"name": "local-gemma-4-e4b", "provider": "local", "model": "gemma-4-e4b"},
+    {"name": "local-gemma-4-26b-a4b-off", "provider": "local", "model": "gemma-4-26b-a4b", "effort": "off"},
+    {"name": "local-gemma-none", "provider": "local", "model": "gemma-none"},
+    {"name": "p1-m", "provider": "p1", "model": "m"},
+    {"name": "p-m.1-xhigh", "provider": "p", "model": "m.1", "effort": "xhigh"},
+    {"name": "", "invalid": true},
+    {"name": "local", "invalid": true},
+    {"name": "-gemma-off", "invalid": true},
+    {"name": "local--gemma-off", "invalid": true},
+    {"name": "local-gemma--off", "invalid": true},
+    {"name": "local-gemma-", "invalid": true},
+    {"name": "local-", "invalid": true},
+    {"name": "lo.cal-gemma-off", "invalid": true},
+    {"name": "local-off", "invalid": true},
+    {"name": "local-.-off", "invalid": true},
+    {"name": "local-gémma-off", "invalid": true},
+    {"name": "local-gemma-OFF", "invalid": true},
+    {"name": "local gemma off", "invalid": true},
+    {"name": "local_gemma_off", "invalid": true},
+    {"name": "search/parallel/fast", "invalid": true}
+  ]
+}

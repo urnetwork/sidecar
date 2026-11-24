@@ -45,6 +45,8 @@ var testCloudEnvironmentReaders = []string{
 	"cli/keychain_linux.go",
 	"cli/unit_linux.go",
 	"daemon_socket_unix.go",
+	// the enclave's seccomp shim, which passes its whole environment on to the program it execs, reading no variable
+	"enclave_container_linux.go",
 	"identity_host_stores.go",
 	"mcp/restore_point.go",
 	"state_dir.go",
