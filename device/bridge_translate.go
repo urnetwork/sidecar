@@ -15,8 +15,10 @@
 //	never    every other IPv6 packet meets the router's rows as before; IPv6 extension headers but a fragment's, and
 //	         IPv4 fragments on the way back, are dropped and counted, which this draft does not translate
 //
-// The translator is set while ur tun carries the network (SetTranslator); before, no packet is translated. Counts are
-// atomic, and nothing here takes a lock on the packet path.
+// SetTranslator turns it on, for ur tun to call once it holds the /48's own address and routes the /96 into the tun;
+// that call, the OS's IPv6 address and route, and the /48's persistence are not built in this draft, so until they are
+// no packet is translated and no instance takes an IPv6 address. Counts are atomic, and nothing here takes a lock on
+// the packet path.
 
 package device
 
