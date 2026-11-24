@@ -159,6 +159,10 @@ type SmtpEdgeSettings struct {
 	// The most sends one join reads back from the store. Default 64: a join keys on a network, an address
 	// and a 20 min window, or on a Message-ID's hash, and past this the join is too wide to name one send.
 	ReportJoinSendMaxCount int `yaml:"-"`
+	// The plaintext of each chunk of a sealed report copy but the last (§14.8's sealed_report, owner decision
+	// 437). Default 65,536, the format's: a copy opens only at the size it was sealed at, so this is never a
+	// deployment's to change.
+	ReportSealChunkByteCount int `yaml:"-"`
 
 	// The longest name in text form. Default 253, RFC 1035's.
 	HostNameMaxByteCount int `yaml:"-"`
@@ -310,6 +314,7 @@ func DefaultSmtpEdgeSettings() *SmtpEdgeSettings {
 		ReportDnsTimeout:           30 * time.Second,
 		ReportJoinWindow:           10 * time.Minute,
 		ReportJoinSendMaxCount:     64,
+		ReportSealChunkByteCount:   64 * 1024,
 
 		ReportAggregateValueMaxByteCount: 1024,
 		ReportDkimRsaKeyMinBitCount:      1024,

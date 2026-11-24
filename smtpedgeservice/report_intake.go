@@ -21,14 +21,16 @@
 // once per (reporter, report_id). <root>'s rows name many networks, so they split by header_from's
 // <net> label, a burner's <blabel>.<net>.<root> counting toward <net>; that copy is sealed to no one,
 // since any one network's copy would show it the others' rows (smtp-m5-01-sealed-report-bytes.md). An
-// ARF report or a role mail counts only once SMTP-M9-15's join attributes it to a network, and until
-// that lands nothing is attributable: every one is dropped unread. An ARF report to a token or to
+// ARF report or a role mail counts only once SMTP-M9-15's join attributes it to a network, and an intake
+// given no join attributes nothing: every one is dropped unread. An ARF report to a token or to
 // <root> counts only from an allowlisted loop operator; a role mail opens a case through SmtpAbuseSink,
 // whoever sent it, as a stranger's report reaches only review (§21.8).
 //
-// With no mail key, the raw bytes are dropped unread and only the fields are kept
-// (plan-SMTP-report-seal-key's interim): an aggregate still counts, and an aggregate's sealed-copy row
-// is not written, having nothing to hold.
+// The mail key comes from SmtpReportKeySource, api's gate read surface in a block (report_key_source.go,
+// plan-SMTP-report-seal-key). With none to seal to, the raw bytes are dropped unread and only the fields
+// are kept: an aggregate still counts, and an aggregate's sealed-copy row is not written, having nothing
+// to hold. A source that cannot tell now fails the report, which the listener answers 451, so the
+// reporter sends it again and its copy is not lost to a moment's outage.
 
 package smtpedgeservice
 
@@ -329,11 +331,11 @@ func (self *SmtpReportIntake) accept(ctx context.Context, message *SmtpReportMes
 	return outcome, kind, err
 }
 
-// The one pass over the raw bytes: each chunk to the body hash, then to the seal. Returns the sealed
-// copy, or nil with no sealer.
-func smtpReportPass(raw []byte, sealer *smtpReportSealer, bodyHash *SmtpDkimBodyHash) ([]byte, error) {
-	for start := 0; start < len(raw); start += smtpSealChunkByteCount {
-		chunk := raw[start:min(start+smtpSealChunkByteCount, len(raw))]
+// The one pass over the raw bytes, in chunks of chunkByteCount: each chunk to the body hash, then to the
+// seal. Returns the sealed copy, or nil with no sealer.
+func smtpReportPass(raw []byte, sealer *smtpReportSealer, bodyHash *SmtpDkimBodyHash, chunkByteCount int) ([]byte, error) {
+	for start := 0; start < len(raw); start += chunkByteCount {
+		chunk := raw[start:min(start+chunkByteCount, len(raw))]
 		if bodyHash != nil {
 			bodyHash.Write(chunk)
 		}
@@ -361,7 +363,7 @@ func (self *SmtpReportIntake) sealer(ctx context.Context, networkId sidecar.Id, 
 	if publicKey == nil {
 		return nil, nil
 	}
-	return newSmtpReportSealer(publicKey, networkId, message.ArrivalTime, len(message.Raw))
+	return newSmtpReportSealer(publicKey, networkId, message.ArrivalTime, len(message.Raw), self.settings.ReportSealChunkByteCount)
 }
 
 // The verified reporter of a message whose body hash was fed, or empty. An error when nothing passed and
@@ -482,7 +484,7 @@ func (self *SmtpReportIntake) acceptAggregate(ctx context.Context, route *smtpRe
 			return "", err
 		}
 	}
-	sealed, err := smtpReportPass(message.Raw, sealer, bodyHash)
+	sealed, err := smtpReportPass(message.Raw, sealer, bodyHash, self.settings.ReportSealChunkByteCount)
 	if err != nil {
 		return "", err
 	}
@@ -587,7 +589,7 @@ func (self *SmtpReportIntake) acceptComplaint(ctx context.Context, route *smtpRe
 	if err != nil {
 		return "", err
 	}
-	sealed, err := smtpReportPass(message.Raw, sealer, bodyHash)
+	sealed, err := smtpReportPass(message.Raw, sealer, bodyHash, self.settings.ReportSealChunkByteCount)
 	if err != nil {
 		return "", err
 	}
