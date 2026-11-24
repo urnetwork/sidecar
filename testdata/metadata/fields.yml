@@ -38,6 +38,14 @@ key_sources:
   - evs_repo_place.go
   # TlsKillKey and TlsKillTriggerKey, the {tes_} keys tlsedge, sockets and api's kill switch share (tls-4)
   - tls_api.go
+  # DESIGN-COMPUTE's server keys outside a <svc>service (CARCH-M11-03): the ledger's and its jobs' and routes' in owner
+  # decision 594's packages, and the search signer's, an engine by name on hosts of its own (§14.2, §21.5)
+  - model/compute_*.go
+  - controller/compute_*.go
+  - work/compute_*.go
+  - handler/compute_*.go
+  - searchsigner/*.go
+  - searchsigner/*/*.go
 
 roots:
   # protocol/envelope.proto
