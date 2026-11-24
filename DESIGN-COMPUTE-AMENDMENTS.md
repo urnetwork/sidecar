@@ -2,12 +2,12 @@
 
 This file holds the answers DESIGN-COMPUTE.md does not yet carry, for the owner to fold when they revise it.
 
-The compute planner raised 151 questions about DESIGN-COMPUTE.md on 2026-11-24 (`.stack/questions/compute-plan-*.md`, listed in `.stack/plan/COMPUTE-PLAN.md`), and the owner answered all of them the same day, QD-1233 to QD-1383, each with the recommended option, under the owner's standing acceptance of recommended options (2026-11-16, restated 2026-11-19). The run's question ledger (`.stack/decisions/LEDGER.json`), `.stack/decisions/RESOLUTIONS.md` and `.stack/decisions/later-pending.md` record them outside git; this file is their durable copy in the sidecar repo, each answer stated as the rule it makes. Track dr17-compute-answers wrote it on 2026-11-24. One answer recorded after them that amends DESIGN-COMPUTE.md alone, QD-1386, the catalog's tie rule, which the build raised while implementing §6.3 (INFER-M11-01) and the owner answered the same day, is filed under §6 by track dr17-late-fold, which folded the rest of that day's later answers into DESIGN.md.
+The compute planner raised 151 questions about DESIGN-COMPUTE.md on 2026-11-24 (`.stack/questions/compute-plan-*.md`, listed in `.stack/plan/COMPUTE-PLAN.md`), and the owner answered all of them the same day, QD-1233 to QD-1383, each with the recommended option, under the owner's standing acceptance of recommended options (2026-11-16, restated 2026-11-19). The run's question ledger (`.stack/decisions/LEDGER.json`), `.stack/decisions/RESOLUTIONS.md` and `.stack/decisions/later-pending.md` record them outside git; this file is their durable copy in the sidecar repo, each answer stated as the rule it makes. Track dr17-compute-answers wrote it on 2026-11-24. One answer recorded after them that amends DESIGN-COMPUTE.md alone, QD-1386, the catalog's tie rule, which the build raised while implementing §6.3 (INFER-M11-01) and the owner answered the same day, is filed under §6 by track dr17-late-fold, which folded the rest of that day's later answers into DESIGN.md. The owner folded four of the plan's readings into DESIGN-COMPUTE.md §26 on 2026-11-24, aligning its listeners with DESIGN.md's service discovery (owner decision 778; commit e9478d45): QD-1248 (`Deliver` on app hosts), QD-1249 (the listeners file's `desc_by` and `v4_uncertain` and the `LISTENERS` bodies), QD-1250 (`BridgeListenerReach` in `device/`) and QD-1251 (a labeled UDP socket above the ephemeral threshold), so they left this file, as its folding rule has a folded item do; track dr18-compute-fences took them out.
 
 The answers are of two kinds:
 
 - **Appendix answers**, QD-1258 to QD-1365, 108 in all, below by the DESIGN-COMPUTE.md section that asks them. Each answers a question of DESIGN-COMPUTE.md's question register (Appendix B): the 101 open owner questions of Appendix G.2, whose recommended answers the owner let stand with CO-44 ("Let recommendations stand", 2026-11-23), and 7 more that a compute task's plan cites, whose decider Appendix B gives as peer review (Q-CTRUST-2, Q-INFER-7, Q-HARN-6, Q-GW-7, Q-ENC-7, Q-ENC-14, Q-GIT-1) and whose answers stood as the design (CO-14). Every one takes the answer DESIGN-COMPUTE.md already gives, so the rule is the design's own; what the document does not carry yet is that the owner has decided it. One, QD-1260 (Q-BAL-16), is also the G.1 decision Appendix G calls still open, which the second review added after CO-42 and CO-44.
-- **The plan's own readings**, QD-1233 to QD-1257 and QD-1366 to QD-1383, 43 in all, in a section of their own after the appendix answers. The planners raised them where DESIGN-COMPUTE.md leaves a format, a route, a module or a name open, or disagrees with itself or with the code (COMPUTE-PLAN.md's "What the design leaves contradictory or unbuildable"): command names that already exist, modules the design does not name, routes and bytes it gives no form. Each is a rule DESIGN-COMPUTE.md does not state, and some change DESIGN.md or RECORD.md through Appendix D as well, which the item's first line says.
+- **The plan's own readings**, QD-1233 to QD-1257 and QD-1366 to QD-1383, 43 in all, 39 left here, in a section of their own after the appendix answers. The planners raised them where DESIGN-COMPUTE.md leaves a format, a route, a module or a name open, or disagrees with itself or with the code (COMPUTE-PLAN.md's "What the design leaves contradictory or unbuildable"): command names that already exist, modules the design does not name, routes and bytes it gives no form. Each is a rule DESIGN-COMPUTE.md does not state, and some change DESIGN.md or RECORD.md through Appendix D as well, which the item's first line says.
 
 **Precedence.** Where an item here and DESIGN-COMPUTE.md differ, the item governs until it is folded, as sidecar/DESIGN-AMENDMENTS.md's items govern DESIGN.md's text. The compute tasks build to these items, and to DESIGN-COMPUTE.md where they are silent. DESIGN-COMPUTE.md governs the points it owns over DESIGN.md until a design-records track folds its Appendix D (its front matter); an item that changes what Appendix D carries changes what that fold takes into DESIGN.md.
 
@@ -23,7 +23,7 @@ A reading appears in every row whose section it amends, and is written once, bel
 |---|---|---|
 | §1 Context, scope and requirements | | QD-1253 |
 | §2 Trust model and invariants | QD-1276, QD-1277 | QD-1242 |
-| §3 Architecture and flows | | QD-1244, QD-1250 |
+| §3 Architecture and flows | | QD-1244 |
 | §4 Providers | QD-1344 | QD-1247, QD-1257 |
 | §5 Attestation and the policy | | QD-1242, QD-1243, QD-1254, QD-1256, QD-1379 |
 | §6 Inference | QD-1324, QD-1325, QD-1326; QD-1386, the build's | QD-1237, QD-1241, QD-1246, QD-1247, QD-1370 |
@@ -45,7 +45,7 @@ A reading appears in every row whose section it amends, and is written once, bel
 | §23 Mail and calendar for agents | QD-1335 to QD-1343 | QD-1235, QD-1236 |
 | §24 Context history in EVS | QD-1278 to QD-1288 | QD-1234, QD-1240, QD-1366 |
 | §25 Connected services | QD-1265 to QD-1273 | QD-1381 |
-| §26 Listeners | QD-1327 to QD-1334 | QD-1248, QD-1249, QD-1250, QD-1251 |
+| §26 Listeners | QD-1327 to QD-1334 | |
 | §27 Automatic approvals and the safety classifier | QD-1345 to QD-1350 | QD-1366, QD-1368 to QD-1373 |
 | Appendix B, question register; Appendix G, open decisions | every appendix answer | |
 | Appendix D, amendments to DESIGN.md | | QD-1234, QD-1237, QD-1238, QD-1240, QD-1243, QD-1252, QD-1254, QD-1255, QD-1366, QD-1367, QD-1374, QD-1378 |
@@ -863,13 +863,6 @@ From the version's effective instant: each disclosure entry of §5.4's signed po
 
 Builds: ATTEST-M11-01, CTRUST-M12-01. Question: `compute-plan-disclosure-grace-start.md`.
 
-### QD-1250: May the viewer's reach evaluation for listeners live in `device/`, which §3.3 puts in the root package that may not import `device/`?
-*Amends §3.3 and §26.7. Option 1.*
-
-Yes: the viewer's reach evaluation for listeners lives in `device/` (`BridgeListenerReach`, proposed), the same evaluation the bridge's hook runs, and cli and the sdk install it into the root through a seam. The root keeps everything else §3.3 lists for listeners in `listeners_*.go`: discovery, the classifier, the publisher and the viewer's merge. Why: the root may not import `device/` (D-SDK-20, check/layering_test.go), and a copy of the rule evaluation in the root would be a second implementation of the hook's rules that could drift.
-
-Builds: LSTN-M13-04. Question: `compute-plan-lstn-reach-in-device.md`.
-
 ### QD-1257: How does reconciliation read what each provider billed for a day, which §10.7 compares and §4.6's adapter interface cannot supply?
 *Amends §4.6 and §10.7. Option 1.*
 
@@ -1086,27 +1079,6 @@ Builds: CTXH-M11-01, CTXH-M11-07. Question: `compute-plan-approval-notice-bytes.
 `GET /sidecar/limits` also answers the network's stored bytes and the time they were counted. It needs no new metadata row, since the count is already server-visible under DESIGN §20's rows. Why: one field on an existing route; a route of its own would be a separate surface for one number, and the device's own estimate from its own pushes would drift on a network of several devices.
 
 Builds: CTXH-M11-06. Question: `compute-plan-ctxh-stored-count.md`.
-
-### QD-1249: What fields carry §26.5's Windows `v4?` mark and the rest of `desc_by`, and what are the live ask's `LISTENERS` and `LISTENERS_RESULT` bodies?
-*Amends §26.5, §26.6 and §26.8. Option 1.*
-
-In protocol/listeners.proto: the listeners file's `desc_by` is an enum of every description source §26.5 lists, not only `program` and `label`; a boolean `v4_uncertain` carries the Windows `v4?` mark, an IPv4 listener whose dual-stack state is unknown; and the live ask's messages are `LISTENERS {device_scope, include_own_view}` and `LISTENERS_RESULT {file, own_view_entries}`. Why: complete and deterministic.
-
-Builds: LSTN-M13-01. Question: `compute-plan-lstn-file-fields.md`.
-
-### QD-1251: Should listeners list UDP services above the ephemeral port threshold, since Q-LSTN-6's own WireGuard example on port 51820 is never listed under §26.5's rule?
-*Amends §26.5. Option 1.*
-
-§26.5's rule stands, and a UDP socket above its OS's ephemeral threshold is listed only once its person labels it (`ur listeners label 51820/udp`), so WireGuard on 51820 appears once labeled. Why: it keeps the rule, which lists no client's socket, and gives the person the one act that lists a server on a high port; listing every bound UDP socket would list every client's ephemeral socket too.
-
-Builds: LSTN-M13-04. Question: `compute-plan-lstn-udp-high-ports.md`.
-
-### QD-1248: Where does §26.7's `Deliver` run on an app host, where `ur tun` does not run?
-*Amends §26.7, beside §26.10. Option 1.*
-
-On an app host, the apps' VPN component (owner decision 197), where no `ur tun` runs, a listed flow is delivered through the VPN component's existing map, which keeps the non-loopback map after C16, to the listed entry's non-loopback address, never to loopback; a loopback-only entry there is shown as unreachable from other devices. Why: the rule's intent on the host that exists; refusing delivery on app hosts would leave a phone's listed services unreachable.
-
-Builds: LSTN-M13-09. Question: `compute-plan-lstn-deliver-app-hosts.md`.
 
 ### QD-1370: Does the safety classifier run as `ur __engine classify` inside `ur` (§27.5) or in the separate `ur-engine` helper (§6.5)?
 *Amends §27.5, beside §6.5. Option 1.*
