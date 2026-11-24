@@ -57,6 +57,41 @@ type AttestSettings struct {
 	// The largest state file the store reads back, in bytes: 4 MiB, room for a policy of PolicyMaxByteCount and its
 	// signature as base64 with what the store keeps beside them. A larger one is dropped as unreadable.
 	StateMaxByteCount int
+
+	// §5.4's freshness tickets (ATTEST-M12-01). The largest ticket file, <day>.bin, a parse reads, in bytes: 16 KiB,
+	// a reading: a ticket is under 100 bytes beside its armored signature, which SignatureMaxByteCount bounds.
+	// Non-positive refuses every ticket.
+	TicketMaxByteCount int
+	// The longest window a ticket may carry, not_before to not_after: 72 hours, §5.4's, which a device enforces
+	// whatever a signed ticket claims. Shorter refuses more; non-positive refuses every ticket.
+	TicketMaxWindow time.Duration
+	// The longest a batch may run from its sitting to its expiry: 14 days, §5.4's, which bounds how long a withheld
+	// revocation lasts if the ticket host is taken too (IC-9). Non-positive refuses every ticket.
+	TicketBatchMaxLifetime time.Duration
+	// How far ahead of its not_before a ticket may arrive before the gate raises an alarm: an hour, §5.4's, past which
+	// only a leak from the ticket host or a wrong clock explains it. An early ticket is refused whatever this is.
+	TicketEarlyAlarm time.Duration
+	// How long a staging build's policy stays current after the device first took it, whatever its not_after says: 7
+	// days, §5.4's (D-ATTEST-8). Production builds do not read it.
+	StagingPolicyLifetime time.Duration
+	// The serving paths policies and tickets are fetched from, each <base>/<version>.json, its .sig and
+	// <base>/tickets/<day>.bin (QD-1379): ur.io's, https://ur.io/compute/policy/v1 (§5.4's Distribution), and any
+	// mirror after it. The signature is what is trusted, so a mirror widens nothing. Empty fetches nothing.
+	FetchBaseUrls []string
+	// The longest one fetch of one file takes: 30 s, a reading, room for a policy of PolicyMaxByteCount on a slow link.
+	// Non-positive leaves a fetch to its caller's context alone.
+	FetchTimeout time.Duration
+	// The least time between two fetches a lapse asks for: a minute, a reading, so a burst of refused calls costs one
+	// fetch (connect/CODESTYLE.md's retry budget). Non-positive lets each lapse ask one.
+	FetchMinInterval time.Duration
+	// How often the fetcher's own schedule runs once remote work has been asked for: 6 hours, a reading, four a
+	// ticket's day, so a released ticket or a revocation's reaches a running device within hours, well inside the 72
+	// hours §5.4 bounds. Non-positive runs no schedule, leaving fetches to the gate's refreshes.
+	FetchInterval time.Duration
+	// The most policy versions one fetch takes, one after another: 16, a reading, about four months of weekly
+	// versions, so a device back from a long absence catches up in one pass and a hostile source cannot hold it in
+	// one forever. Non-positive fetches no policy.
+	FetchMaxPolicySteps int
 }
 
 // The component's defaults, the only place one is set.
@@ -72,5 +107,15 @@ func DefaultAttestSettings() *AttestSettings {
 		CertificateMaxValidity:   366 * 24 * time.Hour,
 		RsaMinBitCount:           3072,
 		StateMaxByteCount:        4 * 1024 * 1024,
+		TicketMaxByteCount:       16 * 1024,
+		TicketMaxWindow:          72 * time.Hour,
+		TicketBatchMaxLifetime:   14 * 24 * time.Hour,
+		TicketEarlyAlarm:         time.Hour,
+		StagingPolicyLifetime:    7 * 24 * time.Hour,
+		FetchBaseUrls:            []string{"https://ur.io/compute/policy/v1"},
+		FetchTimeout:             30 * time.Second,
+		FetchMinInterval:         time.Minute,
+		FetchInterval:            6 * time.Hour,
+		FetchMaxPolicySteps:      16,
 	}
 }

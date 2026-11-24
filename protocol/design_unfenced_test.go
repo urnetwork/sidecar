@@ -15,6 +15,15 @@ package protocol
 // Each block names its file, as a fence does, and each declaration says where the design writes it. A declaration
 // that gains a real fence is then written twice, which says to take it out of here.
 const testUnfencedFence = `
+// sidecar/protocol/attest.proto
+// DESIGN-COMPUTE.md §5.4's freshness tickets, which it gives as field lists without numbers: deterministic protobuf in
+// attest.proto by compute-plan-ticket-distribution's answer (QD-1379), numbered in the order written (ATTEST-M12-01).
+message ComputePolicyTicketBatch { bytes batch_id = 1; int64 signed_at_ms = 2; int64 expires_ms = 3; }
+message ComputePolicyTicket {
+  uint32 format = 1; ComputePolicyTicketBatch batch = 2; uint64 policy_version = 3; int64 not_before_ms = 4;
+  int64 not_after_ms = 5;
+}
+message ComputePolicyTicketFile { bytes ticket = 1; bytes signature = 2; }
 // sidecar/protocol/envelope.proto
 // §6.5: each result has its request's fields.
 message HelloResult {
