@@ -27265,7 +27265,7 @@ Each term is defined once, with the section that owns it, updated to the edited 
 
 ## Appendix D. Subprotocol message index
 
-Messages on the sidecar subprotocol (connect subprotocol id 21842), from §6.11's `MessageType` catalog and the sections' Interfaces subsections. `Envelope.type` is service << 8 \| message; §6 assigns numbers and owners define the messages. ControlId messages ride `PushHint` on a topic (§6.8) and are hints: clients resync over HTTPS on any gap. Services 0x11 (§8) and 0x18 (§16) define no messages, nor 0x19 (§17) of this design's own; DESIGN-COMPUTE.md adds EVIDENCE and EVIDENCE_RESULT (0x1406, 0x1407) and LISTENERS and LISTENERS_RESULT (0x1901, 0x1902), which join this table when §6.11's fence takes them (owner decisions [752](#od-752), [770](#od-770)). Each statement carried in `Signed` has a `SignedType` in §6.11's registry, service << 8 \| n, which the signature covers. `sidecar/device` parses only `protocol/bridge`'s `signed.proto`, `auth.proto` and `bridge.proto` (§4.4).
+Messages on the sidecar subprotocol (connect subprotocol id 21842), from §6.11's `MessageType` catalog and the sections' Interfaces subsections. `Envelope.type` is service << 8 \| message; §6 assigns numbers and owners define the messages. ControlId messages ride `PushHint` on a topic (§6.8) and are hints: clients resync over HTTPS on any gap. Services 0x11 (§8) and 0x18 (§16) define no messages, nor 0x19 (§17) of this design's own; DESIGN-COMPUTE.md adds EVIDENCE and EVIDENCE_RESULT (0x1406, 0x1407) and LISTENERS and LISTENERS_RESULT (0x1901, 0x1902) (owner decisions [752](#od-752), [770](#od-770)), which §6.11's fence holds and this table lists. Each statement carried in `Signed` has a `SignedType` in §6.11's registry, service << 8 \| n, which the signature covers. `sidecar/device` parses only `protocol/bridge`'s `signed.proto`, `auth.proto` and `bridge.proto` (§4.4).
 
 | Message | Number | Direction | Purpose | § |
 |---|---|---|---|---|
@@ -27285,15 +27285,19 @@ Messages on the sidecar subprotocol (connect subprotocol id 21842), from §6.11'
 | `GkmHint` | 0x1301 | ControlId → client (topics `gkm:<group_id>`, `gkm`) | A commit on `gkm:<group_id>`, versioned epoch × 2^24 + generation; pending change, Welcome, KeyPackages low or wrap pending (a GenWrap, wrap or sealed GroupInfo is missing) on the per-client `gkm` topic | §10.14 |
 | `EvsHeadChanged` | 0x1401 | ControlId → client (topic `evs:<repo_id>`) | A ref moved: ref id, version, chain, push id, all server-held | §11.10 |
 | `EvsHeadCheck`, `EvsHeadCheckResult` | 0x1402, 0x1403 | — | Withdrawn; 0x1402-0x1403 stay reserved, never reused (ref pins ride HeadCheck) | §6.11 |
+| `SearchRequest`, `SearchReply` | 0x1404, 0x1405 | app host ↔ indexer (RPC) | Remote search at a designated search indexer, on the pair's Network contract: data where reach allows, otherwise the control class (D-PROTO-21; owner decisions [175](#od-175), [178](#od-178)) | §11.14 |
+| `EVIDENCE`, `EVIDENCE_RESULT` | 0x1406, 0x1407 | member device ↔ the network's indexer enclave (RPC) | A member's device asking the indexer enclave for its evidence (DESIGN-COMPUTE.md §11.6, §11.10; [owner decision 752](#od-752)) | §6.11 |
 | `TlsEdgeOpen` | 0x1501 | tlsedge → listener (StreamOpen metadata) | Visitor IP and port, SNI, ALPN, ClientHello size, connection id, grant expiry | §13.5 |
 | `TlsHint` | 0x1502 | ControlId → client (topic `tls`) | Certificate orders, issuance and revocation | §13.6 |
 | `SmtpPreamble`, `SmtpPreambleResult`, `SmtpOutcome` | 0x1601-0x1603 | sidecar ↔ smtpedge (stream) | Preamble frames ahead of the raw TLS; the edge's answer (UNSPECIFIED 0 to TRY_LATER 7); the send outcome | §14.5 |
 | `SmtpStatus` | 0x1604 | ControlId → client (topic `mail`) | Halt and quota state | §14.14 |
 | `SmtpProof`, `SmtpProofResult` | 0x1605, 0x1606 | sidecar ↔ smtpedge (RPC), M9 | The ZK preamble proofs π1-π3 and, in DATA mode, one per later body part, which also prove the MX's replies; outbound mail waits for them (owner decisions [35](#od-35), [125](#od-125)) | §14.5 |
+| `SmtpHandshake`, `SmtpHandshakeResult` | 0x1607, 0x1608 | sidecar ↔ smtpedge (RPC), M9 | TLS 1.3's disclosed SHTS, sent as soon as the handshake ends; the edge answers OK, or INVALID and ends the connection; TLS 1.2 sends none | §14.5 |
 | `MailIngress` | 0x1701 | mxedge → receiver (StreamOpen metadata) | Sender IP and port, SNI, EHLO name, forward-confirmed PTR, IP listings, receive time | §15.5 |
 | `MailHint` | 0x1702 | ControlId → client (topic `mail`) | A deposit is waiting, or a receiver is needed | §15.15 |
 | (service 0x18) | — | — | §16 defines no messages in v0; records use §11's hints, and its statements are `SignedType` 0x1801-0x1804 | §16.14 |
 | (service 0x19) | — | — | §17 defines none: bridge rules ride the config repo ([owner decision 5](#od-5)), its statements and `WindowDelegation` being `SignedType` 0x1901-0x1908; `BridgeSlice` is withdrawn | §17.16 |
+| `LISTENERS`, `LISTENERS_RESULT` | 0x1901, 0x1902 | peer ↔ peer (RPC), on the control class too | A host's listeners, asked live (DESIGN-COMPUTE.md §26.8; [owner decision 770](#od-770)) | §6.11 |
 | `CoreHint` | 0x1A01 | ControlId → client (topic `core`) | A revocation hint, verified against the config, and forced resync; also the content-free wake topic | §5.15 |
 | `DnsZoneChanged` | 0x1B01 | ControlId → client (topic `dns`) | A zone delta, versioned by the zone serial | §12.14 |
 

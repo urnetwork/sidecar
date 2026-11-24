@@ -80,8 +80,8 @@ INTRO = {
           "owners define the messages. ControlId messages ride `PushHint` on a topic (§6.8) and are hints: clients "
           "resync over HTTPS on any gap. Services 0x11 (§8) and 0x18 (§16) define no messages, nor 0x19 (§17) of this "
           "design's own; DESIGN-COMPUTE.md adds EVIDENCE and EVIDENCE_RESULT (0x1406, 0x1407) and LISTENERS and "
-          "LISTENERS_RESULT (0x1901, 0x1902), which join this table when §6.11's fence takes them (owner decisions "
-          "752, 770). Each "
+          "LISTENERS_RESULT (0x1901, 0x1902) (owner decisions 752, 770), which §6.11's fence holds and this table "
+          "lists. Each "
           "statement carried in `Signed` has a `SignedType` in §6.11's registry, service << 8 \\| n, which the "
           "signature covers. The keyless device role parses only `protocol/bridge`'s `signed.proto`, `auth.proto` "
           "and `bridge.proto` (§4.4)."),
@@ -116,6 +116,23 @@ MESSAGES = _replace(MESSAGES, '(service 0x19)',
     ('(service 0x19)', '—', '—',
      "§17 defines none: bridge rules ride the config repo (owner decision 5), its statements and `WindowDelegation` "
      "being `SignedType` 0x1901-0x1908; `BridgeSlice` is withdrawn", '§17.16'))
+# The pairs §6.11's fence holds that the table above left out: remote search and the disclosed SHTS, and
+# DESIGN-COMPUTE.md's two, which §6.11's fence took with their code (types.proto).
+MESSAGES = _insert_after(MESSAGES, '`EvsHeadCheck`, `EvsHeadCheckResult`',
+    ('`SearchRequest`, `SearchReply`', '0x1404, 0x1405', 'app host ↔ indexer (RPC)',
+     "Remote search at a designated search indexer, on the pair's Network contract: data where reach allows, "
+     "otherwise the control class (D-PROTO-21; owner decisions 175, 178)", '§11.14'))
+MESSAGES = _insert_after(MESSAGES, '`SearchRequest`, `SearchReply`',
+    ('`EVIDENCE`, `EVIDENCE_RESULT`', '0x1406, 0x1407', "member device ↔ the network's indexer enclave (RPC)",
+     "A member's device asking the indexer enclave for its evidence (DESIGN-COMPUTE.md §11.6, §11.10; owner "
+     "decision 752)", '§6.11'))
+MESSAGES = _insert_after(MESSAGES, '`SmtpProof`, `SmtpProofResult`',
+    ('`SmtpHandshake`, `SmtpHandshakeResult`', '0x1607, 0x1608', 'sidecar ↔ smtpedge (RPC), M9',
+     "TLS 1.3's disclosed SHTS, sent as soon as the handshake ends; the edge answers OK, or INVALID and ends the "
+     "connection; TLS 1.2 sends none", '§14.5'))
+MESSAGES = _insert_after(MESSAGES, '(service 0x19)',
+    ('`LISTENERS`, `LISTENERS_RESULT`', '0x1901, 0x1902', 'peer ↔ peer (RPC), on the control class too',
+     "A host's listeners, asked live (DESIGN-COMPUTE.md §26.8; owner decision 770)", '§6.11'))
 
 # ------------------------------------------------------------------ Appendix D: carried messages
 # The carried-in cell names a SignedType range only where §6.11's registry comment names the statement itself:
