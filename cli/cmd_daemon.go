@@ -165,6 +165,8 @@ type urDaemonNetwork struct {
 	noSidecar    string
 	tlsSettings  *sidecar.TlsCustomSettings
 	searchBudget *sidecar.SidecarRemoteBudget
+	// each network's zone watch (daemon_dns.go)
+	dnsWatchSettings *sidecar.DnsWatchComponentSettings
 	// a running Sidecar on the instance's store of networkId, nil for one not enrolled yet
 	start func(networkId *sidecar.Id) (*sidecar.Sidecar, error)
 	// ends a Sidecar the daemon no longer hosts
@@ -731,7 +733,8 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) error {
 			log.Warningf("[ur]this daemon cannot name its own ur, so its git tier takes no push: %s", err)
 		}
 	}
-	network := &urDaemonNetwork{instance: instance, daemon: daemon, stop: closeSidecar, tlsSettings: urDesktopTlsSettings()}
+	network := &urDaemonNetwork{instance: instance, daemon: daemon, stop: closeSidecar, tlsSettings: urDesktopTlsSettings(),
+		dnsWatchSettings: sidecar.DefaultDnsWatchComponentSettings()}
 	if settings.Search.RemoteServe {
 		network.searchBudget, err = sidecar.NewSidecarRemoteBudget(settings.Search, settings.Clock)
 		if err != nil {
@@ -781,8 +784,9 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) error {
 			// state among them, so it stays attached
 			daemon.Events().Attach(running)
 			// the network's label table, which every zone its DnsClient fetches writes, and the zone's hints, from its
-			// first client generation on (daemon_dns.go); added before the follower, so a generation attaches it first
-			startUrDns(running, log)
+			// first client generation on, and D-TRUST-9's zone watch (daemon_dns.go); added before the follower, so a
+			// generation attaches them first
+			startUrDns(running, network.dnsWatchSettings, log)
 			// the network's one judge of its log, which starts at the Sidecar's first client generation; one that does
 			// not start leaves this network unjudged and the others following (CORE-M6-01)
 			if follower := startUrConfigFollower(running, log); follower != nil {
