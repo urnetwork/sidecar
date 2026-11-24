@@ -9301,7 +9301,7 @@ A reply reaches these whenever its hits nearly fill a step: the size tests of 11
 
 ### 11.2 The design
 
-Extraction is one function, written out below in full. It calls no parser of the standard library or of any module: base64, quoted-printable, character references, header fields, parameters and multipart bodies are each a rule here. What it takes from outside is tables, each pinned: Unicode 17.0.0 and the charset decoders, both from golang.org/x/text v0.43.0 and Go's `unicode` package, which normalizer 1 already pins and checks at start; HTML's named character references, a list its standard has frozen, held in `entities.json`; and the block tags, listed here. Three limits, HeaderMax, LineWindow and MimeDepth, make it computable in one pass with fixed memory (11.2.8). It is total: every byte string has exactly one output and there is no error to return.
+Extraction is one function, written out below in full. It calls no parser of the standard library or of any module: base64, quoted-printable, character references, header fields, parameters and multipart bodies are each a rule here. What it takes from outside is tables, each pinned: Unicode 17.0.0 and the charset decoders, both from golang.org/x/text v0.44.0 and Go's `unicode` package, which normalizer 1 already pins and checks at start; HTML's named character references, a list its standard has frozen, held in `entities.json`; and the block tags, listed here. Three limits, HeaderMax, LineWindow and MimeDepth, make it computable in one pass with fixed memory (11.2.8). It is total: every byte string has exactly one output and there is no error to return.
 
 The identifiers stay extractor 1 and normalizer 1. Index format 1 freezes at M10's exit (§23.8) and no index exists outside tests, so this section defines extractor 1 rather than adding a second. `protocol/INDEX-FORMAT.md`'s Extractor 1 and Documents sections are replaced by 11.8's text.
 
@@ -9340,9 +9340,10 @@ Tables, each part of extractor 1 or normalizer 1:
 
 ```text
 Unicode       17.0.0: general categories and scripts from Go's unicode package (unicode.Version), normalization
-              and case folding from golang.org/x/text v0.43.0 (norm.Version, cases.UnicodeVersion). A build
+              and case folding from golang.org/x/text v0.44.0 (norm.Version, cases.UnicodeVersion), re-pinned
+              from v0.43.0, whose unicode/norm, cases and encoding are byte-identical (owner decision 732). A build
               linking anything else is another normalizer and writes nothing (INDEX-FORMAT.md's Tables).
-charsets      golang.org/x/text v0.43.0's encoding/htmlindex: 228 labels naming 40 encodings, listed in
+charsets      golang.org/x/text v0.44.0's encoding/htmlindex: 228 labels naming 40 encodings, listed in
               charsets.json (SHA-256 9c94ee72a1db3f894cd3765b3805839835b66fcca57f9530cbee31968b36a4da), and
               that module's decoder for each (C1-C3)
 references    HTML's 2,231 named character references, 106 of them also without their ';' and 93 of them two
@@ -9541,7 +9542,7 @@ C1  A label is trimmed. It names an encoding when every byte of it is 0x21 to 0x
     of charsets.json's 228 labels.
 C2  No label, a label that names nothing, and a label that names utf-8 or replacement leave the bytes as
     they are. Ill-formed UTF-8 then meets N1.
-C3  Any other label's bytes are decoded by x/text v0.43.0's decoder for its encoding. Those decoders answer
+C3  Any other label's bytes are decoded by x/text v0.44.0's decoder for its encoding. Those decoders answer
     malformed input with U+FFFD and never fail. No charset is guessed from content.
 ```
 
@@ -9785,7 +9786,7 @@ Z-D One form   a message has one body, so a pad of zeros hides nothing
 
 **R1.** Every rule ends in an "otherwise" that takes input as text or drops it, and no rule can fail: H5 passes over a line, W2 leaves a word as written, C2 leaves bytes, M2 and M6 give nothing, T2 stops, T3 and X6 copy a byte, E4 copies. Every scan moves forward: each step consumes at least one byte, or, in W5, moves the position 2 on. The searches that run ahead (X1's "-->", X3's '>', X5's end tag, a line's LF) either find their mark and resume after it or end that value. A message always reaches D4, which gives one chunk even for an empty text.
 
-**R2.** Read the rules for what they take in. Bytes compare as bytes or under `lower`; the only sets of bytes are white, blank, letters, digits and the base64 alphabet. Numbers: a section is at most 999,999,999 and a numeric reference is held at 0x110000, so both fit 31 bits; everything else is a length. P3 keeps pieces by name and section, the first of each counting, and P5 reads them by name and by ascending section, so no order of a map is ever read. The tables are pinned and checked: the Unicode and x/text versions at start by `indexLinkedTables` (landed), the 2,231 references and 228 labels by the vector files, the block tags by vector `x-block-list`, the 40 decoders by the `c-sweep-` vectors over one sample. C3 is the one rule defined by reference to code, x/text v0.43.0's decoders, which normalizer 1 already makes part of the format; over 3,000 random inputs each, none of the 40 returned an error.
+**R2.** Read the rules for what they take in. Bytes compare as bytes or under `lower`; the only sets of bytes are white, blank, letters, digits and the base64 alphabet. Numbers: a section is at most 999,999,999 and a numeric reference is held at 0x110000, so both fit 31 bits; everything else is a length. P3 keeps pieces by name and section, the first of each counting, and P5 reads them by name and by ascending section, so no order of a map is ever read. The tables are pinned and checked: the Unicode and x/text versions at start by `indexLinkedTables` (landed), the 2,231 references and 228 labels by the vector files, the block tags by vector `x-block-list`, the 40 decoders by the `c-sweep-` vectors over one sample. C3 is the one rule defined by reference to code, x/text's decoders at normalizer 1's pin, v0.44.0 since owner decision 732 and v0.43.0's, byte-identical, when this was checked, which normalizer 1 already makes part of the format; over 3,000 random inputs each, none of the 40 returned an error.
 
 **R3.** Sizes by stage: base64 gives 3 bytes for 4 and quoted-printable never more than it takes; a charset decoder gives at most 3 bytes a byte (measured at exactly 3.00 over those random inputs, a single byte becoming U+FFFD or a three-byte character); removing tags only removes; a reference never grows except `&nLt;` and `&nGt;`, 5 bytes giving 6. So a part's text is at most 3.6 times its bytes, and a header value's at most 3 times its 16,384. Time: every stage is a scan with bounded lookahead (11.2.8's table), and the whole-value form reads a part once per multipart level around it, at most 17 times. W5's failed starts cost in all at most three times the value's length: each reads no further than the third '?' after it, and every later start holds a '?'.
 
@@ -9882,7 +9883,7 @@ unknown charset         bytes as they are (C2): ASCII words are found, and the r
 wrong charset label     decoded as labelled: that part's text is indexed as the wrong characters and its true
                         words are not found in it. Another alternative, if it is labelled right, is found. An
                         HTML part's own <meta charset> is not read.
-another decoder        C3 means x/text v0.43.0's tables. They are not every library's: its ISO 8859 decoders
+another decoder        C3 means x/text v0.44.0's tables. They are not every library's: its ISO 8859 decoders
                         read 0x80 to 0x9F as U+FFFD where others give C1 controls. A writer on another
                         decoder fails the c-sweep vectors.
 iso-2022-kr, hz-gb-2312 the Encoding Standard decodes these to one U+FFFD. Here they pass as bytes (C2), so the

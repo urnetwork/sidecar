@@ -28,7 +28,7 @@ This section owns `sdk/sidecar.go` and its binding gates, host services, wakes, 
 - **Bindings.** gomobile binds only `github.com/urnetwork/sdk` (sdk/build/Makefile:101, :150, :160), plus an `ios_extension` binding (:155); Android output passes `mobileexports` (:118; sdk/build/cmd/mobileexports/main.go:128-137). The signed extension had 4,690,096 B of headroom on 2026-11-02 (sdk/build/APPLE_EXTENSION_MEMORY_BUDGET.md); sdk.wasm is 74,965,628 B (2026-10-31).
 - **Auth.** The Api owns the token, its refresh (sdk/device_token_manager.go:20-27; sdk/api.go:364, :3672) and the network credential (:203-207), which `.auth_state` keeps beside the device client token in a 0600 file (sdk/local_state_auth.go:31-35; sdk/local_state.go:22). A confirmed 401 reaches `AddAuthLogoutEventListener` with its generation, which `IsAuthLogoutCurrent` checks (sdk/api_auth_logout_event.go:11-39), and cause `session_revoked` only for a session the server confirms revoked (sdk/api_auth_logout_cause.go:31).
 - **Extension.** Its background script (extension/manifest.config.ts:35-43) keeps a network `by_jwt` in `chrome.storage.local`, written on SSO login, an external `SET_JWT` and the ur.io bridge's `SETUP` and `REFRESH_JWT` (src/background/index.ts:134, :201-206; src/bridge/background.ts:502-508, :560-565); its sdk.wasm serves only the popup (src/utils/sdk-wasm.ts:1-10).
-- **connect.** In-band auth exists (connect/transport.go:2556-2600; server/connect/transport.go:1507-1552), but without `CheckOrigin` (:1597-1601) cross-origin browser upgrades fail (gorilla/websocket@v1.5.3/server.go:89-99). Proxies are SOCKS5 only (connect/net.go:333-363). `Client.Send` takes a per-frame ack callback (connect/transfer.go:4228-4235).
+- **connect.** In-band auth exists (connect/transport.go:2556-2600; server/connect/transport.go:1507-1552), but without `CheckOrigin` (:1597-1601) cross-origin browser upgrades fail (gorilla/websocket@v1.5.4-0.20240701034025-d67f41855da4/server.go:89-99, the version connect and server require since GO-2026-6278's bump). Proxies are SOCKS5 only (connect/net.go:333-363). `Client.Send` takes a per-frame ack callback (connect/transfer.go:4228-4235).
 - **Apps, hosted devices.** The iOS app has `aps-environment` (apple/app/network/network.entitlements:5-6); no server code sends APNs or FCM. ur.io's hosted DeviceLocal (server/proxy/proxy_device.go:1302) sets `HostedIncompatible` (:1483; sdk/device_local.go:893-910); the server knows it by its `proxy_device_config` row (server/db_migrations.go:2777) or as that client's child (server/model/network_client_retired_hosted.go:2-6).
 
 ### 18.4 Roles, placement, identity
@@ -567,6 +567,8 @@ re-enrollment (EnrollWithDevice,  -> offline, binding generation n+1 under the s
 generations every event names its generation; one of an older generation is dropped
 ```
 
+**Compute** (owner decisions 733, 751, 770; DESIGN-COMPUTE.md §15.3). `Sidecar` also exposes DESIGN-COMPUTE.md's API: `NewHarness` and its `SidecarHarness`, `Models()` for the catalog and model settings, `Compute()` for the balance, its packs, charges and spend, `Enclaves()`, `Agents()`, `Disclosures()` with `AckDisclosure` and `AckNetworkDisclosure`, `AutoApprovals()`, `Calendar()`, `Connections()`, `OpenSsh` and `Listeners()`, which backs the apps' Listeners section; their UI stays outside this design (owner rule 6).
+
 ### 18.6 Device abstractions and the DeviceRemote mirror
 
 ```go
@@ -862,6 +864,8 @@ FCM   data message, priority high                  {"data":{"t":"mail","v":"42"}
 ```
 
 - **Directory notices (D-SDK-28).** From M8 a phone leases the team directory's `q/<h>/<tgt>/` prefixes for the targets its member approves, and the notice path of each of its own pending requests (§16.11, §11.10), so a decision, a denial's included, rewrites a notice the phone leases. Their hints are `evs:<repo_id>` hints like any lease's (§6.8), so they are wake-class: a request or its decision wakes the phone under topic class `evs`, naming no directory, target or request.
+
+**Compute hosts** (owner decisions 733, 741, 768, 772; DESIGN-COMPUTE.md §6.5, §15.3). The app injects `SidecarLocalInferenceHost` (`SetLocalInferenceHost`), the local engine's seam, `SidecarSafetyClassifierHost` (`SetSafetyClassifierHost`), the reduced ONNX Runtime its safety classifier runs on, and `SidecarConnectHost` (`SetConnectHost`), the browser seam a connection's sign-in completes through.
 
 ### 18.8 The browser sidecar (X14): the extension and ur.io pages
 

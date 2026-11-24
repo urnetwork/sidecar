@@ -2646,3 +2646,172 @@ assert DECISIONS_INTRO.count(_D723) == 1, 'decisions lead moved'
 DECISIONS_INTRO = DECISIONS_INTRO.replace(
     _D723, _D723 + "Its fourth piece numbers two more recorded while it ran, the test harness's Net joining the "
     "connect clients it ends (724) and the abuse action notice naming its network (725), extending @@OD:720@@. ")
+
+# The eighth late fold's first piece (dr17-late-fold, 2026-11-24): the integration phase's answers after 725, QD-1226
+# to QD-1232, and QD-1384 and QD-1385 (726-732); QD-1227 is an owner instruction and QD-1386 amends DESIGN-COMPUTE.md.
+INDEX += [
+    (726, "Clients ride out api's gate lag",
+     "evs's and gkm's clients ask the exchange's invalid_scope again for §8.9's 5 s before ending a call, gkm's under "
+     'the missing scope alone.'),
+    (727, "The minio fork's advisories",
+     'The minio fork moves the modules its shipped build reaches 41 advisories through, takes go 1.27.4 and a '
+     'govulncheck rule.'),
+    (728, "api's deposit token at gkm",
+     "gkm admits api's own deposit token at the drop-key route alone, so the report intake seals to the network's "
+     'mail key.'),
+    (729, 'The queue holds on either refusal',
+     "An owned ref's queue holds on the token exchange's refusal for good whether evs's client or gkm's asked it."),
+    (730, "A restarted client's first stream",
+     "connect takes a restarted client's first ClientHello and holds or nacks an answer ahead of its sequence's "
+     'head.'),
+    (731, 'The zone watch beside the CT watch',
+     "D-TRUST-9's zone watch runs where the CT watch does: ur daemon and the sdk's desktop class, not phones."),
+    (732, 'The golang.org/x modules move together',
+     'x/crypto v0.59.0 and the other golang.org/x modules move in one change, normalizer 1 re-pinned at x/text '
+     'v0.44.0.'),
+]
+for _n, _note in [
+        (78, ' Followed by @@OD:728@@: gkm admits the token the report intake reads the drop key with.'),
+        (98, " Extended by @@OD:731@@: the zone watch runs in ur daemon and the sdk's desktop class."),
+        (195, ' Followed by @@OD:727@@: the fork moves its own advisories and takes a govulncheck rule.'),
+        (272, ' Followed by @@OD:732@@: the golang.org/x modules move together the same way.'),
+        (691, " Extended by @@OD:730@@: a restarted client's first stream is answered without resend backoff."),
+        (708, ' Extended by @@OD:726@@: the single-scope ask covers a scope a batch left out, within a 5 s window.'),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 733))
+DATES.update({_n: '2026-11-23' for _n in range(726, 730)})
+DATES.update({_n: '2026-11-24' for _n in range(730, 733)})
+_D725 = "and the abuse action notice naming its network (725), extending @@OD:720@@. "
+assert DECISIONS_INTRO.count(_D725) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D725, _D725 + "An eighth late fold on 2026-11-24 numbers the answers recorded after it: evs's and gkm's clients "
+    "riding out api's gate lag on a new grant (726), extending @@OD:708@@; the minio fork's advisories (727), "
+    "following @@OD:195@@; api's deposit token at gkm's drop-key route (728); the owned ref's queue holding on either "
+    "client's exchange refusal (729); a restarted client's first stream in connect (730), extending @@OD:691@@; the "
+    "zone watch beside the CT watch (731); and the golang.org/x modules moving together, normalizer 1 re-pinned at "
+    "x/text v0.44.0 (732), following @@OD:272@@. ")
+
+# The eighth late fold's compute piece: DESIGN-COMPUTE.md's owner statements CO-1 to CO-44, as 733 to 776 (CO-n as
+# 732 + n), with its Appendix D's amendments and Appendix H's moves of earlier positions.
+INDEX += [
+    (733, 'Compute: inference and the Harness',
+     'Inference runs locally with LiteRT-LM or on a Bittensor subnet provider, through the embedded Harness (CO-1).'),
+    (734, 'Compute: TEE-only inference, first',
+     'All remote inference was first to run in a TEE; @@OD:750@@ made that the TEE-only choice (CO-2).'),
+    (735, 'Compute: the compute balance',
+     'A compute balance, separate from the transfer balance, paid by credits and auto-renew, pays inference and '
+     'enclaves (CO-3).'),
+    (736, 'Compute: the local gateway',
+     'A local Responses API gateway puts every provider and the compute balance behind one harness config (CO-4).'),
+    (737, 'Compute: secure enclaves',
+     'TEE Debian enclaves start with a sidecar and an address, reached by a bundled SSH, each with its own Harness '
+     '(CO-5).'),
+    (738, "Compute: the local Harness's tools",
+     'The local Harness uses only bundled tools, with EVS through git for files and local temp files (CO-6).'),
+    (739, "Compute: an enclave's networking",
+     "An enclave's networking, its default egress included, is managed by the sidecar and ur (CO-7)."),
+    (740, 'Compute: the bundled git', 'A minimal git is bundled for the Harness to use with EVS (CO-8).'),
+    (741, 'Compute: local inference is free', 'Local inference is free and never touches the compute balance (CO-9).'),
+    (742, 'Compute: fiat in, gamma out',
+     'People pay URnetwork fiat for compute balance, and URnetwork pays providers in gamma (CO-10).'),
+    (743, "Compute: the Harness's catalog",
+     "The Harness launches agents on any model in the gateway's catalog; the `models` key acts (CO-11)."),
+    (744, 'Compute: the recURd skill',
+     'Every Harness starts with the recURd skill: agent names, regular summaries in EVS, and agent inboxes '
+     '(CO-12).'),
+    (745, 'Compute: the research', 'Deep research into the Bittensor inference subnets and enclaves (CO-13).'),
+    (746, 'Compute: DESIGN-COMPUTE.md', 'The compute design lives in DESIGN-COMPUTE.md, every question answered (CO-14).'),
+    (747, "Compute: agents' questions and inboxes",
+     "Through EVS the Harness answers what agents are doing and messages one or all, with replies (CO-15)."),
+    (748, 'Compute: built-in web search',
+     'A built-in web search tool charged to the compute balance, first on Brave, now on Parallel (CO-16).'),
+    (749, 'Compute: web fetch', 'A core web_fetch tool returns a page in a structured form (CO-17).'),
+    (750, 'Compute: every provider, canonical names',
+     'Every provider is included, the person limiting to TEEs or providers; names read provider-model-effort '
+     '(CO-18).'),
+    (751, 'Compute: mail setup, bot tab, selector',
+     "Mail setup offers an enclave indexer; the apps' bot tab, harness selector and agent graph (CO-19)."),
+    (752, 'Compute: the indexer enclave',
+     "One indexer enclave a network, granted members' mailboxes, may receive the network's mail (CO-20)."),
+    (753, 'Compute: Bittensor enclaves only', 'Enclaves use Bittensor providers only (CO-21).'),
+    (754, 'Compute: spend by service', "A person sees each service's total and last week's compute spend (CO-22)."),
+    (755, 'Compute: managing remote Harnesses',
+     'The local Harness manages remote Harnesses, both sides knowing the messaging between them (CO-23).'),
+    (756, 'Compute: mail summaries and calendars',
+     'A local agent summarizes unread mail and adds calendar events through a link saved in EVS (CO-24).'),
+    (757, 'Compute: context history in EVS', 'All Harness context history is stored in EVS (CO-25).'),
+    (758, "Compute: Parallel's terms",
+     "Parallel's clauses answered; search is off through the gateway; each network is the customer (CO-26)."),
+    (759, 'Compute: Parallel, device direct',
+     "Parallel is the first search choice, each device calling Parallel's API directly (CO-27)."),
+    (760, 'Compute: the providers locked in',
+     'Parallel for search; engy, SayGM and Chutes for inference; Hippius, Lium and Cathedral for enclaves (CO-28).'),
+    (761, 'Compute: a percentage per call',
+     'A payee passing off its own address does not matter while URnetwork takes a percentage per call (CO-29).'),
+    (762, 'Compute: failed calls are charged',
+     'Failed search calls are charged; a provider failing too often prompts an alternative (CO-30).'),
+    (763, "Compute: search on training terms",
+     "Search launches on Parallel's training terms, disclosed before the first search (CO-31)."),
+    (764, 'Compute: gamma or no launch', 'A provider that does not accept gamma at launch is dropped from launch (CO-32).'),
+    (765, 'Compute: honest disclosures',
+     'Each search, inference provider and enclave carries an honest disclosure of what is private (CO-33).'),
+    (766, 'Compute: a non-TEE model is prompted',
+     "A model without a TEE is prompted at first use, as the search prompt is (CO-34)."),
+    (767, "Compute: the balance's first answers",
+     "The owner's answers on markup, credits, renewal, budgets, providers, treasury, history and search (CO-35)."),
+    (768, 'Compute: connected services', 'The Harness signs in to OpenID Connect services such as Google Calendar (CO-36).'),
+    (769, 'Compute: OAuth credentials in EVS', 'OAuth credentials are stored in EVS (CO-37).'),
+    (770, 'Compute: listeners',
+     "The apps list every listener and forward as ip:port (description), reachable network-wide (CO-38)."),
+    (771, 'Compute: the use cases supported', 'The design fully supports the use cases (CO-39).'),
+    (772, 'Compute: automatic approvals',
+     'An on-device safety classifier approves, by default, actions held only by taint, else asks (CO-40).'),
+    (773, 'Compute: seven more answers',
+     "A $50 a day device ceiling, credits sold once spendable, admins' disclosures for tagged sidecars, and more "
+     '(CO-41).'),
+    (774, "Compute: Appendix G.1's answers",
+     "The owner's answers on phasing, policy keys, tiers, buyers, payees, the indexer enclave and listeners "
+     '(CO-42).'),
+    (775, "Compute: an enclave as its sponsor's device",
+     "For the initial version an agents' enclave is one of its sponsor's devices, with their access (CO-43)."),
+    (776, 'Compute: recommendations stand',
+     "Appendix G.2's remaining owner questions take their recommendations (CO-44)."),
+]
+for _n, _note in [
+        (12, ' Amended by @@OD:752@@: the network\'s indexer enclave may receive mail.'),
+        (83, " Amended by @@OD:775@@: an enclave incarnation's sponsor never moves, and it leaves with its sponsor."),
+        (120, ' Amended by @@OD:770@@: the listeners rule grants every client each listed service.'),
+        (126, " Amended by @@OD:775@@: an agents' enclave is one of its sponsor's consented devices."),
+        (142, ' Amended by @@OD:772@@: an on-device classifier decides first for the compute kinds it names.'),
+        (245, ' Amended by @@OD:768@@: a limited_use bit rides beside the tainted bit.'),
+        (452, ' Amended by @@OD:743@@ and @@OD:757@@: `models` acts, and session entries keep PII.'),
+        (470, ' Amended by @@OD:768@@: the limited_use mark rides beside the tainted bit.'),
+        (573, ' Amended by @@OD:757@@: from M11 each request writes its own notice.'),
+        (700, " Amended by @@OD:775@@: an agents' enclave's client is minted on its sponsor's membership."),
+        (734, ' Superseded in its rule by @@OD:750@@: TEE-only is a choice.'),
+        (748, ' Followed by @@OD:759@@ and @@OD:760@@: Parallel, not Brave.'),
+        (716, " Followed by @@OD:777@@: a wrap the delivery checks refuse poisons no generation at the Forwarder."),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+INDEX += [
+    (777, "A refused wrap at the Forwarder",
+     "At a VPN component's Forwarder a DelegationWrap the delivery checks refuse opens nothing and poisons no "
+     'generation.'),
+]
+assert [r[0] for r in INDEX] == list(range(1, 778))
+DATES.update({_n: '2026-11-23' for _n in range(733, 777)})
+DATES[777] = '2026-11-24'
+_D732 = "x/text v0.44.0 (732), following @@OD:272@@. "
+assert DECISIONS_INTRO.count(_D732) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D732, _D732 + "The same fold enters DESIGN-COMPUTE.md's owner statements of 2026-11-23, CO-1 to CO-44, the compute "
+    "extension's, as 733 to 776, CO-n as 732 + n, with its amendments to this design, among them @@OD:752@@'s indexer "
+    "enclave, amending @@OD:12@@, @@OD:770@@'s listeners rule, amending @@OD:120@@, @@OD:772@@'s automatic approvals, "
+    "amending @@OD:142@@, and @@OD:775@@'s enclave as its sponsor's device, amending @@OD:83@@ and @@OD:126@@; and "
+    "an answer recorded while it ran, a refused DelegationWrap at the Forwarder poisoning no generation (777), "
+    "following @@OD:716@@. ")

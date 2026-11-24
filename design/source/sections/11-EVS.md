@@ -271,7 +271,7 @@ format          a repo's format is repo/'s object format: 1, or 2 from v1; PUT /
                 pushes (503) and purges nothing
 ```
 
-**Records** are `checkpoint`, `diff` (a git pack delta against the file's previous version, https://git-scm.com/docs/gitformat-pack) or `chunk`. Trees are not stored: directory names and each child's sealed {mode, oid} rebuild them exactly, except an imported tree that does not, which travels as its bytes beside the commit that brought it (`EvsSealedCommit.trees`), the tree builder using them once git's reading of them equals the entries it built; an imported commit travels as its bytes, and only a sidecar's new commits meet the strict codec, so owner decision 81's committer rule stays as strict as it is (owner decision 236). Commits travel sealed in push records with provenance (§5.5's `agent_id`; agent-subkey signatures from v1, each with its `AgentCert`, a `Signed` of purpose `agent-cert` that rides in the push's sealed metadata and that a reader checks under the pushing sidecar's identity key before the subkey's signature, an absent certificate reading `agent_asserted`; from M3, format 1 included, the writing run's `tainted` bit, so §16.6 and the search index mark files from a tainted run: a version so marked reads `trust: untrusted` and reading it taints the run first, while a push bound to no run, a person's own `git push` included, carries none; owner decision 245) and §10's `epoch_authenticator`. A file's random 16-B `file_id`, sealed in its entry, lets a rename keep its chain and stops evs swapping chains between files. From format 2 the sealed metadata also carries `index_none`, under sealed_metadata_sha256, on a push that changes no document (11.14's coverage row); nothing server-visible changes.
+**Records** are `checkpoint`, `diff` (a git pack delta against the file's previous version, https://git-scm.com/docs/gitformat-pack) or `chunk`. Trees are not stored: directory names and each child's sealed {mode, oid} rebuild them exactly, except an imported tree that does not, which travels as its bytes beside the commit that brought it (`EvsSealedCommit.trees`), the tree builder using them once git's reading of them equals the entries it built; an imported commit travels as its bytes, and only a sidecar's new commits meet the strict codec, so owner decision 81's committer rule stays as strict as it is (owner decision 236). Commits travel sealed in push records with provenance (§5.5's `agent_id`; agent-subkey signatures from v1, each with its `AgentCert`, a `Signed` of purpose `agent-cert` that rides in the push's sealed metadata and that a reader checks under the pushing sidecar's identity key before the subkey's signature, an absent certificate reading `agent_asserted`; from M3, format 1 included, the writing run's `tainted` bit, so §16.6 and the search index mark files from a tainted run: a version so marked reads `trust: untrusted` and reading it taints the run first, while a push bound to no run, a person's own `git push` included, carries none; owner decision 245; beside it a `limited_use` bit, for a push bound to a run carrying DESIGN-COMPUTE.md §25.10's mark, which a reader takes into its run as it takes the tainted bit, and §11.14's index rows carry the mark as that section gives it, each with its code (owner decision 768) and §10's `epoch_authenticator`. A file's random 16-B `file_id`, sealed in its entry, lets a rename keep its chain and stops evs swapping chains between files. From format 2 the sealed metadata also carries `index_none`, under sealed_metadata_sha256, on a push that changes no document (11.14's coverage row); nothing server-visible changes.
 
 ```proto
 message EvsPush {                       // sidecar/protocol/evs.proto, inside §6 Signed, purpose evs-push; <= 1 KiB signed
@@ -593,7 +593,9 @@ history   a carried blob that is no entry's content is one sealed history record
 kinds     a git-mode push may write a file where a directory stands and a directory where a file stands, as a
           creation, removing what was below by its own changes; a gitlink is a file entry with no chain
 head mode mobile and wasm read both modes and write only file-mode refs; the SDK's Write on a git-mode ref returns
-          EVS_GIT_REF, since a head-mode client cannot build a git tree, which needs every sibling's oid
+          EVS_GIT_REF, since a head-mode client cannot build a git tree, which needs every sibling's oid; the
+          bundled git, a minimal git in Go, writes git-mode refs on every leg, so a Harness with no system
+          git commits there (owner decision 740; DESIGN-COMPUTE.md §13.4)
 scope     tags are git-mode refs pushed IMMUTABLE that hold no path state and have no base: a tag's one push
           carries no change and names as sources the refs whose tips already reach its commit, carrying what its
           commit reaches beyond them as commits and history blobs, so a tag of what a branch reaches is one push
@@ -1941,8 +1943,10 @@ settle    whenever evs's tip for a ref changes, the local ref follows it when it
           one goes (owner decision 240)
 owned     ur/<sidecar_id>/… refs are accepted at once (the journal, the local ref, `ok`; the queue pushing within
           250 ms, then at most once per 2 s, one push for everything queued; sidecar/design/market2.md:518);
-          offline pushes queue, and on reconnect the engine seals to the generation then current; a final refusal
-          holds the queue and is shown until the local ref moves or ur evs retry; ur/<sidecar_id>/import/… is an
+          offline pushes queue, and on reconnect the engine seals to the generation then current; a final refusal,
+          the token exchange's refusal for good among them whether evs's client or gkm's asked it, shown as
+          token exchange <code> (owner decision 729), holds the queue and is shown until the local ref moves or
+          ur evs retry; ur/<sidecar_id>/import/… is an
           import's: the daemon takes no client update of a ref there but its deletion
 locks     a publish lock per ref serializes one device's pushes to it and is held across the network; the apply
           lock covers only local state and is never held across a request; the sync engine takes only the apply
@@ -2063,7 +2067,15 @@ mailbox      member, owner-bound                record-class   the owner's conse
 secret       any number a member, owner-bound:  record-class   the owner's consented devices (below)
              one secret, such as a custom
              domain's ACME account key (§13.8)
+agents       member per network, owner-bound   below          the member's consented devices and every agent
+                                                               the member runs; no depositor
+agent        an agent, owner-bound              below          the agent's sidecar and the member's consented
+                                                               devices; deposits from the network's sidecars
+listeners    network                            below          every admitted sidecar reads; each that is not
+                                                               read_only writes only its own s/<sidecar_id>
 ```
+
+DESIGN-COMPUTE.md's three kinds (owner decisions 744, 747, 770; DESIGN-COMPUTE.md §20.4, §26.6) join each under its feature (§7.9), `agents` and `agent` under `agent_repos` and `listeners` under `listeners`, with the classes, labels and readers those sections give, `RepoKind` in acl.proto taking them with their code; in a Team the policy's default lets members' devices and their agents deposit into `agent` repos, another tagged subject only where a rule names it; `RepoAdmin` adds, `RepoGrant`, `RepoRevoke`, `RepoVersioning` and the search index are refused on `listeners`, whose versionless files only the config writers delete, and only for removed sidecars (§8.5).
 
 **Owner-bound** repos carry `owner_member_id` (D-EVS-11). The first consented, not read_only device of member M with an entry to write files RepoCreate{kind vault} (§10's KF1), and M's vault is M's live vault repo whose RepoCreate has the lowest log position, live as RECORD.md section 4.2 reads it, by which writers, depositors and readers all judge at their pin; once its RepoCreate lands, and before its first write, a device reads the log, and if another repo is the vault it ingests any deposit into that one and files RepoDelete{now} for its own empty repo. Only the owner's consented devices (§8.5) read and write them, so one admin signature never makes a reader; others read through a consented device's `EvsShare` or as a Team's visible audit reader, the only reader admins may add, though they may revoke (owner decisions 63, 126); the owner's other sidecars deposit into its vault and mailbox, and a `secret` takes only read receipts; MCP's evs tools reach no `secret` repo and never read the config's contents (§16.6). Members refuse, and no writer commits, any other Add or wrap; KF2 parks such a device with `approval_pending`, and the owner's devices alarm on admissions under the owner they did not sign (§10.7, §5.4).
 
@@ -3051,13 +3063,15 @@ text      invalid UTF-8 -> U+FFFD; NFKC; full case folding, cases.Fold() followe
           signs stay); subject, from, to and title cut at 1 KiB on a code point; each field padded with one space
           each side, fields joined in field order
 tables    golang.org/x/text links Unicode 15.0.0 tables under Go < 1.27 and 17.0.0 under Go 1.27
-          (.gomodcache/golang.org/x/text@v0.43.0/unicode/norm/tables15.0.0.go:3, tables17.0.0.go:3; cases/ alike),
+          (.gomodcache/golang.org/x/text@v0.44.0/unicode/norm/tables15.0.0.go:3, tables17.0.0.go:3; cases/ alike),
           and connect and sdk declare go 1.27.4 (connect/go.mod:3, sdk/go.mod:3): normalizer 1 is Unicode 17.0.0
-          from one x/text module version, at least v0.43.0, linked by every leg with one toolchain, since one
-          norm.Version does not fix NFC: v0.40.0 and v0.41.0 compose U+05D2 U+0307 to U+105C9 and U+05DA U+0307 to
-          U+105E4 (U+FB32 and U+FB3A alike), where v0.42.0 and v0.43.0 keep them, all reporting 17.0.0, examples
-          of a defect covering 19,960 two-rune strings, supplementary letters included (U+10044 U+0307 to U+1E0A;
-          §4.7), which is why every module of connect, sdk, server and sn requires v0.43.0 (connect/go.mod:33);
+          from one x/text module version, v0.44.0, linked by every leg with one toolchain, since one norm.Version
+          does not fix NFC: v0.40.0 and v0.41.0 compose U+05D2 U+0307 to U+105C9 and U+05DA U+0307 to U+105E4
+          (U+FB32 and U+FB3A alike), where v0.42.0 to v0.44.0 keep them, all reporting 17.0.0, examples of a
+          defect covering 19,960 two-rune strings, supplementary letters included (U+10044 U+0307 to U+1E0A;
+          §4.7), which is why every module of connect, sdk, server and sn requires v0.44.0 (connect/go.mod:33);
+          normalizer 1 was pinned at v0.43.0 and re-pinned at v0.44.0, whose unicode/norm, cases and tables are
+          byte-identical, by the golang.org/x modules' coordinated move (owner decision 732);
           headers record norm.Version, cases.UnicodeVersion and the module version; another table or module
           version is another normalizer, and a rebuild; testdata/index/ pins the fold map: U+13A0 and U+AB70 both
           give U+13A0, U+13F0 and U+13F8 both give U+13F0
@@ -3560,7 +3574,10 @@ eligible  eligible(d, R, p), which each side evaluates in its own newest verifie
           a ur daemon host advertising Hello feature bit 0; p is an admitted member device, untagged and not
           ephemeral, revoked, parked or suspended (in v1 an app host); d and p are in RepoReaders(R) (§8.12); for R
           owner-bound to M, consented(d, M) (§8.5), d's designation at member scope, or at network scope where the
-          config state holds one member, and p reads R as M's consented device or by an EvsShare; for a team R, d
+          config state holds one member, or d the network's indexer enclave's running incarnation that M's own
+          device seated as R's reader (owner decision 752; DESIGN-COMPUTE.md §11.10), the phone taking that seat
+          in RepoReaders(R) as d's consent evidence, so only the incarnation M's device verified answers, and
+          only M asks; and p reads R as M's consented device or by an EvsShare; for a team R, d
           is a device of p's member or its designation is network scope; d holds a whole snapshot of R's index
           under its background policy (§18.4), its all usable (retained, above) where the request's scope is all,
           with R's index on in a format and normalizer d reads; the indexer's verdict for a repo is the first that

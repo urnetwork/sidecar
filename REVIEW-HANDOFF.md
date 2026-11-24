@@ -440,11 +440,13 @@ Progress at this update (2026-11-23), in `server/sidecare2e` and `server/sidecar
   - a personal network's second device got no vault scope at the token exchange;
   - group mail answered delivered was lost at ingest (QD-1196);
   - a key rotation racing a re-form stranded a device on the old group (QD-1186 to QD-1188).
-- **Decisions.** QD-1170 to QD-1225 were recorded under the owner's standing acceptance of recommended options, each
-  in `.stack/decisions/RESOLUTIONS.md`, and design-records tracks have folded them all into DESIGN.md:
-  `dr14-late-fold` QD-1170 to QD-1175 as owner decisions 685 to 690, `dr15-late-fold` QD-1176 to QD-1209 as 691 to
-  715 (QD-1195, a one-time landing allowance, as an unnumbered owner instruction), and `dr16-late-fold` QD-1210 to
-  QD-1225 as 716 to 725:
+- **Decisions.** QD-1170 to QD-1232 and QD-1384 to QD-1387 were recorded under the owner's standing acceptance of
+  recommended options, each in `.stack/decisions/RESOLUTIONS.md`, and design-records tracks have folded them all
+  into DESIGN.md: `dr14-late-fold` QD-1170 to QD-1175 as owner decisions 685 to 690, `dr15-late-fold` QD-1176 to
+  QD-1209 as 691 to 715 (QD-1195, a one-time landing allowance, as an unnumbered owner instruction),
+  `dr16-late-fold` QD-1210 to QD-1225 as 716 to 725, and `dr17-late-fold` QD-1226 to QD-1232, QD-1384 and QD-1385
+  as 726 to 732 and QD-1387 as 777 (QD-1227, landcheck's rules timeout, as an unnumbered owner instruction, and
+  QD-1386, the compute catalog's tie rule, in DESIGN-COMPUTE-AMENDMENTS.md beside the compute plan's answers):
   - a forwarding role alarms a config generation it cannot open, and a listing off its chain (716);
   - a team member's removal ends the auth keys and API keys it made, so a re-join revives none (717);
   - topic `sock` is a raised clock (718);
@@ -459,10 +461,28 @@ Progress at this update (2026-11-23), in `server/sidecare2e` and `server/sidecar
   - a Team's earnings and payout-sent mail reach its Owners and Billing admins too, and its billing mail names the
     Team and its subscription (723);
   - sidecartest's Net joins the connect clients it ends, so nothing it ran outlives `Net.Close` (724);
-  - the abuse action notice names the network it is about (725).
+  - the abuse action notice names the network it is about (725);
+  - evs's and gkm's clients ride out api's gate lag on a new grant for §8.9's 5 s (726);
+  - the minio fork moves the modules its shipped build reached 41 advisories through, takes go 1.27.4 and a
+    govulncheck rule (727);
+  - gkm admits api's own deposit token at the drop-key route, so DMARC reports seal to the network's mail key (728);
+  - an owned ref's queue holds on the token exchange's refusal for good whichever client asked (729);
+  - connect answers a restarted edge's first stream without its resend backoff (730), decided ahead of its code;
+  - the zone watch runs where the CT watch does, in `ur daemon` and the sdk's desktop class (731);
+  - the golang.org/x modules move together, normalizer 1 re-pinned at x/text v0.44.0 (732);
+  - a DelegationWrap the delivery checks refuse poisons no generation at a VPN component's Forwarder (777), built on
+    `forwarder-rotation-delivery-checks`, which had not landed when the fold numbered it.
+- **The compute design.** The owner wrote DESIGN-COMPUTE.md on 2026-11-23 and 2026-11-24 (inference, the Harness,
+  the compute balance, the gateway, enclaves, web search and fetch, mail and calendar for agents, context history,
+  connected services, listeners and automatic approvals) and asked that it be drafted, which the compute tracks do on
+  the `sidecar` branches (`.stack/plan/COMPUTE-PLAN.md`). `dr17-late-fold` entered its owner statements CO-1 to CO-44
+  as owner decisions 733 to 776 and folded its Appendix D's amendments into DESIGN.md and RECORD.md; its wire
+  additions join DESIGN.md's fences with their code. The answers to the compute planner's questions, QD-1233 to
+  QD-1383, and QD-1386 are in DESIGN-COMPUTE-AMENDMENTS.md until the owner revises DESIGN-COMPUTE.md.
 - **Still to do in this phase:** the queued fix tracks (`.stack/scratch/lanes/pending-fix-tracks.json`), among them
-  `net-close-joins-clients` and `abuse-notice-names-network`, which build 724 and 725, and the plan's step 5,
-  a nightly leg that runs a bounded e2e subset and the sidecar-related server packages' own tests.
+  `connect-restart-first-stream`, which builds 730 (`net-close-joins-clients` and `abuse-notice-names-network` have
+  built 724 and 725), and the plan's step 5, a nightly leg that runs a bounded e2e subset and the sidecar-related
+  server packages' own tests.
 
 Then come:
 

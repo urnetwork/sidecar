@@ -673,7 +673,10 @@ recovery   GET recovery/<member_id>/wraps: a device of that member, or its unadm
            recovery:<member_id> (§7.9); POST: that member's device re-wrapping after a rebind (10.8), under r,
            rw or admin of the group's repo; DELETE ?binding=<b8>: that member's device
 deposit    reaches GET repos/<id>/drop-key only, which r, rw and admin also reach (10.14); a token whose only
-           repo scopes are deposit reaches nothing else at gkm
+           repo scopes are deposit reaches nothing else at gkm; so does api's own deposit token for §14.8's
+           report intake, which names no sidecar and holds one repo:<id>:deposit scope, admitted there alone,
+           with no standing check, while the network's newest verified state holds the repo and it takes
+           deposits, unknown while the network is not loaded (owner decision 728)
 ```
 
 **Write gate (D-KEYS-6; D-EVS-18).** The predicate below, over §7.9's causal identities, decides which writes a key-holder change blocks; §11.8 enforces it at each ref's head CAS. Target: p99 close-to-reopen ≤5 min with a writer online, in the directory group a hinted or pushing one (10.9); alarm at 1 h.
@@ -939,7 +942,12 @@ time      time_ms <= my clock + 60 s and >= the parent's
 drop      where R takes deposits, time_ms < drop_not_after_ms <= time_ms + DropKeyLifetime + 10 min, as
           readerkey's check is, so no signer voids the backstop with a far-future value (owner decision 357)
 poisoned  a delivery the delivery checks below judge invalid: members alarm, never seal to the generation and
-          rotate at once (cause REMOVE), and admins revoke the signer
+          rotate at once (cause REMOVE), and admins revoke the signer; at a VPN component's Forwarder, which
+          cannot rotate, a DelegationWrap the checks refuse opens nothing and poisons neither its generation
+          nor the one above: the generation still opens by a wrap that passes or by the ladder, the refusal is
+          its cause when nothing else opens it, so config_key_waiting names it once it has waited, a wrap
+          pinned off the judged chain raises head_alarm (fork), and a refused wrap where another opens the
+          generation is logged only; a refused GenRotate is refused there as by every member (owner decision 777)
 roster    every commit's roster lies within the key holders at its auth pin, and in the config and directory
           groups within the leaf-entitled devices (§7.9), except a recovery self-join's revoked leaves (10.8),
           whose generation-0 epoch has no GenWrap; the next leaf commit after a leaf's drop, or its loss of
@@ -1036,7 +1044,7 @@ use       the recipient opens only a delivery to itself and to a key it holds wh
 
 **D-KEYS-25 (proposed).** A ReaderKey is valid at most 7 days after signing and replaced at 6 days, its private key kept 30 days past its not_after, and rotators and deliverers seal only to an unexpired one valid no longer than that; so a passive keychain copy heals at the first generation after the device's next path commit and that not_after, about 37 days after the copy (60 above 50 leaves) whatever advertisement gkm serves, and an active clone, which signs fresh keys, ends only at a compromise revocation and a new enrollment (10.5). *Why:* gkm serves one overwriteable advertisement with no authenticated retirement, so only the key's own validity bounds a stale one, and whoever holds an identity key can sign another.
 
-**D-KEYS-26 (proposed).** gkm's routes take 10.6's scopes: a sidecar's own ReaderKey and KeyPackages under a gkm token of its own that holds an r, rw or admin scope on some repo, a token whose only repo scopes are deposit reaching the drop-key route alone; reads, acks and a member device's commits under r; GroupInfo and deliveries under r from a sidecar that is not read_only; claims, Welcomes and KeyPackage claims under rw; members, not gkm, check what a commit carries (10.9). *Why:* reader-only and read_only leaves must keep their keys and leaves current (D-TEAM-24), and gkm cannot see a PrivateMessage's proposals.
+**D-KEYS-26 (proposed).** gkm's routes take 10.6's scopes: a sidecar's own ReaderKey and KeyPackages under a gkm token of its own that holds an r, rw or admin scope on some repo, a token whose only repo scopes are deposit reaching the drop-key route alone, api's own deposit token for the report intake, which names no sidecar, among them (owner decision 728); reads, acks and a member device's commits under r; GroupInfo and deliveries under r from a sidecar that is not read_only; claims, Welcomes and KeyPackage claims under rw; members, not gkm, check what a commit carries (10.9). *Why:* reader-only and read_only leaves must keep their keys and leaves current (D-TEAM-24), and gkm cannot see a PrivateMessage's proposals.
 
 **D-KEYS-27 (proposed).** A group belongs to one repo from its first byte: `gkm/<group_id>/owner`, created If-None-Match by gkm from the token before the GroupForm at a creation or a re-form, names the repo through which alone gkm resolves the group, every group route requiring that repo among the token's scopes, and a form naming a group id another repo's marker holds answers 409 with nothing written (10.6, 10.14; owner decision 201; DESIGN-DETAILS.md section 6). *Why:* a form naming another repo's group would give a reader of that repo a write position in its group, and a LIST before the form leaves a race in which two newest forms name one group.
 

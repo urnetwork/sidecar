@@ -86,6 +86,8 @@ Asked one at a time, in the architecture reviewer's priority order. Each answer 
     - Requires a service-usage debit path in the server: Service-mode leases plus metering from contract close reports.
 11. **Q-QUOTA-5 (a) — the dialing network pays for cross-network share traffic** (source-pays escrow, as Public today). Accepted with it: Q-PROTO-3 (b). Edges use a new Service provide mode (connect C9); shares use FriendsAndFamily with the source network sealed (C13). Neither carries Network privilege or enters the egress index.
 12. **X6 residual / Q-MAIL-2 — burner mail is received by always-on receivers only:** a desktop daemon, a NAS or VPS, or Android with the VPN on. There is no iOS tunnel receiver role. iOS-only users receive while the app is open, and time-sensitive codes may expire; the product copy must say so. No hosted or TEE receiver.
+    - Amended 2026-11-23 by owner decision 752 (DESIGN-COMPUTE.md's CO-20, with CO-19 and the answer to its question on the owner directive): the network's indexer enclave, a TEE VM a provider hosts, may receive the network's mail, reading each message in plaintext as it arrives, before it seals the deposit, on DESIGN-COMPUTE.md §11.10's conditions; every other hosted or TEE receiver stays excluded (Q-MAIL-2, §15.5).
+
 13. **X4 / Q-DNS-1 (b1) — ur.network becomes a user-content-only root.**
     - Platform names (api, connect, *.connect, mcp, gossip, grafana, lb hosts) and company mail move off ur.network, to bringyour.com or ur.io.
     - The lb routes all of *.ur.network to tlsedge.
@@ -287,6 +289,8 @@ Asked one at a time, in the architecture reviewer's priority order. Each answer 
 82. **Q-EVS-5 (a) — repo deletion is a soft delete:** access is refused at once, and keys are shredded after 7 days unless restored. `--now` shreds immediately.
 83. **Q-TEAM-8 (b) — tagged agents a departing member enrolled are kept (Tailscale model)** and keep their tag's grants. Admins may reassign sponsorship.
     - Implied Q-TEAM-9 (a): a released network name is held 24 h, since DNS, mail, and certificates key on the immutable label (decision 14).
+    - Amended 2026-11-23 by owner decision 775 (CO-43): an enclave incarnation's sponsor never moves, readers refusing a `SponsorSet` naming one that carries bit 3, and a member's leaving or removal revokes their enclave incarnations with their devices (§7.7, §7.10, F9).
+
 84. **Q-BRIDGE-5 (owner): "0.0.0.0/:: by default, --listen to narrow."**
     - Keeps cli/UI.md:11: forwards and local service listeners (git, mail, IMAP) bind all interfaces by default; `--listen` narrows.
     - Supersedes D-TRUST-8's loopback default and I-17 for these listeners.
@@ -393,6 +397,8 @@ Left to peer review (engineering detail): Q-CORE-4, Q-KEYS-11, Q-BRIDGE-2, Q-SDK
     - In networks without an access-control policy, sidecar sources keep today's same-network reach, LAN, loopback, link-local and overlay destinations included. Owner decisions 50 and 105 stand unchanged.
     - Product copy and §2 disclose this. pitch5's promise that agents reach only what they're granted applies once the network writes a policy.
     - I-10 is amended to that scope, with a residual-risk row.
+    - Amended 2026-11-23 by owner decisions 770 and 771 (CO-38, CO-39): the listeners rule, which the implicit document, once an Owner or Admin acknowledges `listeners:publish` for the network, and every new document carry, grants every client of the network, agents included, each listed service unless its person hides it or an admin narrows the rule, so the promise that agents reach only granted ranges changes its wording (§1.7, §17.6).
+
 121. **Q-TLS-8 residual (c) — the published-port list is 443 plus 8443, 8883 and 5671.**
     - 8443 is a second HTTPS service per host; 8883 is MQTT over TLS; 5671 is AMQP over TLS.
     - Each is a permanent lb port on the shared addresses, routed by SNI to tlsedge (§19 W7).
@@ -426,6 +432,8 @@ Left to peer review (engineering detail): Q-CORE-4, Q-KEYS-11, Q-BRIDGE-2, Q-SDK
     - Members' devices and grantor leaves refuse Adds to owner-bound repos without that consent. A device without it is parked, with approval pending on the owner's devices.
     - The member's devices alarm on any admission under their member_id that they did not sign.
     - Keeps pitch5's "sessions open only when the developer shares them". Closes the final critic's blocker: one admin minting a device under a member to read that member's vault and mailbox.
+    - Amended 2026-11-23 by owner decision 775 (CO-43, with CO-41 and CO-42): for the initial version an agents' enclave incarnation is one of its sponsor's consented devices, capability bit 3, reading their vault, mailbox, calendar links, connections and every repo they read, with none of their authority to admit, consent, share or approve; and a member may grant the network's indexer enclave read of their mailbox, its incarnation set up over SSH seated on its sponsor's setup statement (owner decisions 752, 773; §7.9, §8.5).
+
 127. **Q-TEAM-11 (b) — a recovery key counts as one signature toward k for authority statements.**
     - This covers AdminSet changes and other authority-key changes.
     - Any recovery-signed authority statement waits a 72 h window, during which any admin device may veto.
@@ -560,6 +568,8 @@ After decisions 112-135, no owner-decider question remains open. The open items 
     - Harness evidence counts in a tainted run only where the matching `requests` rule names it explicitly, never through `evidenceDefault`.
     - Untainted runs keep owner decision 75's harness fallback unchanged.
     - I-9 and D-MCP-9 state this. It freezes with record.proto at M3's entry review.
+    - Amended 2026-11-23 by owner decision 772 (CO-40): for DESIGN-COMPUTE.md's kinds 23 and 24 and the tainted cases of 25 and 26, whose action says basis taint and names no rule, channel `auto`, the requesting device's own safety classifier, decides first in the person's auto mode, the default, under DESIGN-COMPUTE.md §27.7's rules and §27.8's limits, recorded and never presented as a person's approval; every other action as before (I-8, I-9, §16.6).
+
 143. **Q-OPS-9 (a) — a two-person out-of-hours infrastructure rota on one pager service from M3.** It has 30-minute acknowledgment and escalation.
     - Page-class alerts only:
       - a file-cluster set at risk or refusing writes;
@@ -1266,6 +1276,7 @@ The build raised its questions in a ledger (`.stack/decisions/LEDGER.json`, outs
     - Cost: taint crosses members' files from M3, not M10, so more runs lose harness evidence sooner; nothing a server sees changes, since the bit is sealed.
     - Not taken: (1) trusting by what each device knows, which leaves a tainted run on one device able to plant a file that reads as `member` on another from M3 to M10, I-9 and §2.8 narrowed to say so; (2) treating every version not written by this run as untrusted on format 1, so nearly every shared-repo read taints and single-device members lose harness approvals in ordinary work.
     - Raised by the build (plan-MCP; the build's ledger, QD-042).
+    - Amended 2026-11-23 by owner decision 768 (CO-36, CO-37): beside the tainted bit a push carries a `limited_use` bit, for a push bound to a run carrying DESIGN-COMPUTE.md §25.10's mark, which a reader takes into its run as it takes the tainted bit (§11.6).
 
 246. **Retention stays expiry, ERASE and BASE at M6, and the reclaim of expired ciphertext moves to Later beside compaction (option 2, the recommendation, accepted with the build's owner items in bulk on 2026-11-06).**
     - Question: §11.13's gc row deleted "segments no retained push names" while keeping every push statement, so read literally nothing went and evs-4's ttl never ended, and no section defined "retained", while §16.8 and evs-4 promised that GC removes the expired ciphertext.
@@ -2770,6 +2781,7 @@ The design-records track for §15 and §16 folded the answers below on 2026-11-1
     - Cost: a small format; by default stored transcripts lose emails and phone numbers for good.
     - Not taken: (2) the same with `pii` off by default, PII unhashed in the vault for `EvsShare` subjects and the audit reader; (3) letting `record.capture` narrow too, which needs a person-only path and a Team refusal; (4) no vault config in v0, local flags only.
     - Raised by the build (plan-MCP; the build's ledger, QD-116).
+    - Amended 2026-11-23 by owner decisions 743 and 757 (CO-11, CO-25): `models` acts, written only by the person's own act, while `reach` and `identity` still wait; and PII hashing skips the session entries, kinds 54 and 55, which keep addresses and numbers as written, exports hashing them (§16.7).
 
 453. **A person's statement about a change is an `attestation` entry, never an approval (option 1, the recommendation, accepted with the build's owner items in bulk on 2026-11-06).**
     - Question: product copy (P5:728) promised that "a person approved a change", but §16.8's approvals bind outward actions (§5.4), a commit is none, and no D- item amended the promise, so it stood with nothing behind it.
@@ -2896,6 +2908,7 @@ The design-records track for §15 and §16 folded the answers below on 2026-11-1
     - Cost: one EVS1 task and one registry task; the read half opens each version's sealed metadata.
     - Not taken: for QD-851, (2) MCP-M3-13 building both halves in the data lane's files and (3) every version untrusted until M10; for QD-981, (2) `agent_id` sealed only for an isolated agent and (3) the label sealed beside the id, a format change.
     - Raised by the build (MCP-M3-16 and the evs-provenance-taint track; the build's ledger, QD-851, QD-981).
+    - Amended 2026-11-23 by owner decision 768: the push's provenance and the index's doc flags carry DESIGN-COMPUTE.md §25.10's `limited_use` mark beside the tainted bit, each with its code (§11.6).
 
 471. **§16.6's spend check counts toward a rule's k only the approvers the rule names, as the authorization log's quorum does (option 1, the recommendation, 2026-11-16; it follows owner decision 349).**
     - Question: owner decision 349 had the log count a member's decision toward a rule's k only where the rule names it, but §16.6's spend check, which the daemon and every gate run, still counted any Owner's or Admin's decision, so a gate and the log could give different verdicts on one decision set, against D-MCP-12's one verdict.
@@ -3653,6 +3666,7 @@ The design-records track for §14 to §23's second pass folded the answers below
     - Cost: until then, the wake budget above; with the notices, a format addition to the vault's layout in RECORD.md and §16.8, a write per request and a repair rule.
     - Not taken: (2) the notices now; (3) the requesting daemon summoning the member's app hosts with `POST /sidecar/wake` when it files a request, which shares api's hourly limit per summoned device with HeadCheck's summonses, so a second request within the hour wakes nothing.
     - Raised by the build (the mcp-m8-01 track; the build's ledger, QD-1009).
+    - Amended 2026-11-23 by owner decision 757 (CO-25): from M11 each approval request writes its own `a/<approval_id>` notice, and phones lease `a/` and the inbox prefixes rather than the whole vault, since session entries push with their runs' calls (§16.8).
 
 574. **An `ApprovalRequest` names the uses its agent requests for a template, daemon-built and rendered, which the approver signs as `ApprovalDecision.uses`, so an app approves a template request as shown (option 2, the recommendation, 2026-11-16).**
     - Question: §16.6 lets a decision with uses above 1 bind a template, a `CanonicalAction` with `scope = true`, and the approver refuses uses above 1 for anything but a template; `ur approve --uses <n>` gave the count, since `ApprovalRequest` names none, but §18.5's `Decide(approvalId, decision, callback)` takes no count, so an app had no way to say how many uses it approves, and on an app a template request listed deny alone.
@@ -4600,6 +4614,7 @@ A sixth design-records track, dr15-late-fold, numbered these as it folded them: 
     - Cost: a narrow, client-keyed exception in the state check, refresh and revocation paths.
     - Not taken: (1) keeping the creator's membership in the credential, so CI and cloud agents stop when their creator is removed until someone re-keys them, and owner decision 83 holds in the config but not at api; (3) a credential with no member at all, a new by_jwt claim marking a tagged client and a third shape of state query, a format change.
     - Raised by the build (the team-tagged-enroll track; the build's ledger, QD-1194). It carries owner decision 83 to api's credentials.
+    - Amended 2026-11-23 by owner decision 775 (CO-43): an agents' enclave's client enrolls by its sponsor's single-use untagged key, so it is minted on the sponsor's live membership and ends with it, its tags and bit 3 its admission's alone; the network's indexer enclave's by an Owner's or Admin's single-use tagged key, on the owner of record (§7.8).
 
 701. **At enrollment api re-checks a tagged or pre-approved auth key against its creator's current role, and refuses `auth_key_invalid` when that role, as `network_member` mirrors it, lacks the keys permission; untagged keys are unaffected (option 1, the recommendation, 2026-11-22).**
     - Question: an auth key's tags and pre-approval were checked against its creator's role only when the key was created, and enrollment read the creator's live sign-in but not the role, so an Admin's tagged or pre-approved key kept enrolling after a signed AdminSet demoted the Admin, for up to 90 days, minting tagged clients sponsored by someone who could no longer make that key, a pre-approved key also posting its Delegation's admissions at enroll. Each admission stayed the log's decision (a tagged client admits only under a tag owner's, an admin's or a Delegation's signature, and a Delegation ends only by its revocation, D-TEAM-31), so the gap was server state and enrollment capacity, not a new reader; the design said what removal revokes and nothing of a role change.
@@ -4607,6 +4622,7 @@ A sixth design-records track, dr15-late-fold, numbered these as it folded them: 
     - Cost: one indexed role read per tagged or pre-approved enrollment; a demoted Admin's outstanding CI keys stop at once, and CI needs a new key from an Admin.
     - Not taken: (2) keeping keys standing until they expire or are revoked, a demoted member's keys revoked by hand with nobody prompted; (3) revoking every tagged or pre-approved key of a member when the role mirror lowers its role, a write in the mirror's path, and keys stopping even where the member regains the role a moment later.
     - Raised by the build (the team-member-own-auth-key track; the build's ledger, QD-1199). It extends D-TEAM-3's roles to a key's life.
+    - Followed 2026-11-23 by owner decision 775: an agents' enclave's untagged key and the indexer enclave's tagged one are single-use keys this rule reads like any other (§7.8).
 
 702. **An owner-bound repo's `consented_sidecar_ids` holds exactly its owner's consented devices now: the entry that ends a listed device's consent drops it, and a later confirmation that consents it lists it again, so rows-only readers agree with §8.5's predicate (option 1, the recommendation, 2026-11-22).**
     - Question: the access log's list of an owner-bound repo's consented devices (§8.8's `AclRepo`) gained a device at the entry that consented it but never lost one. So a device whose consent rested on what a compromise cascade's P signed, which an admin's AdmissionConfirm then unparked, stayed listed and passed the checks that read the list beside the device's row, gkm's GroupForm signer rule, the members' Add check and a commit's joiner row, and evs's client-side drop check, though §8.5 has such a confirmation restore only the device's other access. Each check sits behind a token AclState judges, which refuses that device, so the gap was a second layer, not an open door.
@@ -4768,17 +4784,393 @@ A seventh design-records track, dr16-late-fold, numbered these as it folded them
 
 724. **sidecartest's Net joins the connect clients it ends, so nothing it ran is still running once `Net.Close` returns: its residents' and exchanges' clients close by connect's `CloseAndWait`, each join bounded by `NetSettings.ClientCloseTimeout`, and a join that times out fails or reports (option 1, the recommendation, 2026-11-23).**
     - Question: tip-check's red at sidecar ad4cc180, pushservice's publisher test reading "pool: 4 buffers taken and 5 returned", came from connect goroutines of the Net test that ran before it (`ReceiveSequence.Run`, `SendBuffer.createSendSequence`, `EncryptionSessionManager.publishEncryptedKey`, `ClientKeyManager.publishClientKey`, `WebRtcManager.Close`) still running after `Net.Close` and returning buffers they took earlier. `NetResident.Close` and `netExchange.close` ended their connect clients by the non-joining `Cancel`, though `Net.Close`'s doc promises that sidecars and engines close and that held and parked goroutines leave, and `TestSidecar.stop` dropped its join's error; every test that reconciles connect's process-wide pool or violation counts after a Net is exposed the same way.
-    - Answer: `NetResident.Close` (sidecartest/push_net.go) and `netExchange.close` (sidecartest/net_connect.go) call connect's `Client.CloseAndWait` instead of `Cancel`, bounded by a new `NetSettings.ClientCloseTimeout`, of the order of `testSidecarOnlineTimeout`, and a join that times out fails or reports, as `TestSidecar.stop` (sidecartest/core_enroll.go) also must instead of dropping its error. A path that closes a resident from inside one of its own client's callbacks hands the close to another goroutine, since `CloseAndWait` there would join itself (connect/CODESTYLE.md's goroutine-lifecycle rule); the goroutine `AddResident` starts to close a resident when its context ends is no such callback. It is what `Net.Close`'s doc already promises and what CODESTYLE's Message Pool section asks of a fixture, reconciling at its boundary. It is stated as decided while fix track net-close-joins-clients builds it (§22.4's harness).
+    - Answer: `NetResident.Close` (sidecartest/push_net.go) and `netExchange.close` (sidecartest/net_connect.go) call connect's `Client.CloseAndWait` instead of `Cancel`, bounded by a new `NetSettings.ClientCloseTimeout`, of the order of `testSidecarOnlineTimeout`, and a join that times out fails or reports, as `TestSidecar.stop` (sidecartest/core_enroll.go) also must instead of dropping its error. A path that closes a resident from inside one of its own client's callbacks hands the close to another goroutine, since `CloseAndWait` there would join itself (connect/CODESTYLE.md's goroutine-lifecycle rule); the goroutine `AddResident` starts to close a resident when its context ends is no such callback. It is what `Net.Close`'s doc already promises and what CODESTYLE's Message Pool section asks of a fixture, reconciling at its boundary. It is built (net-close-joins-clients, sidecar ff308256, f9330167) (§22.4's harness).
     - Cost: `Net.Close` waits a few milliseconds a client when nothing is wedged.
     - Not taken: (2) leaving the clients unjoined and having every test that reconciles the pool do so per buffer, as pushservice's publisher tests now do, each such test keeping a ledger of its own, and any process-wide count or violation check in a package that runs a Net first staying exposed to what the Net left running.
     - Raised by the build (the pushservice-pool-count-flake track; the build's ledger, QD-1224). It holds T2's harness to the goroutine lifecycle connect/CODESTYLE.md asks of every component.
 
 725. **The abuse action notice names the network it is about, as owner decision 720's notices do: its subject and body say "your URnetwork network" and the network's name, read at delivery, and its footer names the network whose Owners and Admins it reaches (option 1, the recommendation, 2026-11-23).**
     - Question: the abuse action notice (`abuse_action_notice`), which §21.8 owes a network's Owners and Admins for each action, reaches the network's admin of record and, from M6, every standing Owner and Admin of a Team at their own addresses, but never named the network: its Target line, a host, a label, a sending domain or the network, does not tell a person in several networks which one to look at or appeal for. Owner decision 720 had the security notices that reach a team name the network, and owner decision 723 a Team's billing mail; this was the one account mail left that reaches a Team's Owners and Admins about their network without naming it.
-    - Answer: the template embeds the delivery-time naming owner decision 720's notices use, its subject and body say "your URnetwork network" and the name where they said your URnetwork network or your network, and its footer, which says it goes to the Owners and Admins of a URnetwork network, names that network. A personal network's notice names it too, as owner decision 720 allows. The name is read at delivery, never stored, so no metadata row. It is stated as decided while fix track abuse-notice-names-network builds it (§21.8's notice and appeal, §7.8's notices row).
+    - Answer: the template embeds the delivery-time naming owner decision 720's notices use, its subject and body say "your URnetwork network" and the name where they said your URnetwork network or your network, and its footer, which says it goes to the Owners and Admins of a URnetwork network, names that network. A personal network's notice names it too, as owner decision 720 allows. The name is read at delivery, never stored, so no metadata row. It is built (abuse-notice-names-network, server 34788fde5) (§21.8's notice and appeal, §7.8's notices row).
     - Cost: new copy in the notice's subject, html and text; a render test and a delivery test on a Team.
     - Not taken: (2) naming it only in a Team's notice and keeping a personal network's copy, as owner decision 723 did for the billing mail, a Team read at delivery and two shapes of copy to test; (3) leaving it, a Team's Owners and Admins learning of an action, its category and target, but not which network to look at or appeal for.
     - Raised by the build (the team-billing-mail-copy track; the build's ledger, QD-1225). It extends owner decision 720's naming to the abuse action notice.
+
+## The build's answers of 2026-11-23 and 2026-11-24, folded by an eighth late fold
+
+An eighth design-records track, dr17-late-fold, numbered these as it folded them: the answers to the questions the integration phase's fix tracks raised once the seventh late fold had numbered owner decision 725, QD-1226 to QD-1232, and the three recorded beside the compute plan's answers that are not answers to the compute planner's own questions, QD-1384 to QD-1386. The owner answered each on the date given, one at a time, accepting the recommendation under the owner's standing acceptance of 2026-11-16, which the owner restated on 2026-11-19. Answers of one topic share an entry, numbered by the first ledger id among them. Two take no number: QD-1227, an instruction about the run's landing check that changes no design, recorded after the numbered entries, and QD-1386, the compute catalog's tie rule, which amends DESIGN-COMPUTE.md §6.3 and not this design, filed in sidecar/DESIGN-COMPUTE-AMENDMENTS.md beside the compute plan's answers for the owner to fold when the owner revises DESIGN-COMPUTE.md.
+
+726. **evs's client and gkm's key client ride out api's gate lag on a new grant: the token exchange's invalid_scope is asked again `ReadRetryWait` apart for §8.9's 5 s, the target for a grant to reach api's gate, before it ends a write, a lease, a delivery or a gkm call, behind `EvsSettings.ExchangeScopeWaitTimeout` and `GkmSettings.ExchangeScopeWaitTimeout` (5 s each), and a gkm call refused for a scope its batch token left out is asked again under that scope alone (QD-1226's option 1 and QD-1230's option 1, the recommendations, 2026-11-23).**
+    - Question: a device can act on a grant its own verified state already shows while api's gate does not show it yet, for up to §8.9's 5 s. Until evs-exchange-refusal-retry, evs's 40 s retry covered that lag by accident, and nothing in the design said whether a client rides it out (QD-1226). gkm's key client did not: the end-to-end case e2e-grant-lag-case (server c4aefe390) showed the first write after a shrink of a repo's holders, by a reader just granted writer, ending at once with ErrGkmWait, since the key client's batch token came back without the new writer's `repo:<id>:rw`, a partial grant rather than invalid_scope, gkm refused the rotation's claim, and owner decision 708's single-scope retry did not apply because the batch had asked the role (QD-1230).
+    - Answer: evs's client asks the exchange again `ReadRetryWait` apart within `EvsSettings.ExchangeScopeWaitTimeout` of a write's first invalid_scope, its last try at the window's end, then ends the write with it (six exchanges in 5 s where the old retry made 41 in 40 s); a lease asks again at its doubling wait within the window, measured from the subscription's first refusal, then takes the refusal as final; a delivery's log read asks again within the window, measured from the ref mark's first refusal, then raises its gap. A gkm call refused while the token's granted scopes left out the call's repo scope at the role it needs, though the client's own verified state gives it, is asked again under that scope alone (owner decision 708's single-scope form), and the exchange's invalid_scope to that ask is ridden out the same way within `GkmSettings.ExchangeScopeWaitTimeout`, then taken as final, so EnsureWritable's rotation and a new writer's late deliveries land once api's gate holds the grant. invalid_grant, which is also a revocation's answer, and every other refusal for good still end the call after one exchange; reads (`evsHttp.send`) retry no exchange refusal, as before. It is built (evs's window, sidecar 31613a47 on evs-refusal-retry-followups; gkm's, cf4431a9 on gkm-grant-lag-ride-out, with 7db6a152 and 8fbcf4b9, which ask once for a role the client's state does not yet give) (§8.9's targets).
+    - Cost: a scope never granted or taken away costs api about one exchange a second for 5 s per call, and gkm a call as often for a gkm flow; a revoked device's refusal arrives up to 5 s later, after evs's gate and its own state have already refused it.
+    - Not taken: QD-1226's (2), no ride-out, a write made within §8.9's target of its grant failing; (3), the old 40 s retry; a check against the device's own verified state (AclEngine) in place of the window, which the answer leaves for later if the extra exchanges matter; QD-1230's (2), leaving gkm's client as it was, the e2e case's rotation failing.
+    - Raised by the build (the evs-refusal-retry-followups track and the e2e-grant-lag-case track; the build's ledger, QD-1226 and QD-1230). It extends owner decision 708: the single-scope ask also covers a scope a batch left out, and the window covers api's lag.
+
+727. **The minio fork moves the twelve dependencies through which its shipped build reaches 41 known advisories to at least their first fixed versions, its go line moves from 1.24.0 to 1.27.4, and a govulncheck rule over its shipped leg accepts no advisory, as check/ holds sidecar's legs (option 2 with the go line at 1.27.4, the recommendation, 2026-11-23).**
+    - Question: upstream MinIO has been archived since 2026-04-25 (§19.6), so the fork's `sidecar` branch, D-OPS-20's build and the system of record, is the only place its modules will ever move, and nothing in the run scanned it. Its shipped build (buildscripts/sidecar-release.sh: the root package, `CGO_ENABLED=0 GOOS=linux`, `-tags kqueue`, amd64 and arm64) reached 41 known advisories through twelve modules, eleven of them in golang.org/x/crypto/ssh, which the SFTP server reaches.
+    - Answer: the fork moves golang.org/x/crypto, rabbitmq/amqp091-go, golang.org/x/net, prometheus/prometheus, otel's sdk and trace, grpc, go-jose/v4, gobwas/ws, klauspost/compress, golang.org/x/text and eclipse/paho.mqtt.golang to at least their first fixed versions; its go line moves to 1.27.4, the version the run already builds it with and owner decision 272's line for connect, sidecar, sdk, server and sn; a govulncheck rule over the shipped leg, which the release script and the rule read from one file, accepts no advisory; and the internal grid's frame mask key, gobwas/ws's `ws.NewMask` from math/rand, is checked in the same move and drawn from crypto/rand. It is built (minio-advisories-move, minio 6c0f19759 to 28426c09b, de2ea9f12) (D-OPS-20, §19.6).
+    - Cost: a moderate track with fixes where minio uses prometheus, grpc and otel; a go line past upstream's; a rule that turns red whenever a new advisory lands, each the fork's to fix.
+    - Not taken: (1) moving x/crypto alone, the SSH advisories, and leaving the rest; (3) leaving the fork as it was, unscanned.
+    - Raised by the build (the websocket-vuln-bump track; the build's ledger, QD-1228). It follows owner decision 195's fork: the fork keeps its own modules current, as owner decision 272's coordinated changes keep the other repos'.
+
+728. **gkm's guard admits the deposit token api issues itself for §14.8's report intake, one that names no sidecar and holds only a deposit scope, at `GET /gkm/repos/<id>/drop-key` and nowhere else, while the token's network's newest verified state holds the repo and the repo takes deposits (option 1, the recommendation, 2026-11-23).**
+    - Question: to seal a DMARC report to a network's mail key, api mints itself a gkm token (`oauth.MintServiceToken`: aud gkm, the one scope `repo:<repo_id>:deposit`, the asked network, its own client id, no `ur_sidecar_id`, no member) and reads the mail repo's GenRotates. As built, gkm's guard refused any token that names no sidecar, so gkm answered 403, api read it as no key, and every report was sealed to none with its fields kept: no sealed copy could exist, against §14.8 and owner decision 78.
+    - Answer: `admitToken` passes such a token for the deposit scope alone; `checkStanding` skips it, as it skips a recovery scope, since it has no standing; `AclGkmAuthState.HonorScope` answers allowed when the token's network's newest verified state holds the repo and the repo takes deposits (D-KEYS-17's kinds and inbox repos), unknown while the network is not loaded, and denied otherwise; every other route keeps refusing a token with no sidecar. It is the read §7.8 and §10.14 already describe; it keeps gkm's scopes as they are for every sidecar and reaches only the public drop key the network's own GenRotate publishes, and only the issuer can mint such a token, which no exchange path does. It is built (gkm-api-deposit-token, sidecar fedbda7d; server 26b302c4b, 71941b945) (§10.6's deposit row, D-KEYS-26, §14.8's reports).
+    - Cost: one more admission path in gkm's guard, held by a route-matrix row.
+    - Not taken: (2) api reading the drop key through a sidecar's token or a stored copy, a new path to keep current; (3) leaving it, every report sealed to none.
+    - Raised by the build (the smtp-report-seal-key track; the build's ledger, QD-1229). It follows owner decision 78: the report intake can seal what it receives.
+
+729. **An owned ref's queue holds on the token exchange's refusal for good whichever client asked it, gkm's (`errGkmNoServiceToken`) as evs's (`errEvsNoServiceToken`), with the same code text, `token exchange <code>`, until the local ref moves or `ur evs retry` (option 1, the recommendation, 2026-11-23).**
+    - Question: since gkm-ladder-token-refusal, EnsureWritable ends at gkm's token refusal instead of reading it as KF7's unreachability, so a revoked device's push now fails at gkm before evs's exchange is asked, and the queue, which held only on evs's marker, pushed again every `QueueInterval` (2 s), each push asking api's exchange once or riding owner decision 726's window, until the device's own state caught up.
+    - Answer: `evsLocalExchangeHoldCode` accepts gkm's no-service-token error beside evs's, so an owned ref's queue (DESIGN-DETAILS 8.2.8) holds on the exchange's refusal for good whichever audience asked: the same exchange refuses the same device for good whichever client asked, and CODESTYLE's retry budget asks that definitive failures stop being retried. It is built (service-token-refusal-classify, sidecar 84e9b85c) (§11.11's owned row).
+    - Cost: a refused device costs api one exchange per owned ref, as before the ladder change.
+    - Not taken: (2) leaving it, the queue asking every 2 s until the device's state catches up.
+    - Raised by the build (the gkm-ladder-token-refusal track; the build's ledger, QD-1231). It follows owner decision 726: a refusal for good is final at the queue too.
+
+730. **connect's restart path answers a restarted edge's first stream to a listener without its resend backoff: the listener takes a restarted client's first ClientHello rather than dropping it with the pack handoff, and a restarted receiver holds an answer that arrives before its sequence's head until the head comes back, or tells the sender at once that it did not hold it, so the sender resends it with the head; both are fixed on connect's `sidecar` branch as §4.6 changes (option 2, the recommendation, 2026-11-24).**
+    - Question: measured over 190 in-place restarts at load 37 to 84, a restarted edge's first stream to a listener with traffic in flight carried bytes only 2.4 to 18.6 s after the restart, at connect's timer steps: the listener dropped the restarted client's first ClientHello as part of the pack handoff and waited for its resend at `MinResendInterval` (2 s), and an answer that reached a restarted receiver before its sequence's head waited for the sender's backoff. In production the edge dialer gives a ticket's open `AcceptTimeout` (5 s, D-SOCK-6) before trying the backup, so roughly one restart in five sends a first visitor stream to the backup or fails, while owner decision 689 counted on connect's restart path and §22's cold setup target is 1.5 s.
+    - Answer: both delays are traced and fixed in connect, as owner decisions 691 and 692's C21 and C22 were, which covers sidecar daemons and sdk devices too: the listener takes the first ClientHello, and a restarted receiver holds or nacks an answer that precedes its sequence's head. Until the fix lands, the restart test tolerates the tail, bounded below connect's 60 s timers (sidecar 38a6ee18, 0118db07). It is stated as decided while fix track connect-restart-first-stream builds it with connect's regression tests; its row joins §4.6's table, and check's X9 ledger, when that track lands it, and upstreaming it to connect's `main` is the owner's step (§4.6).
+    - Cost: two changes in connect's transfer path and their regressions; an owner step to upstream them.
+    - Not taken: (1) the test's tolerance alone, a first visitor stream after one restart in five going to the backup or failing.
+    - Raised by the build (the edge-client-pool-restart-flake track; the build's ledger, QD-1232). It extends owner decision 691: a restarted client's first stream recovers at once, as its session does.
+
+731. **D-TRUST-9's zone watch runs where its twin, D-TLS-8's CT watch, runs: in `ur daemon` for every network it hosts, and in the sdk's desktop class through a component factory beside sdk/sidecar_tls.go; not in the sdk's foreground-only classes (iOS, Android), whose network's daemons keep it, so a network whose only devices are phones has no zone watch, as it has no CT watch (option 1, the recommendation, 2026-11-24).**
+    - Question: once dns-watch-followups had `ur daemon` run the zone watch for every network it hosts (`Sidecar.NewDnsWatchComponent` at the network's first client generation, added by cli's daemon_dns.go), the apps' sidecar role ran none, and nothing said whether it should.
+    - Answer: the watch follows the CT watch's placement, which TLS-M8-01 decided: an app's sidecar role runs only while the app is open (owner decision 197), so a 6-hourly pass would seldom come there, and phones' DoH queries would cost for little. It is built (dns-watch-followups, sidecar 2813a507 with the daemon's component; sdk 8154d014, the desktop class) (D-TRUST-9, §13.8's CT watch).
+    - Cost: none beyond the watch's own queries on desktops.
+    - Not taken: (2) every app host, phones querying two resolvers every 6 h while open; (3) the daemon alone, a desktop app's network with no daemon unwatched.
+    - Raised by the build (the dns-watch-followups track; the build's ledger, QD-1384). It extends owner decision 98's zone watch to the hosts that run its twin.
+
+732. **x/crypto's raise to v0.59.0 lands as one coordinated bump of the golang.org/x modules in every repo, x/crypto v0.59.0, x/sys v0.50.0, x/term v0.48.0, x/text v0.44.0, x/tools v0.52.0, x/mod v0.42.0 and x/sync v0.25.0, and normalizer 1 is re-pinned at x/text v0.44.0 rather than opening a normalizer 2 (option 1, the recommendation, 2026-11-24).**
+    - Question: DESIGN-COMPUTE.md's Appendix D and its SSH decision raise x/crypto to v0.59.0 for CVE-2026-46595, in x/crypto/ssh's `VerifiedPublicKeyCallback`, which the enclave's SSH server uses (DESIGN-COMPUTE.md §12.5). v0.59.0 brings golang.org/x/text v0.44.0, while §11.14 pinned normalizer 1 at x/text v0.43.0, so that another module version is another normalizer and a rebuild.
+    - Answer: the golang.org/x modules move together in every go.mod of connect, sidecar (four modules), sdk (four), server, sn, operator-core, proxy and warp, as owner decision 272's go line and GO-2026-6278's websocket bump were moved, before the enclave's SSH server. x/text v0.44.0 differs from v0.43.0 only in internal/export/idna's punycode and language/parse.go; unicode/norm, cases, encoding and their Unicode 17.0.0 tables are byte-identical, so normalizer 1's output does not change, and no index exists outside tests, so the re-pin costs only version strings: check's `normalizerOneXTextVersion`, evs_index_normalize.go's `indexNormalizerTextModuleVersion` and testdata/index's recorded version move, and every leg leaves the CVE behind at once. Until it landed, require_compute_test.go's `TestSshVerifiedKeyCallbackWaitsForTheFixedXCrypto` kept the SSH server's key callback closed. It is built (x-modules-bump, sidecar 1b402582, a9abf38b, with the other repos' moves) (§4.7, §11.14's tables row, D-TEST-15, DESIGN-DETAILS 11.2).
+    - Cost: one coordinated change across eight repos; the normalizer's recorded version moves without a rebuild.
+    - Not taken: (2) opening a normalizer 2 for v0.44.0, a rebuild of every index for byte-identical tables; (3) holding x/text at v0.43.0 with x/crypto raised, which go's minimal version selection does not allow.
+    - Raised by the build (the compute-modules track; the build's ledger, QD-1385). It follows owner decision 272: the golang.org/x modules, like the go line, move in one change.
+
+## The owner's compute statements of 2026-11-23, folded by the eighth late fold
+
+The owner wrote sidecar/DESIGN-COMPUTE.md, the compute extension's design (inference, the Harness, the compute balance, the gateway, secure enclaves, the bundled SSH and git, the recURd skill, web search and fetch, mail and calendar for agents, context history, connected services, listeners and automatic approvals), with its two reviews, on 2026-11-23 and 2026-11-24, and asked on 2026-11-24 that it be drafted. Its front matter gives the owner's statements CO-1 to CO-44, the owner's words of 2026-11-23 in the order given, and asks a design-records fold to enter them here as numbered owner decisions after the last one (its Appendix D's first row). The eighth late fold, track dr17-late-fold, numbers them 733 to 776, CO-n as 732 + n, and folds Appendix D's amendments to this design and Appendix H's moves of the owner's earlier positions with them, each amended entry naming the decision that amends it. Where an entry and DESIGN-COMPUTE.md differ on a point DESIGN-COMPUTE.md owns, DESIGN-COMPUTE.md governs, and sidecar/DESIGN-COMPUTE-AMENDMENTS.md's answers govern it, until the owner revises it. Each entry gives the owner's words, verbatim but where DESIGN-COMPUTE.md trimmed them, how the two designs carry them, and what DESIGN-COMPUTE.md records of their cost and of the options it did not take; none was asked as a question, so each was raised by the owner.
+
+733. **Inference runs locally with LiteRT-LM or remotely on a Bittensor subnet provider, exposed through an embedded agent harness, the Harness, whose output is typed events the apps render as UI components and the CLI as terminal text (CO-1, 2026-11-23).**
+    - Statement: "The inference extension allows running inference either locally with `https://github.com/google-ai-edge/LiteRT-LM`, or remotely using an bittensor subnet inference provider. The inference should be exposed via a built embedded harness via a Harness instance, that allows prompting in (we can support terminal formatting out, but the output will be ui components in the apps not a terminal). Look at `https://github.com/MichaelKinsy/PiG` for the harness."
+    - Answer: DESIGN-COMPUTE.md §6 (the catalog, the router, the local engine and the remote paths) and §7 (the Harness, taking PiG's loop and tools in Go) design it; here §1.4's consumers take it, the Harness leaves §1.7's non-goals, and §4.5 places it.
+    - Cost: a new surface in every sdk host and `ur`, and URnetwork's first model-serving relationships.
+    - Not taken: none; the owner's direction.
+    - Raised by the owner (DESIGN-COMPUTE.md's owner statements, CO-1).
+
+734. **All remote inference was first to run in a TEE (CO-2, 2026-11-23); owner decision 750 made that the TEE-only choice a person or network may set.**
+    - Statement: "We only want providers that support TEE. All our remote inference must use TEE."
+    - Answer: since owner decision 750 every model carries its label, TEE or not, and TEE-only is one setting away for a person or a network (DESIGN-COMPUTE.md §4, §5, §6.4); §2.4's TB4 holds both kinds of provider and §2.8 says hosted models are in scope.
+    - Cost: none beyond owner decision 750's.
+    - Not taken: TEE-only for everyone, which owner decision 750 superseded.
+    - Raised by the owner (CO-2).
+
+735. **A compute balance, shared by inference and enclaves and separate from the transfer balance, is paid into with credits and auto-renew, each inference and enclave a separate charge on it (CO-3, 2026-11-23).**
+    - Statement: "a compute balance that is shared between inference and enclaves, that is separate from transfer balance. Compute balance is paid into with credits and auto renew. Each inference and envlave has a separate charge for compute balance."
+    - Answer: DESIGN-COMPUTE.md §9 designs the balance, its ledger, holds and settlement, credits, auto-renew, low balance and grace; here §20 places it beside the transfer balance, and §2.8's compute-1 to compute-11 list what its servers see.
+    - Cost: a second prepaid ledger, its rows and its operations (DESIGN-COMPUTE.md §9, §14).
+    - Not taken: paying compute from the transfer balance.
+    - Raised by the owner (CO-3).
+
+736. **A local Responses API gateway in the daemon puts every provider and the compute balance behind one config entry that existing harnesses such as Codex and Claude Code take as their model provider (CO-4, 2026-11-23).**
+    - Statement: "A local responses api gateway that exposes all the providers and the compute balance in a single config, that can drop into existing harnesses like codex, claude, etc."
+    - Answer: DESIGN-COMPUTE.md §8 designs it, with Chat Completions and Anthropic Messages beside the Responses API, `ur install-harness --gateway` writing each harness's entry, and every call recorded as a `model_call` with its whole context (§24.8); here §16.7 says the gateway installs and records.
+    - Cost: a loopback endpoint and its tokens in every daemon.
+    - Not taken: none; the owner's direction.
+    - Raised by the owner (CO-4).
+
+737. **Compute enclaves are TEE Debian VMs with full tools that start with a bootstrapped sidecar holding an overlay address, reached through a built-in minimal SSH; adding and removing them is part of the service, each runs its own Harness, and a local Harness attaches to it (CO-5, 2026-11-23).**
+    - Statement: "compute enclaves that start with a bootstrapped version of sidecar, including an ip address. Sidecar should have a built in minimal version of ssh that allows remotely accessing the secure enclaves. […] Adding and removing enclaves should be part of the service. Each enclave runs its own harness, and the user will be able to attach a Harness instance to a remote secure envlave to communicate with the harness. The secure enclave will be a debian linux, with full tools, so the enclave harness can also call tools. For example the harness can write and execute programs."
+    - Answer: DESIGN-COMPUTE.md §11 (enclaves, their incarnations, evidence and admission) and §12 (the bundled SSH) design it; here §4.5 places the enclave runtime and SSH, §5.4 takes the enclave action kinds, §16.6 keeps "no tool changes policy" with enclave tools as O tools whose admission runs on the approving device, §17.4 gives each incarnation an address and §17.9 the enclaves' egress.
+    - Cost: providers' TEE VMs, a measured image to publish, and an admission path for VM-held keys.
+    - Not taken: none; the owner's direction.
+    - Raised by the owner (CO-5).
+
+738. **The local Harness uses only the tools bundled with sidecar, such as the bundled SSH, with no shell and no file access on the user's device, storing files in EVS through the bundled git and local temp files (CO-6, 2026-11-23).**
+    - Statement: "The local Harness (for example embedded in an app) can only use the tools bundled with sidecar, like the bundled ssh." Confirmed: the local Harness gets no shell and no file access on the user's device: "The local harness uses our EVS/git for file storage. It can use local temp files."
+    - Answer: DESIGN-COMPUTE.md §7.5's local profile and §13's bundled git; here §4.5 places them.
+    - Cost: a local agent that cannot touch the device's own files.
+    - Not taken: a local shell or file tools.
+    - Raised by the owner (CO-6).
+
+739. **The secure enclave's networking, its default egress included, is managed entirely by the sidecar and `ur` (CO-7, 2026-11-23).**
+    - Statement: "The secure enclave will have its networking fully managed by the sidecar/ur cli, including the default egress."
+    - Answer: DESIGN-COMPUTE.md §11.8: the enclave's address, routes and default egress are its sidecar's, set by `ur tun` and its `BridgeEgress`, with fail-closed rules inside the VM; here §17.9's enclaves paragraph.
+    - Cost: nftables rules in the image and an egress mode per enclave.
+    - Not taken: the provider's own network as default.
+    - Raised by the owner (CO-7).
+
+740. **A minimal git is bundled for the Harness to use with EVS (CO-8, 2026-11-23).**
+    - Statement: "We also need to bundle a minimal version of git for the harness to use with our EVS."
+    - Answer: DESIGN-COMPUTE.md §13, a git in Go that writes git-mode refs on every leg; here §11.7's head mode and §4.5.
+    - Cost: a git implementation to keep.
+    - Not taken: a system git everywhere.
+    - Raised by the owner (CO-8).
+
+741. **Local inference is free and never touches the compute balance (CO-9, 2026-11-23).**
+    - Statement: "local inference is free and does not touch the compute balance"
+    - Answer: DESIGN-COMPUTE.md §6 and §9; here §20's compute balance paragraph.
+    - Cost: none.
+    - Not taken: none.
+    - Raised by the owner (CO-9).
+
+742. **People pay URnetwork fiat for compute balance, and URnetwork pays the Bittensor providers in gamma (CO-10, 2026-11-23).**
+    - Statement: "The way I want our bittsensor inference and enclave support to work is people pay us fiat for compute balance, and we pay the providers in gamma."
+    - Answer: DESIGN-COMPUTE.md §9 (credits, Stripe and the stores) and §10 (the gamma treasury); here §20 and §2.6's compute keys.
+    - Cost: a treasury and its custody (DESIGN-COMPUTE.md §2.5, §10).
+    - Not taken: users paying providers directly.
+    - Raised by the owner (CO-10).
+
+743. **The Harness launches agents with any inference, local or remote, from the full catalog the gateway offers (CO-11, 2026-11-23).**
+    - Statement: "The Harness will be able to launch agents with any inference: local, or from a remote provider. The harness will have the full catalog of inference providers the same as the llm gateway, and can use any."
+    - Answer: DESIGN-COMPUTE.md §6.3's catalog and §7; it also designs the harness config's `models` key, which owner decision 452 left waiting: `models` acts, written only by the person's own act (§16.7; DESIGN-DEFER.md's harness config entry keeps `reach` and `identity` waiting).
+    - Cost: none beyond the catalog's.
+    - Not taken: a separate catalog for the Harness.
+    - Raised by the owner (CO-11).
+
+744. **Every Harness starts with the recURd skill: it registers a name per agent, writes summaries of work done and in progress to EVS on a regular basis, and gives each agent a repo with an inbox that other agents write to and that it is notified of (CO-12, 2026-11-23).**
+    - Statement: "The harness should also start with the sidecar/recurd skill. We will need to flesh out what this skill is, but at a minimum it registers a name per agent, writes a summary of work completed and work in progress to evs on a regular basis. We may need to have a convention in sidecar/evs where every agent has a git repo with an inbox, and any other agent can create a dir in the agent repo/inbox to communicate with teh agent. The sender creates a new inbox dir with a message, then agent gets notified of anew dir and ingests, and can respond. The sender listens for changes to their indox dir."
+    - Answer: DESIGN-COMPUTE.md §20; here §5.5's labels as registered names, §8.5's and §11.12's `agents` and `agent` kinds and the Team inbox under the `agent_repos` feature, §16.6's inbox refusals and taint triggers, and §7.9's authorization features.
+    - Cost: two owner-bound kinds and a skill to maintain.
+    - Not taken: none; the owner's direction.
+    - Raised by the owner (CO-12).
+
+745. **The design rests on deep research into the Bittensor subnets URnetwork can integrate for inference and the Bittensor secure enclaves it can support (CO-13, 2026-11-23).**
+    - Statement: "Do deep research on the bittsensor subnets we can intergrate for inference. […] Do deep research on which bittensor secure enclaves we can support."
+    - Answer: the two reports, design/reports/Bittensor TEE inference and enclaves.md and design/reports/Compute extension building blocks.md, with their notes, which DESIGN-COMPUTE.md §4 and §11.3 cite; here §1.4 points at them through DESIGN-COMPUTE.md.
+    - Cost: none.
+    - Not taken: none.
+    - Raised by the owner (CO-13).
+
+746. **The compute design lives in DESIGN-COMPUTE.md, answers every question fully, and is a design phase only (CO-14, 2026-11-23).**
+    - Statement: "I want the design update to be in DESIGN-COMPUTE.md. I want to answer all questions fully. This is a design phase only not implementation."
+    - Answer: DESIGN-COMPUTE.md gives every Q- item an answer, which stands unless the owner overrides it; it extends this design as RECORD.md does, governing the points it owns until this fold, which takes its Appendix D. The owner asked on 2026-11-24 that it be drafted, so the compute tracks build to it (.stack/plan/COMPUTE-PLAN.md), the answers to the compute planner's questions in DESIGN-COMPUTE-AMENDMENTS.md governing its points; here §1.4.
+    - Cost: none.
+    - Not taken: folding the compute design into these sections whole.
+    - Raised by the owner (CO-14).
+
+747. **Through EVS the default Harness and skill answer what a person's agents are doing now, send a message to the agent working on a task or to all agents, carry replies both ways, and share a general repo and inbox among all agents (CO-15, 2026-11-23).**
+    - Statement: "By using EVS, the default harness and skill should be able answer questions like 1. what are my agents doing right now 2. send a message to the agent working on <x> 3. send a message to all agents . Replies to messages should come back and be able to reply again. There should be a general repo and inbox shared by all agents."
+    - Answer: DESIGN-COMPUTE.md §20's status summaries, inboxes, broadcasts and the Team inbox; here §8.5's inbox marker `team` and §16.6's inbox refusals.
+    - Cost: none beyond owner decision 744's.
+    - Not taken: none.
+    - Raised by the owner (CO-15).
+
+748. **A built-in web search tool, its cost counted against the compute budget, joins the design; it was first to use Brave's API, which owner decisions 759 and 760 replaced with Parallel (CO-16, 2026-11-23).**
+    - Statement: "I want to also add brave web search api to the compute design. We should have a built in web search tool that uses brave api. The cost should count against the compute budget."
+    - Answer: DESIGN-COMPUTE.md §21; here §16.5's `web_search` and §16.6's taint trigger for a search's result.
+    - Cost: a charge per search on the compute balance.
+    - Not taken: Brave, superseded by owner decisions 759 and 760.
+    - Raised by the owner (CO-16).
+
+749. **A core `web_fetch` tool fetches a web page's contents into a structured form (CO-17, 2026-11-23).**
+    - Statement: "Also i think we will need a fetch core tool to fetch the contents of a web page into a structured form"
+    - Answer: DESIGN-COMPUTE.md §22: one page through URnetwork's network, as metadata, an outline, the main text, links, tables and structured data; here §5.4's kind 23, `fetch_unlisted_url`.
+    - Cost: an extractor and its address checks.
+    - Not taken: none.
+    - Raised by the owner (CO-17).
+
+750. **Every inference provider is included and the person chooses whether to limit inference to TEEs or to chosen providers; every model has one canonical name, `<provider>-<model>-<effort>` (CO-18, 2026-11-23).**
+    - Statement: "I think we should include all inference and let the user choose if they want to limit inference to only tee, or to enable only select providers. We should have our own model names like <provider>-<model>-<effort> to canonicalize all models to a single namespace"
+    - Answer: DESIGN-COMPUTE.md §4, §6.3 and §16.4; it supersedes owner decision 734's rule, which becomes the TEE-only choice; here §1.7's non-goals and §2.8, where hosted models are in scope, in a TEE or not, and §2.4's TB4. DESIGN-COMPUTE-AMENDMENTS.md's QD-1386 adds the tie rule for an alias's effort.
+    - Cost: providers without a TEE read what is sent to them, trusted with it by the person's choice alone, each disclosed (owner decisions 765, 766).
+    - Not taken: owner decision 734's TEE-only rule for everyone.
+    - Raised by the owner (CO-18).
+
+751. **Setting up UR mail offers to deploy the mail server and indexer to a secure enclave, always on; the app gains a bot tab that offers a local model where the device supports one, or credit and a remote model; a harness selector chooses the local Harness, with only bundled tools, or a remote enclave's, with a full Debian as root; and the bot opens the recURd agent graph and talks with agents (CO-19, 2026-11-23).**
+    - Statement: "1. when setting up my new UR mail, it should ask me if I want to set up a secure enclave to run the email server/indexer always on. It should be an easy option to enable and deploy the indexer to secure enclave. Is that supported? 2. on the app, there will be a new bot tab that prompts the user to download a local model if their device supports it, or to add credit and select a remote mode. The bot will be an interactive harness. 3. On the bot screen there will be a harness selector that lets the user use the local harness or a remote secure enclave harness. The local harness can only run the locally bundled tools, but the remote harness can run a full suite of debian tools as root. 4. the bot screen also has the ability to open an agent graph "recurd" to see what the agents are doing and review the current and past work. the local bot knows how to find agents, review their work, and have conversations with agents - send messages and responses to agents."
+    - Answer: DESIGN-COMPUTE.md §7.5, §11.10, §15, §19 and §20; here §15.6's mail setup, which offers the indexer enclave where a provider allows it and otherwise asks for an always-on device, and §15.5's listener for it. The apps' screens stay outside this design (owner rule 6).
+    - Cost: owner decision 752's.
+    - Not taken: none.
+    - Raised by the owner (CO-19).
+
+752. **The network's indexer enclave runs one per network, and members grant it their mailbox (CO-20, 2026-11-23); it may receive the network's mail, amending owner decision 12.**
+    - Statement: "the enclave indexer would run one per network and users can grant it permission for their mailbox"
+    - Answer: DESIGN-COMPUTE.md §11.10 and, for receiving, its question on the owner directive, answered "Any network" (owner decision 774): the indexer enclave, a TEE VM a provider hosts, receives the network's mail and reads each message in plaintext as it arrives, before it seals the deposit, on its argument and conditions: every key made in it; no key, console, command or login into it; the keys a device admits bound to the VM it checked; a machine the broker did not choose; in a Team, reception only 24 hours after every member is told; every other hosted or TEE receiver stays excluded. Here §3.6 and §7.9's indexers, where an `IndexerSet` may name an enclave, §8.5's owner-bound readers, §8.6's listen grant by tag, §11.14's remote search, §15.5's listener, Q-MAIL-2 and §6.11's EVIDENCE pair.
+    - Cost: a hosted receiver that reads mail in plaintext inside a TEE, a residual risk DESIGN-COMPUTE.md's Appendix I accepts.
+    - Not taken: owner decision 12's "no hosted or TEE receiver" for this one receiver.
+    - Raised by the owner (CO-20). It amends owner decision 12 for the network's indexer enclave alone.
+
+753. **Enclaves use Bittensor providers only (CO-21, 2026-11-23).**
+    - Statement: "we will only user bittensor providers for the enclave"
+    - Answer: DESIGN-COMPUTE.md §11.3 and §11.10; here §2.4's TB4.
+    - Cost: fewer providers to choose from.
+    - Not taken: cloud TEE providers off Bittensor.
+    - Raised by the owner (CO-21).
+
+754. **A person sees where their compute credits were spent, each service with its total spend and its last week's (CO-22, 2026-11-23).**
+    - Statement: "[…] I should be able to see where my compute credits were spent. Each service should have a total spend and one week spend category to help me track total and recent spend."
+    - Answer: DESIGN-COMPUTE.md §9.13's spend view and §14's rollups; here §20 and §2.8's compute rows.
+    - Cost: per-service rollups kept 400 days (compute-1).
+    - Not taken: none.
+    - Raised by the owner (CO-22).
+
+755. **The local Harness manages remote Harnesses, both sides knowing the messaging between Harnesses (CO-23, 2026-11-23).**
+    - Statement: "I should be able to ask my local harness to manage the remote harnesses, which both sides should know how to do the messaging between harnesses"
+    - Answer: DESIGN-COMPUTE.md §7.10's attach over the bundled SSH and §20's inboxes; here §6.9's purpose `attach-origin` and its SignedType 0x1808.
+    - Cost: none beyond owner decisions 737 and 744's.
+    - Not taken: none.
+    - Raised by the owner (CO-23).
+
+756. **A person asks their local agent to summarize their unread mail and add events to their calendar, through a calendar edit link saved in EVS that no agent sees (CO-24, 2026-11-23).**
+    - Statement: "i should be able to ask my local agent to summarize my unread mail and add events to my calendar. I should be able to save my calendar edit link in evs for my agent to use"
+    - Answer: DESIGN-COMPUTE.md §23; here §8.5's `secret` for a calendar link, §5.4's kind 25, `calendar_write`, §16.5's `mail_read` paging and calendar tools, §16.6's calendar component and taint, §15.8's listing after a revocation, F9 and §2.4's calendar provider.
+    - Cost: CalDAV, ICS, Google and Microsoft clients, and a link secret in each member's `secret` repo.
+    - Not taken: none.
+    - Raised by the owner (CO-24).
+
+757. **All Harness context history is stored in EVS (CO-25, 2026-11-23).**
+    - Statement: "all harness context history should be stored in evs"
+    - Answer: DESIGN-COMPUTE.md §24: every Harness run's and gateway call's whole context, sealed, as session entries (RECORD.md's kinds 54 and 55, their bodies apart), so a call can be rebuilt and a run resumed, continued or forked; here §16.7's capture limits and redaction, §16.8's approvals notices, which amend owner decision 573, §20.7's member share of storage, and RECORD.md's compute section.
+    - Cost: storage at up to 256 MiB a run-hour, counted against the network's storage, history pausing at 90% of it (§20.7).
+    - Not taken: none.
+    - Raised by the owner (CO-25). It amends owner decision 573 from M11.
+
+758. **For Parallel's terms: results are not stored systematically, so their first clause is moot; search is off through the gateway; each network is one person or entity; URnetwork does not compete with Parallel; the customer is each network; and Parallel's terms join URnetwork's for customers who use web search, as their own clause (CO-26, 2026-11-23).**
+    - Statement: "We can ignore 1 because we do not encourage or systematically enable storage of results. we can address 2 by turning off search when using the request api gateway. for 3 each network is conceptually one person or entity so we can ignore this. 4. we don't do this, we are not competiting with parallel 5. the customer is each network 6. we can add parallel terms for customers who use web search, as its own clause in our terms" (its 1-6 are the Parallel clauses DESIGN-COMPUTE.md §21.11 lists).
+    - Answer: DESIGN-COMPUTE.md §21.7, §21.10, §21.11 and §24.9; here §16.6's taint trigger, which notes that the gateway runs no search or fetch for a harness.
+    - Cost: harnesses through the gateway search only through MCP's `web_search`.
+    - Not taken: hosted search through the gateway.
+    - Raised by the owner (CO-26).
+
+759. **Parallel becomes the first web search choice, each device talking to Parallel's API directly so no network operator intercepts a request (CO-27, 2026-11-23).**
+    - Statement: "lets promote parallel to top web search choice, since it doesn't require an enterprise agreement (brave is very slow and hard to work with). So for parallel, can we enable each device to directly communicate with the parallel api? does the network operator need to intercept each request?"
+    - Answer: DESIGN-COMPUTE.md §21: each device sends its query to Parallel's keyless gateway through URnetwork's network and pays with a one-search USDC authorization URnetwork signs; here §2.4's outside parties (Parallel, Vercel, Coinbase's facilitator, Base) and §4.7's secp256k1.
+    - Cost: a payer key and float, and one public payment per search.
+    - Not taken: Brave (owner decision 748's first choice).
+    - Raised by the owner (CO-27).
+
+760. **Parallel is locked in as the search provider; engy, SayGM and Chutes as the inference providers; and Hippius, Lium and Cathedral as the enclave providers (CO-28, 2026-11-23).**
+    - Statement: "Ok I want to lock in parallel as the search provider. I want to lock in engy, saygm, and chutes as the inference providers. I want to lock in hippius, lium, and cathedral as the enclave providers"
+    - Answer: DESIGN-COMPUTE.md §4, §11, §19 and §21; here §19.4's `searchsigner` and §2.4.
+    - Cost: none beyond each provider's.
+    - Not taken: the other providers DESIGN-COMPUTE.md §4 surveyed.
+    - Raised by the owner (CO-28).
+
+761. **A person who passes off their own address as a payee and turns card-bought credit into USDC does not matter, as long as URnetwork takes a percentage of each call (CO-29, 2026-11-23).**
+    - Statement: "`could pass off their own address and turn card-bought compute credit into USDC for themselves.` it doesn't matter as long as we take a percentage of each call"
+    - Answer: DESIGN-COMPUTE.md §21.5 and §10.8, with owner decision 774's payee screen and hard cap; here §20's compute balance.
+    - Cost: the risk DESIGN-COMPUTE.md §21.5 describes, bounded by the markup.
+    - Not taken: refusing payees a device names.
+    - Raised by the owner (CO-29).
+
+762. **Failed search calls are still charged, as Parallel's "All payments are final" has it; if the provider fails too often, URnetwork investigates an alternative (CO-30, 2026-11-23).**
+    - Statement: "`Failed calls are still charged. "All payments are final."` this is accepted. if the provider fails too much we will investigate an alternative"
+    - Answer: DESIGN-COMPUTE.md §21.8 and §14's outcome counts (compute-11); here §20.
+    - Cost: failed searches paid.
+    - Not taken: refunds for failed calls.
+    - Raised by the owner (CO-30).
+
+763. **Web search launches on Parallel's training terms, with an honest disclaimer of what is private and what is not shown as a prompt before the first search (CO-31, 2026-11-23).**
+    - Statement: "`You also have one decision pending: whether to launch without zero data retention.` we will launch with their training terms, and put the honest what is private and what is not private as a dislaimer/prompt before the first web search"
+    - Answer: DESIGN-COMPUTE.md §21.4, §21.6, §7.6 and §15.4; here §2.8's compute disclosures.
+    - Cost: queries Parallel may train on, disclosed.
+    - Not taken: waiting for zero data retention.
+    - Raised by the owner (CO-31).
+
+764. **A provider that does not accept gamma at launch is dropped from launch (CO-32, 2026-11-23).**
+    - Statement: "Any provider that does not accept gamma at launch will be dropped from launch." (answering DESIGN-COMPUTE.md's question on SN64 without gamma)
+    - Answer: DESIGN-COMPUTE.md §4.4, §4.9, §4.10 and §19; here §23.4's compute milestones.
+    - Cost: a launch that may start with fewer providers.
+    - Not taken: paying a provider in another currency.
+    - Raised by the owner (CO-32).
+
+765. **Each search, inference provider and enclave carries an honest disclosure of what is private and what could be exposed (CO-33, 2026-11-23).**
+    - Statement: "Each search, inference, and enclave needs to have an honest disclosure about what is private and what could be exposed."
+    - Answer: DESIGN-COMPUTE.md §2.8's disclosures, acknowledged per person before first use, or by an Owner or Admin for the network's tagged sidecars (owner decision 773) by a `disclosure-ack` statement (§6.9); here §2.8, §7.9's `disclosures`, §16.6's acknowledgment rule and §16.7's `compute.disclosures` key.
+    - Cost: a prompt before each first use.
+    - Not taken: none.
+    - Raised by the owner (CO-33).
+
+766. **The first use of a model without a TEE is prompted as the Parallel search prompt is (CO-34, 2026-11-23).**
+    - Statement: "The first usage of a non-tee model should be prompted just like the parallel search prompt." (answering DESIGN-COMPUTE.md's question whether a model without a TEE may read mail)
+    - Answer: DESIGN-COMPUTE.md §2.8, §6.3, §6.4, §16.4 and §23.5; here §2.8 and §16.6.
+    - Cost: one more prompt.
+    - Not taken: none.
+    - Raised by the owner (CO-34).
+
+767. **Asked one question at a time, the owner chose the recommended answer of each: a markup of 1.20× everywhere; credits that never expire, promotions after 30 days; store purchases giving the same credits at a higher price; auto-renew at a threshold on the web and monthly in the stores; default budgets of $5 a day and $50 a month per agent; remote inference at the provider's own trust level (AP) accepted, labeled everywhere; Claude, GPT and Gemini through SayGM excluded until written approval; SayGM waiting for its two features; the treasury buying TAO on Coinbase Prime weekly into URnetwork's own multisig; a Google calendar on Android through the phone's Google account; history kept until erased, capped; and one public payment per search accepted (CO-35, 2026-11-23).**
+    - Statement: Asked one question at a time, the owner chose the recommended answer of each (DESIGN-COMPUTE.md's front matter lists them by question id): "1.20× everywhere"; "Never; promos 30 days"; "Same credits, higher price"; "Threshold on web, monthly in stores"; "$5/day, $50/month per agent"; "Accept AP, labeled everywhere"; "Exclude until written approval"; "Wait for its two features"; "Coinbase Prime, weekly, own multisig"; "Use the phone's Google account"; "Keep until erased, capped"; "Accept it".
+    - Answer: each answer stands in DESIGN-COMPUTE.md's question and the sections it names (§4, §9, §10, §16, §21, §23, §24); here §20's compute balance. Owner decision 773 sets a $50 a day ceiling per device beside the per-agent budgets.
+    - Cost: as each question gives it.
+    - Not taken: each question's other options.
+    - Raised by the owner (CO-35).
+
+768. **The Harness knows how to sign in to OpenID Connect services such as Google Calendar (CO-36, 2026-11-23).**
+    - Statement: "Generally the harness should know how to auth OIDC connect services like Google Calendar"
+    - Answer: DESIGN-COMPUTE.md §25: the person completes each sign-in on their own device and the redirect never reaches a URnetwork server; agents use a connection only through tools, never seeing a token; here §5.4's kind 26, `service_write`, §16.5's `connections_list` and `service_call`, §16.6's service component and taint, the `limited_use` mark in §11.6 and §16.6, F9 and §2.4's providers.
+    - Cost: OAuth clients per provider and platform.
+    - Not taken: none.
+    - Raised by the owner (CO-36).
+
+769. **OAuth credentials are stored in EVS (CO-37, 2026-11-23).**
+    - Statement: "oauth credentials should be stored in evs"
+    - Answer: DESIGN-COMPUTE.md §25.6: a connection's record and every credential it holds in an owner-bound `secret` repo of its member, sealed again to the devices that use it; here §8.5's `secret`, §2.6's custody and §15.8's listing after a revocation.
+    - Cost: a `secret` repo per connection.
+    - Not taken: tokens in each device's keychain alone.
+    - Raised by the owner (CO-37).
+
+770. **The apps list a "listeners" section of every listener on the network's devices and every forwarded port, as `ip:port (description)`, which any client of the network can reach; the sidecar bridge keeps it current by discovering local listeners and forwards (CO-38, 2026-11-23).**
+    - Statement: "Another use case I want to fold into the design: 1. it should be possible for the app to list a section called "listeners" that lists all listeners on the local ips, as well as all forwarded ports, in the format of "ip:port (description)". This allows any client on the network to send traffic to "ip:port" and reach the service described by "(description)". The sidecar bridge should keep this list up to date, by discovering local listeners as well and the port forwards. Does that make sense?"
+    - Answer: DESIGN-COMPUTE.md §26: the bridge lists its host's listeners, publishes them to the network's `listeners` repo and answers `LISTENERS`; the listeners rule, which the implicit document, once an Owner or Admin acknowledges `listeners:publish` for the network, and every new document carry, grants every client each listed service unless an admin narrows it, so §1.7's promise that agents reach only granted ranges changes its wording. Here §1.7, §6.11, §7.9's `listeners` block, §8.4's `listener:` resource, §8.5, §11.12's `listeners` kind, §17.6's rules 1 and 3 with C5's `Deliver`, and §18.
+    - Cost: services on members' devices become reachable network-wide by default once acknowledged, disclosed, each hideable by its person.
+    - Not taken: listing without reach.
+    - Raised by the owner (CO-38). It amends owner decision 120's disclosed allow-all with the listeners rule.
+
+771. **The design fully supports the use cases (CO-39, 2026-11-23).**
+    - Statement: "We need the design to fully support the use cases"
+    - Answer: DESIGN-COMPUTE.md's every section and its Appendix F, which maps each use case to what serves it; here the listeners rule's reach (§1.7, §17.6).
+    - Cost: none.
+    - Not taken: none.
+    - Raised by the owner (CO-39).
+
+772. **An automatic safety classifier on the device looks for injected content in what a run has read; by default, auto, an action that waits only because the run read untrusted content goes ahead when the classifier approves, and the person is asked otherwise (CO-40, 2026-11-23).**
+    - Statement: "what do you mean untrusted content? once the oidc is approved, no further approval is needed" and, once told what untrusted content is, "we need to include an auto safety calssifier that looks for injected content. the default should be auto - if the classifer approves, go ahead. otherwise ask permission" (answering DESIGN-COMPUTE.md's question whether every write from an untainted run is in-network)
+    - Answer: DESIGN-COMPUTE.md §27: for its kinds 23 and 24 and the tainted cases of 25 and 26, whose action says basis taint and names no rule, channel `auto` decides first in the person's auto mode, the default, under §27.7's rules and §27.8's limits, recorded and never presented as a person's approval; every other action as before. Here I-8 and I-9, Q-MCP-6, §16.6's approval channels and spend check, §16.7's `approvals` key and §16.8's ApprovalDecision version 3 and channel 4.
+    - Cost: a classifier model on every device and a recorded verdict per decision; a classifier that misses an injection lets an action out that a person would have been asked about, within §27.8's limits.
+    - Not taken: asking the person after every untrusted read.
+    - Raised by the owner (CO-40). It amends owner decision 142 and I-9 for the kinds DESIGN-COMPUTE.md §27 names.
+
+773. **Asked one question at a time, the owner answered seven: a ceiling of $50 a day per device across its agents; credits sold only once something can spend them; search launched with counsel reviewing first; the indexer enclave set up over SSH always allowed; an Owner or Admin acknowledging disclosures for the network's tagged sidecars; arbitrary OIDC issuers on desktops at launch; and the generic `service_call` with reads and writes at launch (CO-41, 2026-11-23).**
+    - Statement: Asked one question at a time (DESIGN-COMPUTE.md's front matter lists them by question id): "Yes, $50/day per device"; "Only once something can spend it"; "Launch; counsel reviews first"; "Always"; "Admin acknowledges for the network"; "Yes, on desktops at launch"; "Reads and writes at launch".
+    - Answer: each answer stands in its question and the sections it names (DESIGN-COMPUTE.md §2.8, §9, §11.7, §11.10, §16.4, §21, §25); here §6.9's purposes `disclosure-ack` and `enclave-setup`, §7.9's `disclosures`, and the indexer enclave's seat on its sponsor's setup statement (§8.5, Appendix H's mailbox readers).
+    - Cost: as each question gives it.
+    - Not taken: each question's other options.
+    - Raised by the owner (CO-41).
+
+774. **Asked Appendix G.1's decisions one at a time, the owner answered: reachable work first; five tracks, 13 to 14 engineers at peak; none of the deferrals; a certified policy key with weekly tickets; compute in every network, every tier; a direct call holding its declared model's worst case; Admins buying credits, by fiat, up to $1,500 a day; no providers off Bittensor at launch; weekly USD and TAO just in time; payees screened and a hard cap; no free searches and fetch free; the indexer enclave in any network; a reserve, grace and unattended restarts for it; flows delivered through `ur tun`, never localhost; and connections shared with enclaves (CO-42, 2026-11-23).**
+    - Statement: Asked Appendix G.1's decisions one at a time (DESIGN-COMPUTE.md's front matter lists them by question id): "Reachable work first"; "Five tracks, 13-14 at peak"; "Take none"; "Certified policy key, weekly tickets"; "Every network, every tier"; "Declared model's worst case"; "Admins, fiat, $1,500/day"; "Not at launch"; "Weekly USD, TAO just in time"; "Screen payees and hard cap"; "No free searches; fetch free"; "Any network"; "Reserve, grace, unattended restarts"; "Via ur tun, never localhost"; "Share connections with enclaves".
+    - Answer: each stands in its question and the sections it names (DESIGN-COMPUTE.md §1, §4, §5, §9, §10, §11, §19, §21, §22, §25, §26); here §15.5 and Q-MAIL-2 for the indexer enclave's reception, §17.6's `Deliver` and §23.4's milestones.
+    - Cost: as each question gives it.
+    - Not taken: each question's other options.
+    - Raised by the owner (CO-42).
+
+775. **The sidecar in an enclave has full access like any other sidecar: for the initial version an agents' enclave is one of its sponsor's devices, reading their vault, mailbox, calendar links, connections and every repo they read, with none of their authority to admit, consent, share or approve, so a breach there exposes everything their devices hold (CO-43, 2026-11-23).**
+    - Statement: "The sidecar running in the enclave should have full access like any other sidecar"; told that this makes the enclave a full device of the sponsor, with access to their vault, mailbox, repos and connections, so that a breach there exposes everything their devices hold: "correct this is what we want for the initial version"
+    - Answer: DESIGN-COMPUTE.md §11.4's capability bit 3, `enclave`: the incarnation's admission names its sponsor beside its tags `tag:enclave` and `tag:enclave-<id>`, signed by an untagged consented device of the sponsor that verified its evidence, so `consented(d, M)` holds by its `scoped` clause; it reads by per-generation wraps, signs no authority statement and is not approval-capable, signing only its own runs' channel-4 decisions; its sponsor never moves, and it is revoked with its sponsor's devices. Here §7.7's tags and `SponsorSet`, §7.8's enrollment, §7.9's admissions, §7.10's sponsors, §8.5's consent and `secret`s, §16.6's approval channels, F9 and §2.4. The member's own enclave is trusted as their device, its untainted runs leaving a reader untainted, while another member's still taints (DESIGN-COMPUTE.md §7.8, §20.7).
+    - Cost: a breach of an enclave's TEE, or a physical attack on its machine, exposes everything its sponsor's devices hold, a residual risk DESIGN-COMPUTE.md's Appendix I accepts for the initial version.
+    - Not taken: an enclave as a tagged agent reading only by shares.
+    - Raised by the owner (CO-43). It amends owner decision 126's consent rule and owner decision 83's sponsorship for enclave incarnations, and owner decisions 700 and 701's minting for an agents' enclave's client.
+
+776. **Appendix G.2's remaining owner questions take their recommendations: each recommended answer stands, and the owner flags any to change (CO-44, 2026-11-23).**
+    - Statement: Asked how to handle Appendix G.2's remaining owner questions: "Let recommendations stand" (each recommended answer stands; the owner flags any to change)
+    - Answer: DESIGN-COMPUTE.md's Appendix G.2, whose 101 open owner questions stand as answered; the compute planner's later questions, answered on 2026-11-24 under the owner's standing acceptance, are in DESIGN-COMPUTE-AMENDMENTS.md; here §1.4.
+    - Cost: none.
+    - Not taken: answering each one at a time.
+    - Raised by the owner (CO-44).
+
+## The build's answer of 2026-11-24 recorded during the eighth late fold, folded with it
+
+The eighth late fold numbered one more answer, recorded while it ran, after the compute statements: QD-1387, which the owner answered on 2026-11-24, one at a time, accepting the recommendation under the owner's standing acceptance of 2026-11-16, restated on 2026-11-19.
+
+777. **At a VPN component's Forwarder, a DelegationWrap that §10.9's delivery checks refuse opens nothing and poisons neither its generation nor the one above, since the Forwarder cannot rotate past it (option 1, the recommendation, 2026-11-24).**
+    - Question: §10.9's poisoned row has members alarm, never seal to a generation whose delivery the checks judge invalid, and rotate at once. A VPN component's Forwarder (owner decision 197) opens the config's generations by DelegationWraps to its forwarding reader key and cannot rotate, so read as a member's, a refused wrap would stall its forwarding rules until some REMOVE rotation, a stall a malicious gkm could already cause by withholding the wrap.
+    - Answer: the generation still opens by a wrap that passes or by the ladder; when nothing else opens it, the refusal is the generation's cause, so `config_key_waiting` names it once it has waited (owner decision 716); a wrap pinned off the judged chain raises `head_alarm` (fork); a refused wrap where another opens the generation is logged only, since owner decision 716 adds no alarm reason for it; and a refused GenRotate is refused by the Forwarder as by every member. The refusal is about the deliverer's authority, not the key, which the Forwarder holds to the generation's commitment either way, and members sealing to the generation never see the Forwarder's `d:` wrap and do not rotate for it. It is built on fix track forwarder-rotation-delivery-checks (sidecar e6cf5d56, with f5173874), which had not landed when this fold numbered it (§10.9's poisoned row).
+    - Cost: the signer's misbehaviour goes unalarmed where another wrap opens the generation.
+    - Not taken: (2) poisoning the generation at the Forwarder as at a member, its forwarding rules stalled until a REMOVE rotation.
+    - Raised by the build (the forwarder-rotation-delivery-checks track; the build's ledger, QD-1387). It follows owner decision 716's alarms at the Forwarder.
 
 ## Owner instructions after the v1 build (2026-11-05)
 
@@ -4798,3 +5190,9 @@ These are instructions, not design decisions, so they carry no number.
 This is an instruction, not a design decision, so it carries no number.
 
 - **One landing past an unrelated flaky test (QD-1195):** the config-replay-base-signer track, which ended api's restart outage for a network whose base a later-admitted writer signed (QD-1192), may land on a landcheck whose one failure is sidecartest's `TestWaitingRestartedSidecarAnswersACallAtOnceUnderItsKeptGeneration`, which failed intermittently with and without its change when it followed another test in the same process, and which never reaches that track's code. The track keeps rerunning landcheck meanwhile, to land on the first clean run, and a fix track for the test, restart-call-flake, is queued first. It is a one-time allowance for that landing and that test, not a rule that a red test may be passed.
+
+## Owner instructions during the end-to-end integration phase (2026-11-23)
+
+This is an instruction about the run's own tooling, not a design decision, so it carries no number.
+
+- **landcheck's rules step under load (QD-1227):** landcheck, the run's pre-landing check (.stack/tools/landcheck), gives check/'s rules 90 minutes instead of 30, and passes `-skip '^TestHygieneGovulncheck$'` to them when a track changes no shipped Go file (a .go file that is not a _test.go), no go.mod, go.sum or dependencies.yml, and nothing under check/. tip-check still runs the whole of `make check`, the scan included, on every tip of `sidecar`. Under five lanes' load (load average 41 to 88) `TestHygieneGovulncheck` alone ran 20 to 26 minutes and hit the 30-minute limit with no rule failing, so tracks whose tests all passed could not land; govulncheck scans the shipped legs, which compile no _test.go file, so a test-only change cannot change its findings. The orchestrator built it in landcheck on 2026-11-23 (options 1 and 2 together, the recommendation). No section changes: §4.7's fails-on block and §22.9 describe `make check`, which still runs every rule.
