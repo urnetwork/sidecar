@@ -323,3 +323,24 @@ func (self *BridgeDiscoveryComponent) stateWithLockForTest() *bridgeDiscoverySta
 	defer self.stateLock.Unlock()
 	return self.stateWithLock().clone()
 }
+
+// The listeners read the one hide set: a port hidden by discovery is hidden to them, and the device hidden whole hides
+// every port.
+func TestBridgeDiscoveryHideSetServesTheListeners(t *testing.T) {
+	host := newDiscoveryTestShareHost(t)
+	if host.component.HidesPort("tcp", 445) {
+		t.Fatal("hidden before any hide")
+	}
+	if err := host.component.Set(DaemonBridgeDiscoveryHide, "445", false); err != nil {
+		t.Fatal(err)
+	}
+	if !host.component.HidesPort("tcp", 445) || host.component.HidesPort("udp", 445) || host.component.HidesPort("tcp", 22) {
+		t.Fatal("the port hide reads wrong")
+	}
+	if err := host.component.Set(DaemonBridgeDiscoveryHide, DaemonBridgeDiscoveryDevice, false); err != nil {
+		t.Fatal(err)
+	}
+	if !host.component.HidesPort("tcp", 22) {
+		t.Fatal("the device hidden whole leaves a port open")
+	}
+}

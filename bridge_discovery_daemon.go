@@ -511,3 +511,17 @@ func (self *BridgeDiscoveryComponent) Devices() *DaemonBridgeDevicesReply {
 	}
 	return reply
 }
+
+// Whether the host's one hide set holds a protocol and port at its overlay address, or the device whole: what
+// DESIGN-COMPUTE.md's listeners read so a hide written by either command takes an entry off the list and out of the
+// listeners rule (§17.7.1's Hiding; D-LSTN-12). transport is "tcp" or "udp". True while the sealed settings do not
+// read, the closed direction.
+func (self *BridgeDiscoveryComponent) HidesPort(transport string, port uint16) bool {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.stateErr != nil {
+		return true
+	}
+	state := self.stateWithLock()
+	return state.HiddenDevice || state.hidesPort("_"+strings.TrimPrefix(transport, "_"), port)
+}
