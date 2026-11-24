@@ -3,8 +3,9 @@
 //
 //	ur mail enable [--network=<net>]   turns mail on: mailcfg, this device's member's mailbox and its RepoAdmin, then
 //	                                   POST /mail/enable, which turns on the network's mail records (§12)
-//	ur mail status [--network=<net>]   the network's mail status, this device's receiver, and §15.6's prompt for a
-//	                                   desktop, NAS or VPS indexer while none stands
+//	ur mail status [--network=<net>]   the network's mail status, this device's receiver and sender, each with why it
+//	                                   does not run where it does not, and §15.6's prompt for a desktop, NAS or VPS
+//	                                   indexer while none stands
 //	ur mail credential [--network=<net>]
 //	                                   the network's IMAP and submission credential, shown once on the terminal
 //	                                   (cmd_mail_credential.go)
@@ -85,21 +86,30 @@ type urMailEnableReply struct {
 	EnabledTimeMillis int64 `json:"enabled_time_ms"`
 }
 
-// mail.status's reply: the status, ids and flags only.
+// mail.status's reply: the status, ids and flags only. Receiving to Problem are this device's receiver; Sender is its
+// sender, nil from a daemon that says nothing of one, whose status then prints no sender line.
 type urMailStatusReply struct {
-	Enabled          bool        `json:"enabled"`
-	NetworkKnown     bool        `json:"network_known"`
-	StorageFull      bool        `json:"storage_full,omitempty"`
-	Spent            bool        `json:"spent,omitempty"`
-	DirectMx         bool        `json:"direct_mx,omitempty"`
-	Receiving        bool        `json:"receiving"`
-	Listening        bool        `json:"listening"`
-	Serving          bool        `json:"serving"`
-	ApprovalId       *sidecar.Id `json:"approval_id,omitempty"`
-	Problem          string      `json:"problem,omitempty"`
-	MailIndexer      bool        `json:"mail_indexer"`
-	MailIndexerKnown bool        `json:"mail_indexer_known"`
-	Prompt           string      `json:"prompt,omitempty"`
+	Enabled          bool               `json:"enabled"`
+	NetworkKnown     bool               `json:"network_known"`
+	StorageFull      bool               `json:"storage_full,omitempty"`
+	Spent            bool               `json:"spent,omitempty"`
+	DirectMx         bool               `json:"direct_mx,omitempty"`
+	Receiving        bool               `json:"receiving"`
+	Listening        bool               `json:"listening"`
+	Serving          bool               `json:"serving"`
+	ApprovalId       *sidecar.Id        `json:"approval_id,omitempty"`
+	Problem          string             `json:"problem,omitempty"`
+	Sender           *urMailSenderReply `json:"sender,omitempty"`
+	MailIndexer      bool               `json:"mail_indexer"`
+	MailIndexerKnown bool               `json:"mail_indexer_known"`
+	Prompt           string             `json:"prompt,omitempty"`
+}
+
+// mail.status's sender part (sidecar.MailClientSenderStatus): whether this device's sender runs, and why not where it
+// does not.
+type urMailSenderReply struct {
+	Running bool   `json:"running"`
+	Problem string `json:"problem,omitempty"`
 }
 
 // The reply of status.
@@ -111,6 +121,7 @@ func urMailStatusReplyOf(status *sidecar.MailClientStatus) *urMailStatusReply {
 		Serving:          status.Receiver.Serving,
 		ApprovalId:       status.Receiver.ApprovalId,
 		Problem:          status.Receiver.Problem,
+		Sender:           &urMailSenderReply{Running: status.Sender.Running, Problem: status.Sender.Problem},
 		MailIndexer:      status.MailIndexer,
 		MailIndexerKnown: status.MailIndexerKnown,
 		Prompt:           status.Prompt,
@@ -253,6 +264,15 @@ func formatUrMailStatus(reply *urMailStatusReply) []string {
 		receiver += ": " + reply.Problem
 	}
 	lines = append(lines, "receiver:   "+receiver)
+	if reply.Sender != nil {
+		sender := "not sending"
+		if reply.Sender.Running {
+			sender = "sending"
+		} else if reply.Sender.Problem != "" {
+			sender += ": " + reply.Sender.Problem
+		}
+		lines = append(lines, "sender:     "+sender)
+	}
 	if reply.Prompt != "" {
 		lines = append(lines, "note:       "+reply.Prompt)
 	}
