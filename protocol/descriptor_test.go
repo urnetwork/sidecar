@@ -38,6 +38,7 @@ func TestEvsExactHeadCapabilityWire(t *testing.T) {
 // §4.4's files and those the service sections add, each registered by its root-relative path.
 var testProtoFiles = []string{
 	"protocol/acl.proto",
+	"protocol/attest.proto",
 	"protocol/config.proto",
 	"protocol/core.proto",
 	"protocol/directory.proto",
@@ -806,6 +807,9 @@ func TestConfigReservationsEqualTheDecidedList(t *testing.T) {
 			"mail_strict": 7, "record_cost": 8, "record_required": 9,
 			// Team scopes' signed first bindings (QD-1163)
 			"team_scopes": 10,
+			// the authorization features, reserved with the hold before the first release a user runs (DESIGN-COMPUTE
+			// §16.6; owner decision 775; CACL-M11-02)
+			"auth_features": 11,
 		},
 		"ServiceDirectorySettings": {"runs": 1, "workers": 2},
 		"VersioningRules":          {"rules": 1},

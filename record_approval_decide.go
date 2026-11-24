@@ -254,6 +254,10 @@ func (self *ApprovalApprover) standing() (SidecarAuthority, *SidecarIdentity, *A
 	if authority == nil {
 		return nil, nil, nil, ErrSidecarActNoAuthority
 	}
+	// a reader held at a feature its release lacks approves nothing until it is updated (DESIGN-COMPUTE §16.6's hold)
+	if hold := sidecarAuthorityHold(authority); hold != nil {
+		return nil, nil, nil, hold
+	}
 	identity := self.sidecar.currentIdentity()
 	if identity == nil {
 		return nil, nil, nil, ErrSidecarNoIdentity

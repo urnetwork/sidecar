@@ -197,6 +197,10 @@ func (self *sidecarAct) AddSealed(signedType bridge.SignedType, statement proto.
 	if self.origin != SidecarActConfirmed && !sidecarOwnResourceTypes[signedType] {
 		return ErrSidecarActMode
 	}
+	// a reader held at a feature its release lacks signs only what takes rights away (DESIGN-COMPUTE §16.6's hold)
+	if hold := sidecarAuthorityHold(self.authority); hold != nil && !authFeatureHoldSignedTypes[signedType] {
+		return fmt.Errorf("a held sidecar signs no %s until it is updated: %w", signedType, hold)
+	}
 	headerField := statement.ProtoReflect().Descriptor().Fields().ByNumber(1)
 	if headerField == nil || headerField.Kind() != protoreflect.MessageKind ||
 		headerField.Message().FullName() != (&bridge.StatementHeader{}).ProtoReflect().Descriptor().FullName() {

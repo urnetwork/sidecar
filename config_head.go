@@ -466,6 +466,16 @@ func configHeadRecordSignedByRole(state *ConfigState, signed *bridge.Signed, sig
 	if err != nil {
 		return err
 	}
+	purpose, _ := ConfigStatementPurpose(signedType)
+	if state.base == nil {
+		// base 1's head, judged at S(0), where the genesis owner's device alone stands, the Owner's by the Genesis and
+		// the one writer of the first head (§7.9's bootstrap; IsConfigWriter): its first ServiceSettings, which turns on
+		// the creating release's authorization features (DESIGN-COMPUTE §16.6), is that device's
+		if !state.IsConfigWriter(signerId) {
+			return fmt.Errorf("its signer %s is not the genesis owner's device", signerId)
+		}
+		return bridge.VerifySigned(signed, purpose, signedType, bridge.SignedKeyAlgEd25519, state.IdentityKey(signerId))
+	}
 	row, standing := state.standingSidecar(signerId, state.TimeMs())
 	if !standing {
 		return fmt.Errorf("its signer %s is not standing", signerId)
@@ -477,7 +487,6 @@ func configHeadRecordSignedByRole(state *ConfigState, signed *bridge.Signed, sig
 	if !allow(state.Member(memberId).GetRole()) {
 		return fmt.Errorf("its signer %s's member holds no role that signs it", signerId)
 	}
-	purpose, _ := ConfigStatementPurpose(signedType)
 	return bridge.VerifySigned(signed, purpose, signedType, bridge.SignedKeyAlgEd25519, state.IdentityKey(signerId))
 }
 

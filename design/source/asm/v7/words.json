@@ -11,11 +11,11 @@
  {
   "num": 2,
   "code": "TRUST",
-  "words": 9986,
+  "words": 10161,
   "code_words": 23949,
   "ceiling": 3000,
-  "over": 6986,
-  "over_pct": 232.9
+  "over": 7161,
+  "over_pct": 238.7
  },
  {
   "num": 3,
@@ -29,11 +29,11 @@
  {
   "num": 4,
   "code": "REPO",
-  "words": 9460,
+  "words": 9560,
   "code_words": 2314,
   "ceiling": 2800,
-  "over": 6660,
-  "over_pct": 237.9
+  "over": 6760,
+  "over_pct": 241.4
  },
  {
   "num": 5,
@@ -47,29 +47,29 @@
  {
   "num": 6,
   "code": "PROTO",
-  "words": 9982,
+  "words": 10105,
   "code_words": 4287,
   "ceiling": 3800,
-  "over": 6182,
-  "over_pct": 162.7
+  "over": 6305,
+  "over_pct": 165.9
  },
  {
   "num": 7,
   "code": "TEAM",
-  "words": 14933,
+  "words": 14971,
   "code_words": 15545,
   "ceiling": 3500,
-  "over": 11433,
-  "over_pct": 326.7
+  "over": 11471,
+  "over_pct": 327.7
  },
  {
   "num": 8,
   "code": "ACL",
-  "words": 14059,
+  "words": 14116,
   "code_words": 5962,
   "ceiling": 3800,
-  "over": 10259,
-  "over_pct": 270.0
+  "over": 10316,
+  "over_pct": 271.5
  },
  {
   "num": 9,
@@ -101,11 +101,11 @@
  {
   "num": 12,
   "code": "DNS",
-  "words": 6752,
-  "code_words": 2270,
+  "words": 7681,
+  "code_words": 2514,
   "ceiling": 3000,
-  "over": 3752,
-  "over_pct": 125.1
+  "over": 4681,
+  "over_pct": 156.0
  },
  {
   "num": 13,
@@ -146,20 +146,20 @@
  {
   "num": 17,
   "code": "BRIDGE",
-  "words": 10525,
-  "code_words": 6574,
+  "words": 15118,
+  "code_words": 8417,
   "ceiling": 3800,
-  "over": 6725,
-  "over_pct": 177.0
+  "over": 11318,
+  "over_pct": 297.8
  },
  {
   "num": 18,
   "code": "SDK",
-  "words": 10662,
-  "code_words": 11606,
+  "words": 10749,
+  "code_words": 11759,
   "ceiling": 3000,
-  "over": 7662,
-  "over_pct": 255.4
+  "over": 7749,
+  "over_pct": 258.3
  },
  {
   "num": 19,
@@ -191,19 +191,19 @@
  {
   "num": 22,
   "code": "TEST",
-  "words": 7919,
-  "code_words": 41761,
+  "words": 8081,
+  "code_words": 42152,
   "ceiling": 2500,
-  "over": 5419,
-  "over_pct": 216.8
+  "over": 5581,
+  "over_pct": 223.2
  },
  {
   "num": 23,
   "code": "PHASE",
-  "words": 7868,
-  "code_words": 1172,
+  "words": 7926,
+  "code_words": 1185,
   "ceiling": 2500,
-  "over": 5368,
-  "over_pct": 214.7
+  "over": 5426,
+  "over_pct": 217.0
  }
 ]

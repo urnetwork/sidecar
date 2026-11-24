@@ -192,6 +192,11 @@ func (self *ConfigLog) applyBase(state *ConfigState, kept *configKeptEntry, rows
 	if _, err := bridge.VerifyBaseKeyless(kept.entry, state.IdentityKey(signerId), rows, previousHeader); err != nil {
 		return nil, self.baseFork(kept, "%v", err)
 	}
+	// a feature this release lacks holds the log here, and one the rows clear withholds the base (§16.6), before the
+	// head's compile, which a release lacking the feature cannot match
+	if err := self.checkBaseAuthFeatures(state, kept, rows); err != nil {
+		return nil, err
+	}
 	bits, err := self.checkBaseTail(state.base, header, kept.n)
 	if err != nil {
 		return nil, self.baseFork(kept, "%v", err)

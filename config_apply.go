@@ -78,16 +78,44 @@ type ConfigForkError struct {
 	Entry []byte
 	// What did not hold, ids and positions only (I-13).
 	Reason string
+	// Set on a hold, not a fork (§16.6's hold; acl_compute_features.go): the authorization features the base at N turns
+	// on that this release does not implement. The log stops there as at a fork, so every path the fork stop stops
+	// stops, but nothing forked: no head_alarm is raised, the client raises upgrade_required, and the hold is no
+	// ErrConfigFork, which it does not unwrap to.
+	UpgradeRequired AuthFeature
+	// Set on a re-derivation's wait (§16.6's update row), never on a stop the log applies nothing past: a restore
+	// found its kept state past a base turning on UpgradeRequired, which the release that kept it did not implement, a
+	// faulty build's. The log applies on, but answers this as its fork until a base past N applies, so nothing acts on
+	// the re-derived state before the network's next base confirms its rows and its verdicts.
+	Rederiving bool
 }
 
-// The position and both digests, which HeadCheck's alarm carries.
+// The position and both digests, which HeadCheck's alarm carries; a hold's position and the features it lacks.
 func (self *ConfigForkError) Error() string {
+	if self.Rederiving {
+		return fmt.Sprintf("%s from base %d: %s (%s)", ErrConfigRederiving, self.N, self.Reason, self.UpgradeRequired)
+	}
+	if self.UpgradeRequired != 0 {
+		return fmt.Sprintf("%s at %d: %s (%s)", ErrConfigUpgradeRequired, self.N, self.Reason, self.UpgradeRequired)
+	}
 	return fmt.Sprintf("%s at %d: %s (local %x, remote %x)", ErrConfigFork, self.N, self.Reason, self.LocalChain[:8], self.RemoteChain[:8])
 }
 
-// ErrConfigFork.
+// ErrConfigFork, or for a hold ErrConfigUpgradeRequired, or for a re-derivation's wait ErrConfigRederiving.
 func (self *ConfigForkError) Unwrap() error {
+	if self.Rederiving {
+		return ErrConfigRederiving
+	}
+	if self.UpgradeRequired != 0 {
+		return ErrConfigUpgradeRequired
+	}
 	return ErrConfigFork
+}
+
+// Whether the stop is a hold for features this release lacks, or a re-derivation's wait, not a fork (§16.6's hold and
+// update rows): neither raises a fork alarm.
+func (self *ConfigForkError) Held() bool {
+	return self != nil && (self.UpgradeRequired != 0 || self.Rederiving)
 }
 
 // What one entry came to at its position.
@@ -278,6 +306,12 @@ type ConfigLog struct {
 	history *configStateHistory
 	// the valid vetoes this device holds off the log, by proposal, with each one's at.version (HoldVeto)
 	heldVetoes map[[sha256.Size]byte]uint64
+	// the authorization features this release implements (AuthFeaturesImplemented), which a base's bits are held to:
+	// a bit outside them holds the log at that base (§16.6's hold). An internal test may set a log's own
+	authFeatures AuthFeature
+	// a re-derivation's wait, under stateLock (ConfigForkError.Rederiving): answered by Fork until a base past it
+	// applies, while the log applies on
+	rederive *ConfigForkError
 }
 
 // One retained entry and what it came to.
@@ -323,6 +357,7 @@ func NewConfigLog(settings *ConfigLogSettings, signedGenesis []byte) (*ConfigLog
 		signedGenesis: bytes.Clone(signedGenesis),
 		keptFrom:      1,
 		baseRows:      map[[sha256.Size]byte][]byte{},
+		authFeatures:  AuthFeaturesImplemented(),
 	}
 	self.history = newConfigStateHistory(settings, networkId, self.log)
 	state := &ConfigState{
@@ -378,11 +413,61 @@ func (self *ConfigLog) Pin() *bridge.AuthPin {
 	return self.state.Load().Pin()
 }
 
-// The fork that stopped this log, or nil. Safe for concurrent use.
+// The fork that stopped this log, or nil: a hold too, and a re-derivation's wait while it lasts, which stop every path
+// that acts on the log as a fork does. Safe for concurrent use.
 func (self *ConfigLog) Fork() *ConfigForkError {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
+	if self.fork != nil {
+		return self.fork
+	}
+	return self.rederive
+}
+
+// The stop this log applies nothing past, a fork or a hold, never a re-derivation's wait. Safe for concurrent use.
+func (self *ConfigLog) stopped() *ConfigForkError {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
 	return self.fork
+}
+
+// Starts a re-derivation's wait (§16.6's update row) at the newest base this log stands on, for faulty, features a
+// base it holds turned on that the release that kept it did not implement: nothing acts on the log until a base past
+// that one applies, the network's next, whose rows check and tail verdicts confirm the state re-derived here. For the
+// log's applying goroutine.
+func (self *ConfigLog) startRederive(faulty AuthFeature) {
+	base := self.State().Base()
+	if base == nil {
+		return
+	}
+	rederive := &ConfigForkError{
+		N:               base.GetVersion(),
+		Reason:          "the kept log turned on authorization features the release that kept it did not implement",
+		UpgradeRequired: faulty,
+		Rederiving:      true,
+	}
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.rederive = rederive
+	}()
+	self.log.Warningf("[config]%s re-derives from base %d: the kept log turned on %s, which the release that kept it did not implement", self.networkId, rederive.N, faulty)
+}
+
+// Ends a re-derivation's wait once a base past it applied. For the log's applying goroutine.
+func (self *ConfigLog) endRederive(baseN uint64) {
+	ended := func() bool {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		if self.rederive == nil || baseN <= self.rederive.N {
+			return false
+		}
+		self.rederive = nil
+		return true
+	}()
+	if ended {
+		self.log.Infof("[config]%s base %d confirms the re-derived log", self.networkId, baseN)
+	}
 }
 
 // The verdict a statement would get at the next position, sequenced at timeMs, judged on the current state as §7.9's
@@ -403,7 +488,7 @@ func (self *ConfigLog) Check(signedBytes []byte, timeMs int64) ConfigVerdict {
 	if chain, err := bridge.AuthChainDigest(entry.GetN(), entry.GetPrevChain(), entry.GetKind(), timeMs, signedBytes); err == nil {
 		verdict.Pin = &bridge.AuthPin{Version: entry.GetN(), Chain: bytes.Clone(chain[:])}
 	}
-	if self.Fork() != nil {
+	if self.stopped() != nil {
 		verdict.Refusal = fmt.Errorf("%w: the log stopped at a fork", ErrConfigRefused)
 		return verdict
 	}
@@ -465,7 +550,7 @@ func (self *ConfigLog) Apply(entryBytes []byte, rowsSource ConfigRowsSource) (Co
 	testHookBarrier("config.apply.before", barrierKey)
 	defer testHookBarrier("config.apply.after", barrierKey)
 
-	if fork := self.Fork(); fork != nil {
+	if fork := self.stopped(); fork != nil {
 		return ConfigVerdict{}, fork
 	}
 	entry := &bridge.AuthEntry{}
@@ -501,6 +586,9 @@ func (self *ConfigLog) Apply(entryBytes []byte, rowsSource ConfigRowsSource) (Co
 		if err != nil {
 			return ConfigVerdict{}, err
 		}
+		// a base past a re-derivation's start confirms what this log re-derived: its rows hashed to the base's and
+		// its verdicts equal the base's tail verdicts (§16.6's update row)
+		self.endRederive(kept.n)
 	case bridge.AuthEntryKindStatement:
 		next = self.applyStatement(state, kept)
 	case bridge.AuthEntryKindTick:

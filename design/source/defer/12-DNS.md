@@ -48,12 +48,32 @@ Stage: Later, at the owner's call
 - **Held:** Nothing: no task or track waits on it.
 - **To bring back:** The scope system publish above, across the sidecar's access control, sockets and mail and the server's edge records sync; then the scope set publishes `_mta-sts` as the network's does, under the same verification and certificate conditions, and a test shows a scope receiver serving its policy.
 
+### dns-push-notifications: DNS Push for DNS-SD on the device
+Stage: Later
+- **Deferred:** DNS Push Notifications (RFC 8765) from a device's own resolver for §12.9.1's DNS-SD names, which owner decision 778's design named to keep clients current, named in §12.16's Later row and §12.9.1. It has no D- item, task or FS row.
+- **Why:** RFC 8765 runs only over DNS Stateful Operations on TLS whose server the client authenticates under DNS over TLS's Strict Privacy profile, by DANE where it can (RFC 8765 §7), and a resolver answering a private zone on the device has no identity a client can check that way; mDNSResponder sets up its push TLS in a library Apple does not publish, so what it would accept cannot be known.
+- **Launch instead:** Between hosts, §17.7.1's watch delivers each change within a round trip; on the device, the advertising proxy's registrations change at once, and unicast answers carry RFC 8766 §5.5.1's 10 s TTL (§12.9.1).
+- **Lost:** A unicast DNS-SD client sees a change only when it asks again, up to 10 s later, or later where its resolver raises short TTLs, and mDNSResponder polls a long-lived unicast browse every 15 minutes.
+- **Dark in code:** Nothing is built.
+- **Held:** Nothing: no task or track waits on it.
+- **To bring back:** A server identity a push client verifies: a certificate for a name in the zone that the client's validation accepts, or DANE under a signed answer for the device's resolver, and a check of what mDNSResponder, Avahi and systemd-resolved require.
+
+### dns-service-discovery-app-paths: DNS-SD answers on app paths
+Stage: Later
+- **Deferred:** Answering §12.9.1's DNS-SD names with records, not NODATA, in an app's VPN component through C14's `LocalZone`, named in §12.16's Later row and §12.9.1.
+- **Why:** `LocalZone.Answer` carries addresses alone (§12.9), so PTR, SRV and TXT answers need a change to C14's interface in connect, and an app's discovery view would come from its sidecar role, which on Android runs only while the app is open (owner decision 197).
+- **Launch instead:** The VPN component owns the names and answers each NODATA, so no browse leaves its tunnel; desktops answer them under `ur tun` (§12.9.1) and run the advertising proxy (§17.7.1).
+- **Lost:** On iOS, Bonjour's default browses, AirPrint's among them, do not find the network's instances; on Android only an app that queries DNS itself could have found them.
+- **Dark in code:** The NODATA ownership is built; no record answer is.
+- **Held:** Nothing: no task or track waits on it.
+- **To bring back:** A `LocalZone` method that returns RRsets (a C14 amendment, §4.6), the sidecar role handing its view to the VPN component over the device RPC with each record's expiry, and `lb._dns-sd._udp` answered positively where no advertising proxy runs.
+
 ### dns-v1: §12's v1 set
 Stage: v1 (M6, M7, M8)
-- **Deferred:** §12.16's v1 row: aliases, custom domains in both CAA modes and Team scopes at M6; direct MX and strict-mode MX hosts at M7; scope mail hosts with §15 at M8.
-- **Why:** They are Team items (owner decisions 33, 55, 58).
+- **Deferred:** §12.16's v1 row: aliases, custom domains in both CAA modes, Team scopes and §12.9.1's DNS-SD names in `ur tun`'s resolver at M6 (owner decision 778); `LocalZone` owning those names on app paths, scope mail hosts with §15 at M8; direct MX and strict-mode MX hosts at M7.
+- **Why:** They are Team items (owner decisions 33, 55, 58); the DNS-SD names come with §17.7.1's discovery and `ur tun` on macOS and Windows at M6.
 - **Launch instead:** v0's zone: labels, edge, challenge, SPF, DMARC, null MX and user records at M5; mail records, TLSA and the DS at M7; replying burners' selectors and the reverse zones' PTRs at M9.
-- **Lost:** Until those milestones: a Team's own domain, aliases and scope hosts.
+- **Lost:** Until those milestones: a Team's own domain, aliases and scope hosts, and DNS-SD across hosts.
 - **Dark in code:** Built in the same run on the `sidecar` branches. §13.4's generated split map blocks M6's custom hosts.
 - **Held:** Nothing.
 - **To bring back:** Nothing to bring back: each ships when its milestone's gate passes (§23.6).

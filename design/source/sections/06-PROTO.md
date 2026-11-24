@@ -530,6 +530,8 @@ enum SignedType {
 }
 ```
 
+§12.9.1's watch takes `DNS_SD_WATCH` = 0x1B02 and `DNS_SD_WATCH_RESULT` = 0x1B03 beside `DNS_ZONE_CHANGED` (owner decision 778): a peer RPC that §17.7.1's hosts answer only on a data-class contract, never the control class, whose values types.proto takes with their code track, the fence above holding what it declares (owner decision 273). It stays apart from DESIGN-COMPUTE.md's `LISTENERS` pair, which D-PROTO-18 puts on the control class: the listeners list is the whole network's (owner decision 770), entries a viewer may not reach included, so a viewer without reach still refreshes it, while a watch answers only what reach admits; a DNS-SD instance has no field for a listed entry's kind, bind, description source, end or `shared` mark; and one list answered two ways could disagree (§17.7.1).
+
 ```text
 edge codes, numbered here beside ErrorCode (6.5) and StreamRejectCode and StreamResetCode (6.7)
 SmtpPreambleResult.code (§14)       UNSPECIFIED 0, OK 1, HALTED 2, QUOTA 3, DENIED 4, NO_MX 5, NO_TLS 6,
