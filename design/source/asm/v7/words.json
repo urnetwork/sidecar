@@ -29,11 +29,11 @@
  {
   "num": 4,
   "code": "REPO",
-  "words": 9560,
+  "words": 9615,
   "code_words": 2314,
   "ceiling": 2800,
-  "over": 6760,
-  "over_pct": 241.4
+  "over": 6815,
+  "over_pct": 243.4
  },
  {
   "num": 5,
@@ -47,11 +47,11 @@
  {
   "num": 6,
   "code": "PROTO",
-  "words": 10095,
-  "code_words": 4307,
+  "words": 10179,
+  "code_words": 4332,
   "ceiling": 3800,
-  "over": 6295,
-  "over_pct": 165.7
+  "over": 6379,
+  "over_pct": 167.9
  },
  {
   "num": 7,
@@ -92,11 +92,11 @@
  {
   "num": 11,
   "code": "EVS",
-  "words": 23061,
-  "code_words": 56826,
+  "words": 23239,
+  "code_words": 56876,
   "ceiling": 5000,
-  "over": 18061,
-  "over_pct": 361.2
+  "over": 18239,
+  "over_pct": 364.8
  },
  {
   "num": 12,
@@ -165,7 +165,7 @@
   "num": 19,
   "code": "OPS",
   "words": 10814,
-  "code_words": 11127,
+  "code_words": 11130,
   "ceiling": 3500,
   "over": 7314,
   "over_pct": 209.0
@@ -192,7 +192,7 @@
   "num": 22,
   "code": "TEST",
   "words": 8081,
-  "code_words": 42152,
+  "code_words": 42250,
   "ceiling": 2500,
   "over": 5581,
   "over_pct": 223.2

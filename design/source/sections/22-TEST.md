@@ -884,10 +884,16 @@ real        T3 runs each T3 row through server's real handlers and stores (api, 
             nothing; T3 keeps each row whole and moves time in one reviewed file, server/sidecart3/clock.go: its
             Blobs wrapper records each key's write on the schedule's clock and returns it as LastModified, Advance
             shortens by PEXPIRE the Redis TTLs of the families a row names, and api takes the clock through a test
-            seam beside DenyPostgresForTest; after an Advance the Net rereads its file clusters' admin info once,
-            holding every later blob request until that reread has finished, so none after a move goes on with
-            stale admin info, whatever their order, to a 503 and a retry on a clock no one moves
-            (server/sidecart3/faults.go; owner decision 646); a clause that depends on Postgres now() or a
+            seam beside DenyPostgresForTest; once an Advance has moved the Net's clock past a threshold since its
+            last reread, a sidecart3.Settings field defaulting to the file clusters' CheckInterval (30 s), the Net
+            rereads its file clusters' admin info once, holding every later blob request until that reread has
+            finished, so none after such a move goes on with stale admin info, whatever their order, to a 503 and
+            a retry on a clock no one moves, while a clock following real time in small steps rereads about once
+            in 30 s (server/sidecart3/faults.go; owner decisions 646, 781); a Net's construction rides out a
+            connection reset from the local stack's MinIO, sending MakeBucket and the clusters' first admin read
+            again after a transport failure alone, never a refusal such as AccessDenied, up to sidecart3.Settings'
+            SetupRetryCount (5) times SetupRetryWait (1 s) apart (owner decision 781), since setup against a real
+            store is not what a row tests; a clause that depends on Postgres now() or a
             script's Redis TIME after an Advance runs on T2 alone, since neither moves; the catalog's store_clock
             flag marks each translated clause, gate reports say so, and FS-114 and 22.9's file-cluster suite
             never use the wrapper

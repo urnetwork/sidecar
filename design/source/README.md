@@ -7,7 +7,7 @@
 | Path | What it is |
 |---|---|
 | `sections/01-CTX.md` … `sections/23-PHASE.md` | DESIGN.md §1-§23, one file per section. The build copies them verbatim, adding only links. |
-| `owner/DECISIONS.md` | The owner's record, entries 1-778. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
+| `owner/DECISIONS.md` | The owner's record, entries 1-782. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
 | `owner/APPLY.md` | The rules for applying the owner's decisions: precedence (§1), supersession, where two decisions disagree (§2), notation (§3), editing rules (§4), and the follow-up decisions 112-136 with the sections each binds (§6-§8). |
 | `CONVENTIONS.md` | The writing conventions every section follows: the owner directive (§0), the owner rules (§1), the section template (§2) and the X registry (§7), which DESIGN.md's X1-X20 table replaced. |
 | `OUTLINE.md` | The original outline: section codes, scope boundaries, and the word budgets that G0's density rule replaced on 2026-11-04. |
@@ -44,7 +44,7 @@ It needs only `python3`; it was built and checked with Python 3.13. The steps, a
 
 The data files are layered. Each `data_*N.py` loads its predecessor with `runpy` and patches it: `data_front10.py` loads `data_front9.py`, back to `data_front3.py`, and the registers, glossary and appendices go the same way. Change the top layer (the `*10` files), or add an `*11` layer that loads them. Comments in the scripts cite working files from the design sessions (the reconcilers' orders, `peer/`, `review/`, `snap/`), which were not imported; they are history.
 
-## Adding owner decision N (779 onward)
+## Adding owner decision N (783 onward)
 
 1. Add entry N to `owner/DECISIONS.md`: the question, the answer, its cost, the options not taken, and what raised it.
 2. In `asm/data_front10.py`, append `(N, "<what it settles>", "<one line>")` to `INDEX`, add `DATES[N]`, and raise the `assert` to `list(range(1, N + 1))`. Update `STATUS` and `DECISIONS_INTRO` where they name a range. `@@OD:k@@` writes a link to decision k.
@@ -1399,3 +1399,29 @@ The design-records track dr19-support-fold (lane slot ops, wave f47c) folds DESI
 - **Superseded options.** 320 grep hits, none on a changed line unread, none live.
 - **Text.** No bare placeholders or HTML tags; the one research-sheet id stands; 12,729 section references, with the one unresolved as before. `v7/words.json` was regenerated, and `v7/text_checks.json` regenerated unchanged.
 - **The metadata list** is v69, compute-4 with QD-1388's words; check's `metadataListAdditions` stays empty.
+
+### Owner decisions 779 to 782: the build's answers since the eighth late fold
+
+The answers to the questions the build raised after the eighth late fold numbered owner decision 778, QD-1393 to QD-1397, which the owner answered on 2026-11-24, one at a time, accepting each recommendation under the owner's standing acceptance of recommended options, take numbers here, before the support skill's statements, as the eighth late fold numbered its answers before DESIGN-COMPUTE.md's; answers of one topic share an entry numbered by its first ledger id:
+
+| Ledger id | Owner decision | What it settles |
+|---|---|---|
+| QD-1393 | 779 | The competition evaluator's `sidecar/1` takes operator-core as its twelfth repository before it is qualified, on golang:1.27.4, no submission changing operator-core. |
+| QD-1394 | 780 | evs bounds the store reads one push's step 4, and one read's round 1, has in flight (`EvsSettings.EntryReadConcurrency`, 64), and the file clusters the connections they open to a host (`FileClusterSettings.MaxConnsPerHost`). |
+| QD-1395 | 781 | A T3 Net's setup retries a transport failure of MakeBucket and the first admin read, and its stores reread admin info only once its clock has moved past a threshold, 30 s by default. |
+| QD-1396, QD-1397 | 782 | A coalesced hint is superseded only by a later repeat in its batch, and goes as its `seq` alone; a topic's distinct hints keep their bytes up to `TopicHintBodyCount` (64). |
+
+- **The evaluator's twelve repositories (779).** §4.8's closed source graphs and §19.7's MG0, as sim-latency-operator-core built it (server a4dbb4b02, 97b41b80b, 4501dee0f).
+- **evs's fan-out (780).** §11.8's step 4, §11.9's read request and a Fan-out paragraph in §11.15, stated as decided ahead of its code, which fix track evs-read-fanout-bounds builds in evsservice and server's file clusters.
+- **T3's setup and reread (781).** §22.4's real row, stated as decided ahead of its landing: fix track t3-setup-retries builds it in server's sidecart3. It amends owner decision 646, whose entry's reread now waits for a move past the threshold.
+- **Coalesced hints (782).** §6.8's Hints sentence, `PushHint.hint`'s fence comment and §6.6's `SidecarPublisherSettings.TopicHintBodyCount`, as push-hint-coalescing built the narrowed rule and its bound (sidecar 4dda8fed) and gkm-hint-intake-bodyless read a group topic's bodyless notice (sidecar 113f6d76); the superseded hint's seq-alone shape is stated as decided ahead of its code, which fix track push-superseded-seq-only builds in pushservice's publisher, with protocol/push.proto's own comment on `PushHint.hint`, which still reads "dropped when coalesced". No field, number or §2.8 row changes, so no fence moves.
+- **Index rows.** Owner decisions 267 and 646 note the decisions that extend or amend them.
+- **Asked of the compute document.** QD-1388 to QD-1392 among the answers recorded since are the compute planner's tracks' and take no number (above).
+
+`build.sh` on this folder reproduces DESIGN.md (SHA-256 `c67b90dfc42a2cdedba77da54b91dc2c209af4714c56c803b8a158121fb25298`) and DESIGN-DEFER.md (SHA-256 `749042be18fd33e2a87c087fe0824b4224b52f37cc5def707e0de03854ac07a3`, unchanged), and the validation shows:
+
+- **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item and no §2.8 row, so no guard line.
+- **Owner decisions.** All 782 rows are present and cited; APPLY.md's section pairs hold. `MAXD`, the two range checks and `LATE_DATES` take 782, each of 779 to 782 dated 2026-11-24. One open owner question, Q-REPO-6.
+- **Superseded options.** 320 grep hits, none on a changed line unread, none live.
+- **Text.** No bare placeholders or HTML tags; the one research-sheet id stands; 12,734 section references, with the one unresolved as before. `v7/words.json` was regenerated, and `v7/text_checks.json` regenerated unchanged.
+- **DESIGN-DEFER.md.** 107 entries and 175 pointers, unchanged: none of the four defers anything.

@@ -2846,3 +2846,36 @@ _S197 = "as the design-records tracks fold them. "
 assert STATUS.count(_S197) == 1, 'status moved'
 STATUS = STATUS.replace(_S197, "as the design-records tracks fold them, and on 2026-11-24 with owner decision 778, "
                         "service discovery across hosts. ")
+
+# Owner decisions 779-782 (2026-11-24): the build's answers recorded after the eighth late fold that are not the compute
+# planner's own (QD-1393 to QD-1397), folded by the eleventh fold, track dr19-support-fold.
+INDEX += [
+    (779, "The evaluator's twelve repositories",
+     "The competition evaluator's sidecar/1 release takes operator-core as its twelfth repository before it is "
+     'qualified.'),
+    (780, "evs's read fan-out bounded",
+     "evs bounds a push's and a read's store reads in flight, and the file clusters their connections to a host."),
+    (781, "A T3 Net's setup rides out resets",
+     "A T3 Net's setup retries a reset from the local stack's MinIO, and it rereads admin info after a real clock move."),
+    (782, 'Coalesced hints',
+     'A superseded hint is a repeat and goes as its seq alone; a topic keeps up to 64 distinct hint bodies a batch.'),
+]
+for _n, _note in [
+        (267, " Extended by @@OD:779@@: sidecar/1 also takes operator-core, twelve repositories."),
+        (646, ' Amended by @@OD:781@@: the reread waits for a move past a threshold, 30 s by default.'),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 783))
+DATES.update({_n: '2026-11-24' for _n in range(779, 783)})
+_D778 = "taking Bonjour names per viewer beside @@OD:770@@'s listeners. "
+assert DECISIONS_INTRO.count(_D778) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D778, _D778 + "An eleventh fold numbers the build's answers recorded after the eighth late fold: the evaluator's "
+    "twelve repositories (779), extending @@OD:267@@; evs's read fan-out bounded (780); a T3 Net's setup riding out "
+    "resets (781), amending @@OD:646@@; and coalesced hints, a superseded one sent as its seq alone (782). ")
+_S778 = "and on 2026-11-24 with owner decision 778, service discovery across hosts. "
+assert STATUS.count(_S778) == 1, 'status moved'
+STATUS = STATUS.replace(_S778, "and on 2026-11-24 with owner decision 778, service discovery across hosts, and the "
+                        "build's later answers, owner decisions 779 to 782. ")
