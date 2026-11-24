@@ -1,0 +1,24 @@
+{
+  "about": "Organization prefixes, synthetic: dropped where no other id of the provider differs only by one, kept by each id that does; case alone is no difference of organization, so those collide.",
+  "provider": "example",
+  "ids": [
+    {"id": "deepseek-ai/DeepSeek-V3.2", "label": "AP", "model": "deepseek-ai-deepseek-v3.2"},
+    {"id": "mirror-org/DeepSeek-V3.2", "label": "AP", "model": "mirror-org-deepseek-v3.2"},
+    {"id": "Qwen/Qwen3.8-27B", "label": "AP", "model": "qwen3.8-27b"},
+    {"id": "plain-model", "label": "none", "model": "plain-model"},
+    {"id": "vendor/plain-model", "label": "none", "model": "vendor-plain-model"},
+    {"id": "Org/Model_Name:v2 beta", "label": "none", "model": "model-name-v2-beta"},
+    {"id": "outer/inner/deep-model", "label": "none", "model": "inner-deep-model"},
+    {"id": "Case/X-1", "label": "none", "model": "x-1", "collides": true},
+    {"id": "case/x-1", "label": "none", "model": "x-1", "collides": true},
+    {"id": "  Spaced -- Out__Model  ", "label": "none", "model": "spaced-out-model"},
+    {"id": "Ünïcödé/Mödel-7B", "label": "none", "model": "mdel-7b"},
+    {"id": "org/", "label": "none", "refused": true},
+    {"id": "///", "label": "none", "refused": true},
+    {"id": "...", "label": "none", "refused": true},
+    {"id": "tee", "label": "none", "refused": true},
+    {"id": "weird", "label": "A3", "refused": true},
+    {"id": "on-device", "label": "local", "refused": true}
+  ],
+  "names": []
+}

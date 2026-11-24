@@ -2,7 +2,7 @@
 
 ### 21.1 Purpose and scope
 
-This section sets abuse policy: mail reputation, hosted-content and name abuse, network standing, intake and appeals, legal process and transparency. Mechanisms and default caps stay with their owners (§8-§20); §2.8 holds the metadata list and TTLs. No control acts on content (CONVENTIONS §0).
+This section sets abuse policy: mail reputation, hosted-content and name abuse, network standing, intake and appeals, legal process and transparency. Mechanisms and default caps stay with their owners (§8-§20); §2.8 holds the metadata list and TTLs. No control acts on content (CONVENTIONS §0). Compute's abuse, safety and legal process, for inference, enclaves, web search and fetch, connected services and listeners, is DESIGN-COMPUTE.md §17 (owner decisions 733, 737, 759, 768, 770).
 
 ### 21.2 Requirements
 

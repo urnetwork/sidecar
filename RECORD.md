@@ -30,6 +30,7 @@ DESIGN.md §16.8 provides the record's primitives (X20): signed, chained, sealed
 18. [Interfaces](#18-interfaces)
 19. [Risks](#19-risks)
 20. [Phasing and tests](#20-phasing-and-tests)
+21. [DESIGN-COMPUTE.md's additions](#21-design-computemds-additions)
 
 ## 1. Purpose and scope
 
@@ -152,6 +153,8 @@ continue    the first handoff entry a run reads, if it names this run's member o
             unless a run of its harness process is tainted (§16.6's monotone row), and reading the handoff follows
             §16.10's trust rule
 ```
+
+DESIGN-COMPUTE.md amends this section; section 21 holds its additions.
 
 ### 4.4 Actions
 
@@ -469,6 +472,8 @@ These were open; the finding waits on the first, and the second has settled:
 |---|---|---|---|
 | What a `BASE` carries, what evs checks and what GC then keeps: §11.22 lists it and no section specifies it | Sections 5.5, 8 and 10 read which paths a BASE removed and rely on its kept statements | plan-EVS1-v1-unspecified, whose reading this document follows: an `admin` push adding no payload, whose changes remove expired paths | a BASE that does not show what it removed leaves readers no way to hold class 7 or tell expiry from loss, and format 1 must carry that |
 | The bytes of a stream's ref name and of ids in paths | Section 5.2; `DecisionRef`'s head read | plan-RECORD-stream-names, beside plan-EVS1-ref-name-bytes | settled: `ur/<sidecar_id>/record` spells its sidecar id as Id.String(), and ids in paths stay 32 lowercase hex (QD-450, QD-484, QD-485; owner decision 406; §11.8's refs table), so section 5.2's vectors stand |
+
+DESIGN-COMPUTE.md amends this section; section 21 holds its additions.
 
 ## 6. The v1 kind registry
 
@@ -1318,6 +1323,8 @@ ur record model show [--port p]
 
 A port serving many models (Ollama) has one manifest naming none of them singly, so D-CTX-5's per-model grant holds only where each model has its own port, and the manifest says what the host states. Weight digests stay in the host's author's log and T (section 6.3), and reach no server.
 
+DESIGN-COMPUTE.md amends this section; section 21 holds its additions.
+
 ## 13. Cost
 
 "Cost" is two things: what a run cost its owner (§1.7 leaves this here), and what the record costs to keep.
@@ -1667,3 +1674,17 @@ detail nonce v3    an access_request of kind 15, expires_millis 1762387200000, g
                    target_sidecar_id = 16 x 0x32, subject = 16 x 0x33, in field order
                    fdb5388cdb287f4c28f31e2b5d1a0718
 ```
+
+## 21. DESIGN-COMPUTE.md's additions
+
+DESIGN-COMPUTE.md, the owner's compute design of 2026-11-23 (DESIGN.md's owner decisions 733-776), amends this document as its Appendix D lists, and DESIGN.md's eighth late fold writes the amendments here. Each takes the registry rows, enumerations and fields it names with its code: until record.proto, record_kind.go and their tests take them, through an additions list as the owner's answer QD-1366 allows (DESIGN-COMPUTE-AMENDMENTS.md), sections 6.2, 6.3, 6.4 and 8 keep their v1 tables, and DESIGN-COMPUTE.md's fences hold the wire.
+
+- **Bindings (section 4.3; DESIGN-COMPUTE.md 8.9; owner decision 736).** A gateway call under a run handle is an event of its token's harness process: it binds the session its headers name as a hook's first event would, and the router checks it against the union of the marks and taint of that process's runs and of any harness process above it before choosing a route. A call without a handle binds no process, is recorded by harness, agent and time as an inference, and is checked against the union of every run of the grant's live harness processes.
+- **Continuations (section 4.3; DESIGN-COMPUTE.md 24.7, 24.8; owner decisions 757, 775).** A Harness continuation or fork, and a gateway session its harness reports resumed, set `continues_run_id` and `continues_entry_id` too, naming the run and node they continue; such a run starts tainted if any node it takes into its context is flagged, or untrusted: written by a tagged sidecar other than the member's own enclave, or recorded under an inferred binding.
+- **Session entries (sections 5.2 to 5.5; DESIGN-COMPUTE.md 24.5, 24.10; owner decision 757).** A session entry (kinds 54 and 55) is two files: its `RecordEntry` at `e/<n>`, `sealed_body` empty and `body_apart` (field 6) set, chained as every entry is, and its sealed body alone at `s/<n>`, the same n, opened with the key row its entry names. A writer's headers leave in seq order and never wait, its bodies in the same push or a later one, a cap holding back only bodies; an ingester files a deposited session entry so in its own stream, past a cap holding its body. Readers read every header, so chains, pins, gaps and forks stand as section 5.5 has them, and at step 5 show such a body `deferred` (in the stream, not fetched), `withheld` (not yet pushed) or `dropped` (named in its writer's `coverage` `bodies_dropped`, or its writer revoked or removed), none alarming; a fetched body that fails `body_commitment` alarms as any body's; a file at `s/<n>` with no header at `e/<n>` in its push or before is ignored and alarmed. Until then one stream path, `e/`, holds each entry as one file, and record_evs.go refuses a stream file at no `e/` path.
+- **What format 1 must carry (section 5.7; DESIGN-COMPUTE.md 24.5).** `RecordEntry.body_apart` and the `s/` prefix are reserved before record.proto freezes at M3 (D-MCP-6): every reader from format 1 lists `s/`, never refusing a stream for a file there, and reads `body_apart` at step 5, so a reader released before M11 verifies a vault's chains whole and shows session entries generically, their bodies deferred, and M11 needs no activation point for the layout.
+- **The batch (section 5.3; DESIGN-COMPUTE.md 24.5).** Kinds 54 and 55 leave in the push of their call's `model_call` entry, at a turn's end, or 60 s after the oldest waits (`record.session_push_secs`, 30 to 300), never in a push of their own at each call; any earlier push of their writer carries their headers, its stream landing in seq order, and may leave their bodies to a later one.
+- **Kinds (sections 5.6, 6.3, 6.4 and 8; DESIGN-COMPUTE.md 24.5, 24.10, 27.9; owner decisions 757, 772).** Kinds 54 `session_entry` (source observed, hook for items the gateway records from a harness's request) and 55 `session_blob`, in V only, raw and never indexed, their bodies returned by `record_query` only when named, a node a tagged sidecar other than the member's own enclave wrote shown as an untrusted stub; `ModelCallBody` field 15, `CallContext`, its `request_sha256` covering parts by hash; class 8 `bulk` (`session_blob`), a reader raising no removed-early alarm for an unknown kind whose erasure gives reason 2; sources `harness` and `gateway`, gap `context_partial`; and `ur record erase --run <id>` with `--context` or `--blobs-only`, every entry of the run unless narrowed. Kind 56 `auto_verdict`, class action, in V and routed as `approval_decision`, one per verdict in auto mode, holds hashes and scores, never text, each input by its session entry, part, size and the form the record holds it in, so a decision stands as a recorded verdict whatever later becomes of an input; kind 20 for channel `auto` is written by the classifying daemon or sdk, source observed, never approver.
+- **Tool calls (section 6.4; DESIGN-COMPUTE.md 24.4, 24.5).** A Harness's `tool_call` leaves `input` and `output` empty and names the `session_entry` holding its result in the header's `content`, a `ContentRef`, its action id joining the two.
+- **Coverage (section 6.4; DESIGN-COMPUTE.md 24.5, 24.10).** `Coverage` field 8, `bodies_dropped`, repeated `SeqRange{first, last}`: the writer's seqs in this log whose session bodies its spool dropped, gap `spool_drop`, in a coverage entry it files for the run at the drop.
+- **Model receipts (section 12; DESIGN-COMPUTE.md 6.8, 11.12; owner decisions 733, 737).** Evidence level 4 is a verified TEE platform; `ModelCallBody` takes fields 11 to 14; and the record takes enclave entries.
