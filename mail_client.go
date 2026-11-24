@@ -374,13 +374,17 @@ func (self *MailClient) Bind(binding *MailBinding) {
 	self.bindWhen(binding, nil)
 }
 
-// A generation can decline a stale binding, or supply its sender, under the same lock that installs it.
+// A generation can decline a stale binding, or supply its sender, under the same lock that installs it. Barriers
+// mail.client.bind.before and .after, keyed by this device's sidecar, sit around the install, .after ahead of the
+// close of the mailcfg reader a change of repos or state dropped, so a schedule can hold a rebind between dropping a
+// reader and closing it, where only registerConfigLookups' check keeps that reader from registering.
 func (self *MailClient) bindWhen(binding *MailBinding, accept func(*MailBinding) bool) {
 	if binding == nil {
 		return
 	}
 	copied := *binding
 	var closeConfig *MailConfig
+	testHookBarrier("mail.client.bind.before", self.sidecarId.String())
 	applied := func() bool {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
@@ -404,6 +408,7 @@ func (self *MailClient) bindWhen(binding *MailBinding, accept func(*MailBinding)
 		self.notifyWithLock()
 		return true
 	}()
+	testHookBarrier("mail.client.bind.after", self.sidecarId.String())
 	if closeConfig != nil {
 		closeConfig.Close()
 	}

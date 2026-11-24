@@ -503,6 +503,8 @@ barrier mail.auth.slots.take.after mail_auth_slots.go
 barrier mail.auth.slots.take.before mail_auth_slots.go
 barrier mail.burner.retire.after mail_burner_reply.go
 barrier mail.burner.retire.before mail_burner_reply.go
+barrier mail.client.bind.after mail_client.go
+barrier mail.client.bind.before mail_client.go
 barrier mail.client.config.install.after mail_client.go
 barrier mail.client.config.install.before mail_client.go
 barrier mail.config.remove.after mail_config_write.go
