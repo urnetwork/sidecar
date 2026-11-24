@@ -76,6 +76,7 @@ type gkmTokenRenewFlowGkm struct {
 	refusedCount int
 }
 
+// gkm's 401 to a marked token, else the world's gkm's answer.
 func (self *gkmTokenRenewFlowGkm) RoundTrip(request *http.Request) (*http.Response, error) {
 	bearer := strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")
 	expired := func() bool {
