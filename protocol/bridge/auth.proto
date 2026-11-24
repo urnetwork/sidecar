@@ -122,6 +122,9 @@ enum ProposalKind {
 message ProjectionSettings {
   uint32 self_admit = 1;                 // SelfAdmitMode's value: 0 unset (on), 1 on, 2 off (owner decision 112)
   bytes  scim_signer = 2;                // ServiceSettings.scim_signer (7.6), empty for none
+  uint32 auth_features = 3;              // ServiceSettings.auth_features, the authorization features the head turns
+                                         // on (DESIGN-COMPUTE §16.6; owner decision 775), which every reader holds
+                                         // at its base: a bit its release lacks holds it there
 }
 
 message RingRow {
@@ -277,6 +280,9 @@ enum SidecarCapability {
   SIDECAR_CAPABILITY_READ_ONLY = 2;  // bit 1: page Workers (D-TEAM-24)
   SIDECAR_CAPABILITY_INVITED = 4;    // bit 2: set by the admitting device once the invite's join MAC verifies
                                      // (§7.5, §7.6); §8.5's invited clause (plan-ACL-invited-consent-evidence)
+  SIDECAR_CAPABILITY_ENCLAVE = 8;    // bit 3: an agents' enclave's incarnation, its sponsor's device under the
+                                     // enclaves feature (DESIGN-COMPUTE §11.4, §16.6; owner decisions 737, 775),
+                                     // which admissions refuse as an unknown bit until ENC's admission takes it
 }
 
 enum KeyAlg {

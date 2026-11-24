@@ -151,6 +151,8 @@ const (
 	SidecarCapability_SIDECAR_CAPABILITY_NONE      SidecarCapability = 0
 	SidecarCapability_SIDECAR_CAPABILITY_READ_ONLY SidecarCapability = 2 // bit 1: page Workers (D-TEAM-24)
 	SidecarCapability_SIDECAR_CAPABILITY_INVITED   SidecarCapability = 4 // bit 2: set by the admitting device once the invite's join MAC verifies
+	// (§7.5, §7.6); §8.5's invited clause (plan-ACL-invited-consent-evidence)
+	SidecarCapability_SIDECAR_CAPABILITY_ENCLAVE SidecarCapability = 8 // bit 3: an agents' enclave's incarnation, its sponsor's device under the
 )
 
 // Enum value maps for SidecarCapability.
@@ -159,11 +161,13 @@ var (
 		0: "SIDECAR_CAPABILITY_NONE",
 		2: "SIDECAR_CAPABILITY_READ_ONLY",
 		4: "SIDECAR_CAPABILITY_INVITED",
+		8: "SIDECAR_CAPABILITY_ENCLAVE",
 	}
 	SidecarCapability_value = map[string]int32{
 		"SIDECAR_CAPABILITY_NONE":      0,
 		"SIDECAR_CAPABILITY_READ_ONLY": 2,
 		"SIDECAR_CAPABILITY_INVITED":   4,
+		"SIDECAR_CAPABILITY_ENCLAVE":   8,
 	}
 )
 
@@ -1088,8 +1092,9 @@ func (x *ProposalSigner) GetAt() uint64 {
 
 type ProjectionSettings struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	SelfAdmit     uint32                 `protobuf:"varint,1,opt,name=self_admit,json=selfAdmit,proto3" json:"self_admit,omitempty"`   // SelfAdmitMode's value: 0 unset (on), 1 on, 2 off (owner decision 112)
-	ScimSigner    []byte                 `protobuf:"bytes,2,opt,name=scim_signer,json=scimSigner,proto3" json:"scim_signer,omitempty"` // ServiceSettings.scim_signer (7.6), empty for none
+	SelfAdmit     uint32                 `protobuf:"varint,1,opt,name=self_admit,json=selfAdmit,proto3" json:"self_admit,omitempty"`          // SelfAdmitMode's value: 0 unset (on), 1 on, 2 off (owner decision 112)
+	ScimSigner    []byte                 `protobuf:"bytes,2,opt,name=scim_signer,json=scimSigner,proto3" json:"scim_signer,omitempty"`        // ServiceSettings.scim_signer (7.6), empty for none
+	AuthFeatures  uint32                 `protobuf:"varint,3,opt,name=auth_features,json=authFeatures,proto3" json:"auth_features,omitempty"` // ServiceSettings.auth_features, the authorization features the head turns
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1136,6 +1141,13 @@ func (x *ProjectionSettings) GetScimSigner() []byte {
 		return x.ScimSigner
 	}
 	return nil
+}
+
+func (x *ProjectionSettings) GetAuthFeatures() uint32 {
+	if x != nil {
+		return x.AuthFeatures
+	}
+	return 0
 }
 
 type RingRow struct {
@@ -2766,12 +2778,13 @@ const file_protocol_bridge_auth_proto_rawDesc = "" +
 	"\x04kind\x18\t \x01(\rR\x04kind\"8\n" +
 	"\x0eProposalSigner\x12\x16\n" +
 	"\x06signer\x18\x01 \x01(\fR\x06signer\x12\x0e\n" +
-	"\x02at\x18\x02 \x01(\x04R\x02at\"T\n" +
+	"\x02at\x18\x02 \x01(\x04R\x02at\"y\n" +
 	"\x12ProjectionSettings\x12\x1d\n" +
 	"\n" +
 	"self_admit\x18\x01 \x01(\rR\tselfAdmit\x12\x1f\n" +
 	"\vscim_signer\x18\x02 \x01(\fR\n" +
-	"scimSigner\":\n" +
+	"scimSigner\x12#\n" +
+	"\rauth_features\x18\x03 \x01(\rR\fauthFeatures\":\n" +
 	"\aRingRow\x12!\n" +
 	"\fstatement_id\x18\x01 \x01(\fR\vstatementId\x12\f\n" +
 	"\x01n\x18\x02 \x01(\x04R\x01n\"n\n" +
@@ -2934,11 +2947,12 @@ const file_protocol_bridge_auth_proto_rawDesc = "" +
 	"\x14MEMBER_ROLE_IT_ADMIN\x10\x04\x12\x1d\n" +
 	"\x19MEMBER_ROLE_BILLING_ADMIN\x10\x05\x12\x17\n" +
 	"\x13MEMBER_ROLE_AUDITOR\x10\x06\x12\x16\n" +
-	"\x12MEMBER_ROLE_MEMBER\x10\a*r\n" +
+	"\x12MEMBER_ROLE_MEMBER\x10\a*\x92\x01\n" +
 	"\x11SidecarCapability\x12\x1b\n" +
 	"\x17SIDECAR_CAPABILITY_NONE\x10\x00\x12 \n" +
 	"\x1cSIDECAR_CAPABILITY_READ_ONLY\x10\x02\x12\x1e\n" +
-	"\x1aSIDECAR_CAPABILITY_INVITED\x10\x04*u\n" +
+	"\x1aSIDECAR_CAPABILITY_INVITED\x10\x04\x12\x1e\n" +
+	"\x1aSIDECAR_CAPABILITY_ENCLAVE\x10\b*u\n" +
 	"\x06KeyAlg\x12\x17\n" +
 	"\x13KEY_ALG_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16KEY_ALG_WEBAUTHN_ES256\x10\x01\x12\x1d\n" +

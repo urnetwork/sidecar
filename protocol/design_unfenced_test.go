@@ -707,6 +707,10 @@ const (
 	testVersion5AutoSource     = "DESIGN-COMPUTE.md §27.9's field 70 (owner decision 772; CACL-M11-04)"
 )
 
+// Where an authorization feature's declaration comes from: §7.9's fences name ServiceSettings' field 11, ProjectionSettings'
+// field 3 and capability bit 3 only in comments, which design-records folds into the fences with their code.
+const testAuthFeaturesSource = "DESIGN-COMPUTE.md §16.6's authorization features (owner decisions 737, 775; CACL-M11-02)"
+
 // Fields the owner's answers add to messages the design fences, ahead of design-records' fold, each with the question
 // that holds its answer. Each joins the fence it extends, so both directions stay exact, and one the design comes to
 // write fails until its line here leaves.
@@ -742,6 +746,9 @@ var testFenceAdditions = []struct {
 	{message: "AclTarget", field: testFenceField{name: "model_glob", number: 11, typeName: "string"}, question: testAclComputeSource},
 	{message: "AclTarget", field: testFenceField{name: "compute_resource", number: 12, typeName: "AclComputeResource"}, question: testAclComputeSource},
 	{message: "AclTarget", field: testFenceField{name: "listener", number: 13, typeName: "bytes"}, question: testAclListenersSource},
+	// §16.6's reservation, which §7.9's fences name only in comments until design-records folds them in
+	{message: "ServiceSettings", field: testFenceField{name: "auth_features", number: 11, typeName: "uint32"}, question: testAuthFeaturesSource},
+	{message: "ProjectionSettings", field: testFenceField{name: "auth_features", number: 3, typeName: "uint32"}, question: testAuthFeaturesSource},
 }
 
 // Numbers an owner's answer reserves in a message the design fences, ahead of design-records' fold, each with the
@@ -812,6 +819,8 @@ var testFenceValueAdditions = []testFenceValueAddition{
 	{enum: "RepoKind", name: "REPO_KIND_AGENTS", number: 10, question: testAclAgentsSource},
 	{enum: "RepoKind", name: "REPO_KIND_AGENT", number: 11, question: testAclAgentsSource},
 	{enum: "RepoKind", name: "REPO_KIND_LISTENERS", number: 12, question: testAclListenersSource},
+	// the enclave's capability bit 3, which §7.9's Enclave admissions paragraph names in prose alone
+	{enum: "SidecarCapability", name: "SIDECAR_CAPABILITY_ENCLAVE", number: 8, question: testAuthFeaturesSource},
 }
 
 // One value an owner's answer takes out of an enum the design fences, its number reserved.

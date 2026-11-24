@@ -39,6 +39,13 @@
 // hint naming a position api does not serve, treats itself as withheld, judging each follow by the hints noted before
 // it read api, so the position its own base lands at during a follow is the next follow's to judge.
 //
+// A base turning on an authorization feature this release does not implement holds the client there (DESIGN-COMPUTE
+// §16.6's hold; acl_compute_features.go): its log stops as at a fork, so Fork answers the hold and every path the fork
+// stop stops stops, but it raises upgrade_required, once, and no head_alarm, and reports nothing to HeadStopState; what
+// it holds stays readable, and an updated release resumes from authlog/ below the base. A restart whose kept log turned
+// on a feature the release that kept it did not implement re-derives (config_client_store.go): Fork answers its wait,
+// while the follows and the waits go on, until the network's next base confirms it.
+//
 // What it keeps across restarts is config_client_store.go's, in §5.9's authlog/.
 //
 // Every leg, the sidecar_http page Worker's included: no connect type. Safe for concurrent use; one goroutine follows.
@@ -262,6 +269,8 @@ type ConfigClient struct {
 	// For a native host with a read-only follower and a ref dedicated to explicit ACL confirmation.
 	// It shares the client lifetime and has no periodic fold loop.
 	confirmedAclWriter *ConfigWriter
+	// the hold upgrade_required was raised for, so each hold raises it once
+	upgradeRaised *ConfigForkError
 }
 
 // This device's config writer for the network, nil while none runs: what an act saving a config head goes through.
@@ -403,13 +412,29 @@ func (self *ConfigClient) UnconfirmedPin() *bridge.AuthPin {
 
 // The fork that stopped the log, nil while it follows: a joining device's rows-only log forks it as the confirmed log
 // does, since what a rows-only verifier refuses as a fork every full reader refuses too, and so does a fork a start met,
-// which no log holds (QD-1209). Safe for concurrent use: each log's fork is read under that log's lock.
+// which no log holds (QD-1209). A hold answers here as a fork does, and so does a re-derivation's wait while it lasts
+// (§16.6), so every path that acts on the log stops for both. Safe for concurrent use: each log's fork is read under
+// that log's lock.
 func (self *ConfigClient) Fork() *ConfigForkError {
 	for _, log := range []*ConfigLog{self.configLog.Load(), self.unconfirmed.Load()} {
 		if log == nil {
 			continue
 		}
 		if fork := log.Fork(); fork != nil {
+			return fork
+		}
+	}
+	return self.startFork.Load()
+}
+
+// The stop the follows apply nothing past: a log's fork or hold, or the one a start met; never a re-derivation's wait,
+// through which the log follows on to the base that ends it. Safe for concurrent use.
+func (self *ConfigClient) stop() *ConfigForkError {
+	for _, log := range []*ConfigLog{self.configLog.Load(), self.unconfirmed.Load()} {
+		if log == nil {
+			continue
+		}
+		if fork := log.stopped(); fork != nil {
 			return fork
 		}
 	}
@@ -445,8 +470,9 @@ func (self *ConfigClient) WaitForPin(ctx context.Context, n uint64) (*ConfigStat
 
 // Waits until the log has applied position n, or ctx ends, or the client closes, or a fork stops the client. A fork
 // leaves the position where it was, so the wait watches the fork the follows note beside it, and wakes on whichever
-// moves. It reads the fork the client holds (Fork), never older than the one noted, since a follow under way, whose
-// callbacks may wait here too, can have recorded one its end has not noted yet.
+// moves. It reads the fork the client holds (stop), never older than the one noted, since a follow under way, whose
+// callbacks may wait here too, can have recorded one its end has not noted yet. A re-derivation's wait stops no wait,
+// since the log applies on through it.
 func (self *ConfigClient) waitApplied(ctx context.Context, n uint64) (*ConfigState, error) {
 	for {
 		position, changed := self.position.Get()
@@ -454,7 +480,7 @@ func (self *ConfigClient) waitApplied(ctx context.Context, n uint64) (*ConfigSta
 			return self.State(), nil
 		}
 		_, forked := self.stopped.Get()
-		if fork := self.Fork(); fork != nil {
+		if fork := self.stop(); fork != nil {
 			return nil, fork
 		}
 		select {
@@ -577,7 +603,7 @@ func (self *ConfigClient) follow(ctx context.Context) error {
 	self.followLock.Lock()
 	defer self.followLock.Unlock()
 	defer self.noteStopped()
-	if fork := self.Fork(); fork != nil {
+	if fork := self.stop(); fork != nil {
 		return fork
 	}
 	var saveErr error
@@ -976,6 +1002,11 @@ func (self *ConfigClient) start(ctx context.Context, log *ConfigLog, projection 
 		floor = log.Pin()
 	}
 	refused := func(err error) error {
+		if hold := (&ConfigForkError{}); errors.As(err, &hold) && hold.Held() {
+			// a start at a base this release cannot read holds there, with upgrade_required and no fork alarm
+			self.raiseUpgradeRequired(hold)
+			return err
+		}
 		if atBase && (errors.Is(err, ErrConfigFork) || errors.Is(err, ErrConfigRunRefused) || errors.Is(err, ErrConfigBelowPin)) {
 			self.log.Errorf("[config]%s a start at api's newest base refused: %v", self.args.NetworkId, err)
 			self.emit(SidecarEvent{Kind: SidecarEventHeadAlarm, HeadAlarm: SidecarHeadAlarmFork, Evidence: [2][]byte{configPinBytes(floor), nil}})
@@ -1040,6 +1071,10 @@ func (self *ConfigClient) holdStartFork(err error, entries [][]byte) {
 // did not hold. A head or rows api withheld, a run refused and a page below the pin are no fork: the next follow reads
 // them again.
 func configStartFork(err error, entries [][]byte) *ConfigForkError {
+	if hold := (&ConfigForkError{}); errors.As(err, &hold) && hold.Held() {
+		// a hold the start met stops the follows as a fork does (§16.6's hold), raising no fork alarm
+		return hold
+	}
 	if !errors.Is(err, ErrConfigFork) || errors.Is(err, ErrConfigHeadUnavailable) || errors.Is(err, ErrConfigRowsUnavailable) {
 		return nil
 	}
@@ -1118,9 +1153,14 @@ func (self *ConfigClient) publish(log *ConfigLog, before *ConfigState, verdicts 
 	return saveErr
 }
 
-// A fork or a refused run stops here: head_alarm with both pins, and the fork reported to HeadStopState.
+// A fork or a refused run stops here: head_alarm with both pins, and the fork reported to HeadStopState. A hold stops
+// the log as a fork does, but nothing forked: upgrade_required, and no head_alarm (§16.6's hold).
 func (self *ConfigClient) onApplyError(log *ConfigLog, err error) {
 	fork := &ConfigForkError{}
+	if errors.As(err, &fork) && fork.Held() {
+		self.raiseUpgradeRequired(fork)
+		return
+	}
 	if !errors.As(err, &fork) {
 		runError := &ConfigRunError{}
 		if errors.As(err, &runError) && runError.HasLocalChain {
@@ -1140,6 +1180,25 @@ func (self *ConfigClient) onApplyError(log *ConfigLog, err error) {
 	if self.args.ReportFork != nil {
 		self.args.ReportFork(HeadFork{Kind: HeadForkAuth, Local: localBytes, Remote: remoteBytes})
 	}
+}
+
+// Raises upgrade_required for a hold, once a hold (§16.6's hold): the features the network turned on that this
+// release lacks, which the update that ends the hold brings.
+func (self *ConfigClient) raiseUpgradeRequired(hold *ConfigForkError) {
+	first := func() bool {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		if self.upgradeRaised == hold {
+			return false
+		}
+		self.upgradeRaised = hold
+		return true
+	}()
+	if !first {
+		return
+	}
+	self.log.Warningf("[config]%s holds at base %d: this release lacks %s", self.args.NetworkId, hold.N, hold.UpgradeRequired)
+	self.emit(authFeatureUpgradeEvent(hold))
 }
 
 // Raises an event, when the host takes them.
