@@ -1,4 +1,4 @@
-//go:build !ios_extension && !sidecar_http
+//go:build !ios_extension && !sidecar_http && !js
 
 // The models key (DESIGN-COMPUTE §16.4; CACL-M11-01): each field read and held to its bounds, a write strict where a
 // read passes over what a later release may add, and the key narrowing only what the network grants.
@@ -6,6 +6,7 @@
 package sidecar
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -187,5 +188,32 @@ func TestModelsKeyWriteChangesOnlyWhatChanged(t *testing.T) {
 	}
 	if len(harnessModelsKeyEdits(was, was.Clone())) != 0 {
 		t.Fatal("an unchanged key makes edits")
+	}
+}
+
+// On a running Sidecar the models component stands from its start: the key reads nothing before a config follower
+// installs a verified state, and a write is refused for its origin before anything is read.
+func TestSidecarModelsKeyBeforeAFollower(t *testing.T) {
+	instance, enrollment := newTestEnrolledInstance(t)
+	platform := newTestSidecarPlatform()
+	sidecar, err := NewSidecar(context.Background(), &testSidecarHost{store: instance.Store(&enrollment.networkId)}, nil, testSidecarSettings(platform))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), sidecarTestTimeout)
+	defer cancel()
+	defer sidecar.CloseAndWait(ctx)
+	if store, err := sidecar.MemberHarnessConfig(); err != nil || store == nil {
+		t.Fatalf("the store: %v", err)
+	}
+	if _, err := sidecar.ModelsKey(ctx); !errors.Is(err, ErrHarnessConfigUnavailable) {
+		t.Fatalf("the key before a follower: %v", err)
+	}
+	_, err = sidecar.SetModelsKey(ctx, &MemberHarnessConfigUpdateArgs{Origin: SidecarActMcp}, func(key *HarnessModelsKey) error {
+		key.TeeOnly = false
+		return nil
+	})
+	if !errors.Is(err, ErrHarnessConfigRefused) {
+		t.Fatalf("a write through MCP: %v", err)
 	}
 }
