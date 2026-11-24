@@ -834,8 +834,9 @@ func TestANewWritersGrantApisGateNeverHoldsEndsItsWriteAfterTheWindow(t *testing
 // due a rotation): with api's gate behind the revocation, the token carries the repo's scopes, gkm refuses its read
 // of the generations at the batch's rw and at r alone, and the write ends with gkm's 403 at once, the clock unmoved;
 // with api's gate holding the revocation too, the r scope alone is refused invalid_scope through the window, QD-1230's
-// cost, and the write is refused ErrGkmWait, the shrink uncovered. No claim reaches gkm either way. Once its own state
-// holds the revocation, it is no writer, and asks the exchange nothing.
+// cost, and the write ends with that refusal, a token refused for good being no unreachability for KF7's keychain path
+// (gkm_ladder_token_refusal_test.go). No claim reaches gkm either way. Once its own state holds the revocation, it is
+// no writer, and asks the exchange nothing.
 func TestARevokedWriterIsRefused(t *testing.T) {
 	lag := newGkmGrantLagReader(t, true)
 	agent := lag.device
@@ -856,8 +857,9 @@ func TestARevokedWriterIsRefused(t *testing.T) {
 	lag.exchange.apply(revoked)
 	start := lag.clock.Now()
 	readsBefore := len(lag.exchange.asked(agent.id, lag.scope(sidecar.GkmScopeRoleRead)))
-	_, err, took = lag.ensureWritable()
-	if !errors.Is(err, sidecar.ErrGkmWait) || took != lag.apiSettings.ExchangeScopeWaitTimeout {
+	key, err, took := lag.ensureWritable()
+	var apiError *sidecar.SidecarApiError
+	if key != nil || !errors.As(err, &apiError) || apiError.Code != "invalid_scope" || took != lag.apiSettings.ExchangeScopeWaitTimeout {
 		t.Errorf("a revoked writer, api's gate holding it: %v after %s", err, took)
 	}
 	reads := lag.exchange.asked(agent.id, lag.scope(sidecar.GkmScopeRoleRead))[readsBefore:]
