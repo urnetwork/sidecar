@@ -27,9 +27,9 @@ func (self *SmtpEdgeService) AwaitProbes(ctx context.Context, count int) error {
 	}
 }
 
-// A sealed copy's raw bytes, for tests that hold the network mail key's private half.
+// A sealed copy's raw bytes, for tests that hold the network mail key's private half, at the format's chunk size.
 func OpenSealedReport(privateKey hpke.PrivateKey, networkId sidecar.Id, arrival time.Time, sealed []byte) ([]byte, error) {
-	return openSmtpSealedReport(privateKey, networkId, arrival, sealed)
+	return openSmtpSealedReport(privateKey, networkId, arrival, sealed, DefaultSmtpEdgeSettings().ReportSealChunkByteCount)
 }
 
 // Waits until the breaker has finished count reads of the median.

@@ -22,38 +22,48 @@ func (self *MailClient) outboxSettings() *MailOutboxSettings {
 	return DefaultMailOutboxSettings()
 }
 
-// Registers kind mail's Lookup on gate, once a gate, in place of one on an earlier gate.
+// Registers kind mail's Lookup on gate, once a gate, in place of one on an earlier gate. §16.6's gate refuses a kind
+// with no registered Lookup before its Reserve, so a caller must never find gate marked before its Lookup stands there:
+// the mark is set only once the registration has returned, and outboxLookupLock is held from the read of the mark to
+// its setting, so a send racing a Bind's first registration on a gate waits for it rather than going to the gate
+// before it. A closed client registers nothing, and a registration the client closed under takes back what it added.
 func (self *MailClient) registerOutboxLookup(gate MailConfigGate) {
 	if gate == nil {
 		return
 	}
-	previous, registered := func() (func(), bool) {
+	if !self.outboxLookupLock.TryLock() {
+		// marks that this caller waits on another holding the lock: a registration in flight, or a read of the mark
+		testHookBarrier("mail.outbox.lookup.wait", self.sidecarId.String())
+		self.outboxLookupLock.Lock()
+	}
+	defer self.outboxLookupLock.Unlock()
+	previous, register := func() (func(), bool) {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
-		if self.outboxLookupGate == gate {
-			return nil, true
+		if self.closed || self.outboxLookupGate == gate {
+			return nil, false
 		}
 		previous := self.outboxLookupRemove
-		self.outboxLookupGate, self.outboxLookupRemove = gate, nil
-		return previous, false
+		self.outboxLookupGate, self.outboxLookupRemove = nil, nil
+		return previous, true
 	}()
-	if registered {
+	if !register {
 		return
 	}
 	if previous != nil {
 		previous()
 	}
 	remove := gate.RegisterEffectLookup(SidecarActionMail, self.outboxLookup)
-	stale := func() bool {
+	kept := func() bool {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
-		if self.outboxLookupGate != gate {
-			return true
+		if self.closed {
+			return false
 		}
-		self.outboxLookupRemove = remove
-		return false
+		self.outboxLookupGate, self.outboxLookupRemove = gate, remove
+		return true
 	}()
-	if stale {
+	if !kept {
 		remove()
 	}
 }
