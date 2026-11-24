@@ -567,6 +567,8 @@ re-enrollment (EnrollWithDevice,  -> offline, binding generation n+1 under the s
 generations every event names its generation; one of an older generation is dropped
 ```
 
+**Compute** (owner decisions 733, 751, 770; DESIGN-COMPUTE.md §15.3). `Sidecar` also exposes DESIGN-COMPUTE.md's API: `NewHarness` and its `SidecarHarness`, `Models()` for the catalog and model settings, `Compute()` for the balance, its packs, charges and spend, `Enclaves()`, `Agents()`, `Disclosures()` with `AckDisclosure` and `AckNetworkDisclosure`, `AutoApprovals()`, `Calendar()`, `Connections()`, `OpenSsh` and `Listeners()`, which backs the apps' Listeners section; their UI stays outside this design (owner rule 6).
+
 ### 18.6 Device abstractions and the DeviceRemote mirror
 
 ```go
@@ -862,6 +864,8 @@ FCM   data message, priority high                  {"data":{"t":"mail","v":"42"}
 ```
 
 - **Directory notices (D-SDK-28).** From M8 a phone leases the team directory's `q/<h>/<tgt>/` prefixes for the targets its member approves, and the notice path of each of its own pending requests (§16.11, §11.10), so a decision, a denial's included, rewrites a notice the phone leases. Their hints are `evs:<repo_id>` hints like any lease's (§6.8), so they are wake-class: a request or its decision wakes the phone under topic class `evs`, naming no directory, target or request.
+
+**Compute hosts** (owner decisions 733, 741, 768, 772; DESIGN-COMPUTE.md §6.5, §15.3). The app injects `SidecarLocalInferenceHost` (`SetLocalInferenceHost`), the local engine's seam, `SidecarSafetyClassifierHost` (`SetSafetyClassifierHost`), the reduced ONNX Runtime its safety classifier runs on, and `SidecarConnectHost` (`SetConnectHost`), the browser seam a connection's sign-in completes through.
 
 ### 18.8 The browser sidecar (X14): the extension and ur.io pages
 

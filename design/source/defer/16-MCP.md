@@ -80,11 +80,11 @@ Stage: Later
 
 ### mcp-harness-config-keys: The harness config's waiting keys
 Stage: Later
-- **Deferred:** Four keys of the global harness config: `record.capture` as a narrowing control, and `reach`, `models` and `identity`; with them §8.5's harness `reach:` block as a filer of access requests (owner decision 452; QD-116; §1's source row; §8.5, §16.7).
-- **Why:** Owner decision 452: a narrowing control on capture weakens R-MCP-4 and needs a person-only surface first. The other three wait for a later design.
+- **Deferred:** Three keys of the global harness config: `record.capture` as a narrowing control, and `reach` and `identity`; with them §8.5's harness `reach:` block as a filer of access requests (owner decision 452; QD-116; §1's source row; §8.5, §16.7). The fourth, `models`, is designed and acts since owner decision 743, written only by the person's own act (DESIGN-COMPUTE.md section 16.4).
+- **Why:** Owner decision 452: a narrowing control on capture weakens R-MCP-4 and needs a person-only surface first. `reach` and `identity` wait for a later design.
 - **Launch instead:** Two keys act: `record.redact.pii` from M3 and `claims` from M6, with `agents.<label>` overriding those two only. Capture stays §16.7's fixed set.
-- **Lost:** A person cannot narrow what is captured, and a harness config cannot file reach requests, choose models or set identity.
-- **Dark in code:** The keys are kept in the format: `record.capture` is read and ignored, and `reach`, `models` and `identity` are ignored and warned about, so a `reach:` block files no request.
+- **Lost:** A person cannot narrow what is captured, and a harness config cannot file reach requests or set identity.
+- **Dark in code:** The keys are kept in the format: `record.capture` is read and ignored, and `reach` and `identity` are ignored and warned about, so a `reach:` block files no request; `models` too, until the compute tracks build owner decision 743's reader.
 - **Held:** Nothing: no task or track waits on it.
 - **To bring back:** A design for each key. For capture: a person-only path and a Team refusal. For `reach`: how a block becomes requests under §8.5.
 

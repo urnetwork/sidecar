@@ -78,7 +78,10 @@ INTRO = {
     'D': ("Messages on the sidecar subprotocol (connect subprotocol id 21842), from §6.11's `MessageType` catalog and "
           "the sections' Interfaces subsections. `Envelope.type` is service << 8 \\| message; §6 assigns numbers and "
           "owners define the messages. ControlId messages ride `PushHint` on a topic (§6.8) and are hints: clients "
-          "resync over HTTPS on any gap. Services 0x11 (§8), 0x18 (§16) and 0x19 (§17) define no messages. Each "
+          "resync over HTTPS on any gap. Services 0x11 (§8) and 0x18 (§16) define no messages, nor 0x19 (§17) of this "
+          "design's own; DESIGN-COMPUTE.md adds EVIDENCE and EVIDENCE_RESULT (0x1406, 0x1407) and LISTENERS and "
+          "LISTENERS_RESULT (0x1901, 0x1902), which join this table when §6.11's fence takes them (owner decisions "
+          "752, 770). Each "
           "statement carried in `Signed` has a `SignedType` in §6.11's registry, service << 8 \\| n, which the "
           "signature covers. The keyless device role parses only `protocol/bridge`'s `signed.proto`, `auth.proto` "
           "and `bridge.proto` (§4.4)."),

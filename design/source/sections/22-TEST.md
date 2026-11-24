@@ -4,6 +4,8 @@
 
 This section owns verification: tiers, harness, hot-path gates, fuzzing, scenarios, privacy, admission and revocation suites, load, soak, the fault-schedule program, storage benchmarks, conformance, platform budgets and internal review gates. Sections keep their targets and mechanisms; this one names each target's test, invariant and gate. §19 owns environments, §23 milestones and the gate map.
 
+Compute's verification, its tiers, gates, fuzz targets, scenarios and conformance, is DESIGN-COMPUTE.md §18, which adds to this section's suites and is built with the compute tracks (owner decisions 733, 746, 771).
+
 ### 22.2 Requirements
 
 | id | requirement | source |
@@ -297,7 +299,7 @@ Scenarios mirror §3.7's flows (D-ARCH-3) on T2 fakes, then T3 (S1 only T3), wit
 - **S1** (F1, enroll): code-create 403; token never in MCP, env or logs; a genesis other than the invite's refused.
 - **S2** (F2, write, notify): hint p99 ≤ 2 s; owned refs land; on a shared ref, disjoint pushes land on file-mode refs, and on a git-mode ref the second gets a stock non-fast-forward and its merge lands (§11.7, §11.11; owner decision 141; FS-5); every acknowledged commit is reachable; a non-writer's head refused.
 - **S3** (F3, add a reader): a server-forged admission, KeyPackage or ReaderKey refused, and an authentic ReaderKey past its not_after or valid over 7 days; Adds and wraps only for readers, each late wrap judged at its own pin (FS-104); device form S3a (KF2) from M2, member form S3b at M6.
-- **S4** (F9, remove): the revocation suite; device form S4a (KF4) from M2, member form S4b at M6.
+- **S4** (F9, remove): the revocation suite; device form S4a (KF4) from M2, member form S4b at M6; from DESIGN-COMPUTE.md's milestones the member form also checks that the member's devices revoke each connection's token at its provider, list their calendar links' app passwords and revoke the member's enclave incarnations (owner decisions 756, 769, 775).
 - **S5** (F4, publish HTTPS): key only on device; each §13.7 audience, login-less visitors reaching only edge login; Community publishes verified, ≤ 7 days.
 - **S6** (F5, send mail, M9): no record forwarded before its proof verifies; no unauthenticated MX; §15.10's forwarding rules; a message over the DATA cap is `too_large` for the non-CHUNKING recipient domain alone (FS-123).
 - **S7** (F6, receive mail): 530 to plaintext; unroutable gets a temporary failure, the edge holding nothing; abuse@`<root>` without SNI reaches the platform listener; DNS changed between reception and ingest leaves the reception-time result, and tampered evidence fails; a message whose checks a bound cut is deposited and labeled from what was verified (FS-121).

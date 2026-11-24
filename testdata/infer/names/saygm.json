@@ -1,0 +1,18 @@
+{
+  "about": "SayGM's open and -tee models as its catalog gave them on 2026-11-23, all labeled none (Q-PROV-8): the -tee mark is dropped, so kimi-k3-tee and glm-5.3-flash-tee give the names of the open kimi-k3 and glm-5.3-flash, collisions reported for the policy to name one (§5.4).",
+  "provider": "saygm",
+  "ids": [
+    {"id": "kimi-k3", "label": "none", "model": "kimi-k3", "collides": true},
+    {"id": "kimi-k3-tee", "label": "none", "model": "kimi-k3", "collides": true},
+    {"id": "glm-5.2-tee", "label": "none", "model": "glm-5.2"},
+    {"id": "glm-5.3", "label": "none", "model": "glm-5.3"},
+    {"id": "glm-5.3-flash", "label": "none", "model": "glm-5.3-flash", "collides": true},
+    {"id": "glm-5.3-flash-tee", "label": "none", "model": "glm-5.3-flash", "collides": true},
+    {"id": "deepseek-v4.1-flash", "label": "none", "model": "deepseek-v4.1-flash"},
+    {"id": "gpt-oss-20b", "label": "none", "model": "gpt-oss-20b"}
+  ],
+  "names": [
+    {"name": "saygm-glm-5.2-high", "provider": "saygm", "model": "glm-5.2", "effort": "high"},
+    {"name": "saygm-kimi-k3", "provider": "saygm", "model": "kimi-k3"}
+  ]
+}
