@@ -253,36 +253,36 @@ func TestEnclaveSeccompProfile(t *testing.T) {
 			data []byte
 			want int
 		}{
-			{enclaveTestSeccompData(number("unshare"), other, enclaveSeccompCloneNewUser), kill},
-			{enclaveTestSeccompData(number("unshare"), architecture.auditArch, enclaveSeccompCloneNewUser), eperm},
-			{enclaveTestSeccompData(number("unshare"), architecture.auditArch, enclaveSeccompCloneNewUser|cloneNewNs), eperm},
-			{enclaveTestSeccompData(number("unshare"), architecture.auditArch, cloneNewNs), allow},
-			{enclaveTestSeccompData(number("clone"), architecture.auditArch, enclaveSeccompCloneNewUser|sigchld), eperm},
-			{enclaveTestSeccompData(number("clone"), architecture.auditArch, sigchld), allow},
-			{enclaveTestSeccompData(number("clone3"), architecture.auditArch), enosys},
-			{enclaveTestSeccompData(number("io_uring_setup"), architecture.auditArch), enosys},
-			{enclaveTestSeccompData(number("io_uring_enter"), architecture.auditArch), enosys},
-			{enclaveTestSeccompData(number("io_uring_register"), architecture.auditArch), enosys},
+			{data: enclaveTestSeccompData(number("unshare"), other, enclaveSeccompCloneNewUser), want: kill},
+			{data: enclaveTestSeccompData(number("unshare"), architecture.auditArch, enclaveSeccompCloneNewUser), want: eperm},
+			{data: enclaveTestSeccompData(number("unshare"), architecture.auditArch, enclaveSeccompCloneNewUser|cloneNewNs), want: eperm},
+			{data: enclaveTestSeccompData(number("unshare"), architecture.auditArch, cloneNewNs), want: allow},
+			{data: enclaveTestSeccompData(number("clone"), architecture.auditArch, enclaveSeccompCloneNewUser|sigchld), want: eperm},
+			{data: enclaveTestSeccompData(number("clone"), architecture.auditArch, sigchld), want: allow},
+			{data: enclaveTestSeccompData(number("clone3"), architecture.auditArch), want: enosys},
+			{data: enclaveTestSeccompData(number("io_uring_setup"), architecture.auditArch), want: enosys},
+			{data: enclaveTestSeccompData(number("io_uring_enter"), architecture.auditArch), want: enosys},
+			{data: enclaveTestSeccompData(number("io_uring_register"), architecture.auditArch), want: enosys},
 		}
 		for _, name := range []string{"bpf", "userfaultfd", "perf_event_open", "keyctl", "add_key", "request_key",
 			"kexec_load", "kexec_file_load", "init_module", "finit_module", "delete_module", "open_by_handle_at"} {
 			cases = append(cases, struct {
 				data []byte
 				want int
-			}{enclaveTestSeccompData(number(name), architecture.auditArch), eperm})
+			}{data: enclaveTestSeccompData(number(name), architecture.auditArch), want: eperm})
 		}
 		for _, nr := range allowed {
 			cases = append(cases, struct {
 				data []byte
 				want int
-			}{enclaveTestSeccompData(nr, architecture.auditArch, enclaveSeccompCloneNewUser), allow})
+			}{data: enclaveTestSeccompData(nr, architecture.auditArch, enclaveSeccompCloneNewUser), want: allow})
 		}
 		if architecture.x32 {
 			// x32's unshare, its number with the x32 bit
 			cases = append(cases, struct {
 				data []byte
 				want int
-			}{enclaveTestSeccompData(enclaveSeccompX32SyscallBit|number("unshare"), architecture.auditArch), kill})
+			}{data: enclaveTestSeccompData(enclaveSeccompX32SyscallBit|number("unshare"), architecture.auditArch), want: kill})
 		}
 		for i, c := range cases {
 			got, err := vm.Run(c.data)

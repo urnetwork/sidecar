@@ -53,6 +53,8 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// Takes the process over when it runs as the seccomp shim, before anything else of ur runs; otherwise gives the
+// containers this leg's system and the socket its peer reader.
 func init() {
 	if filepath.Base(os.Args[0]) == enclaveSeccompShimName {
 		// returns only when it could not exec, the filter installed or not
@@ -201,6 +203,7 @@ func enclaveContainerSysctl(name string) (string, bool, error) {
 	return strings.TrimSpace(string(value)), true, nil
 }
 
+// Reads the kernel's switches: unprivileged BPF off, and io_uring off where the kernel has the setting.
 func (self *enclaveContainerLinuxSystem) CheckKernel() error {
 	bpfDisabled, present, err := enclaveContainerSysctl("kernel.unprivileged_bpf_disabled")
 	if err != nil || !present || (bpfDisabled != "1" && bpfDisabled != "2") {
@@ -227,6 +230,8 @@ func enclaveContainerMounted(path string) (bool, error) {
 	return stat.Dev != parentStat.Dev, nil
 }
 
+// Makes the container's directories and files and mounts the overlay of the image's root and the scratch volume's
+// upper layer, unless one is mounted there already.
 func (self *enclaveContainerLinuxSystem) PrepareRoot(ctx context.Context, plan *EnclaveContainerPlan) error {
 	if info, err := os.Stat(plan.LowerPath); err != nil || !info.IsDir() {
 		return fmt.Errorf("%w: the image's root %s", ErrEnclaveContainerKernel, plan.LowerPath)
@@ -265,6 +270,7 @@ func (self *enclaveContainerLinuxSystem) PrepareRoot(ctx context.Context, plan *
 	return unix.Mount("overlay", plan.RootPath, "overlay", 0, options)
 }
 
+// Detaches the overlay; one not mounted is no error.
 func (self *enclaveContainerLinuxSystem) ReleaseRoot(plan *EnclaveContainerPlan) error {
 	if err := unix.Unmount(plan.RootPath, unix.MNT_DETACH); err != nil && !errors.Is(err, unix.EINVAL) {
 		return err
@@ -281,10 +287,12 @@ type enclaveContainerLinuxProcess struct {
 	cgroupLeaf bool
 }
 
+// The process's pid in the daemon's namespace.
 func (self *enclaveContainerLinuxProcess) Pid() int {
 	return self.cmd.Process.Pid
 }
 
+// Waits for the process, then removes its own leaf, and answers its exit code.
 func (self *enclaveContainerLinuxProcess) Wait() (int, error) {
 	err := self.cmd.Wait()
 	if self.cgroupLeaf {
@@ -301,6 +309,7 @@ func (self *enclaveContainerLinuxProcess) Wait() (int, error) {
 	return self.cmd.ProcessState.ExitCode(), nil
 }
 
+// Signals the process's group.
 func (self *enclaveContainerLinuxProcess) Signal(signal os.Signal) error {
 	sig, ok := signal.(syscall.Signal)
 	if !ok {
@@ -310,10 +319,12 @@ func (self *enclaveContainerLinuxProcess) Signal(signal os.Signal) error {
 	return unix.Kill(-self.cmd.Process.Pid, sig)
 }
 
+// Sends the process SIGTERM.
 func (self *enclaveContainerLinuxProcess) Terminate() error {
 	return self.cmd.Process.Signal(unix.SIGTERM)
 }
 
+// Writes its cgroup's cgroup.kill, then kills the process itself.
 func (self *enclaveContainerLinuxProcess) Kill() error {
 	errs := []error{}
 	if self.cgroupPath != "" {
@@ -374,10 +385,12 @@ func (self *enclaveContainerLinuxSystem) run(command *EnclaveContainerCommand) (
 	return process, nil
 }
 
+// Starts the runtime's supervisor.
 func (self *enclaveContainerLinuxSystem) Start(ctx context.Context, command *EnclaveContainerCommand) (EnclaveContainerProcess, error) {
 	return self.run(command)
 }
 
+// Starts an Exec's shim in a leaf of its own.
 func (self *enclaveContainerLinuxSystem) Run(ctx context.Context, command *EnclaveContainerCommand) (EnclaveContainerProcess, error) {
 	return self.run(command)
 }
@@ -421,6 +434,7 @@ func (self *enclaveContainerLinuxSystem) Leader(plan *EnclaveContainerPlan) (int
 	return leaderPid, nil
 }
 
+// Makes the scope's ur-exec cgroup, which may stand from an earlier start.
 func (self *enclaveContainerLinuxSystem) PrepareExecCgroup(plan *EnclaveContainerPlan) error {
 	if err := os.Mkdir(plan.ExecCgroupPath, 0o755); err != nil && !errors.Is(err, fs.ErrExist) {
 		return err
@@ -433,6 +447,8 @@ func enclaveContainerWriteSysctl(name string, value string) error {
 	return os.WriteFile(filepath.Join("/proc/sys", filepath.FromSlash(name)), []byte(value), 0)
 }
 
+// Sets the veth's host end's settings, address and link up in the daemon's namespace, then its container end's
+// address, link and default route from a thread moved into the container's namespace.
 func (self *enclaveContainerLinuxSystem) ConfigureNetwork(ctx context.Context, leaderPid int, network *EnclaveContainerNetwork) error {
 	// the host end, in the daemon's namespace
 	hostInterface, err := net.InterfaceByName(network.HostInterface)
@@ -510,6 +526,7 @@ func enclaveContainerInNetns(leaderPid int, work func() error) error {
 	return <-errs
 }
 
+// Opens /proc/<first process>/root, O_PATH.
 func (self *enclaveContainerLinuxSystem) OpenRoot(leaderPid int) (*os.File, error) {
 	fd, err := unix.Open("/proc/"+strconv.Itoa(leaderPid)+"/root", unix.O_PATH|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
 	if err != nil {
@@ -518,6 +535,7 @@ func (self *enclaveContainerLinuxSystem) OpenRoot(leaderPid int) (*os.File, erro
 	return os.NewFile(uintptr(fd), "enclave-container-root"), nil
 }
 
+// Duplicates file's descriptor close-on-exec, under the file's own reference so a close meanwhile fails it.
 func (self *enclaveContainerLinuxSystem) Dup(file *os.File) (*os.File, error) {
 	raw, err := file.SyscallConn()
 	if err != nil {
@@ -536,6 +554,7 @@ func (self *enclaveContainerLinuxSystem) Dup(file *os.File) (*os.File, error) {
 	return os.NewFile(uintptr(fd), file.Name()), nil
 }
 
+// Listens from a thread moved into the first process's network namespace and back.
 func (self *enclaveContainerLinuxSystem) Listen(leaderPid int, network string, address string) (net.Listener, error) {
 	var listener net.Listener
 	err := enclaveContainerInNetns(leaderPid, func() error {
@@ -558,6 +577,7 @@ func enclaveContainerNamespaceOf(pid int, kind string) (uint64, uint64, error) {
 	return stat.Dev, stat.Ino, nil
 }
 
+// Compares pid's PID namespace with the first process's and reads its pid there from NSpid.
 func (self *enclaveContainerLinuxSystem) NamespacePid(pid int, leaderPid int) (int, bool) {
 	dev, ino, err := enclaveContainerNamespaceOf(pid, "pid")
 	if err != nil {

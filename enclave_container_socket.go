@@ -168,6 +168,7 @@ func NewEnclaveContainerDaemonHost(daemon *Daemon, networkId Id) EnclaveContaine
 	return &enclaveContainerDaemonHost{daemon: daemon, networkId: networkId}
 }
 
+// The hosted network's run store.
 func (self *enclaveContainerDaemonHost) Runs() (*RunStore, error) {
 	hosted, ok := self.daemon.SidecarForNetwork(self.networkId)
 	if !ok {
@@ -176,6 +177,7 @@ func (self *enclaveContainerDaemonHost) Runs() (*RunStore, error) {
 	return hosted.Runs()
 }
 
+// The daemon's registered mcp mode, which cli/ injects.
 func (self *enclaveContainerDaemonHost) ServeMcp(ctx context.Context, hello *DaemonHello, stream io.ReadWriter) error {
 	handler, ok := self.daemon.mode(DaemonModeMcp)
 	if !ok {
@@ -184,6 +186,7 @@ func (self *enclaveContainerDaemonHost) ServeMcp(ctx context.Context, hello *Dae
 	return handler(ctx, hello, stream)
 }
 
+// The daemon's own dispatch over a session of hello's, with its network resolution, request bound and reply walk.
 func (self *enclaveContainerDaemonHost) RpcSession(hello *DaemonHello) func(ctx context.Context, line []byte) []byte {
 	session := &daemonSession{hello: hello}
 	return func(ctx context.Context, line []byte) []byte {
@@ -225,6 +228,7 @@ func enclaveContainerSocketMethodAllowed(mode string, method string) bool {
 	return slices.Contains(enclaveContainerSocketMethods.modeNames[mode], method)
 }
 
+// Lets the hook's method through in hook mode.
 func init() {
 	registerEnclaveContainerSocketMethod(DaemonModeHook, enclaveContainerHookMethod)
 }
@@ -771,10 +775,12 @@ type enclaveContainerMcpStream struct {
 	writer io.Writer
 }
 
+// The caller's lines the socket let through.
 func (self *enclaveContainerMcpStream) Read(p []byte) (int, error) {
 	return self.reader.Read(p)
 }
 
+// The server's answers, to the writer that taints before it passes them on.
 func (self *enclaveContainerMcpStream) Write(p []byte) (int, error) {
 	return self.writer.Write(p)
 }

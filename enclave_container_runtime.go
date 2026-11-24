@@ -78,6 +78,7 @@ type enclaveNspawnRuntime struct {
 	settings *EnclaveContainerSettings
 }
 
+// nspawn.
 func (self *enclaveNspawnRuntime) Name() EnclaveContainerRuntimeName {
 	return EnclaveContainerRuntimeNspawn
 }
@@ -129,6 +130,7 @@ func (self *enclaveNspawnRuntime) nspawnArgs(plan *EnclaveContainerPlan) []strin
 	return args
 }
 
+// systemd-run's scope around systemd-nspawn, whose first process is the shim and then the init.
 func (self *enclaveNspawnRuntime) StartCommand(plan *EnclaveContainerPlan) (*EnclaveContainerCommand, error) {
 	argv := enclaveContainerScopeArgv(self.settings, plan)
 	argv = append(argv, self.settings.NspawnPath)
@@ -183,6 +185,7 @@ type enclaveRunscRuntime struct {
 	settings *EnclaveContainerSettings
 }
 
+// runsc.
 func (self *enclaveRunscRuntime) Name() EnclaveContainerRuntimeName {
 	return EnclaveContainerRuntimeRunsc
 }
@@ -205,6 +208,7 @@ func (self *enclaveRunscRuntime) Prepare(plan *EnclaveContainerPlan) error {
 	return nil
 }
 
+// systemd-run's scope around runsc's run of the bundle, its filter applied inside the sandbox.
 func (self *enclaveRunscRuntime) StartCommand(plan *EnclaveContainerPlan) (*EnclaveContainerCommand, error) {
 	argv := enclaveContainerScopeArgv(self.settings, plan)
 	argv = append(argv, self.settings.RunscPath, "--root="+self.settings.RunscStatePath, "--oci-seccomp",
@@ -212,6 +216,7 @@ func (self *enclaveRunscRuntime) StartCommand(plan *EnclaveContainerPlan) (*Encl
 	return &EnclaveContainerCommand{Argv: argv, Env: []string{"PATH=" + self.settings.ExecSearchPath}}, nil
 }
 
+// runsc's exec into the sandbox, the user, directory and environment as flags.
 func (self *enclaveRunscRuntime) ExecCommand(plan *EnclaveContainerPlan, leaderPid int, spec *EnclaveContainerExec) (*EnclaveContainerCommand, error) {
 	uid, gid, err := spec.ids()
 	if err != nil {
