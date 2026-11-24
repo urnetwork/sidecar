@@ -14,6 +14,10 @@
 // alias), and the set is computed here by TlsIdentifierSet, so no certificate row's names are ever taken as the
 // device's. The verified ownership rows and the device's publish grants select its scope and mapped custom hosts.
 //
+// The manager's service token for aud certs, as an ordering desktop's (tls_custom_domain.go), is certsServiceToken's,
+// which reads why one could not be had as evs's and gkm's clients do: a refusal for good ends the call at once, and
+// what may change goes again within SidecarTlsSettings' bound.
+//
 // Two kinds of host make one (§18.4). A host that stays up, a desktop or CLI daemon, takes TlsComponentArgs, which runs
 // D-TLS-8's CT watch while it listens (tls_ct.go). An app's sidecar role runs only while the app is open (owner
 // decision 197), so it takes TlsForegroundComponentArgs, which runs no watch and makes no CT client: the network's
@@ -205,9 +209,29 @@ func tlsDeviceZoneNames(zone *DnsZone, scope string, granted func(string) bool) 
 	return names
 }
 
+// A service token for aud certs at resource (§7.8), as the certificate manager's calls and an ordering desktop's custom
+// routes present it: ServiceToken's, read by why one could not be had (sidecarRetryServiceToken). A refusal for good,
+// the exchange's invalid_grant or no enrolled client say, ends the call at once, and one that may change, no answer
+// from api, its 429 or 5xx, a keychain still locked or no api yet, is asked again within SidecarTlsSettings'
+// CertsExchangeRetryCount. No request goes to api's certs routes without it.
+func (self *Sidecar) certsServiceToken(ctx context.Context, resource string, scopes []string) (string, error) {
+	settings := self.settings.Tls
+	if settings == nil {
+		settings = DefaultSidecarTlsSettings()
+	}
+	retry := sidecarServiceTokenRetry{
+		count:   settings.CertsExchangeRetryCount,
+		wait:    settings.CertsExchangeRetryWait,
+		maxWait: settings.CertsExchangeRetryMaxWait,
+	}
+	return sidecarRetryServiceToken(ctx, self.clock, retry, func(ctx context.Context) (string, error) {
+		return self.ServiceToken(ctx, resource, scopes)
+	})
+}
+
 // The args a TlsComponent takes from this Sidecar for the network it is enrolled in, on a host that stays up (a
-// desktop or CLI daemon): its settings, device key, Sign, ServiceToken, zone, sealed directory, clock and log, and
-// D-TLS-8's CT watch on a keyless client, which passes while this sidecar listens.
+// desktop or CLI daemon): its settings, device key, Sign, certs' ServiceToken (certsServiceToken), zone, sealed
+// directory, clock and log, and D-TLS-8's CT watch on a keyless client, which passes while this sidecar listens.
 func (self *Sidecar) TlsComponentArgs() (*TlsComponentArgs, error) {
 	return self.tlsComponentArgs(true)
 }
@@ -240,7 +264,7 @@ func (self *Sidecar) tlsComponentArgs(watchCt bool) (*TlsComponentArgs, error) {
 			Settings:     self.settings.Tls,
 			Keys:         &sidecarTlsCertKeys{sidecar: self},
 			Sign:         self.Sign,
-			ServiceToken: self.ServiceToken,
+			ServiceToken: self.certsServiceToken,
 			Names:        self.tlsCertNames,
 			Store:        store,
 			Clock:        self.clock,
