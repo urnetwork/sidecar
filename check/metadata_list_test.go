@@ -94,7 +94,8 @@ var metadataListAdditions = []metadataListAddition{
 # fields, ProjectionSettings.auth_features and {scf_<network_id>}, each sidecar's stated authorization features
 # (§16.4, §16.6). Where §14.6 names no store or retention, a row states CARCH-M11-03's reading: the account under
 # compute-3, the provider tables under compute-7, the terms kept for the network's life, and the budget counters,
-# capacities and search counts kept as long as the period they count.
+# capacities and search counts kept as long as the period they count. compute-5 also lists what the broker carries to
+# an enclave's VM, never stored (compute-plan-enc-readings, QD-1243).
 `,
 	},
 	{
@@ -146,12 +147,12 @@ var metadataListAdditions = []metadataListAddition{
 `,
 	},
 	{
-		question: "DESIGN-COMPUTE.md §14.6 (CARCH-M11-03): compute-5",
+		question: "DESIGN-COMPUTE.md §14.6 (CARCH-M11-03) and compute-plan-enc-readings (QD-1243): compute-5",
 		block:    "  owner: DESIGN-COMPUTE §14.6 (§11.6)\n",
 		list: "  owner: DESIGN-COMPUTE §14.6 (§11.6)\n" + `compute-5:
   service: compute (the broker's evidence tunnel and provisioning relay)
   store: memory only, in transit
-  sees: "in transit only: evidence bytes, nonces, sealed provisioning bundles; for the tunnel, the host, sizes and times (its contents are the device's TLS, or its SSH at an enclave's setup)"
+  sees: "in transit only: evidence bytes, nonces, sealed provisioning bundles; for the tunnel, the host, sizes and times (its contents are the device's TLS, or its SSH at an enclave's setup); the bootstrap B the broker carries to an enclave's VM, which reads it from the host, and the per-VM token the VM uses from the host (DESIGN-COMPUTE §11.7, §14.3; QD-1243)"
   why: a device verifies a TEE's evidence and provisions an enclave itself, through the broker, which reads none of it (DESIGN-COMPUTE §5.7, §11.7)
   ttl: "not stored; relayed within 10 minutes; tunnel counts in metrics only"
   owner: DESIGN-COMPUTE §14.6 (§5.7, §11.7)
