@@ -5,10 +5,16 @@
 // contract it holds. The Net's issuer signs each contract with the destination's live provide key, as CreateContract
 // does, so the listener's contract is the old process's. A restarted pool whose client presents the same connect
 // identity, which its source's seed derives (host_edge_identity.go), verifies that contract, and its next stream to the
-// listener carries bytes both ways within RecoveryTimeout. A pool that drew a fresh identity refuses the contract, and
-// the listener's answers wait on its AckTimeout, connect's 60 s, which is the blogger case's two-minute outage in small.
+// listener carries bytes both ways. A pool that drew a fresh identity, or another provide key alone, refuses that
+// contract, and its stream to the listener never opens: neither had an answer within 150 s, past connect's 60 s
+// AckTimeout, which is the blogger case's two-minute outage.
 //
-// Real connect clients keep real timers, so the bounds are real time, each one a broken run's, never a sleep.
+// What the restarted stream waits for is connect's restart path, on connect's real timers: the restarted client's new
+// session with the listener, and the listener's resends of what it holds to the id, which back off from its rtt to
+// MaxResendInterval (8 s). So the edge's dispatcher reads the Net's clock, as the listener's does, and nothing here moves
+// it: no deadline of a dispatcher's, its DefaultCallTimeout, a read's or its keepalive's, ends a wait that connect has
+// yet to answer, as the edge's 15 s DefaultCallTimeout did in listen-expires' landcheck (2026-11-23). Each wait ends on
+// its event, the open's answer or the bytes, or at its step's bound, a broken run's, in real time.
 
 package sidecar_test
 
@@ -25,13 +31,16 @@ import (
 	"github.com/urnetwork/sidecar/sidecartest"
 )
 
-// The restart test's bounds (QD-702).
+// The restart test's bounds (QD-702), each in real time and each a broken run's.
 type edgeRestartNetSettings struct {
-	// How soon after the restarted pool is made its stream must carry the listener's bytes back: above a resend of the
-	// listener's held item, which backs off to connect's MaxResendInterval (8 s), and well below the AckTimeout (60 s)
-	// a stale contract waits on.
+	// How long after the restart the restarted pool's stream has to open and carry bytes both ways. Connect's restart
+	// path took 2.4, 4.8, 10.6 or 18.6 s, as one or another of the listener's resends reached the restarted client, in
+	// 140 runs on a machine at load 37 to 80 (2026-11-24). Below connect's 60 s AckTimeout, TlsTimeout and
+	// SelectiveAckTimeout, so a pass never waited for one of them to expire. Also the edge's DefaultCallTimeout: an open
+	// hands connect what its own deadline leaves, which on a clock nothing moves is all of it, and connect holds the
+	// open's send that long, in real time, for the restarted client's session.
 	RecoveryTimeout time.Duration
-	// Each step before the restart, a broken run's bound.
+	// Each step before the restart.
 	StepTimeout time.Duration
 	// The listener's target, a tls/ name as a registration names it.
 	Target string
@@ -39,18 +48,36 @@ type edgeRestartNetSettings struct {
 
 func defaultEdgeRestartNetSettings() *edgeRestartNetSettings {
 	return &edgeRestartNetSettings{
-		RecoveryTimeout: 20 * time.Second,
+		RecoveryTimeout: 45 * time.Second,
 		StepTimeout:     45 * time.Second,
 		Target:          "tls/443/blog",
 	}
 }
 
-// Opens a stream from the pool's first client to the listener and waits for the listener's accept, both within ctx.
+// A context that ends timeout from now, in real time, and carries no deadline: a dispatcher reads a context's deadline
+// on its own clock, which here is the Net's, so the bound reaches it only as the context's end.
+func edgeRestartBound(t *testing.T, timeout time.Duration) context.Context {
+	ctx, cancel := context.WithTimeout(t.Context(), timeout)
+	t.Cleanup(cancel)
+	return edgeRestartBoundContext{Context: ctx}
+}
+
+// A context without its deadline (edgeRestartBound).
+type edgeRestartBoundContext struct {
+	context.Context
+}
+
+// None, so a dispatcher on the Net's clock does not read a real-time deadline against it.
+func (self edgeRestartBoundContext) Deadline() (time.Time, bool) {
+	return time.Time{}, false
+}
+
+// Opens a stream from the pool's first client to the listener and waits for the listener's accept, both until ctx ends.
 func edgeRestartOpen(t *testing.T, ctx context.Context, pool *sidecar.EdgeClientPool, listenerId connect.Id, target string, incomings <-chan *sidecar.StreamIncoming) (*sidecar.SubprotocolStream, *sidecar.StreamIncoming) {
 	t.Helper()
 	stream, err := pool.Clients()[0].Subprotocol.OpenStream(ctx, sidecar.Id(listenerId), &sidecar.StreamOpenRequest{Target: target})
 	if err != nil {
-		t.Fatalf("the edge's open: %v", err)
+		t.Fatalf("the edge's open: %v (its bound: %v)", err, ctx.Err())
 	}
 	select {
 	case incoming := <-incomings:
@@ -61,15 +88,18 @@ func edgeRestartOpen(t *testing.T, ctx context.Context, pool *sidecar.EdgeClient
 	}
 }
 
-// Reads exactly len(want) bytes from stream by deadline and fails unless they are want.
-func edgeRestartRead(t *testing.T, stream *sidecar.SubprotocolStream, deadline time.Time, want string, what string) {
+// Reads exactly len(want) bytes from stream and fails unless they are want. The read ends with its bytes, or when ctx
+// ends, which passes the stream's read deadline on whichever clock its dispatcher reads.
+func edgeRestartRead(t *testing.T, ctx context.Context, stream *sidecar.SubprotocolStream, want string, what string) {
 	t.Helper()
-	if err := stream.SetReadDeadline(deadline); err != nil {
-		t.Fatal(err)
-	}
+	stop := context.AfterFunc(ctx, func() {
+		// before every clock here
+		stream.SetReadDeadline(time.Unix(0, 0))
+	})
+	defer stop()
 	got := make([]byte, len(want))
 	if _, err := io.ReadFull(stream, got); err != nil || string(got) != want {
-		t.Fatalf("%s read %q, %v", what, got, err)
+		t.Fatalf("%s read %q, %v (its bound: %v)", what, got, err, ctx.Err())
 	}
 }
 
@@ -112,6 +142,9 @@ func TestEdgeClientPoolRestartedInPlaceReachesItsListenerAgain(t *testing.T) {
 	}
 	args.Settings = sidecar.DefaultEdgeClientPoolSettings()
 	args.Settings.ClientCount = 1
+	args.Settings.Protocol.DefaultCallTimeout = settings.RecoveryTimeout
+	// the Net's clock, as the listener's dispatcher reads it, which nothing here moves (the file header)
+	args.Clock = net.Clock()
 	pool, err := sidecar.NewEdgeClientPool(t.Context(), args)
 	if err != nil {
 		t.Fatal(err)
@@ -121,13 +154,12 @@ func TestEdgeClientPoolRestartedInPlaceReachesItsListenerAgain(t *testing.T) {
 	net.SetContractProvideMode(listenerClientId, edgeClientId, connectprotocol.ProvideMode_Service)
 	net.SetContractProvideMode(edgeClientId, listenerClientId, connectprotocol.ProvideMode_Service)
 
-	stepCtx, cancelStep := context.WithTimeout(t.Context(), settings.StepTimeout)
-	defer cancelStep()
+	stepCtx := edgeRestartBound(t, settings.StepTimeout)
 	stream, incoming := edgeRestartOpen(t, stepCtx, pool, listenerClientId, settings.Target, incomings)
 	if _, err := incoming.Stream.Write([]byte("before")); err != nil {
 		t.Fatal(err)
 	}
-	edgeRestartRead(t, stream, time.Now().Add(settings.StepTimeout), "before", "the edge before the restart")
+	edgeRestartRead(t, stepCtx, stream, "before", "the edge before the restart")
 
 	// the edge goes away mid-stream; the listener's next write waits for an ack that the old process never sends
 	pool.Close()
@@ -136,6 +168,7 @@ func TestEdgeClientPoolRestartedInPlaceReachesItsListenerAgain(t *testing.T) {
 	}
 
 	restartTime := time.Now()
+	recoveryCtx := edgeRestartBound(t, settings.RecoveryTimeout)
 	restarted, err := sidecar.NewEdgeClientPool(t.Context(), args)
 	if err != nil {
 		t.Fatal(err)
@@ -144,16 +177,14 @@ func TestEdgeClientPoolRestartedInPlaceReachesItsListenerAgain(t *testing.T) {
 	if connect.Id(restarted.Clients()[0].ClientId) != edgeClientId {
 		t.Fatal("the restarted pool's client took another id")
 	}
-	recoveryCtx, cancelRecovery := context.WithDeadline(t.Context(), restartTime.Add(settings.RecoveryTimeout))
-	defer cancelRecovery()
 	restartedStream, restartedIncoming := edgeRestartOpen(t, recoveryCtx, restarted, listenerClientId, settings.Target, incomings)
 	if _, err := restartedIncoming.Stream.Write([]byte("after")); err != nil {
 		t.Fatal(err)
 	}
-	edgeRestartRead(t, restartedStream, restartTime.Add(settings.RecoveryTimeout), "after", "the restarted edge")
+	edgeRestartRead(t, recoveryCtx, restartedStream, "after", "the restarted edge")
 	if _, err := restartedStream.Write([]byte("visitor")); err != nil {
 		t.Fatal(err)
 	}
-	edgeRestartRead(t, restartedIncoming.Stream, restartTime.Add(settings.RecoveryTimeout), "visitor", "the listener after the restart")
+	edgeRestartRead(t, recoveryCtx, restartedIncoming.Stream, "visitor", "the listener after the restart")
 	t.Logf("the restarted edge's stream carried bytes both ways %s after the restart", time.Since(restartTime))
 }
