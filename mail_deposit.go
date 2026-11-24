@@ -22,11 +22,23 @@
 //	           write-budget refusal, §11.8's closed gate, a reset. A failure leaves the repos that took the message
 //	           holding it, and the sender's retry deposits it again there, which QD-208 bounds by
 //	           mail_inbound_repos_per_message
-//	right      a repo this receiver's own newest verified state gives no deposit (§8.5; repo:<id>:deposit's table,
-//	           AclExchangeScopes, D-ACL-21) refuses the message before any deposit is made, at once (refuses), so the
-//	           session answers 451 4.3.0 before the body is even spooled, where the exchange would otherwise refuse
-//	           the deposit's token only once the body was spooled; a repo whose client holds no ACL state to judge by
-//	           is left to the exchange and evs, which judge every deposit whatever this says
+//	right      a repo this receiver's own newest verified state gives no deposit of mail refuses the message before any
+//	           deposit is made, at once (refuses), so the session answers 451 4.3.0 before the body is even spooled.
+//	           The rule is the send side's, mailSendMayDeposit itself, so a receiver deposits only where a same-network
+//	           sender may: the deposit right the exchange mints repo:<id>:deposit on (§8.5; AclExchangeScopes,
+//	           D-ACL-21), on a repo that takes mail, a mailbox or a general repo its RepoCreate marks an inbox, the
+//	           only general repos a drop key serves (D-KEYS-17; QD-1173), and never §16.8's receipt deposit, which
+//	           ingest takes as no mail. A repo whose client holds no ACL state to judge by is left to the exchange and
+//	           evs, which judge every deposit whatever this says
+//	never      a repo that state holds as taking no mail, by its kind or its RepoCreate's marker, takes no deposit in
+//	           any later state either, since only RepoCreate sets them. gkm serves it no drop key, so a deposit there
+//	           waited out ErrGkmWait and answered 451 4.3.0 on every retry, and the sender retried for days. The
+//	           session answers such a recipient 550 5.1.1 at RCPT instead (takesNoMail), §15.5's permanent answer for
+//	           a recipient no mail reaches, so the sender gives up on that recipient alone at its first try, before
+//	           gkm is asked. Deposit refuses a target there at once as well, ErrMailDepositRefused, which a session
+//	           answers 451 4.3.0 at DATA, like any failure there: only a state that came to hold the repo after RCPT
+//	           took the recipient reaches it, and the sender's retry is then answered 550 5.1.1 at RCPT for that
+//	           recipient alone, rather than every recipient of the message bounced
 //	bound      the deposits take at most DepositTimeout, past which every one still open is cancelled and the message
 //	           answers 451 4.3.0 inside the sender's wait
 //
@@ -43,6 +55,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -52,6 +65,9 @@ import (
 var (
 	// A deposit could not be made or did not commit: the session answers 451 4.3.0 and the sender retries.
 	ErrMailDepositFailed = errors.New("mail deposit failed")
+	// A recipient's repo takes no mail, by a kind or marker no later state changes, so no deposit was made and gkm was
+	// not asked (the file header's never row). Deposit wraps it in ErrMailDepositFailed.
+	ErrMailDepositRefused = errors.New("mail deposit refused: the repo takes no mail")
 	// What a depositor was given cannot be deposited: no spool, no recipient, or a repo with none.
 	ErrMailDepositorInvalid = errors.New("mail depositor: invalid")
 )
@@ -61,35 +77,77 @@ type mailDepositRepo interface {
 	Deposit(ctx context.Context, args *EvsDepositArgs) (*EvsDepositResult, error)
 }
 
-// A repo that also says, before anything is sent, whether depositorId may deposit there now by the depositor's own
-// newest verified state; known false where it holds none to judge by (the file header's right row).
+// A repo that also says, before anything is sent, whether depositorId may deposit mail there now by the depositor's
+// own newest verified state; known false where it holds none to judge by (the file header's right row).
 type mailDepositRightRepo interface {
 	mailDepositRepo
 	depositRight(depositorId Id) (allowed bool, known bool)
 }
 
-// mailDepositRightRepo over EvsRepo: its client's verified state (EvsClientArgs.Config), whose ACL rows the exchange
-// reads for repo:<id>:deposit, at its client's clock.
+// A repo that also says, before anything is sent, whether it takes mail at all by the depositor's own newest verified
+// state; known false where that state does not hold the repo, or there is none to judge by (the file header's never
+// row).
+type mailDepositTakingRepo interface {
+	mailDepositRepo
+	takesMail() (takes bool, known bool)
+}
+
+// mailDepositRightRepo and mailDepositTakingRepo over EvsRepo: its client's verified state (EvsClientArgs.Config),
+// whose ACL rows the exchange reads for repo:<id>:deposit, at its client's clock.
 type mailEvsDepositRepo struct {
 	*EvsRepo
 }
 
-// See mailDepositRightRepo.
-func (self mailEvsDepositRepo) depositRight(depositorId Id) (bool, bool) {
+// The ACL state of its client's newest verified state, and its client's now; false where there is none to judge by.
+func (self mailEvsDepositRepo) aclState() (*AclState, time.Time, bool) {
 	client := self.client
 	if client == nil || client.args.Config == nil {
-		return false, false
+		return nil, time.Time{}, false
 	}
 	state, ok := client.args.Config().(*ConfigState)
 	if !ok || state == nil {
-		return false, false
+		return nil, time.Time{}, false
 	}
 	acl, err := state.Acl()
 	if err != nil || acl == nil {
+		return nil, time.Time{}, false
+	}
+	return acl, client.clock.Now(), true
+}
+
+// See mailDepositRightRepo: the send side's rule, so a receiver deposits mail only where a same-network sender of
+// the same rights may, and only where the exchange mints repo:<id>:deposit.
+func (self mailEvsDepositRepo) depositRight(depositorId Id) (bool, bool) {
+	acl, now, ok := self.aclState()
+	if !ok {
 		return false, false
 	}
-	access := acl.EvsAccess(AclSidecarSubject(depositorId), self.repoId, AclTokenAudienceEvs, client.clock.Now())
-	return access.Rights.Has(AclEvsDeposit), true
+	return mailSendMayDeposit(acl, depositorId, self.repoId, now) == MailSendDelivered, true
+}
+
+// See mailDepositTakingRepo: a mailbox, or a general repo its RepoCreate marks an inbox, the kinds
+// mailSendMayDeposit takes, so both ends agree. A repo's kind and marker are its RepoCreate's, which a repo has
+// once (FoldAclRepos), so a repo held here as taking no mail takes none in any later state.
+func (self mailEvsDepositRepo) takesMail() (bool, bool) {
+	acl, _, ok := self.aclState()
+	if !ok {
+		return false, false
+	}
+	repo := acl.Repo(self.repoId)
+	if repo == nil {
+		// a repo made after this state, which a later state may hold
+		return false, false
+	}
+	switch repo.GetKind() {
+	case protocol.RepoKind_REPO_KIND_MAILBOX:
+		return true, true
+	case protocol.RepoKind_REPO_KIND_GENERAL:
+		// a group's or the admin address's repo: no other general repo's generations carry a drop key (D-KEYS-17)
+		return gkmRepoTakesDeposits(repo), true
+	}
+	// every other kind, those whose generations carry a drop key for what they hold among them (the vault, the secret
+	// store, the team record), which ingest never reads as mail
+	return false, true
 }
 
 // What NewMailDepositor builds on.
@@ -205,12 +263,30 @@ func (self *MailDepositor) refuses(targets []*MailDepositTarget) bool {
 	return false
 }
 
+// Whether this receiver's own newest verified state holds repoId as a repo that takes no mail, so that no deposit
+// there could ever land, in this state or any later one: the session answers its recipient 550 5.1.1 at RCPT (the
+// file header's never row). False where the state does not hold the repo, or there is none to judge by.
+func (self *MailDepositor) takesNoMail(repoId Id) bool {
+	repo, ok := self.repo(repoId).(mailDepositTakingRepo)
+	if !ok {
+		return false
+	}
+	takes, known := repo.takesMail()
+	return known && !takes
+}
+
 // Deposits the message to every target's repo, at most DepositConcurrency at once and within DepositTimeout: nil only
-// once evs confirmed each, else ErrMailDepositFailed with the first failure, and at once, with none made, where the
-// receiver's own state refuses it one (refuses). See the file header.
+// once evs confirmed each, else ErrMailDepositFailed with the first failure, and at once, with none made and gkm not
+// asked, where the receiver's own state holds a repo that takes no mail (ErrMailDepositRefused too, takesNoMail) or
+// refuses it one (refuses). See the file header.
 func (self *MailDepositor) Deposit(ctx context.Context, input *MailDepositInput) error {
 	if input == nil || input.Spool == nil || !input.Spool.finished || len(input.Targets) == 0 {
 		return fmt.Errorf("%w: no message or no repo", ErrMailDepositorInvalid)
+	}
+	for _, target := range input.Targets {
+		if self.takesNoMail(target.RepoId) {
+			return fmt.Errorf("%w: %w", ErrMailDepositFailed, ErrMailDepositRefused)
+		}
 	}
 	if self.refuses(input.Targets) {
 		return fmt.Errorf("%w: this receiver may not deposit into a recipient's repo", ErrMailDepositFailed)
