@@ -14,10 +14,21 @@ import (
 	"testing"
 )
 
-// True for <svc>service and anything beneath it. §4.4 names nine, and more follow the same suffix.
+// True for <svc>service and anything beneath it. §4.4 names nine, and more follow the same suffix; one more is named
+// in namedEngineDirectories.
 func isEnginePackage(packageName string) bool {
 	first, _, _ := strings.Cut(packageName, "/")
-	return strings.HasSuffix(first, "service") && first != "service"
+	return isEngineDirectory(first)
+}
+
+// The engines no suffix names: DESIGN-COMPUTE's search signer, which §14.2 and §3.3 call a server engine of its own,
+// on hosts apart from the broker's, keeping the name the design writes (CARCH-M11-01).
+var namedEngineDirectories = []string{searchSignerPackage}
+
+// True for a top-level directory of this module that holds an engine: <svc>service, or one named above. The engine
+// legs list each (legs_test.go), and the clock rule binds each (clock_rule_test.go).
+func isEngineDirectory(name string) bool {
+	return (strings.HasSuffix(name, "service") && name != "service") || slices.Contains(namedEngineDirectories, name)
 }
 
 // True for packages that are no client: an engine may import a peer, and sidecartest hosts engines

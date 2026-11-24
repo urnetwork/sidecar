@@ -80,6 +80,52 @@ type SidecarSettings struct {
 	// §8.8's save on a config writer: the tier bounds it holds a document to beside GET /sidecar/limits' acl_* keys.
 	AclWriter *SidecarAclWriterSettings
 
+	// The compute components' settings (DESIGN-COMPUTE §3.3; CARCH-M11-01, CONTRACTS C-38), one field a component, each
+	// its area's to fill in its own file, so this file is not edited for them again. Their names are the API apps and
+	// the sdk read, as the rest are. On the forwarding and page Worker legs, which run no compute (owner decision 197;
+	// DESIGN-COMPUTE §15.4), each is an empty stand-in (sidecar_compute_leg.go).
+	//
+	// §7's Harness (harness_settings.go).
+	Harness *HarnessSettings
+	// §24's context history (session_settings.go).
+	Session *SessionSettings
+	// §6's inference: the catalog, the router, the local engine and the remote path (infer_settings.go).
+	Infer *InferSettings
+	// §5's attestation and the signed compute policy (attest_settings.go).
+	Attest *AttestSettings
+	// §2.8's disclosures and their acknowledgments (disclosure_settings.go).
+	Disclosure *ComputeDisclosureSettings
+	// §16.4's budgets (budget_settings.go).
+	Budget *BudgetSettings
+	// §16.4's models key (models_settings.go).
+	ModelsKey *ModelsKeySettings
+	// §16's compute policy and its enforcement (acl_compute_settings.go).
+	ComputePolicy *ComputePolicySettings
+	// §9's compute client: the balance, purchases, auto-renew and the spend view (compute_client_settings.go).
+	Compute *ComputeClientSettings
+	// §8's local gateway (gateway_settings.go).
+	Gateway *GatewaySettings
+	// §11's secure enclaves (enclave_settings.go).
+	Enclave *EnclaveSettings
+	// §12's bundled SSH (ssh_settings.go).
+	Ssh *SshSettings
+	// §13's bundled git (git_settings.go).
+	Git *GitSettings
+	// §20's recURd skill (skill_settings.go).
+	Skill *SkillSettings
+	// §21's web search (websearch_settings.go); Search is §16.10's index search.
+	WebSearch *WebSearchSettings
+	// §22's web fetch (fetch_settings.go).
+	Fetch *FetchSettings
+	// §23's mail and calendar for agents (calendar_settings.go).
+	Calendar *CalendarSettings
+	// §25's connected services (oauth_settings.go).
+	Oauth *OauthSettings
+	// §26's listeners (listeners_settings.go).
+	Listeners *ListenersSettings
+	// §27's automatic approvals (safety_settings.go).
+	Safety *SafetySettings
+
 	// Envelopes one component's queue holds. Complete envelopes wait here without blocking the
 	// inline handler, and a full queue drops and counts (§5.4; connect/CODESTYLE.md:119). Default
 	// 256, a reading: the design sets no number, so this is four of §6.6's 64-message peer queues.
@@ -1222,6 +1268,27 @@ func DefaultSidecarSettings() *SidecarSettings {
 		AclWriter: &SidecarAclWriterSettings{
 			CommunityPublishMaxExpiry: 7 * 24 * time.Hour,
 		},
+
+		Harness:       DefaultHarnessSettings(),
+		Session:       DefaultSessionSettings(),
+		Infer:         DefaultInferSettings(),
+		Attest:        DefaultAttestSettings(),
+		Disclosure:    DefaultComputeDisclosureSettings(),
+		Budget:        DefaultBudgetSettings(),
+		ModelsKey:     DefaultModelsKeySettings(),
+		ComputePolicy: DefaultComputePolicySettings(),
+		Compute:       DefaultComputeClientSettings(),
+		Gateway:       DefaultGatewaySettings(),
+		Enclave:       DefaultEnclaveSettings(),
+		Ssh:           DefaultSshSettings(),
+		Git:           DefaultGitSettings(),
+		Skill:         DefaultSkillSettings(),
+		WebSearch:     DefaultWebSearchSettings(),
+		Fetch:         DefaultFetchSettings(),
+		Calendar:      DefaultCalendarSettings(),
+		Oauth:         DefaultOauthSettings(),
+		Listeners:     DefaultListenersSettings(),
+		Safety:        DefaultSafetySettings(),
 
 		ComponentQueueMessageCount: 256,
 		ComponentQueueByteCount:    1024 * 1024,
