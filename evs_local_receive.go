@@ -904,12 +904,15 @@ var evsLocalQueueHoldCodes = []protocol.EvsRefusalCode{
 
 // The hold of an owned ref's queue whose push the token exchange refused for good (sidecarServiceTokenRefusalOf's final
 // refusals of the exchange's), as 8.2.8's queue row holds it on evs's SCOPE: "token exchange" and the exchange's code,
-// its status where it named none, as `ur status` shows it, nothing of api's text. invalid_scope arrives here only once
-// retryRefusingNothing has ridden out ExchangeScopeWaitTimeout. No enrolled client is the sidecar's own state, not the
-// exchange's answer: it holds as offline (evsLocalOfflineHoldCode), which a reconnect releases, and every failure that
-// may change goes again at QueueInterval. false for those, and for any error of another kind.
+// its status where it named none, as `ur status` shows it, nothing of api's text. It holds whichever client asked, evs's
+// for the push (errEvsNoServiceToken) or gkm's for its key (errGkmNoServiceToken), which EnsureWritable ends at since
+// gkm-ladder-token-refusal, as the same exchange refuses the same device for good whatever the audience (QD-1231).
+// invalid_scope arrives here only once retryRefusingNothing, or GkmApi, has ridden out its ExchangeScopeWaitTimeout. No
+// enrolled client is the sidecar's own state, not the exchange's answer: it holds as offline (evsLocalOfflineHoldCode),
+// which a reconnect releases, and every failure that may change goes again at QueueInterval, as gkm's own 401, no
+// exchange's answer, does. false for those, and for any error of another kind.
 func evsLocalExchangeHoldCode(err error) (string, bool) {
-	if !errors.Is(err, errEvsNoServiceToken) {
+	if !errors.Is(err, errEvsNoServiceToken) && !errors.Is(err, errGkmNoServiceToken) {
 		return "", false
 	}
 	refusal := sidecarServiceTokenRefusalOf(err)
