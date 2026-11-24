@@ -499,6 +499,51 @@ func TestTlsCertManagerHoldsTheNetworksOrderWhoseTokenIsRefusedForGood(t *testin
 	}
 }
 
+// A person's rotation is new work for the orders on the key it rotates, as a local ref's move is for an owned ref's
+// held queue (DESIGN-DETAILS 8.2.8), so it lets every hold go: the network's successor order, held at the exchange's
+// invalid_grant by the pass a first rotation asked for and asked nothing past the backoff, is tried at once by the
+// pass the person's next rotation asks for, lands once the exchange grants, and installs and serves at the next pass.
+// Without the release the order stayed held until the device's state or enrollment moved, the person's rotation
+// asking nothing.
+func TestTlsCertManagerAPersonsRotationLetsHoldsGo(t *testing.T) {
+	world := newTlsCertHoldWorld(t, true)
+	outcome := tlsCertsRenewAwait(t, tlsCertsRenewEnsure(t.Context(), world.manager()))
+	if outcome.err != nil || outcome.certificate == nil {
+		t.Fatalf("the person's order: %v", outcome.err)
+	}
+	served := tlsCertLeafOf(t, outcome.certificate)
+	world.renew.world.sidecar.ForgetServiceToken(world.renew.resource(), nil)
+	world.refuseExchanges(1, http.StatusBadRequest, "invalid_grant")
+	if err := world.manager().RotateTlsKey(t.Context(), TlsKeyRotationRequest); err != nil {
+		t.Fatal(err)
+	}
+	world.fixture.settleLoop()
+	before := world.counts()
+	if err := world.passPastTheBackoff(); err != nil {
+		t.Errorf("a pass with the network's order held: %v", err)
+	}
+	if taken := world.counts().since(before); taken != (tlsCertHoldCounts{}) {
+		t.Fatalf("passes with the network's order held took %+v", taken)
+	}
+
+	before = world.counts()
+	if err := world.manager().RotateTlsKey(t.Context(), TlsKeyRotationRequest); err != nil {
+		t.Fatal(err)
+	}
+	world.fixture.settleLoop()
+	want := tlsCertHoldCounts{tokenAsks: 1, exchanges: 1, certsRequests: 1, orders: 1}
+	if taken := world.counts().since(before); taken != want {
+		t.Errorf("the person's rotation's pass took %+v, want %+v", taken, want)
+	}
+	if err := world.sync(); err != nil {
+		t.Errorf("the pass installing the successor: %v", err)
+	}
+	certificate, err := world.manager().PublishCertificate(world.fixture.networkSet())
+	if err != nil || tlsCertLeafOf(t, certificate).Equal(served) {
+		t.Errorf("the successor does not serve: %v", err)
+	}
+}
+
 // A status read whose renewal after certs' 401 meets a refusal of its token keeps the order: the exchange's 404 to the
 // renewal is no answer about the order's row, so EnsureTlsCertificate ends with the token refusal, the order stays
 // open, and once the row issues the next EnsureTlsCertificate follows that same order to its certificate, placing no

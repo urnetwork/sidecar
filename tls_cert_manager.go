@@ -29,13 +29,14 @@
 // What the pass orders for, the network's certificate or a custom host, goes again after a failed order on a backoff,
 // CertRetryMinInterval doubling to CertRetryMaxInterval, as an owned ref's queue goes again on what may change
 // (DESIGN-DETAILS 8.2.8). An order whose certs token was refused for good, the exchange's invalid_grant or
-// restore_required, another refusal of its sidecarServiceTokenRefusalOf calls final, or no enrolled client, is held
+// restore_required, another of its refusals sidecarServiceTokenRefusalOf calls final, or no enrolled client, is held
 // instead, as that queue holds on a final refusal (owner decision 729): the same request meets the same answer, so the
 // pass asks nothing more for that name, the exchange least of all, until the device's state or its enrollment moves. A
 // generation's api attaching or detaching (SetApi), the device's verified state moving past the version the refused
 // pass read its names at (TlsCertNames.PinVersion), or a certs call landing under the manager's token, which shows the
-// refusal no longer stands, lets every hold go. certs' own answers, its 401 to a renewed token included, back off as
-// before. A person's EnsureTlsCertificate waits on neither.
+// refusal no longer stands, lets every hold go; so does a person's rotation (RotateTlsKey), new work for every order on
+// the key, as a local ref's move is for that queue. certs' own answers, its 401 to a renewed token included, back off
+// as before. A person's EnsureTlsCertificate waits on neither.
 //
 // The state file holds chains and open orders, which are public values (cert-1), and no key. One pass runs at a time,
 // and no state lock is held across the keychain, the store or the api. Errors and logs name no host, label or id's
@@ -1044,8 +1045,9 @@ func tlsCertTokenRefusedForGood(err error) bool {
 	return errors.Is(err, errTlsCertNoServiceToken) && sidecarServiceTokenRefusalOf(err).final
 }
 
-// Lets go every target held for a certs token refused for good: certs answered a call under the manager's token, so
-// no such refusal stands any more, whatever the standing. A backoff for what may change stays.
+// Lets go every target held for a certs token refused for good, whatever the standing: certs answered a call under the
+// manager's token, so no such refusal stands any more, or a person's rotation set new work. A backoff for what may
+// change stays.
 func (self *TlsCertManager) releaseHolds() {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
@@ -1800,7 +1802,9 @@ func (self *TlsCertManager) keepCustomHostWithPass(ctx context.Context, names *T
 
 // Sets a pending successor for reason and asks for a pass, which orders its certificate with `replaces`. The key
 // serving keeps serving until that chain installs. After suspicion the predecessor's certificate is revoked with
-// keyCompromise once its successor serves (§13.8).
+// keyCompromise once its successor serves (§13.8). A person's rotation is new work for every order on the key, as a
+// local ref's move is for an owned ref's held queue (DESIGN-DETAILS 8.2.8), so it lets every hold go: the pass it asks
+// for tries the successor's order whatever certs token was refused before, and holds it again if refused again.
 func (self *TlsCertManager) RotateTlsKey(ctx context.Context, reason TlsKeyRotationReason) error {
 	if err := self.acquirePass(ctx); err != nil {
 		return err
@@ -1812,6 +1816,7 @@ func (self *TlsCertManager) RotateTlsKey(ctx context.Context, reason TlsKeyRotat
 	if _, _, err := self.refreshKeysWithPass(); err != nil {
 		return err
 	}
+	self.releaseHolds()
 	self.requestPass()
 	return nil
 }
