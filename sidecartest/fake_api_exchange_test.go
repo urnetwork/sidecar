@@ -1,7 +1,8 @@
 // The fake api's token exchange on T2, §22.5's §7 row as TEAM-M1-06 runs it on server: a copied token fails, an
 // expired subject is refused, a replayed proof is refused, the api audience is never issued, a 65th repo: scope is
-// refused; and what the fake adds for schedules: no scope without a projection, the scope source seam, a removed
-// client, re-seed mode, a proof that names another request, and the tokens the Net's engines take.
+// refused; and what the fake adds for schedules: no scope without a projection, the scope source seam and its
+// refusals' answers, a removed client, re-seed mode, a proof that names another request, and the tokens the Net's
+// engines take.
 
 package sidecartest
 
@@ -367,6 +368,38 @@ func TestFakeApiExchangeTakesItsScopesFromTheSource(t *testing.T) {
 	}
 	fixture.api.SetExchangeScopeSource(nil)
 	fixture.refused("the source removed", fixture.form(fixture.api.ServiceOrigin("gkm"), asked...), []string{fixture.proof()}, "invalid_scope")
+}
+
+// A source's refusals answer as server's exchange answers its source's: a scope it will not grant 400 invalid_scope, a
+// client it does not admit 400 invalid_grant, a state it cannot judge by yet 503 temporarily_unavailable, each when
+// wrapped too and none naming its detail, and any other error 500 server_error.
+func TestFakeApiExchangeAnswersASourcesRefusalsAsServersDoes(t *testing.T) {
+	fixture := newFakeApiExchangeFixture(t)
+	scope := "repo:" + configLogSuiteId().String() + ":r"
+	cases := []struct {
+		refusal error
+		status  int
+		code    string
+	}{
+		{refusal: ErrFakeApiInvalidScope, status: http.StatusBadRequest, code: "invalid_scope"},
+		{refusal: ErrFakeApiInvalidGrant, status: http.StatusBadRequest, code: "invalid_grant"},
+		{refusal: ErrFakeApiExchangeUnavailable, status: http.StatusServiceUnavailable, code: "temporarily_unavailable"},
+		{refusal: errors.New("the source failed"), status: http.StatusInternalServerError, code: "server_error"},
+	}
+	for _, c := range cases {
+		fixture.api.SetExchangeScopeSource(func(ctx context.Context, request *FakeApiScopeRequest) (*FakeApiScopeGrant, error) {
+			return nil, fmt.Errorf("the source's detail: %w", c.refusal)
+		})
+		for _, scopes := range [][]string{nil, {scope}} {
+			status, refusal := fixture.post(fixture.form(fixture.api.ServiceOrigin("evs"), scopes...), []string{fixture.proof()}, "", nil)
+			if status != c.status || refusal["error"] != c.code {
+				t.Errorf("%v with %d scopes: %d %v, want %d %s", c.refusal, len(scopes), status, refusal, c.status, c.code)
+			}
+			if description, _ := refusal["error_description"].(string); strings.Contains(description, "detail") {
+				t.Errorf("%v: the answer names the source's detail: %q", c.refusal, description)
+			}
+		}
+	}
 }
 
 // A removed client's token buys nothing, and no route takes it.
