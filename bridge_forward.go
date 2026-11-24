@@ -17,10 +17,10 @@
 //	          then
 //
 // head_alarm is raised once per condition (§17.8; owner decision 716): each is keyed by what it is about, a generation
-// gkm lists off the held chain, a head served for a base that names another, a genesis or a page api serves off the
-// anchored chain, a pin the app's sidecar role witnessed, and stands from its first raise until the read that met it
-// finds it gone, so a retry, a later compile or a repeated witness that meets it again raises nothing, and one that
-// ended and comes back is raised again. What stands is held in memory, as the posture's
+// gkm lists off the held chain, a GroupForm pinned off the judged one, a head served for a base that names another, a
+// genesis or a page api serves off the anchored chain, a pin the app's sidecar role witnessed, and stands from its first
+// raise until the read that met it finds it gone, so a retry, a later compile or a repeated witness that meets it again
+// raises nothing, and one that ended and comes back is raised again. What stands is held in memory, as the posture's
 // raises are: a restart raises a standing condition once more at its first meeting.
 //
 // Between compiles nothing of the network stays in memory but the pin, the timers, the settings, the last compile's
@@ -96,6 +96,9 @@ const (
 const (
 	// + g: a listed GenRotate at generation g off the held chain (bridge_forward_keys.go)
 	forwarderConditionGeneration = "generation/"
+	// + the hex SHA-256 of the Signed GroupForm: a form the walk to the config's newest group met pinned off the
+	// judged chain (bridge_forward_keys.go)
+	forwarderConditionForm = "form/"
 	// the head's record name, head/<v>-<sha>, itself: a head the reader was served for a base that names another
 	// (bridge_forward_compile.go)
 	forwarderConditionHead = forwarderHeadPrefix
