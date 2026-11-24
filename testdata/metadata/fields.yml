@@ -888,3 +888,16 @@ rows:
   ext-13: {planned: M3}
   ext-14: {planned: M9}
   ext-15: {planned: M9}
+  # DESIGN-COMPUTE.md §14.6's rows (CARCH-M11-03), each until its area's first value: the ledger and broker at M12a,
+  # providers, gamma and disputes with M12, web search at M13b, enclaves, the tunnel and collateral at M14
+  compute-1: {planned: M12}
+  compute-2: {planned: M12}
+  compute-3: {planned: M12}
+  compute-4: {planned: M14}
+  compute-5: {planned: M14}
+  compute-6: {planned: M12}
+  compute-7: {planned: M12}
+  compute-8: {planned: M12}
+  compute-9: {planned: M14}
+  compute-10: {planned: M13}
+  compute-11: {planned: M13}
