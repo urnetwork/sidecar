@@ -33,7 +33,28 @@
 // presents (evsCallScopes), is honored. Every 403 of a route that goes again is answered before gkm writes anything,
 // so a write goes again with its same bytes. A call refused for a right the client lacks is refused twice. A call
 // whose batch carries its own role there, or that presented its repo's one scope already, goes once, and so does an
-// admin route, whose role nothing outranks.
+// admin route, whose role nothing outranks, unless the exchange left the repo's scope out, below.
+//
+// The exchange grants only the scopes the newest state api's gate holds gives the client (§7.8), and a grant reaches
+// that gate up to §8.9's 5 s after this client's own state may show it. So api's gate lags a new grant in two ways:
+// it leaves the new scope out of a batch's token, a partial grant, and it refuses a token of that scope alone
+// invalid_scope. gkm's client rides both out within the call (QD-1230, as QD-1226 has evs's client ride the second
+// out). A call refused 403 under a batch whose token's granted scopes left out the batch's scope on the call's repo,
+// which the client's verified state gives at the role the call needs or a stronger one, and a call whose batch the
+// exchange refused invalid_scope, granting it nothing, go again under the call's repo scope alone at the role it
+// needs: QD-1179's single-scope form. The exchange's invalid_scope to the call's own scope, which the client's state
+// gives, is asked again ReadRetryWait apart until ExchangeScopeWaitTimeout has passed since the call's first such
+// answer, the last try at the window's end, and then ends the call. So a new writer's first write after a shrink of the
+// repo's holders rotates and lands once api's gate holds its grant (§10.5's Rotate inside EnsureWritable), as its late
+// deliveries do, while a scope never granted, or taken away, costs api an exchange and gkm a call about once a second
+// for the window. The granted scopes come from GrantedServiceToken; a client built on ServiceToken alone reads every
+// token as granting each scope asked, so none of its calls takes this retry.
+//
+// Every other failure to get a token is read by why it failed (sidecarServiceTokenRefusalOf), and sent nothing to
+// gkm, so a write goes on as a read does: a refusal for good, invalid_grant or no enrolled client say, ends the call at
+// once, and one that may change, no answer from api, its 429 or 5xx, a keychain still locked or no api yet, goes again
+// at most ExchangeRetryCount times. Such a failure carries errGkmNoServiceToken, so a flow that reads an unknown
+// outcome back after a lost answer knows nothing was sent.
 //
 // Safe for concurrent use.
 
@@ -89,8 +110,17 @@ var (
 	ErrGkmNoAnswer = errors.New("gkm: no answer")
 )
 
+// A call's service token could not be had, so nothing reached gkm: carried with the token keeper's error, which
+// sidecarServiceTokenRefusalOf reads, once the call has ridden out or retried what it may. A write's outcome is known
+// on it, nothing sent.
+var errGkmNoServiceToken = errors.New("no service token")
+
 // A service token for an audience url with scopes, Sidecar.ServiceToken's shape: for an in-process caller only.
 type GkmServiceTokenFunction func(ctx context.Context, resource string, scopes []string) (string, error)
+
+// A service token for an audience url with scopes, and the scopes the exchange granted it, which may be fewer than
+// those asked (§7.8): Sidecar.GrantedServiceToken's shape, for an in-process caller only.
+type GkmGrantedServiceTokenFunction func(ctx context.Context, resource string, scopes []string) (token string, grantedScopes []string, err error)
 
 // Every answer of gkm's but a success (§10.14). Its text names the status and never a path, an id or a token. The
 // lb's 502 or 504 is no answer of gkm's and never one of these (ErrGkmNoAnswer).
@@ -172,8 +202,12 @@ type GkmApiArgs struct {
 	GkmUrl string
 	// SidecarApi's transport, which holds every request to an absolute url.
 	Transport http.RoundTripper
-	// Sidecar.ServiceToken.
+	// Sidecar.ServiceToken, unused where GrantedServiceToken is set.
 	ServiceToken GkmServiceTokenFunction
+	// Sidecar.GrantedServiceToken: the token with the scopes the exchange granted it, which tells a call gkm refused
+	// because the exchange left the call's repo scope out of a batch's token (QD-1230). nil takes ServiceToken, each of
+	// whose tokens is read as granting every scope asked, so no call takes that retry. One of the two is required.
+	GrantedServiceToken GkmGrantedServiceTokenFunction
 	// nil takes the defaults.
 	Settings *GkmSettings
 	// nil is real time.
@@ -184,7 +218,7 @@ type GkmApiArgs struct {
 type GkmApi struct {
 	baseUrl      string
 	transport    http.RoundTripper
-	serviceToken GkmServiceTokenFunction
+	serviceToken GkmGrantedServiceTokenFunction
 	settings     *GkmSettings
 	clock        Clock
 
@@ -204,7 +238,7 @@ func NewGkmApi(args *GkmApiArgs) (*GkmApi, error) {
 	switch {
 	case args == nil:
 		return nil, fmt.Errorf("%w: no gkm api args", errInvalidSettings)
-	case args.Transport == nil || args.ServiceToken == nil:
+	case args.Transport == nil || args.ServiceToken == nil && args.GrantedServiceToken == nil:
 		return nil, fmt.Errorf("%w: a gkm api needs its transport and service token", errInvalidSettings)
 	}
 	if err := checkServiceUrl("GkmUrl", args.GkmUrl, "http", "https"); err != nil {
@@ -214,10 +248,19 @@ func NewGkmApi(args *GkmApiArgs) (*GkmApi, error) {
 	if settings == nil {
 		settings = DefaultGkmSettings()
 	}
+	serviceToken := args.GrantedServiceToken
+	if serviceToken == nil {
+		plainServiceToken := args.ServiceToken
+		serviceToken = func(ctx context.Context, resource string, scopes []string) (string, []string, error) {
+			// a keeper that names no grant: each scope asked is read as granted
+			token, err := plainServiceToken(ctx, resource, scopes)
+			return token, scopes, err
+		}
+	}
 	return &GkmApi{
 		baseUrl:          args.GkmUrl,
 		transport:        args.Transport,
-		serviceToken:     args.ServiceToken,
+		serviceToken:     serviceToken,
 		settings:         settings,
 		clock:            clockOrReal(args.Clock),
 		repoIdBatches:    map[Id]int{},
@@ -269,17 +312,25 @@ func (self *GkmApi) accessScopes() (held bool, changed <-chan struct{}) {
 	return self.accessScopesHeld.Get()
 }
 
-// What one call presents: its token's scopes, and those of the one retry a 403 to them takes.
+// What one call presents: its token's scopes, and those of the one retry a refusal of them takes.
 type gkmCallScopes struct {
 	scopes []string
-	// The call's repo scope alone at the role the call needs, where scopes is a batch carrying a stronger role on
-	// that repo (QD-1179); nil where the batch carries the call's own role there, where scopes is that one scope
-	// already, and for a call on no repo.
+	// The call's repo scope alone at the role the call needs, where scopes is a batch holding a scope on that repo
+	// whose role covers the call's: what a 403 to the batch goes again under where the batch carries a stronger role
+	// there (QD-1179) or the exchange left the batch's scope there out of its token, and what the batch's
+	// invalid_scope does (QD-1230). nil where scopes is that one scope already, and for a call on no repo.
 	narrowedScopes []string
+	// The batch's scope on the call's repo, which the token's granted scopes are read for: "" with no narrowed retry.
+	batchScope string
+	// Whether the batch's role on the repo outranks the call's, so a 403 to it goes again whatever the exchange granted.
+	stronger bool
+	// Whether the client's verified state gives the call's repo at its role or a stronger one: the exchange's
+	// invalid_scope to the call's own scope is ridden out only then (QD-1230).
+	stateGives bool
 }
 
 // The scopes a call on repoId needing role presents: the batch holding the repo when its role covers role, else that
-// one scope alone, and that one scope as the narrowed retry's where the batch's role outranks role. A call on no repo,
+// one scope alone, and that one scope as the narrowed retry's where the batch is more than it. A call on no repo,
 // repoId nil, presents the first batch holding an r, rw or admin scope, and has no narrowed retry.
 func (self *GkmApi) scopesFor(repoId *Id, role string) (gkmCallScopes, error) {
 	self.stateLock.Lock()
@@ -298,12 +349,15 @@ func (self *GkmApi) scopesFor(repoId *Id, role string) (gkmCallScopes, error) {
 	batch, ok := self.repoIdBatches[*repoId]
 	batchRole := self.repoIdRoles[*repoId]
 	if !ok || !gkmRoleCovers(batchRole, role) {
+		// a role the client's state does not give: that one scope, refused as gkm or the exchange refuses it
 		return gkmCallScopes{scopes: repoScopes}, nil
 	}
-	callScopes := gkmCallScopes{scopes: self.batchScopes[batch]}
-	if batchRole != role {
-		// covers and is not role: a stronger role, which gkm refuses whole while its state does not give it
+	callScopes := gkmCallScopes{scopes: self.batchScopes[batch], stateGives: true}
+	if !slices.Equal(callScopes.scopes, repoScopes) {
 		callScopes.narrowedScopes = repoScopes
+		callScopes.batchScope = GkmRepoScope{RepoId: *repoId, Role: batchRole}.scope()
+		// covers and is not role: a stronger role, which gkm refuses whole while its state does not give it
+		callScopes.stronger = batchRole != role
 	}
 	return callScopes, nil
 }
@@ -352,38 +406,94 @@ func gkmBody(message proto.Message) ([]byte, error) {
 
 // Sends call and answers a success's status and body, at most ReplyMaxByteCount, or an error for any other answer.
 // gkm's own 429 or 503 goes again as call.retry allows. Its 403 to a batch with narrowed scopes goes again once, at
-// once, under those scopes, which the rest of the call presents; ReadRetryCount does not count that retry. No answer,
-// the lb's 502 or 504 among them, comes back at once, as a transport error does, and so does an error minting the
-// narrowed token, which leaves the call as a failed exchange leaves any other.
+// once, under those scopes, which the rest of the call presents, where the batch carries a stronger role on the
+// call's repo (QD-1179) or the token's granted scopes left the batch's scope there out (QD-1230); ReadRetryCount does
+// not count that retry, and the batch's invalid_scope takes it too. A token that could not be had is read by why
+// (sidecarServiceTokenRefusalOf): the exchange's invalid_scope to the call's own scope, which the client's state
+// gives, goes again ReadRetryWait apart until ExchangeScopeWaitTimeout has passed since the call's first, the last try
+// at the window's end; another refusal for good ends the call at once; and a failure that may change goes again at
+// most ExchangeRetryCount times. No answer, the lb's 502 or 504 among them, comes back at once, as a transport error
+// does.
 func (self *GkmApi) do(ctx context.Context, call *gkmCall) (int, []byte, error) {
 	scopes := call.scopes.scopes
-	narrowedScopes := call.scopes.narrowedScopes
+	// whether scopes is the call's own repo scope alone or holds no other to narrow to, so nothing narrows it again
+	narrowed := call.scopes.narrowedScopes == nil
 	retryCount := 0
+	exchangeRetryCount := 0
+	// the first of the exchange's invalid_scope answers to the call's own scope, zero while none came
+	var scopeRefusedAt time.Time
 	for {
-		status, body, err := self.doOnce(ctx, call, scopes)
+		status, body, grantedScopes, err := self.doOnce(ctx, call, scopes)
 		if err == nil {
 			return status, body, nil
 		}
-		gkmError, ok := GkmErrorOf(err)
-		if !ok {
+		if ctx.Err() != nil {
 			return 0, nil, err
 		}
-		if gkmError.Status == http.StatusForbidden && narrowedScopes != nil {
-			// QD-1179: the batch's stronger role on the call's repo, which gkm's state does not give yet or any
-			// longer; the role the call needs alone may be honored
-			scopes, narrowedScopes = narrowedScopes, nil
-			continue
-		}
-		if !call.retry || !gkmError.RefusesNothing() || self.settings.ReadRetryCount <= retryCount {
-			return 0, nil, err
-		}
-		retryCount += 1
-		wait := gkmError.RetryAfter
-		if wait <= 0 {
-			wait = self.settings.ReadRetryWait
-		}
-		if self.settings.ReadRetryMaxWait < wait {
-			return 0, nil, err
+		var wait time.Duration
+		if errors.Is(err, errGkmNoServiceToken) {
+			refusal := sidecarServiceTokenRefusalOf(err)
+			switch {
+			case refusal.scopeRefused && !narrowed:
+				// QD-1230: the batch was granted nothing, its scope on the call's repo left out with the rest, and the
+				// call's own scope alone may be
+				scopes, narrowed = call.scopes.narrowedScopes, true
+				continue
+			case refusal.scopeRefused && call.scopes.stateGives && 0 < self.settings.ExchangeScopeWaitTimeout:
+				// QD-1230: the call's own scope, which this client's verified state gives, is refused while api's gate
+				// lags the grant, §8.9's 5 s at most
+				now := self.clock.Now()
+				if scopeRefusedAt.IsZero() {
+					scopeRefusedAt = now
+				}
+				left := scopeRefusedAt.Add(self.settings.ExchangeScopeWaitTimeout).Sub(now)
+				if left <= 0 {
+					return 0, nil, err
+				}
+				wait = left
+				if 0 < self.settings.ReadRetryWait {
+					wait = min(self.settings.ReadRetryWait, left)
+				}
+			case refusal.final:
+				return 0, nil, err
+			default:
+				// no answer from api, its 429 or 5xx, a keychain still locked, no api yet: nothing reached gkm, so a
+				// write goes again as a read does
+				if self.settings.ExchangeRetryCount <= exchangeRetryCount {
+					return 0, nil, err
+				}
+				exchangeRetryCount += 1
+				wait = self.settings.ReadRetryWait
+				if 0 < refusal.retryAfter {
+					if self.settings.ReadRetryMaxWait < refusal.retryAfter {
+						return 0, nil, err
+					}
+					wait = refusal.retryAfter
+				}
+			}
+		} else {
+			gkmError, ok := GkmErrorOf(err)
+			if !ok {
+				return 0, nil, err
+			}
+			if gkmError.Status == http.StatusForbidden && !narrowed && (call.scopes.stronger || !slices.Contains(grantedScopes, call.scopes.batchScope)) {
+				// QD-1179: the batch's stronger role on the call's repo, which gkm's state does not give yet or any
+				// longer; QD-1230: a batch whose token the exchange granted without its scope on the call's repo. The
+				// role the call needs alone may be honored
+				scopes, narrowed = call.scopes.narrowedScopes, true
+				continue
+			}
+			if !call.retry || !gkmError.RefusesNothing() || self.settings.ReadRetryCount <= retryCount {
+				return 0, nil, err
+			}
+			retryCount += 1
+			wait = gkmError.RetryAfter
+			if wait <= 0 {
+				wait = self.settings.ReadRetryWait
+			}
+			if self.settings.ReadRetryMaxWait < wait {
+				return 0, nil, err
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -393,11 +503,12 @@ func (self *GkmApi) do(ctx context.Context, call *gkmCall) (int, []byte, error) 
 	}
 }
 
-// One attempt, presenting a token of scopes.
-func (self *GkmApi) doOnce(ctx context.Context, call *gkmCall, scopes []string) (int, []byte, error) {
-	token, err := self.serviceToken(ctx, self.baseUrl, scopes)
+// One attempt, presenting a token of scopes. Answers the scopes the exchange granted the token beside gkm's answer,
+// nil where no token could be had, which comes back carrying errGkmNoServiceToken.
+func (self *GkmApi) doOnce(ctx context.Context, call *gkmCall, scopes []string) (int, []byte, []string, error) {
+	token, grantedScopes, err := self.serviceToken(ctx, self.baseUrl, scopes)
 	if err != nil {
-		return 0, nil, fmt.Errorf("gkm %s: no service token: %w", call.route, err)
+		return 0, nil, nil, fmt.Errorf("gkm %s: %w: %w", call.route, errGkmNoServiceToken, err)
 	}
 	callCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -409,7 +520,7 @@ func (self *GkmApi) doOnce(ctx context.Context, call *gkmCall, scopes []string) 
 	}
 	request, err := http.NewRequestWithContext(callCtx, call.method, self.baseUrl+call.path, bodyReader)
 	if err != nil {
-		return 0, nil, fmt.Errorf("gkm %s: a request that does not build", call.route)
+		return 0, nil, grantedScopes, fmt.Errorf("gkm %s: a request that does not build", call.route)
 	}
 	if call.body != nil {
 		request.Header.Set("Content-Type", gkmHttpContentType)
@@ -418,27 +529,27 @@ func (self *GkmApi) doOnce(ctx context.Context, call *gkmCall, scopes []string) 
 	response, err := self.transport.RoundTrip(request)
 	if err != nil {
 		if ctx.Err() != nil {
-			return 0, nil, ctx.Err()
+			return 0, nil, grantedScopes, ctx.Err()
 		}
 		// a transport error may hold the url, which holds only ids, but never the token
-		return 0, nil, fmt.Errorf("gkm %s: %w", call.route, err)
+		return 0, nil, grantedScopes, fmt.Errorf("gkm %s: %w", call.route, err)
 	}
 	defer response.Body.Close()
 	if gkmStatusIsNoAnswer(response.StatusCode) {
 		// the lb's answer: nothing of its body is read, so an error page past the bound or cut short changes nothing
-		return 0, nil, gkmErrorOfAnswer(call.route, response.StatusCode, response.Header, nil)
+		return 0, nil, grantedScopes, gkmErrorOfAnswer(call.route, response.StatusCode, response.Header, nil)
 	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, self.settings.ReplyMaxByteCount+1))
 	if err != nil {
-		return 0, nil, fmt.Errorf("%w: %s: the answer was cut short", ErrGkmReplyInvalid, call.route)
+		return 0, nil, grantedScopes, fmt.Errorf("%w: %s: the answer was cut short", ErrGkmReplyInvalid, call.route)
 	}
 	if self.settings.ReplyMaxByteCount < int64(len(body)) {
-		return 0, nil, fmt.Errorf("%w: %s: an answer past %d bytes", ErrGkmReplyInvalid, call.route, self.settings.ReplyMaxByteCount)
+		return 0, nil, grantedScopes, fmt.Errorf("%w: %s: an answer past %d bytes", ErrGkmReplyInvalid, call.route, self.settings.ReplyMaxByteCount)
 	}
 	if response.StatusCode == http.StatusOK || response.StatusCode == http.StatusCreated {
-		return response.StatusCode, body, nil
+		return response.StatusCode, body, grantedScopes, nil
 	}
-	return 0, nil, gkmErrorOfAnswer(call.route, response.StatusCode, response.Header, body)
+	return 0, nil, grantedScopes, gkmErrorOfAnswer(call.route, response.StatusCode, response.Header, body)
 }
 
 // Whether an answer of status is the lb's and none of gkm's: a 502 or a 504 (QD-876). gkm answers neither on any

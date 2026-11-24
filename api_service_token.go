@@ -11,7 +11,9 @@
 //
 // ServiceToken's own refusals are typed, so a caller's retry owner tells what can change from what cannot: a keychain
 // still locked or no api yet goes again within the owner's bound, and no enrolled client ends the call, as the
-// exchange's refusals for good do (sidecarServiceTokenRefusalOf, which evs's retry owners read).
+// exchange's refusals for good do (sidecarServiceTokenRefusalOf, which evs's retry owners and gkm's client read).
+// GrantedServiceToken answers the scopes the exchange granted beside the token, which may be fewer than those asked, so
+// gkm's client tells a refusal of a scope its batch's token never carried from one gkm judged (QD-1230).
 
 package sidecar
 
@@ -56,7 +58,8 @@ type sidecarServiceTokenRefusal struct {
 	exchange bool
 	// The exchange answered invalid_scope, no scope asked granted in the newest state api's gate holds (final too). A
 	// grant reaches server gates within §8.9's 5 s of its entry, and may reach this device's own state first, so a retry
-	// owner asks again within EvsSettings.ExchangeScopeWaitTimeout of the first such answer before it takes it as final.
+	// owner asks again within EvsSettings.ExchangeScopeWaitTimeout, or gkm's GkmSettings.ExchangeScopeWaitTimeout, of the
+	// first such answer before it takes it as final.
 	scopeRefused bool
 	// The wait the exchange's 429 or 5xx asked for, its retry_after_ms or Retry-After: zero where it named none.
 	retryAfter time.Duration
@@ -175,6 +178,17 @@ func (self *Sidecar) ForgetServiceToken(resource string, scopes []string) {
 // ErrSidecarServiceTokenLocked while Locked and ErrSidecarServiceTokenNoClient with no enrolled client, as the exchange
 // has no token to present then, and ErrSidecarServiceTokenNoApi with no api to ask.
 func (self *Sidecar) ServiceToken(ctx context.Context, resource string, scopes []string) (string, error) {
+	token, _, err := self.GrantedServiceToken(ctx, resource, scopes)
+	return token, err
+}
+
+// ServiceToken's token with the scopes the exchange granted it: every scope asked for a token kept from an exchange
+// that granted them all, else those the exchange's answer named, which may be fewer (§7.8). The exchange leaves out a
+// scope the newest state api's gate holds does not give this client, so a grant this device already acts on but which
+// has not reached that gate yet is left out for up to §8.9's 5 s: what a client reads to tell a service's refusal of a
+// scope its token never carried from one the service judged (QD-1230). Only a token that granted every scope asked is
+// kept, so a call after a partial grant exchanges again. Refuses as ServiceToken does.
+func (self *Sidecar) GrantedServiceToken(ctx context.Context, resource string, scopes []string) (string, []string, error) {
 	var state SidecarState
 	var generation int64
 	func() {
@@ -185,29 +199,29 @@ func (self *Sidecar) ServiceToken(ctx context.Context, resource string, scopes [
 	}()
 	switch state {
 	case SidecarStateLocked:
-		return "", ErrSidecarServiceTokenLocked
+		return "", nil, ErrSidecarServiceTokenLocked
 	case SidecarStateUnenrolled, SidecarStateRevoked:
-		return "", ErrSidecarServiceTokenNoClient
+		return "", nil, ErrSidecarServiceTokenNoClient
 	}
 	if self.sidecarApi == nil {
-		return "", ErrSidecarServiceTokenNoApi
+		return "", nil, ErrSidecarServiceTokenNoApi
 	}
 	sortedScopes := slices.Clone(scopes)
 	slices.Sort(sortedScopes)
 	key := newSidecarServiceTokenKey(resource, sortedScopes)
 	clock := self.settings.ClockOrReal()
 	if accessToken, ok := self.serviceTokens.get(key, generation, clock.Now()); ok {
-		return accessToken, nil
+		return accessToken, slices.Compact(sortedScopes), nil
 	}
 	issueTime := clock.Now()
 	token, err := self.sidecarApi.ExchangeToken(ctx, resource, sortedScopes)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	// The exchange can grant a subset, including no scopes before admission. An
 	// attempt made after a grant must exchange again for that original request.
 	if key != newSidecarServiceTokenKey(resource, token.Scopes) {
-		return token.AccessToken, nil
+		return token.AccessToken, slices.Clone(token.Scopes), nil
 	}
 	keepFor := self.settings.TokenRefreshSettings.ServiceTokenCacheTimeout
 	if 0 < token.ExpiresIn && token.ExpiresIn < keepFor {
@@ -218,5 +232,5 @@ func (self *Sidecar) ServiceToken(ctx context.Context, resource string, scopes [
 		generation:  generation,
 		keepUntil:   issueTime.Add(keepFor),
 	})
-	return token.AccessToken, nil
+	return token.AccessToken, slices.Clone(token.Scopes), nil
 }

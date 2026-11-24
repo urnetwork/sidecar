@@ -641,6 +641,19 @@ type GkmSettings struct {
 	ReadRetryMaxWait time.Duration
 	// The wait before a retry when gkm names none: 1 s.
 	ReadRetryWait time.Duration
+	// How long a call rides out the token exchange's invalid_scope to the call's own repo scope at the role it needs,
+	// which the client's verified state gives it, from the call's first such answer, before it ends with it: 5 s,
+	// §8.9's target for an entry to reach server gates, which a grant this device already acts on may not have reached
+	// at api (QD-1230, as QD-1226 has evs's client ride it out). The call asks again ReadRetryWait apart, its last try
+	// at the window's end, so a scope never granted, or taken away, costs api an exchange and gkm a call about once a
+	// second for this long. Non-positive rides out nothing: the first such answer ends the call.
+	ExchangeScopeWaitTimeout time.Duration
+	// How many times one call asks the token exchange again after a failure that may change, as
+	// sidecarServiceTokenRefusalOf reads §7.8's answers: no answer from api, its 429 or 5xx, a keychain still locked,
+	// no api yet. Each waits the exchange's retry_after, else ReadRetryWait, and one asking past ReadRetryMaxWait ends
+	// the call: 3. Nothing reached gkm, so a write goes again as a read does. A refusal for good, as invalid_grant or
+	// no enrolled client, ends the call at once. Non-positive asks once.
+	ExchangeRetryCount int
 	// The most one answer may hold: 16 MiB, past an epochs page carrying a 1,000-leaf group's sealed GroupInfo of
 	// about 2.8 MB (§10.6's sizes).
 	ReplyMaxByteCount int64
@@ -815,6 +828,8 @@ func DefaultGkmSettings() *GkmSettings {
 		ReadRetryCount:               3,
 		ReadRetryMaxWait:             30 * time.Second,
 		ReadRetryWait:                1 * time.Second,
+		ExchangeScopeWaitTimeout:     5 * time.Second,
+		ExchangeRetryCount:           3,
 		ReplyMaxByteCount:            16 * 1024 * 1024,
 		ResyncInterval:               1 * time.Hour,
 		HintPendingCount:             4096,

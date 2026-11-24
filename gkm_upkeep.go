@@ -828,17 +828,19 @@ func (self *GkmUpkeep) ack(ctx context.Context, now time.Time) {
 const gkmUpkeepSecretsNamespace = "gkm"
 
 // The args a GkmApi takes from this Sidecar for the network it is enrolled in: the gkm url, SidecarApi's transport,
-// ServiceToken, the clock and settings.Gkm. The caller sets the repo scopes its verified state gives (SetRepoScopes).
+// ServiceToken and GrantedServiceToken, the clock and settings.Gkm. The caller sets the repo scopes its verified state
+// gives (SetRepoScopes).
 func (self *Sidecar) GkmApiArgs() (*GkmApiArgs, error) {
 	if self.enrolledNetworkId() == nil || self.sidecarApi == nil {
 		return nil, fmt.Errorf("%w: gkm needs an enrolled network", errInvalidSettings)
 	}
 	return &GkmApiArgs{
-		GkmUrl:       self.settings.GkmUrl,
-		Transport:    self.sidecarApi.Transport(),
-		ServiceToken: self.ServiceToken,
-		Settings:     self.settings.Gkm,
-		Clock:        self.clock,
+		GkmUrl:              self.settings.GkmUrl,
+		Transport:           self.sidecarApi.Transport(),
+		ServiceToken:        self.ServiceToken,
+		GrantedServiceToken: self.GrantedServiceToken,
+		Settings:            self.settings.Gkm,
+		Clock:               self.clock,
 	}, nil
 }
 
