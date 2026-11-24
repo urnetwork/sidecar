@@ -34,6 +34,7 @@ const (
 	ServiceGateMxedge   = operator.ServiceGateMxedge
 	ServiceGateSmtpedge = operator.ServiceGateSmtpedge
 	ServiceGateDns      = operator.ServiceGateDns
+	ServiceGateCompute  = operator.ServiceGateCompute
 )
 
 // §19.11's switches, each only `enabled`.
