@@ -23,7 +23,15 @@
 // A call's service token that could not be had is read by why (sidecarServiceTokenRefusalOf), nothing having reached
 // dns, so a write goes on as a read does: a refusal for good, the exchange's invalid_grant or no enrolled client say,
 // ends the call at once, and one that may change, no answer from api, its 429 or 5xx, a keychain still locked or no api
-// yet, is asked again within ExchangeRetryCount and the call's RequestTimeout (sidecarRetryServiceToken).
+// yet, is asked again within ExchangeRetryCount and its request's RequestTimeout (sidecarRetryServiceToken).
+//
+// dns's 401 refuses nothing by itself: the block's guard answers it at the token, one that does not authenticate there
+// (past its life by dns's clock, which may run ahead of this device's, or signed under a key dns no longer holds), or
+// one whose subject a rev/ object voids, before any route reads or writes (dnsservice's authenticateServiceToken).
+// So the call drops the token it presented through the keeper's ForgetServiceToken and goes once more at once, a write
+// with its same body and Idempotency-Key, under a token minted after the answer, as the keeper's contract has a caller
+// do and evs's and gkm's clients do on their 401 (owner decision 411). A 401 to that token ends the call, a refusal
+// for good, and the new token is asked as the first was, read by why it could not be had.
 //
 // The token goes only into the request's Authorization header, never a url, an error or a log (I-7), and an error
 // names the route and never a body. Safe for concurrent use.
@@ -47,7 +55,8 @@ import (
 
 // Tunables of the client.
 type DnsClientSettings struct {
-	// One request's deadline, the token's exchange included.
+	// One request's deadline, the token's exchange included. A call that goes once more after dns's 401 gives that
+	// request, and its new token's exchange, a deadline of its own.
 	RequestTimeout time.Duration
 	// The most bytes an answer may hold: a zone of every RRset §12.7's caps allow, many times over.
 	ReplyMaxByteCount int64
@@ -58,8 +67,9 @@ type DnsClientSettings struct {
 	// How many times one call asks for its service token again after a failure that may change, as
 	// sidecarServiceTokenRefusalOf reads §7.8's answers: no answer from api, its 429 or 5xx, a keychain still locked,
 	// no api yet. 3, as gkm's client asks (GkmSettings.ExchangeRetryCount). Each waits the exchange's retry_after,
-	// else ExchangeRetryWait, all inside the call's RequestTimeout. A refusal for good, as invalid_grant or no enrolled
-	// client, ends the call at once. Nothing reached dns, so a write goes again as a read does. Non-positive asks once.
+	// else ExchangeRetryWait, all inside its request's RequestTimeout. A refusal for good, as invalid_grant or no
+	// enrolled client, ends the call at once. Nothing reached dns, so a write goes again as a read does. Non-positive
+	// asks once.
 	ExchangeRetryCount int
 	// The wait before asking again when the exchange named none: 1 s.
 	ExchangeRetryWait time.Duration
@@ -84,6 +94,10 @@ func DefaultDnsClientSettings() *DnsClientSettings {
 // A service token for an audience url with scopes, Sidecar.ServiceToken's shape: for an in-process caller only.
 type DnsServiceTokenFunction func(ctx context.Context, resource string, scopes []string) (string, error)
 
+// Drops the token a DnsServiceTokenFunction keeps for an audience url and scopes, so its next call mints a new one:
+// Sidecar.ForgetServiceToken's shape.
+type DnsForgetServiceTokenFunction func(resource string, scopes []string)
+
 // An answer that does not hold the route's form. Never read as a refusal.
 var ErrDnsClientReply = errors.New("dns client: reply invalid")
 
@@ -99,6 +113,10 @@ type DnsClientArgs struct {
 	Transport http.RoundTripper
 	// Sidecar.ServiceToken.
 	ServiceToken DnsServiceTokenFunction
+	// Sidecar.ForgetServiceToken: drops a token dns answered 401, so the call's one retry presents a token minted after
+	// the answer (the file's comment). Nil for a token function that keeps no token, as one exchanging at each call
+	// does, whose retry mints a new one anyway; beside one that keeps a token, nil retries with the token refused.
+	ForgetServiceToken DnsForgetServiceTokenFunction
 	// The network whose zone this is.
 	NetworkId Id
 	// nil takes the defaults.
@@ -112,9 +130,11 @@ type DnsClient struct {
 	baseUrl      string
 	transport    http.RoundTripper
 	serviceToken DnsServiceTokenFunction
-	networkId    Id
-	settings     *DnsClientSettings
-	clock        Clock
+	// nil for a serviceToken that keeps no token
+	forgetServiceToken DnsForgetServiceTokenFunction
+	networkId          Id
+	settings           *DnsClientSettings
+	clock              Clock
 
 	// the held zone's version, which a caller may wait on
 	version *MonitorValue[uint64]
@@ -145,13 +165,14 @@ func NewDnsClient(args *DnsClientArgs) (*DnsClient, error) {
 		settings = DefaultDnsClientSettings()
 	}
 	return &DnsClient{
-		baseUrl:      args.DnsUrl,
-		transport:    args.Transport,
-		serviceToken: args.ServiceToken,
-		networkId:    args.NetworkId,
-		settings:     settings,
-		clock:        clockOrReal(args.Clock),
-		version:      NewMonitorValue[uint64](0),
+		baseUrl:            args.DnsUrl,
+		transport:          args.Transport,
+		serviceToken:       args.ServiceToken,
+		forgetServiceToken: args.ForgetServiceToken,
+		networkId:          args.NetworkId,
+		settings:           settings,
+		clock:              clockOrReal(args.Clock),
+		version:            NewMonitorValue[uint64](0),
 	}, nil
 }
 
@@ -169,10 +190,26 @@ func (self *DnsClient) Labels() *NetworkLabelTable {
 	return self.labels
 }
 
-// One request to the block: its answer's body for a 2xx, a *DnsApiError for a refusal, or the transport's error. A
-// token that could not be had is read by why, asked again within the settings' bound where that may change, and sends
-// nothing (see the file header); its error wraps the token keeper's.
+// One call to the block: its answer's body for a 2xx, a *DnsApiError for a refusal, or the transport's error. dns's
+// first 401 drops the token it refused and goes once more at once, the same request under a token minted after it, and
+// that request's answer stands, a 401 included (see the file header).
 func (self *DnsClient) do(ctx context.Context, route string, method string, path string, body []byte, header http.Header) ([]byte, error) {
+	answer, err := self.doOnce(ctx, route, method, path, body, header)
+	var apiError *DnsApiError
+	if err == nil || !errors.As(err, &apiError) || apiError.Status != http.StatusUnauthorized {
+		return answer, err
+	}
+	// dns's guard refused the token before any route ran, which a new token may mend
+	if self.forgetServiceToken != nil {
+		self.forgetServiceToken(self.baseUrl, nil)
+	}
+	return self.doOnce(ctx, route, method, path, body, header)
+}
+
+// One request to the block, under its own RequestTimeout. A token that could not be had is read by why, asked again
+// within the settings' bound where that may change, and sends nothing (see the file header); its error wraps the token
+// keeper's.
+func (self *DnsClient) doOnce(ctx context.Context, route string, method string, path string, body []byte, header http.Header) ([]byte, error) {
 	callCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	stop := self.clock.AfterFunc(self.settings.RequestTimeout, cancel)
@@ -473,10 +510,11 @@ func RegisterDnsEffectLookups(sidecar *Sidecar, client *DnsClient) func() {
 	}
 }
 
-// The network's DnsClient, built once over the sidecar's settings, transport and ServiceToken: nil with an error
-// before the network is known or with no dns url. Its label table is NetworkLabels', and the dns component a host adds
-// at its composition, as ur daemon and the sdk's local Sidecar do, attaches the table and the hint subscription on
-// each client generation (NewDnsComponent).
+// The network's DnsClient, built once over the sidecar's settings, transport, ServiceToken and ForgetServiceToken,
+// which drops a token dns answered 401 so the call's one retry presents a new one: nil with an error before the network
+// is known or with no dns url. Its label table is NetworkLabels', and the dns component a host adds at its composition,
+// as ur daemon and the sdk's local Sidecar do, attaches the table and the hint subscription on each client generation
+// (NewDnsComponent).
 func (self *Sidecar) Dns() (*DnsClient, error) {
 	self.dns.stateLock.Lock()
 	defer self.dns.stateLock.Unlock()
@@ -491,11 +529,12 @@ func (self *Sidecar) Dns() (*DnsClient, error) {
 		return nil, errors.New("dns client: no api")
 	}
 	client, err := NewDnsClient(&DnsClientArgs{
-		DnsUrl:       self.settings.DnsUrl,
-		Transport:    self.sidecarApi.Transport(),
-		ServiceToken: self.ServiceToken,
-		NetworkId:    *networkId,
-		Clock:        self.settings.ClockOrReal(),
+		DnsUrl:             self.settings.DnsUrl,
+		Transport:          self.sidecarApi.Transport(),
+		ServiceToken:       self.ServiceToken,
+		ForgetServiceToken: self.ForgetServiceToken,
+		NetworkId:          *networkId,
+		Clock:              self.settings.ClockOrReal(),
 	})
 	if err != nil {
 		return nil, err
