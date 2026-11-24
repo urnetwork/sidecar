@@ -55,10 +55,11 @@ func TestBridgeZoneAnswersANameOfTheTable(t *testing.T) {
 	}
 }
 
-// Every other name passes: the zone's apex, a name under a client's, another zone, a published name and the root.
+// Every other name passes: the zone's apex, another zone, a published name and the root. A name under a client's is
+// §12.9.1's DNS-SD target form since owner decision 778, which the zone owns (bridge_discovery_test.go).
 func TestBridgeZonePassesOtherNames(t *testing.T) {
 	zone := zoneTestZone()
-	for _, host := range []string{"acme.ur.example", "www.laptop.acme.ur.example", "laptop.other.example", "app.acme.ur.example", "", "."} {
+	for _, host := range []string{"acme.ur.example", "laptop.other.example", "app.acme.ur.example", "", "."} {
 		if addrs, _, owned := zone.Answer(host, 1); owned || addrs != nil {
 			t.Fatalf("%q was owned: %v", host, addrs)
 		}
