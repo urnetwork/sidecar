@@ -1,0 +1,31 @@
+# Generated from DefaultEnclaveContainerSettings by EnclaveContainerFiles (enclave_container_runtime.go);
+# TestEnclaveContainerFilesAreCurrent holds it. The agents container's plan (DESIGN-COMPUTE §11.10, §12.9),
+# for review: the daemon passes the whole plan on systemd-nspawn's command line with --settings=no.
+# Its scope, ur-containers.slice/ur-agents.scope, runs under systemd-run with these properties:
+#   Delegate=yes
+#   DevicePolicy=closed
+#   DeviceAllow=/dev/net/tun rwm
+#   DeviceAllow=char-pts rw
+#   MemoryMax=75%
+#   CPUWeight=50
+#   TasksMax=8192
+
+[Exec]
+Boot=no
+Parameters=/usr/local/lib/ur/ur-enclave-seccomp -- /lib/systemd/systemd
+PrivateUsers=524288:65536
+KillSignal=SIGRTMIN+3
+OOMScoreAdjust=500
+SystemCallFilter=~io_uring_setup io_uring_enter io_uring_register userfaultfd
+LinkJournal=no
+ResolvConf=off
+
+[Files]
+PrivateUsersOwnership=map
+BindReadOnly=/usr/bin/ur:/usr/local/bin/ur
+BindReadOnly=/usr/bin/ur:/usr/local/lib/ur/ur-enclave-seccomp
+BindReadOnly=/var/lib/ur/scratch/containers/ur-agents/resolv.conf:/etc/resolv.conf
+BindReadOnly=/run/ur/container:/run/ur
+
+[Network]
+VirtualEthernet=yes
