@@ -116,6 +116,10 @@ type ComputePolicyStore struct {
 
 	stateLock sync.Mutex
 	state     computePolicyState
+	// What the file holds of the two that rise in memory before they are written, so a rise memory holds and the
+	// file does not, its write having failed, is written again at the next call that names it.
+	persistedHighestSeen uint64
+	persistedClockFloor  time.Time
 }
 
 // A store over args, holding the release's copy at once and the file from the first call that can read it.
@@ -227,21 +231,25 @@ func (self *ComputePolicyStore) Offer(document []byte, signature []byte) (*Compu
 // the write fails, whose error is returned: a device that cannot record a newer version still does no remote work
 // under an older one.
 func (self *ComputePolicyStore) noteVersionSeen(version uint64) error {
-	if version <= self.snapshot().highestSeen {
+	if persistedHighestSeen, _ := self.persisted(); version <= persistedHighestSeen {
 		return nil
 	}
 	self.raiseHighestSeen(version)
+	versionKey := strconv.FormatUint(version, 10)
+	testHookBarrier("attest_policy_store.seen.raised", versionKey)
 	self.writeLock.Lock()
 	defer self.writeLock.Unlock()
 	if err := self.loadWithWriteLock(); err != nil {
 		return err
 	}
 	state := self.snapshot()
-	versionKey := strconv.FormatUint(version, 10)
+	// a commit that read the state before the rise above may have written it back without it
+	state.highestSeen = max(state.highestSeen, version)
 	testHookBarrier("attest_policy_store.seen.before", versionKey)
 	if err := self.writeStateWithWriteLock(state); err != nil {
 		return err
 	}
+	self.setState(state)
 	testHookBarrier("attest_policy_store.seen.after", versionKey)
 	return nil
 }
@@ -319,7 +327,7 @@ func (self *ComputePolicyStore) keepTicket(ticket *ComputePolicyTicket) (*Comput
 // Raises the clock's floor to floor, persisting it where it rises; in memory even when the write fails, whose error
 // is returned.
 func (self *ComputePolicyStore) raiseClockFloor(floor time.Time) error {
-	if !self.snapshot().clockFloor.Before(floor) {
+	if _, persistedClockFloor := self.persisted(); !persistedClockFloor.Before(floor) {
 		return nil
 	}
 	self.raiseClockFloorInMemory(floor)
@@ -328,7 +336,16 @@ func (self *ComputePolicyStore) raiseClockFloor(floor time.Time) error {
 	if err := self.loadWithWriteLock(); err != nil {
 		return err
 	}
-	return self.writeStateWithWriteLock(self.snapshot())
+	state := self.snapshot()
+	// as noteVersionSeen: a commit that read the state before the rise may have written it back without it
+	if state.clockFloor.Before(floor) {
+		state.clockFloor = floor
+	}
+	if err := self.writeStateWithWriteLock(state); err != nil {
+		return err
+	}
+	self.setState(state)
+	return nil
 }
 
 // Raises the clock's floor in memory alone.
@@ -347,11 +364,24 @@ func (self *ComputePolicyStore) snapshot() computePolicyState {
 	return self.state
 }
 
-// Replaces the state.
+// Replaces the state with one a commit wrote, keeping the highest version seen and the clock's floor no lower than
+// memory holds: those rise in memory before their writer takes writeLock, so a commit that read the state before a
+// rise must not take it back. The writer of the rise writes it once it holds writeLock.
 func (self *ComputePolicyStore) setState(state computePolicyState) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
+	state.highestSeen = max(state.highestSeen, self.state.highestSeen)
+	if state.clockFloor.Before(self.state.clockFloor) {
+		state.clockFloor = self.state.clockFloor
+	}
 	self.state = state
+}
+
+// What the file holds of the highest version seen and the clock's floor, as far as this store has read or written it.
+func (self *ComputePolicyStore) persisted() (uint64, time.Time) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.persistedHighestSeen, self.persistedClockFloor
 }
 
 // Raises the highest version seen in memory alone.
@@ -427,6 +457,10 @@ func (self *ComputePolicyStore) loadWithWriteLock() error {
 	if floor := time.UnixMilli(file.ClockFloorMs).UTC(); 0 < file.ClockFloorMs && self.state.clockFloor.Before(floor) {
 		self.state.clockFloor = floor
 	}
+	self.persistedHighestSeen = file.HighestSeen
+	if 0 < file.ClockFloorMs {
+		self.persistedClockFloor = time.UnixMilli(file.ClockFloorMs).UTC()
+	}
 	self.loaded = true
 	return nil
 }
@@ -453,7 +487,14 @@ func (self *ComputePolicyStore) writeStateWithWriteLock(state computePolicyState
 	if err != nil {
 		return err
 	}
-	return computePolicyWriteStoreFile(self.store, computePolicyStateName, data)
+	if err := computePolicyWriteStoreFile(self.store, computePolicyStateName, data); err != nil {
+		return err
+	}
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.persistedHighestSeen = state.highestSeen
+	self.persistedClockFloor = state.clockFloor
+	return nil
 }
 
 // The state file's content, exactly one document of this format, or an error.

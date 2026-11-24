@@ -33,6 +33,7 @@ barrier attest_policy_store.commit.after attest_policy_store.go
 barrier attest_policy_store.commit.before attest_policy_store.go
 barrier attest_policy_store.seen.after attest_policy_store.go
 barrier attest_policy_store.seen.before attest_policy_store.go
+barrier attest_policy_store.seen.raised attest_policy_store.go
 barrier attest_policy_store.ticket.after attest_policy_store.go
 barrier attest_policy_store.ticket.before attest_policy_store.go
 barrier bridge.adopt.after device/bridge_state.go
