@@ -18,7 +18,11 @@
 //     not_before;
 //   - a token whose only repo scopes are deposit reaches GET drop-key and nothing else, and every other route needs
 //     an r, rw or admin scope on some repo (QD-177, decided); a recovery:<member_id> scope reaches that member's own
-//     recovery wraps and no other route.
+//     recovery wraps and no other route;
+//   - a token naming no sidecar reaches drop-key only as api's own deposit token, which §14.8's report intake reads a
+//     network mail repo's drop key under (§7.8, §10.14; QD-1229): no member either, and deposit scopes alone. It holds
+//     no standing, and the state honors its deposit on a repo it holds that takes deposits (D-KEYS-17); every other
+//     route refuses a token with no sidecar but a recovery read's.
 //
 // Every answer of the state is three-valued, and only an answer of the state allows: a network whose state is not
 // loaded answers 503, never an allow (ACL-M2-13's cold state).
@@ -113,7 +117,9 @@ type GkmAuthState interface {
 	// Whether the newest verified state gives the token's sidecar every right in rights on repoId at now for the gkm
 	// audience (D-ACL-21): AclState.EvsAccess's rights, in which the config gives member devices but read_only ones
 	// gkm rw. The set is honored only whole, as EvsAuthState.HonorScope honors one: a deleted repo's standing admin
-	// holds admin alone (QD-880), so a set naming rw or r beside admin is refused it (QD-975).
+	// holds admin alone (QD-880), so a set naming rw or r beside admin is refused it (QD-975). A token naming no
+	// sidecar, which the guard passes only as api's own deposit token at drop-key (QD-1229), holds deposit alone, and
+	// only on a repo the state holds, standing, that takes deposits (D-KEYS-17).
 	HonorScope(principal *sidecar.Principal, repoId sidecar.Id, rights sidecar.AclEvsRights, now time.Time) GkmAuthAnswer
 	// Whether sidecarId reads repoId at now in the newest verified state (§8.12's RepoReaders): a KeyPackage claim's
 	// target and a late delivery's recipient must.

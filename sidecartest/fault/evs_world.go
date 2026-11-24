@@ -81,6 +81,8 @@ type EvsTierDeps struct {
 	ReceiptKeys *evsservice.ReceiptKeys
 	// The segment cluster's HDD share's settings (EvsWorldSettings.HddInterval).
 	Hdd *evsservice.HddAdmissionSettings
+	// The usage producer's settings (EvsWorldSettings.UsageReportTimeout).
+	Usage *sidecar.QuotaUsageBatcherSettings
 	// The engine's log, nil for none: the Net's capture when the settings ask (T2's block only).
 	Log sidecar.Logger
 }
@@ -155,6 +157,14 @@ type EvsWorldSettings struct {
 	// The HDD share's put report ttl on each instance while HddInterval is positive: 30,000 h, three of its
 	// intervals, as the share's own 15 s is three of its 5 s, so a report outlives the passes that read it.
 	HddPutReportTtl time.Duration
+	// Each instance's usage producer's bound on one ReportUsage (sidecar.QuotaUsageBatcherSettings.ReportTimeout):
+	// none, 0, since the fake Quota answers every call at once and the bound could only fire when a schedule's Advance
+	// passes it. The producer reports from a goroutine of its own once an Advance closes its window, racing the rest of
+	// that Advance, and a report begun at a time the Advance then passed 30 s beyond was cancelled before the Quota
+	// counted it, its retry falling due past RetryHorizon and dropping the batch: a run's host writes, which §22.8's
+	// unknown rule loses one at a time, fell short of the dry run's, and the rerun losing the last found none (FS-1's
+	// "never fired"). Non-positive leaves a report to the producer's context.
+	UsageReportTimeout time.Duration
 	// The balance Setup gives the world's network in the fake Quota: 1 TiB, past what any schedule writes, so no
 	// push meets a spent balance its schedule did not plan.
 	QuotaBalanceByteCount int64
@@ -234,6 +244,7 @@ func DefaultEvsWorldSettings() *EvsWorldSettings {
 		StepEightTimeout:      10 * time.Second,
 		HddInterval:           10000 * time.Hour,
 		HddPutReportTtl:       30000 * time.Hour,
+		UsageReportTimeout:    0,
 		QuotaBalanceByteCount: 1024 * 1024 * 1024 * 1024,
 		ReceiptKeyAge:         48 * time.Hour,
 		TokenLifetime:         15 * time.Minute,
@@ -859,6 +870,7 @@ func (self *EvsWorld) buildInstance(ctx context.Context, host *sidecar.ServiceHo
 		GateViews:   &evsWorldGateViews{world: self, instance: instance},
 		ReceiptKeys: self.receiptKeys,
 		Hdd:         evsservice.DefaultHddAdmissionSettings(),
+		Usage:       evsWorldUsageSettings(self.settings),
 	}
 	if 0 < self.settings.HddInterval {
 		deps.Hdd.Interval = self.settings.HddInterval
@@ -908,6 +920,13 @@ func (self *EvsWorld) awaitReady(host EvsTierHost) error {
 	}
 }
 
+// An instance's usage producer's settings: sidecar's, a report bounded as settings.UsageReportTimeout says.
+func evsWorldUsageSettings(settings *EvsWorldSettings) *sidecar.QuotaUsageBatcherSettings {
+	usage := sidecar.DefaultQuotaUsageBatcherSettings()
+	usage.ReportTimeout = settings.UsageReportTimeout
+	return usage
+}
+
 // T2's block: evsservice's engine with the segment route's parts as server/cli/evs builds them (evshost.NewHost).
 type evsWorldHost struct {
 	engine  *evsservice.EvsEngine
@@ -931,7 +950,7 @@ func newEvsWorldHost(ctx context.Context, host *sidecar.ServiceHost, settings *e
 	}
 	self.closers = append(self.closers, quotaGate.Close)
 	uploads.Quota = quotaGate
-	usage, err := evsservice.NewUsageBatcher(ctx, host, nil)
+	usage, err := evsservice.NewUsageBatcher(ctx, host, deps.Usage)
 	if err != nil {
 		return fail(err)
 	}

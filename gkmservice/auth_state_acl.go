@@ -5,7 +5,9 @@
 //	CheckRevocation  rev/ for the token's client, sidecar and member, each answer kept at most 5 s (§7.8's check row)
 //	HonorScope       AclGateCache.HonorScope for the gkm audience (D-ACL-21, QD-070): the one scope check, ACL's, in
 //	                 which the config gives member devices but read_only ones gkm's rw, given the guard's whole right
-//	                 set, which it honors only whole (QD-975). No copy of it lives here
+//	                 set, which it honors only whole (QD-975). No copy of it lives here. A token naming no sidecar,
+//	                 api's own deposit token (QD-1229), has no subject to ask it of: its deposit alone is honored, on a
+//	                 repo the state holds, standing, that takes deposits (D-KEYS-17)
 //	Reads            the same check for r of another sidecar: a KeyPackage claim's target, a late delivery's recipient
 //	Sidecar          the row's standing as members read it (sidecar.GkmSidecarStandingAt), and the acl part's Suspend
 //	RepoReaders      §8.12's RepoReaders at now
@@ -150,15 +152,45 @@ func (self *AclGkmAuthState) Sidecar(principal *sidecar.Principal, sidecarId sid
 }
 
 // See GkmAuthState: AclGateCache.HonorScope's answer for the gkm audience to the whole set, which honors it only
-// when the sidecar holds every right of it.
+// when the sidecar holds every right of it. A token naming no sidecar is answered by honorApiDeposit.
 func (self *AclGkmAuthState) HonorScope(principal *sidecar.Principal, repoId sidecar.Id, rights sidecar.AclEvsRights, now time.Time) GkmAuthAnswer {
 	if self.gate == nil || principal == nil {
 		return GkmAuthUnknown
 	}
 	if principal.SidecarId == nil {
-		return GkmAuthDenied
+		return self.honorApiDeposit(principal, repoId, rights)
 	}
 	return gkmAclScopeAnswer(self.gate.HonorScope(sidecar.Id(principal.NetworkId), sidecar.Id(*principal.SidecarId), repoId, rights, sidecar.AclTokenAudienceGkm, now))
+}
+
+// HonorScope for a token naming no sidecar, which the guard passes only as api's own deposit token at the drop-key
+// route (§7.8, §10.14; QD-1229): deposit alone, from a token naming no member, is Allowed while the token's
+// network's newest verified state holds repoId, no RepoDelete stands on it unrestored, and it takes deposits, a kind
+// whose GenRotates carry a drop key or a general repo its RepoCreate marks an inbox (D-KEYS-17), and Denied
+// otherwise; Unknown while the network's state is not loaded, which asks for it. There is no subject for D-ACL-21's
+// check, so this asks only whether anyone may deposit there now: the drop key it reaches is the public one each
+// GenRotate publishes for depositors, never another reader's right. Every other right set, and a token naming a
+// member, an unadmitted client's, which reaches nothing on a repo, are Denied without reading the state.
+func (self *AclGkmAuthState) honorApiDeposit(principal *sidecar.Principal, repoId sidecar.Id, rights sidecar.AclEvsRights) GkmAuthAnswer {
+	if rights != sidecar.AclEvsDeposit || principal.MemberId != nil {
+		return GkmAuthDenied
+	}
+	snapshot, answer := self.snapshot(principal)
+	if answer != GkmAuthAllowed {
+		return answer
+	}
+	repo := snapshot.Acl.Repo(repoId)
+	if repo == nil {
+		return GkmAuthDenied
+	}
+	// the state's own reading of a deletion (AclState's deleted repo, QD-880): a RepoDelete's deleted_at with no
+	// RepoRestore of it, under which nobody deposits
+	deletion := repo.GetDeletion()
+	if deletion != nil && deletion.GetDeletedAt() != 0 && deletion.GetRestoredAt() == 0 {
+		return GkmAuthDenied
+	}
+	// D-KEYS-17's two halves, as the rotators who publish the drop key read them (gkmRepoTakesDeposits)
+	return gkmAclAnswer(sidecar.GkmRepoKindTakesDeposits(repo.GetKind()) || sidecar.AclRepoIsInbox(repo))
 }
 
 // See GkmAuthState: the gate's r for sidecarId in the token's network.
