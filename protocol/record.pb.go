@@ -692,8 +692,8 @@ type CanonicalAction struct {
 	Version       uint32                 `protobuf:"varint,12,opt,name=version,proto3" json:"version,omitempty"` // 1; 2 with field 37; 3 for kind access_request (16.11), in fields 8,
 	// 10, 11, 14, 26, 29 and 38; 4 for a dial or route grant, in fields 8,
 	// 10, 11, 28, 29 and 38, a share's also 40; 5 for DESIGN-COMPUTE.md's
-	// kinds 19 to 26, and for kind 5 with field 49 (§16.3), in fields 3, 5,
-	// 29, 38, 39 and 42 to 70; approvers that do not know a version refuse it
+	// kinds 19 to 26, in fields 3, 5, 29, 38, 39 and 42 to 70, and for kind
+	// 5 with field 49 (§16.3); approvers that do not know a version refuse it
 	Scope         bool   `protobuf:"varint,13,opt,name=scope,proto3" json:"scope,omitempty"` // a multi-use template (16.6)
 	RepoId        []byte `protobuf:"bytes,14,opt,name=repo_id,json=repoId,proto3" json:"repo_id,omitempty"`
 	Path          string `protobuf:"bytes,15,opt,name=path,proto3" json:"path,omitempty"`
@@ -747,7 +747,8 @@ type CanonicalAction struct {
 	// request body; field 5 the composed URL's host (23) or the API host (26), in punycode; field 29 the enclave's
 	// running incarnation or the receiving sidecar (20, 22, 24); field 38 a sealed CanonicalActionDetail5 (19, 21),
 	// whose aad's SignedType is SIGNED_APPROVAL_DECISION; field 39 the mode at create (19), or the receiving
-	// enclave's (24).
+	// enclave's (24): BridgeEgressMode's auto, exits or none, and on kind 24 also 4, direct, the enclave's default
+	// egress off (§11.8; QD-1391), a value no other version's field 39 takes.
 	Enclave      *EnclaveFields `protobuf:"bytes,42,opt,name=enclave,proto3" json:"enclave,omitempty"`                               // 19, 20, 22, 24; on 19 its name rides in field 38
 	Budget       *BudgetFields  `protobuf:"bytes,43,opt,name=budget,proto3" json:"budget,omitempty"`                                 // 21
 	Url          string         `protobuf:"bytes,44,opt,name=url,proto3" json:"url,omitempty"`                                       // 23: the whole URL as the agent composed it

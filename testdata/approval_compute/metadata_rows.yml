@@ -13,8 +13,8 @@ CanonicalAction.enclave: {number: 42, type: EnclaveFields, row: compute-4, sees:
 EnclaveFields.enclave_id: {number: 1, type: bytes, row: compute-4, sees: "per enclave: id"}
 EnclaveFields.shape: {number: 3, type: string, row: compute-4, sees: "shape"}
 EnclaveFields.provider: {number: 4, type: string, row: compute-4, sees: "provider"}
-EnclaveFields.label: {number: 5, type: string, row: compute-4, until: M14, pending: "cacl-m11-04-compute4-create-label-price: the provider's label kind 19's action shows, the catalog's own value for its provider, which compute-4 does not name"}
-EnclaveFields.price_per_hour: {number: 6, type: uint64, row: compute-4, until: M14, pending: "cacl-m11-04-compute4-create-label-price: the price per hour kind 19's action shows, the catalog's own price for its shape, which compute-4 does not name"}
+EnclaveFields.label: {number: 5, type: string, row: compute-4, until: M14, pending: "QD-1388 (cacl-m11-04-compute4-create-label-price): compute-4 gains the label and price per hour its create's action shows, the catalog's own values, when design-records folds the answer"}
+EnclaveFields.price_per_hour: {number: 6, type: uint64, row: compute-4, until: M14, pending: "QD-1388 (cacl-m11-04-compute4-create-label-price): compute-4 gains the label and price per hour its create's action shows, the catalog's own values, when design-records folds the answer"}
 EnclaveFields.incarnation: {number: 7, type: uint64, row: compute-4, sees: "incarnations"}
 
 # kind 21's raise: the budget it passes (field 38, sealed, keeps fields.yml's line)

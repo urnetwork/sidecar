@@ -21,7 +21,8 @@
 //	           above. A harness decision's other conditions, taint included, are the signing daemon's, which no
 //	           gate sees, so nothing here re-derives them
 //	requester  d.requester_sidecar_id = s (AD1)
-//	payload    d.payload_sha256 = SHA-256(a as stored)
+//	payload    d.payload_sha256 = SHA-256(a as stored), and d's selection one a's events take
+//	           (CheckApprovalDecisionSelection: DESIGN-COMPUTE §23.9's kind 25)
 //	template   d.uses > 1 exactly when a is a template, scope = true (record.proto's uses comment)
 //	expired    now <= d.not_after_millis plus the settings' skew, skipped for a use already reserved (spend step 1)
 //	pin        d.auth_pin is 40 bytes' worth, its version <= P's, and its digest equals A_k wherever P retains k
@@ -369,6 +370,10 @@ func spendDecision(decision *StoredApprovalDecision, input *SpendInput, state Sp
 	payloadSha256 := input.Action.PayloadSha256()
 	if !bytes.Equal(body.GetPayloadSha256(), payloadSha256[:]) {
 		return spendRefuse(SpendRefusalPayload, nil)
+	}
+	if err := CheckApprovalDecisionSelection(decision, input.Action); err != nil {
+		// a kind-25 approval spends on the events it selected, which its action holds (DESIGN-COMPUTE §23.9)
+		return spendRefuse(SpendRefusalPayload, err)
 	}
 	if (1 < body.GetUses()) != input.Action.Action.GetScope() {
 		return spendRefuse(SpendRefusalTemplate, fmt.Errorf("uses %d, scope %t", body.GetUses(), input.Action.Action.GetScope()))
