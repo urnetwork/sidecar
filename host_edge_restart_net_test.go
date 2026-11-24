@@ -10,11 +10,14 @@
 // AckTimeout, which is the blogger case's two-minute outage.
 //
 // What the restarted stream waits for is connect's restart path, on connect's real timers: the restarted client's new
-// session with the listener, and the listener's resends of what it holds to the id, which back off from its rtt to
-// MaxResendInterval (8 s). So the edge's dispatcher reads the Net's clock, as the listener's does, and nothing here moves
-// it: no deadline of a dispatcher's, its DefaultCallTimeout, a read's or its keepalive's, ends a wait that connect has
-// yet to answer, as the edge's 15 s DefaultCallTimeout did in listen-expires' landcheck (2026-11-23). Each wait ends on
-// its event, the open's answer or the bytes, or at its step's bound, a broken run's, in real time.
+// session with the listener, and the listener's writes of what it holds to the id. Since QD-1232 (owner decision 730,
+// connect 0c25db80 and 7cc26e9a) the listener takes the restarted client's first Packs while the worker of its old
+// sequence exits, and the restarted client says it has delivered nothing of the listener's sequence, so the listener
+// writes what it lacks at once, rather than at resends backed off from its rtt toward MaxResendInterval (8 s). So the
+// edge's dispatcher reads the Net's clock, as the listener's does, and nothing here moves it: no deadline of a
+// dispatcher's, its DefaultCallTimeout, a read's or its keepalive's, ends a wait that connect has yet to answer, as the
+// edge's 15 s DefaultCallTimeout did in listen-expires' landcheck (2026-11-23). Each wait ends on its event, the open's
+// answer or the bytes, or at its step's bound, a broken run's, in real time.
 
 package sidecar_test
 
@@ -33,12 +36,16 @@ import (
 
 // The restart test's bounds (QD-702), each in real time and each a broken run's.
 type edgeRestartNetSettings struct {
-	// How long after the restart the restarted pool's stream has to open and carry bytes both ways. Connect's restart
-	// path took 2.4, 4.8, 10.6 or 18.6 s, as one or another of the listener's resends reached the restarted client, in
-	// 190 runs on a machine at load 37 to 84 (2026-11-24). Below connect's 60 s AckTimeout, TlsTimeout and
-	// SelectiveAckTimeout, so a pass never waited for one of them to expire. Also the edge's DefaultCallTimeout: an open
-	// hands connect what its own deadline leaves, which on a clock nothing moves is all of it, and connect holds the
-	// open's send that long, in real time, for the restarted client's session.
+	// How long after the restart the restarted pool's stream has to open and carry bytes both ways: the edge dialer's
+	// AcceptTimeout, 5 s (D-SOCK-6), after which a ticket's open goes to the backup, so a run past it is one whose first
+	// visitor stream a production edge would have sent elsewhere, the failure QD-1232 fixed. Connect's restart path took
+	// 2.4, 4.8, 10.6 or 18.6 s before that fix, as one or another of the listener's resends reached the restarted client,
+	// in 190 runs at load 37 to 84. Since, over 18,360 runs at load 12 to 37 and 12,800 beside 28 CPU burners, it took
+	// 22 ms at the median, under 0.1 s at the 99th percentile and never more than 0.68 s, one resend timer, nor did it in
+	// 320 runs under the race detector (2026-11-24). Each pool keeps the edge's own DefaultCallTimeout, 15 s, past this
+	// bound: an open hands connect what its own deadline leaves, which on a clock nothing moves is all of it, and connect
+	// holds the open's send that long, in real time, for the restarted client's session, so only this bound ends a
+	// broken run.
 	RecoveryTimeout time.Duration
 	// Each step before the restart.
 	StepTimeout time.Duration
@@ -48,7 +55,7 @@ type edgeRestartNetSettings struct {
 
 func defaultEdgeRestartNetSettings() *edgeRestartNetSettings {
 	return &edgeRestartNetSettings{
-		RecoveryTimeout: 45 * time.Second,
+		RecoveryTimeout: sidecar.DefaultSocketEdgeDialSettings().AcceptTimeout,
 		StepTimeout:     45 * time.Second,
 		Target:          "tls/443/blog",
 	}
@@ -142,7 +149,9 @@ func TestEdgeClientPoolRestartedInPlaceReachesItsListenerAgain(t *testing.T) {
 	}
 	args.Settings = sidecar.DefaultEdgeClientPoolSettings()
 	args.Settings.ClientCount = 1
-	args.Settings.Protocol.DefaultCallTimeout = settings.RecoveryTimeout
+	if args.Settings.Protocol.DefaultCallTimeout <= settings.RecoveryTimeout {
+		t.Fatalf("the edge's DefaultCallTimeout, %v, does not outlast the restarted open's bound, %v", args.Settings.Protocol.DefaultCallTimeout, settings.RecoveryTimeout)
+	}
 	// the Net's clock, as the listener's dispatcher reads it, which nothing here moves (the file header)
 	args.Clock = net.Clock()
 	pool, err := sidecar.NewEdgeClientPool(t.Context(), args)
