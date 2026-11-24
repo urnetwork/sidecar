@@ -1,6 +1,7 @@
-// GkmApi asking once for a role the client's state does not give, on the fake gkm and the fake token exchange of
-// gkm_api_grant_lag_test.go, so this runs on every leg, the sidecar_http page Worker's included.
-// gkm_bootstrap_ride_out_test.go holds the same over the first device's bootstrap flows.
+// GkmApi asking once for what no verified state gives, a role the client's state does not give or an unconfirmed
+// state's scopes, on the fake gkm and the fake token exchange of gkm_api_grant_lag_test.go, so this runs on every leg,
+// the sidecar_http page Worker's included. gkm_bootstrap_ride_out_test.go holds the same over the flows of a network's
+// first device and of a joining device before their followers stand.
 
 package sidecar
 
@@ -110,5 +111,76 @@ func TestGkmApiStillAsksAgainForWhatTheClientsStateGives(t *testing.T) {
 		if count := len(world.gkm.taken()) - requestsBefore; count != 1 {
 			t.Errorf("%s: gkm took %d requests", c.name, count)
 		}
+	}
+}
+
+// Scopes an unconfirmed state gives (SetUnconfirmedRepoScopes, QD-817's join before the follower stands) are presented
+// as a verified state's are, but no call of them waits on the exchange. A read of the repo under them, api's gate
+// lagging the grant, goes again under the repo's r alone at gkm's 403 to the batch, whose token left that scope out, and
+// ends at that scope's invalid_scope with no wait; api's 503 ends the read after one ask; and the routes on no repo,
+// a ReaderKey's upload and the Welcomes, end at their 503 the same way. Handed the same scopes as a verified state's,
+// the read rides the lag out again and lands once api's gate holds the grant, at 3 s. The code before (sidecar
+// 7db6a152) read an unconfirmed state's scopes as a verified state's, riding the read's invalid_scope out 5 s and
+// asking each 503 again ExchangeRetryCount times.
+func TestGkmApiWaitsOnNothingAnUnconfirmedStateGives(t *testing.T) {
+	unloaded := &SidecarApiError{Route: "POST /oauth/token", Status: http.StatusServiceUnavailable, Code: "temporarily_unavailable"}
+	world := newGkmGrantLagApiWorld(t, GkmScopeRoleRead, GkmScopeRoleRead, "", nil)
+	scopes := []GkmRepoScope{{RepoId: world.repoId, Role: GkmScopeRoleRead}, {RepoId: world.otherId, Role: GkmScopeRoleRead}}
+	world.api.SetUnconfirmedRepoScopes(scopes)
+	read := func(ctx context.Context) error {
+		_, err := world.api.Generations(ctx, world.repoId, world.groupId, 1)
+		return err
+	}
+
+	err, waits := world.run(read)
+	if !sidecarServiceTokenRefusalOf(err).scopeRefused || !errors.Is(err, errGkmNoServiceToken) || len(waits) != 0 {
+		t.Errorf("a read under an unconfirmed state's scopes, api's gate lagging its grant: %v, waiting %v", err, waits)
+	}
+	if asks := world.exchange.asked(world.scope(GkmScopeRoleRead)); len(asks) != 1 {
+		t.Errorf("the repo's r alone was asked %d times, want once", len(asks))
+	}
+	if count := len(world.gkm.taken()); count != 1 {
+		t.Errorf("gkm took %d requests, want the batch's alone", count)
+	}
+
+	cases := []struct {
+		name string
+		call func(ctx context.Context) error
+	}{
+		{name: "the repo's read", call: read},
+		{
+			name: "a ReaderKey's upload, on no repo",
+			call: func(ctx context.Context) error {
+				return world.api.UploadReaderKey(ctx, &bridge.Signed{Body: []byte("a ReaderKey")})
+			},
+		},
+		{
+			name: "the Welcomes, on no repo",
+			call: func(ctx context.Context) error {
+				_, err := world.api.Welcomes(ctx)
+				return err
+			},
+		},
+	}
+	for _, c := range cases {
+		world.exchange.refuse(unloaded, 10)
+		before := world.exchange.count()
+		err, waits := world.run(c.call)
+		if !errors.Is(err, unloaded) || len(waits) != 0 || world.exchange.count()-before != 1 {
+			t.Errorf("%s under an unconfirmed state's scopes: %v after %d asks, waiting %v, want the 503 after one", c.name, err, world.exchange.count()-before, waits)
+		}
+	}
+
+	world.exchange.refuse(nil, 0)
+	world.api.SetRepoScopes(scopes)
+	start := world.clock.Now()
+	world.exchange.setRoleAfter(world.repoId, GkmScopeRoleRead, 2500*time.Millisecond)
+	err, waits = world.run(read)
+	if err != nil || !slices.Equal(waits, gkmGrantLagRepeat(time.Second, 3)) {
+		t.Errorf("the read under the same scopes a verified state gives: %v, waiting %v", err, waits)
+	}
+	alone := world.exchange.asked(world.scope(GkmScopeRoleRead))
+	if offsets := gkmGrantLagOffsets(alone[1:], start); !slices.Equal(offsets, []time.Duration{0, time.Second, 2 * time.Second, 3 * time.Second}) {
+		t.Errorf("the verified read's r alone was asked at %v", offsets)
 	}
 }
