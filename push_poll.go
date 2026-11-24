@@ -18,7 +18,9 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -82,22 +84,93 @@ type SidecarSyncCore struct {
 	Gates []string
 	// Whether api holds this sidecar revoked: a candidate, checked against the config.
 	Revoked bool
+	// The authorization features every service serving the network implements (DESIGN-COMPUTE §16.6), unsigned and for
+	// the turn-on prompt alone: api refuses a base turning on any other (feature_unsupported), so a device offers none
+	// outside it. None from an api that names none, so nothing is offered.
+	AuthFeatures AuthFeature
+	// To an Owner's or Admin's device alone, nil to any other and from an api that names none: the network's sidecars
+	// whose last stated features lack one of AuthFeatures, each to pause at a turning-on it lacks until it updates.
+	AuthFeaturesLacking *SidecarSyncCoreLacking
 	// Local to the authenticated request. Neither value is supplied in the core reply or persisted.
 	bearerEpoch   uint64
 	bearerExpires time.Time
 }
 
-// What core's JSON carries: the version as a decimal string, since it passes what a JSON number holds.
+// The sidecars a core answer lists as lacking a feature the services implement (DESIGN-COMPUTE §16.6's turn on row).
+type SidecarSyncCoreLacking struct {
+	// In sidecar id order, each with what its last core sync stated; one that never stated reads as stating none.
+	Sidecars []SidecarStatedAuthFeatures
+	// More sidecars lack one than api lists.
+	More bool
+}
+
+// A sidecar's release's features as its last core sync stated them: unsigned and advisory, never authority.
+type SidecarStatedAuthFeatures struct {
+	SidecarId    Id
+	AuthFeatures AuthFeature
+}
+
+// What core's JSON carries: the version as a decimal string, since it passes what a JSON number holds. Features cross
+// as their names, which an older api omits.
 type sidecarSyncCoreReply struct {
-	Version          string   `json:"version"`
-	MinSecureVersion *uint32  `json:"min_secure_version"`
-	Gates            []string `json:"gates"`
-	Revoked          *bool    `json:"revoked"`
+	Version             string                       `json:"version"`
+	MinSecureVersion    *uint32                      `json:"min_secure_version"`
+	Gates               []string                     `json:"gates"`
+	Revoked             *bool                        `json:"revoked"`
+	AuthFeatures        []string                     `json:"auth_features"`
+	AuthFeaturesLacking *sidecarSyncCoreLackingReply `json:"auth_features_lacking"`
+}
+
+// auth_features_lacking's JSON.
+type sidecarSyncCoreLackingReply struct {
+	Sidecars []*sidecarSyncCoreSidecarReply `json:"sidecars"`
+	More     bool                           `json:"more"`
+}
+
+// One listed sidecar's JSON.
+type sidecarSyncCoreSidecarReply struct {
+	SidecarId    string   `json:"sidecar_id"`
+	AuthFeatures []string `json:"auth_features"`
+}
+
+// The features names give, a name that is no feature's giving nothing (ParseAuthFeatureNames).
+func authFeaturesOfNames(names []string) AuthFeature {
+	return ParseAuthFeatureNames(strings.Join(names, ","))
+}
+
+// The listed sidecars as the client reads them: an entry whose id does not parse is dropped, since it names nothing.
+func (self *sidecarSyncCoreLackingReply) lacking() *SidecarSyncCoreLacking {
+	if self == nil {
+		return nil
+	}
+	lacking := &SidecarSyncCoreLacking{More: self.More}
+	for _, entry := range self.Sidecars {
+		if entry == nil {
+			continue
+		}
+		sidecarId, err := ParseId(entry.SidecarId)
+		if err != nil {
+			continue
+		}
+		lacking.Sidecars = append(lacking.Sidecars, SidecarStatedAuthFeatures{SidecarId: sidecarId, AuthFeatures: authFeaturesOfNames(entry.AuthFeatures)})
+	}
+	return lacking
 }
 
 // GET /sidecar/sync/core.
 func (self *SidecarApi) SyncCore(ctx context.Context) (*SidecarSyncCore, error) {
 	return self.syncCore(ctx, nil)
+}
+
+// The core route's query: the features this release implements (AuthFeaturesImplemented), which api keeps for the
+// turn-on prompt alone (DESIGN-COMPUTE §16.6), as their names; none for a release that implements none, as an older
+// one sends.
+func syncCoreQuery() string {
+	features := AuthFeaturesImplemented()
+	if features == 0 {
+		return ""
+	}
+	return "?auth_features=" + url.QueryEscape(features.String())
 }
 
 // Sends the same bearer whose client and network match this generation, including when a token changes mid-request.
@@ -112,7 +185,7 @@ func (self *SidecarApi) syncCore(ctx context.Context, identity *SidecarIdentity)
 		route:          route,
 		operation:      "sync_core",
 		method:         "GET",
-		url:            self.settings.ApiUrl + "/sidecar/sync/core",
+		url:            self.settings.ApiUrl + "/sidecar/sync/core" + syncCoreQuery(),
 		bearerOverride: token,
 	}
 	if identity != nil {
@@ -131,12 +204,14 @@ func (self *SidecarApi) syncCore(ctx context.Context, identity *SidecarIdentity)
 		return nil, fmt.Errorf("sidecar api %s: %w", route, ErrSidecarSyncReply)
 	}
 	return &SidecarSyncCore{
-		Version:          version,
-		MinSecureVersion: *reply.MinSecureVersion,
-		Gates:            reply.Gates,
-		Revoked:          *reply.Revoked,
-		bearerEpoch:      epoch,
-		bearerExpires:    sidecarJwtExpiration(token),
+		Version:             version,
+		MinSecureVersion:    *reply.MinSecureVersion,
+		Gates:               reply.Gates,
+		Revoked:             *reply.Revoked,
+		AuthFeatures:        authFeaturesOfNames(reply.AuthFeatures),
+		AuthFeaturesLacking: reply.AuthFeaturesLacking.lacking(),
+		bearerEpoch:         epoch,
+		bearerExpires:       sidecarJwtExpiration(token),
 	}, nil
 }
 
