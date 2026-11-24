@@ -125,6 +125,8 @@ type SidecarSettings struct {
 	Listeners *ListenersSettings
 	// §27's automatic approvals (safety_settings.go).
 	Safety *SafetySettings
+	// §28's support skill: the support log and the support client (support_settings.go).
+	Support *SupportSettings
 
 	// Envelopes one component's queue holds. Complete envelopes wait here without blocking the
 	// inline handler, and a full queue drops and counts (§5.4; connect/CODESTYLE.md:119). Default
@@ -168,6 +170,9 @@ type SidecarSettings struct {
 	// The time the Sidecar reads and waits on (clock.go). Nil, the default, is real time; a test
 	// passes sidecartest's FakeClock. connect's own timers stay real (X9).
 	Clock Clock
+	// The process's support log (DESIGN-COMPUTE §28.7; support_log.go), which a host opens once for its process and
+	// every Sidecar it runs writes through: ur daemon's ring, or an app's. Nil, the default, writes nothing.
+	SupportLog SupportLogWriter
 }
 
 // §5.6's alarms (identity_alarms.go) and §7.10's cleanup (identity_cleanup.go) on the device.
@@ -1290,6 +1295,7 @@ func DefaultSidecarSettings() *SidecarSettings {
 		Oauth:         DefaultOauthSettings(),
 		Listeners:     DefaultListenersSettings(),
 		Safety:        DefaultSafetySettings(),
+		Support:       DefaultSupportSettings(),
 
 		ComponentQueueMessageCount: 256,
 		ComponentQueueByteCount:    1024 * 1024,
