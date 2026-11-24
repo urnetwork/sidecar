@@ -43,10 +43,15 @@
 // until a design-records fold writes them into §16.8's; §27.9's proto fence writes auto, auto_verdict, AutoVerdict and
 // channel 4. No field holds a oneof: version tells field 38 which message it holds, and every text an approver's card
 // shows is a string, every amount a uint64 of nano-USD, every enumerated value a uint32, as §16.8's are.
+//
+// DESIGN-COMPUTE.md §6.8's ModelCallBody fields 11 to 14 (INFER-M11-07; CONTRACTS C-26): the attestation of a TEE call
+// §5 verified, the route, the catalog version and the platform field, attested only with that attestation, and the
+// import of protocol/attest.proto, whose AttestationResult field 11 holds. Field 15, CallContext, is CTXH-M11-01's.
 
 syntax = "proto3";
 package urnetwork.sidecar;
 
+import "protocol/attest.proto";
 import "protocol/bridge/auth.proto";
 import "protocol/bridge/signed.proto";
 
@@ -650,6 +655,10 @@ message ModelCallBody {                     // model_call (M6)
   uint64 cache_read_tokens = 6; uint64 cache_write_tokens = 7;
   uint64 reported_micro_usd = 8;            // the harness's own amount, else 0
   int64 started_millis = 9; uint32 duration_millis = 10;
+  AttestationResult attestation = 11;       // remote TEE calls only (DESIGN-COMPUTE §6.8)
+  string route = 12;                        // "local" | "tee" | "direct"; empty on a hook's or a harness's own call
+  uint64 catalog_version = 13;              // the broker's catalog version a remote call named
+  ModelField platform = 14;                 // evidence 4: the policy profile verified; the model stays evidence 2
 }
 
 // RECORD.md section 13.1: run cost (M6).
