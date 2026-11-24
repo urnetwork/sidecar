@@ -577,7 +577,7 @@ re-enrollment (EnrollWithDevice,  -> offline, binding generation n+1 under the s
 generations every event names its generation; one of an older generation is dropped
 ```
 
-**Compute** (owner decisions 733, 751, 770; DESIGN-COMPUTE.md §15.3). `Sidecar` also exposes DESIGN-COMPUTE.md's API: `NewHarness` and its `SidecarHarness`, `Models()` for the catalog and model settings, `Compute()` for the balance, its packs, charges and spend, `Enclaves()`, `Agents()`, `Disclosures()` with `AckDisclosure` and `AckNetworkDisclosure`, `AutoApprovals()`, `Calendar()`, `Connections()`, `OpenSsh` and `Listeners()`, which backs the apps' Listeners section, the listeners list beside `GetDiscovery`'s DNS-SD view (§17.7.1); their UI stays outside this design (owner rule 6).
+**Compute** (owner decisions 733, 751, 770, 783; DESIGN-COMPUTE.md §15.3). `Sidecar` also exposes DESIGN-COMPUTE.md's API: `NewHarness` and its `SidecarHarness`, `Models()` for the catalog and model settings, `Compute()` for the balance, its packs, charges and spend, `Enclaves()`, `Agents()`, `Disclosures()` with `AckDisclosure` and `AckNetworkDisclosure`, `AutoApprovals()`, `Calendar()`, `Connections()`, `OpenSsh`, `Listeners()`, which backs the apps' Listeners section, the listeners list beside `GetDiscovery`'s DNS-SD view (§17.7.1), and `Support()`, which backs the apps' support conversation, its `support_update` events carrying enumerated fields alone, an app the `support` hint wakes as `mail`'s does composing its own notification with no reply's text (§6.8; DESIGN-COMPUTE.md §28.4, §28.9); their UI stays outside this design (owner rule 6).
 
 ### 18.6 Device abstractions and the DeviceRemote mirror
 

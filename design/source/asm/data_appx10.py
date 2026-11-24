@@ -133,6 +133,11 @@ MESSAGES = _insert_after(MESSAGES, '`SmtpProof`, `SmtpProofResult`',
 MESSAGES = _insert_after(MESSAGES, '(service 0x19)',
     ('`LISTENERS`, `LISTENERS_RESULT`', '0x1901, 0x1902', 'peer ↔ peer (RPC), on the control class too',
      "A host's listeners, asked live (DESIGN-COMPUTE.md §26.8; owner decision 770)", '§6.11'))
+# Service discovery's watch, which §6.11's fence took with types.proto's declaration (owner decision 778).
+MESSAGES = _insert_after(MESSAGES, '`DnsZoneChanged`',
+    ('`DnsSdWatch`, `DnsSdWatchResult`', '0x1B02, 0x1B03', 'peer ↔ peer (RPC), on data-class contracts only',
+     "A viewer's watch of a host for the DNS-SD instances the host would let it reach (§17.7.1; owner decision 778)",
+     '§12.9.1'))
 
 # ------------------------------------------------------------------ Appendix D: carried messages
 # The carried-in cell names a SignedType range only where §6.11's registry comment names the statement itself:
@@ -518,7 +523,8 @@ def appendix_g(t2):
               "citations resolve.")
     text = (f"§2.8 holds `metadata_list.yml` ({ver.group(1)}, updated {ver.group(2)} for {ver.group(3)}), the list the "
             "product promises: URnetwork's servers never receive plaintext content or keys, in any mode, and see only "
-            "the values it names (D-TRUST-4), with one bounded exception, the platform report listener (§2.8). This "
+            "the values it names (D-TRUST-4), with two bounded exceptions, the platform report listener and the support "
+            "conversation (§2.8). This "
             "appendix no longer copies it, so the two cannot drift. " + census)
     return {'version': ver.group(1), 'date': ver.group(2), 'scope': ver.group(3), 'rows': len(rows),
             'withdrawn': wd, 'families': {p: len(ns) for p, ns in fam.items()}, 'spans': spans, 'census': census,

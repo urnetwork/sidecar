@@ -45,6 +45,15 @@ type InferSettings struct {
 	// classes, so a laptop or desktop below the next floor still gets the largest default its memory fits. Empty
 	// recommends nothing.
 	LocalDefaults []*InferLocalDefault
+
+	// §6.4's stream. The events a call's channel holds ahead of its reader: 64, a few seconds of a fast local model's
+	// deltas at the Harness's 30 renders a second, past which the router holds them, folding text, reasoning and
+	// argument deltas, so a slow reader never blocks the engine. Non-positive holds one.
+	EventBufferCount int
+	// The most a call's held events may come to, in bytes, before the router stops the call, answering canceled: 16
+	// MiB, many times the longest answer a model's maximum output gives, so only a reader that stopped reading reaches
+	// it, and a stopped reader holds no engine. Non-positive stops a call whose reader falls behind at all.
+	EventPendingMaxByteCount int
 }
 
 // One of §6.5's defaults by memory: the local model a device of its classes gets with at least its memory.
@@ -68,6 +77,8 @@ func DefaultInferSettings() *InferSettings {
 		ToolBudgetWindowDivisor:     4,
 		ManifestMaxByteCount:        4 * 1024 * 1024,
 		ManifestFileMaxByteCount:    64 * 1024 * 1024 * 1024,
+		EventBufferCount:            64,
+		EventPendingMaxByteCount:    16 * 1024 * 1024,
 		LocalDefaults: []*InferLocalDefault{
 			{
 				Name:               "local-gemma-4-26b-a4b-off",

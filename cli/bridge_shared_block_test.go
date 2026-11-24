@@ -208,7 +208,7 @@ func TestSharedBlockStaysWithTheFirstJoinedNetwork(t *testing.T) {
 	}
 	addresses, routes, resolver, zones := world.device()
 	if !slices.Equal(addresses, []netip.Addr{netip.MustParseAddr("100.70.9.9")}) || len(routes) != 2 ||
-		resolver != netip.MustParseAddr("100.70.0.53") || !slices.Equal(zones, []string{"net.example"}) {
+		resolver != netip.MustParseAddr("100.70.0.53") || !slices.Equal(zones, []string{"net.example", "70.100.in-addr.arpa"}) {
 		t.Fatalf("the device holds %v %v %v %v", addresses, routes, resolver, zones)
 	}
 	reply := urStatusSharedBlocksOf(world.bridges)

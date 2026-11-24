@@ -101,8 +101,9 @@ type SidecarAction struct { // every outward action (I-8)
 	                            // decision 436), new kinds appending: DESIGN-COMPUTE.md's 19 enclave_create,
 	                            // 20 enclave_egress_direct, 21 compute_budget_raise, 22 enclave_delete,
 	                            // 23 fetch_unlisted_url, 24 tainted_send, 25 calendar_write, 26 service_write
-	                            // (owner decisions 737, 749, 756, 768, 772), at CanonicalAction version 5
-	                            // alone (§16.8); publish and
+	                            // (owner decisions 737, 749, 756, 768, 772), and 27 support_send (owner
+	                            // decision 783), which record.proto takes with its code, each at
+	                            // CanonicalAction version 5 alone (§16.8); publish and
 	                            // listen cover tls/ and smtp/ alike, since host and socket_name say which
 	Canonical []byte            // built by the daemon; payload_sha256 = SHA-256(Canonical)
 	Risk      SidecarRisk       // 1 normal, 2 high, the wire's values (§16.8); every action is normal: no policy

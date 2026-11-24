@@ -937,3 +937,8 @@ rows:
   compute-7: {planned: M12}
   compute-8: {planned: M12}
   compute-11: {planned: M13}
+  # DESIGN-COMPUTE.md §28.15's rows (owner decisions 783, 784): what FB's feedback service, URnetwork's own to build,
+  # holds of the sidecar's support client, each until M13b's support skill posts to it (DESIGN-COMPUTE §28.21)
+  support-1: {planned: M13}
+  support-2: {planned: M13}
+  support-3: {planned: M13}

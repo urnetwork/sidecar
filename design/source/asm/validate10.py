@@ -307,7 +307,7 @@ for n, head in sorted(entries.items()):
             named_open.append({'decision': n, 'q': q, 'issue': 'no such item'})
 open_items = [q for q, st in qstatus.items() if st == 'open']
 qf = json.loads((V7 / 'qfields.json').read_text())
-out['owner_record'] = {'entries': len(entries), 'entry_numbers_ok': sorted(entries) == list(range(1, 779)),
+out['owner_record'] = {'entries': len(entries), 'entry_numbers_ok': sorted(entries) == list(range(1, 785)),
                        'q_named_by_decisions': sum(len(re.findall(r'Q-[A-Z]+-\d+', h)) for h in entries.values()),
                        'named_but_open': named_open,
                        'open_items': open_items,
@@ -538,9 +538,10 @@ LATE_DATES = {198: '2026-11-10', 199: '2026-11-10', 200: '2026-11-10', 201: '202
               **{_n: '2026-11-22' for _n in range(691, 716)}, 697: '2026-11-23',
               **{_n: '2026-11-23' for _n in range(716, 730)},
               **{_n: '2026-11-24' for _n in range(730, 733)},
-              **{_n: '2026-11-23' for _n in range(733, 777)}, 777: '2026-11-24', 778: '2026-11-24'}
+              **{_n: '2026-11-23' for _n in range(733, 777)}, 777: '2026-11-24', 778: '2026-11-24',
+              **{_n: '2026-11-24' for _n in range(779, 785)}}
 idx_rows = re.findall(r'^\| <a id="od-(\d+)"></a>\d+ \| (2026-11-(?:0[34569]|1[0123456789]|2[01234])) \|', doc, re.M)
-out['decision_rows'] = {'rows': len(idx_rows), 'numbers_ok': [int(n) for n, d in idx_rows] == list(range(1, 779)),
+out['decision_rows'] = {'rows': len(idx_rows), 'numbers_ok': [int(n) for n, d in idx_rows] == list(range(1, 785)),
                         'dates_ok': all(d == ('2026-11-03' if int(n) <= 111 else '2026-11-04' if int(n) <= 145 else '2026-11-05' if int(n) <= 187 else '2026-11-06' if int(n) <= 196 else '2026-11-09' if int(n) == 197 else LATE_DATES.get(int(n))) for n, d in idx_rows),
                         'known_gaps_heading': '### Known gaps' in doc,
                         'closed_by_peer_review_text': len(re.findall(r'closed by peer review', doc))}
