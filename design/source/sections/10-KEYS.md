@@ -942,7 +942,12 @@ time      time_ms <= my clock + 60 s and >= the parent's
 drop      where R takes deposits, time_ms < drop_not_after_ms <= time_ms + DropKeyLifetime + 10 min, as
           readerkey's check is, so no signer voids the backstop with a far-future value (owner decision 357)
 poisoned  a delivery the delivery checks below judge invalid: members alarm, never seal to the generation and
-          rotate at once (cause REMOVE), and admins revoke the signer
+          rotate at once (cause REMOVE), and admins revoke the signer; at a VPN component's Forwarder, which
+          cannot rotate, a DelegationWrap the checks refuse opens nothing and poisons neither its generation
+          nor the one above: the generation still opens by a wrap that passes or by the ladder, the refusal is
+          its cause when nothing else opens it, so config_key_waiting names it once it has waited, a wrap
+          pinned off the judged chain raises head_alarm (fork), and a refused wrap where another opens the
+          generation is logged only; a refused GenRotate is refused there as by every member (owner decision 777)
 roster    every commit's roster lies within the key holders at its auth pin, and in the config and directory
           groups within the leaf-entitled devices (§7.9), except a recovery self-join's revoked leaves (10.8),
           whose generation-0 epoch has no GenWrap; the next leaf commit after a leaf's drop, or its loss of

@@ -79,6 +79,8 @@ errors   429 and 5xx: at most 3 retries with backoff; APNs 410 or FCM UNREGISTER
 metrics  by platform, topic and result, never ids or tokens; sized for twice Y2's 6,000 hints/s
 ```
 
+**Compute's blocks** (owner decisions 735, 742, 759, 760; DESIGN-COMPUTE.md §14.2, §21.5). A `compute` service block runs the broker and orchestrator, `computeservice` on server/cli/compute, with its taskworker jobs; and `searchsigner`, the search payer's rate-limited signer, runs internal, on hosts of its own, apart from the broker's, with no public route.
+
 ### 19.5 Load balancer, addresses, certificates
 
 | # | Change | For |
@@ -96,6 +98,8 @@ metrics  by platform, topic and result, never ids or tokens; sized for twice Y2'
 | W11 | warpctl dns, which derives only A and AAAA today (warp/warpctl/dns_route53.go:112-147), publishes `rpt.bringyour.com` (A and AAAA: W4's two interfaces; MX 10 itself) and `*._report._dmarc.rpt.bringyour.com` TXT "v=DMARC1" (§14.6) from M5, and from M9 the sending addresses' HELO names under bringyour.com (A; owner decision 124) | report host, smtpedge |
 
 **dns edges (D-OPS-15; owner decisions 69, 71, 123).** ns1 and ns2 are two hosts at the site, each with one IPv4 and one IPv6 address on gateway-1's and gateway-2's Hurricane Electric (HE) blocks (vault/main/services.yml:82-104) and transparent interfaces on their own router ports, like fireside's (:449-464). They run only `dnsedge` (UDP 53 by `external_udp_ports`, TCP 53 by W9, no nginx), so §12.6's RRL sees resolvers, and are probed from the off-site VPN host (xops/main/ansible/inventory.yml:267-276).
+
+`compute.bringyour.com` routes to the `compute` block (owner decision 735; DESIGN-COMPUTE.md §14.2); `searchsigner` has no public route.
 
 ### 19.6 The file cluster (X13)
 

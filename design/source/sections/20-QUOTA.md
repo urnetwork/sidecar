@@ -420,6 +420,10 @@ type QuotaLease interface {
 }
 ```
 
+**Context history at the storage limit** (owner decision 757; DESIGN-COMPUTE.md §24.10). DESIGN-COMPUTE.md's context history stops leaving the device at 90% of the network's storage and at each member's share, the `compute` block's `history.member_share`, by default all of it for one member and 2/n for n, its nodes' bodies waiting in the device's spool while their headers still leave and its blobs kept by hash and size, so mail and repos keep writing.
+
+**The compute balance** (owner decisions 735, 741, 742, 754, 761, 762, 767, 773, 774; DESIGN-COMPUTE.md §9, §11.13). Beside the transfer balance, and never converting with it, a network holds a prepaid USD compute balance that pays for remote inference, enclaves and web searches, each with its own charge, bought with fiat credits and auto-renew, its spend shown per service in all and over the last 7 days; local inference is free and touches it not at all; enclaves take DESIGN-COMPUTE.md §11.13's limits.
+
 ### 20.8 Counting sidecar clients (X10)
 
 Owner decision 4: one client per sidecar, a child of the device client in its network, else top-level; one sidecar per device and network (owner decision 23), plus one per agent with its own reach (§5.5). Designs assume enforcement is on.

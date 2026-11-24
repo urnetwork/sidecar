@@ -67,6 +67,13 @@ Consumers (PLAN.md:5-31; D-CTX-1):
 | Burner email: ur.io quick tools (UI:159-165) | browser sidecar | mail, evs |
 | Apps: device ip addr, port forward (PLAN.md:31) | sdk | bridge |
 | Apps: extension worker (PLAN.md:28) | `sidecar.wasm` Worker (§18.8) | per §18 |
+| Compute: a person in an app (owner decisions 733, 751) | sdk, the app process, never the VPN component (owner decision 197) | the Harness as UI components on a local or remote model, each labeled; enclaves; web search and fetch; mail summaries and calendar events; connected services; the network's listeners; the compute balance (DESIGN-COMPUTE.md §1.2) |
+| Compute: a developer at a terminal (owner decisions 733, 736, 737) | `ur` daemon | `ur harness`, `ur enclave`, `ur ssh`, `ur git`, `ur search`, `ur fetch`, `ur calendar`, `ur connect`, `ur listeners`, `ur compute`, and the gateway for the harnesses they already use |
+| Compute: Codex, Claude Code and other harnesses (owner decisions 736, 750) | the daemon's gateway on loopback | every catalog model by its canonical name behind one provider entry, billed to the compute balance, each call recorded with its whole context; web search through MCP's `web_search` alone (owner decision 758) |
+| Compute: an agent in an enclave (owner decisions 737, 775) | `ur` inside a TEE VM | a full Debian with tools, a sidecar identity, an overlay address, EVS, the bundled SSH server and a Harness others attach to; for the initial version one of its sponsor's devices, with their access |
+| Compute: recURd (owner decisions 744, 757) | the record (§16.8, RECORD.md) | Harness runs recorded natively with their whole context history, model receipts with attested evidence, agent names, status summaries and inboxes |
+
+**The compute extension.** DESIGN-COMPUTE.md, the owner's design of 2026-11-23 for compute, extends this design as RECORD.md does, governing the points it owns, as its answers in DESIGN-COMPUTE-AMENDMENTS.md govern theirs, and this design carries its amendments (its Appendix D) and the owner's statements behind it as owner decisions 733-776, the CO-n of its front matter numbered 732 + n: inference, local or remote, through the embedded Harness and the catalog's canonical names (owner decisions 733, 734, 741, 743 and 750); the compute balance, paid in fiat, its providers paid in gamma, its spend shown by service (owner decisions 735, 742, 754, 761, 762, 764 and 767); the gateway for existing harnesses (owner decisions 736 and 758); secure enclaves, their networking, the bundled SSH and git, and the local Harness's bundled tools (owner decisions 737, 738, 739, 740, 753, 755 and 775); the recURd skill's names, summaries and inboxes (owner decisions 744 and 747); web search on Parallel, paid per search, and web fetch (owner decisions 748, 749, 759, 760 and 763); mail summaries, calendar events and the network's indexer enclave (owner decisions 751, 752 and 756); context history in EVS (owner decision 757); connected services (owner decisions 768 and 769); listeners (owner decisions 770 and 771); automatic approvals (owner decision 772); the disclosures every search, model, enclave and listing carries (owner decisions 765 and 766); and the research, the document's form and the owner's answers to its questions (owner decisions 745, 746, 773, 774 and 776). DESIGN-COMPUTE.md §19 schedules it as M11-M16, after M10 (§23.4).
 
 ### 1.5 Features and promises mapped to PLAN.md services
 
@@ -88,7 +95,7 @@ Consumers (PLAN.md:5-31; D-CTX-1):
 
 Goals: one substrate for both products and the apps; every PLAN.md service designed to implementable depth, PLAN.md positions visible unless superseded (§1.14); servers see only ciphertext and the metadata list (R-CTX-29); runs where consumers run; scales horizontally on warp.
 
-Non-goals: a harness, agent, model host, or eval product (PM:21,47; MK2:618-620); a token (P5:934; owner decisions 15, 108); app, console, or extension UI (PLAN.md:28), including OS password-manager registration (MM:465); a general exit for agent traffic; the feedback service (D-CTX-4); record semantics and exports (RECORD.md; owner decision 25); the instruction-file writer (P5:629) and run cost.
+Non-goals: a model host or eval product (PM:21,47; MK2:618-620), the Harness, DESIGN-COMPUTE.md's embedded agent harness, being in scope and hosted models brokered, in a TEE or not by the person's choice (owner decisions 733, 734, 737, 750); a token (P5:934; owner decisions 15, 108); app, console, or extension UI (PLAN.md:28), including OS password-manager registration (MM:465); a general exit for agent traffic; the feedback service (D-CTX-4); record semantics and exports (RECORD.md; owner decision 25); the instruction-file writer (P5:629) and run cost.
 
 Promises (D-CTX-3):
 
@@ -98,7 +105,7 @@ Promises (D-CTX-3):
 | "The relay carries only ciphertext"; the "certificate key stays in the sidecar"; mail "encrypted on arrival" (P5:681,699,708) | sidecar traffic, R-CTX-21, R-CTX-22, R-CTX-24 | none (directive; D-PROTO-6) |
 | Owner decision 72's policy wording, replacing TM:814 | R-CTX-11 | none (owner decisions 3, 5, 6) |
 | "end-to-end encrypted" (P5:928) | R-CTX-29 | claimed now, without P5:930-931's audit and reproducible builds; the security page discloses the unaudited cryptography (owner decisions 77, 99, 119) |
-| Agents "reach only granted ranges, and leave only through exits you run" (P5:689) | R-CTX-28 | holds once a network writes a policy; the allow-all before it is disclosed (owner decision 120) |
+| Agents "reach only granted ranges, and leave only through exits you run" (P5:689) | R-CTX-28 | holds once a network writes a policy; the allow-all before it is disclosed (owner decision 120); and the listeners rule, which the implicit document, once an Owner or Admin acknowledges `listeners:publish` for the network, and every new document carry, grants every client, agents included, each listed service of the network unless its person hides it or an admin narrows the rule, the copy saying so (owner decisions 770, 771; DESIGN-COMPUTE.md §26.7) |
 
 ### 1.8 Tiers and limits as PLAN.md states them
 
