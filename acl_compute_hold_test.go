@@ -7,6 +7,7 @@ package sidecar
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -77,7 +78,8 @@ func TestAuthFeatureHoldStopsWrites(t *testing.T) {
 	net.source.settings[[sha256.Size]byte(testConfigHeadSha256(configVersion))] = &protocol.ServiceSettings{AuthFeatures: uint32(AuthFeatureAgentRepos)}
 	net.fold(net.owner, net.n, configVersion)
 	baseAt := net.n
-	net.admitDevice(first, net.device("m second", member), 0)
+	second := net.device("m second", member)
+	net.admitDevice(first, second, 0)
 	world.publish()
 	client.ReceiveNotice(PushNotice{Topic: PushTopicTeam, Version: net.n})
 
@@ -124,6 +126,25 @@ func TestAuthFeatureHoldStopsWrites(t *testing.T) {
 	// what it holds stays readable
 	if row := client.State().SidecarRow(first.sidecarId); row == nil {
 		t.Fatal("the held state reads no row")
+	}
+	// it admits and approves nothing: an act signs only what takes rights away, and the approver's standing is the hold
+	authority := &ConfigAuthority{client: client}
+	if sidecarAuthorityHold(authority) != hold {
+		t.Fatal("the authority answers no hold")
+	}
+	act := &sidecarAct{
+		sidecar:   &Sidecar{settings: DefaultSidecarSettings(), clock: RealClock{}},
+		authority: authority,
+		origin:    SidecarActConfirmed,
+		identity:  &SidecarIdentity{NetworkId: net.networkId, SidecarId: first.sidecarId},
+		at:        client.Pin(),
+		random:    rand.Reader,
+	}
+	if err := act.Add(bridge.SignedType_SIGNED_SIDECAR_ADMIT, net.admission(net.device("m fourth", member), nil, false, 0, 0)); !errors.Is(err, ErrConfigUpgradeRequired) {
+		t.Fatalf("an admission while held: %v", err)
+	}
+	if err := act.Add(bridge.SignedType_SIGNED_SIDECAR_REVOKE, &bridge.SidecarRevoke{SidecarId: first.sidecarId.Bytes()}); err != nil {
+		t.Fatalf("a revocation while held: %v", err)
 	}
 }
 

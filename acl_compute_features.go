@@ -353,6 +353,33 @@ func (self *ConfigLog) holdAtBase(kept *configKeptEntry, lacking AuthFeature) er
 	return hold
 }
 
+// The statements a held reader still signs (§16.6's hold): those that only take rights away, revocations, a grant's or
+// a repo's revoke and a suspension, which a device stopped at a fork signs too, since removes and revocations never stop
+// (§6.4). An admission, a confirmation, a grant, a share or any other act waits for the update, and so does every
+// approval (ApprovalApprover), so a held reader admits and approves nothing on a state the network has moved past.
+var authFeatureHoldSignedTypes = map[bridge.SignedType]bool{
+	bridge.SignedType_SIGNED_GRANT_REVOKE:      true,
+	bridge.SignedType_SIGNED_SUSPEND:           true,
+	bridge.SignedType_SIGNED_REPO_REVOKE:       true,
+	bridge.SignedType_SIGNED_MEMBER_REVOKE:     true,
+	bridge.SignedType_SIGNED_SIDECAR_REVOKE:    true,
+	bridge.SignedType_SIGNED_KEY_REVOKE:        true,
+	bridge.SignedType_SIGNED_DELEGATION_REVOKE: true,
+}
+
+// The hold, or a re-derivation's wait, the authority's log stands at (the client's stop, Fork), nil for none and for
+// an authority that follows no log of this build's, as a test's fake does.
+func sidecarAuthorityHold(authority SidecarAuthority) *ConfigForkError {
+	configAuthority, ok := authority.(*ConfigAuthority)
+	if !ok || configAuthority == nil || configAuthority.client == nil {
+		return nil
+	}
+	if fork := configAuthority.client.Fork(); fork.Held() {
+		return fork
+	}
+	return nil
+}
+
 // The upgrade_required event of a hold.
 func authFeatureUpgradeEvent(hold *ConfigForkError) SidecarEvent {
 	return SidecarEvent{Kind: SidecarEventUpgradeRequired, AuthFeatures: hold.UpgradeRequired}
