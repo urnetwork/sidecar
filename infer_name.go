@@ -306,9 +306,10 @@ type InferNormalizedModel struct {
 	// Why the id makes no model part: it is too long, its label is unknown or not its provider's kind, or nothing of
 	// it survives normalization.
 	Refused string
-	// The provider's other ids, in their given order, that make the same model part: the policy names one of them
-	// (§5.4), and a catalog holding two refuses (InferCatalog).
-	CollidesWith []string
+	// Whether another of the provider's ids makes the same model part, the ids that share Model being the collision:
+	// the policy names one of them (§5.4), and a catalog holding two refuses (InferCatalog). A flag, not a list, so a
+	// hostile catalog of ids that all collide costs memory linear in its size.
+	Collides bool
 }
 
 // Lowercased; "/", "_", ":", whitespace and "-" made one hyphen, runs collapsed; only [a-z0-9.-] kept; no hyphen at
@@ -350,7 +351,8 @@ func inferDropTeeMarks(model string) string {
 //     confidential) dropped, so its name claims nothing its label denies (Q-PROV-8);
 //   - an id whose model part would make a name past the settings' NameMaxByteCount refused.
 //
-// Two ids that still give one model part are reported on each, for the policy to name one (§5.4); nothing here picks.
+// Two ids that still give one model part are each marked Collides, for the policy to name one (§5.4); nothing here
+// picks. The work and the memory are linear in the ids, which ProviderModelIdMaxCount bounds.
 // An id is refused, with the reason, when it is past ProviderModelIdMaxByteCount, its label is unknown, it pairs the
 // local label with a remote provider or the reverse, or nothing of it survives. Refuses the whole call for a provider
 // that is not a slug or more than ProviderModelIdMaxCount ids, so its work is bounded.
@@ -403,22 +405,26 @@ func InferNormalizeModelId(provider string, ids []*InferProviderModel, settings 
 	}
 
 	// the organization rule: ids whose model parts without their organizations agree, while their organizations do
-	// not, differ only by their organizations, and each keeps its own
-	bareReadings := map[string][]*reading{}
+	// not, differ only by their organizations, and each keeps its own. A group of one bare part keeps them where its
+	// ids name two organizations or more, counting none as one.
+	bareOrganizations := map[string]string{}
+	bareKeeps := map[string]bool{}
 	for _, r := range readings {
-		if r.result.Refused == "" {
-			bareReadings[r.bare] = append(bareReadings[r.bare], r)
+		if r.result.Refused != "" {
+			continue
+		}
+		if organization, ok := bareOrganizations[r.bare]; !ok {
+			bareOrganizations[r.bare] = r.organization
+		} else if organization != r.organization {
+			bareKeeps[r.bare] = true
 		}
 	}
 	for _, r := range readings {
 		if r.result.Refused != "" {
 			continue
 		}
-		keep := slices.ContainsFunc(bareReadings[r.bare], func(other *reading) bool {
-			return other.organization != r.organization
-		})
 		model := r.bare
-		if keep {
+		if bareKeeps[r.bare] {
 			model = r.full
 		}
 		if r.result.Label == ComputeLabelNone {
@@ -435,19 +441,15 @@ func InferNormalizeModelId(provider string, ids []*InferProviderModel, settings 
 		r.result.Model = model
 	}
 
-	modelReadings := map[string][]*reading{}
+	modelCounts := map[string]int{}
 	for _, r := range readings {
 		if r.result.Model != "" {
-			modelReadings[r.result.Model] = append(modelReadings[r.result.Model], r)
+			modelCounts[r.result.Model] += 1
 		}
 	}
 	results := make([]*InferNormalizedModel, len(readings))
 	for i, r := range readings {
-		for _, other := range modelReadings[r.result.Model] {
-			if other != r {
-				r.result.CollidesWith = append(r.result.CollidesWith, other.result.Id)
-			}
-		}
+		r.result.Collides = 1 < modelCounts[r.result.Model]
 		results[i] = r.result
 	}
 	return results, nil

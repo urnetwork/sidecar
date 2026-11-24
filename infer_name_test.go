@@ -8,7 +8,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 )
@@ -19,11 +18,11 @@ type testInferNameCorpus struct {
 	About    string `json:"about"`
 	Provider string `json:"provider"`
 	Ids      []struct {
-		Id           string   `json:"id"`
-		Label        string   `json:"label"`
-		Model        string   `json:"model"`
-		Refused      bool     `json:"refused"`
-		CollidesWith []string `json:"collides_with"`
+		Id       string `json:"id"`
+		Label    string `json:"label"`
+		Model    string `json:"model"`
+		Refused  bool   `json:"refused"`
+		Collides bool   `json:"collides"`
 	} `json:"ids"`
 	Names []struct {
 		Name     string `json:"name"`
@@ -36,7 +35,7 @@ type testInferNameCorpus struct {
 
 // §18's corpus of providers' ids: Chutes' -TEE ids, engy's deepseek-v4.1-flash-1017, SayGM's -tee ids labeled none,
 // organization prefixes, ids that differ only by organization, ids ending in an effort word, and the grammar's edges.
-// Each id makes its model part, or is refused, and reports what it collides with; each name gets its one reading; and
+// Each id makes its model part, or is refused, and says whether it collides; each name gets its one reading; and
 // every name a model part makes reads back to that model part and effort.
 func TestInferModelNameCorpus(t *testing.T) {
 	settings := DefaultInferSettings()
@@ -76,16 +75,8 @@ func TestInferModelNameCorpus(t *testing.T) {
 					t.Errorf("%s: %q made %q (refused %q), want %q (refused %t)", path, id.Id, result.Model, result.Refused,
 						id.Model, id.Refused)
 				}
-				collidesWith := id.CollidesWith
-				if collidesWith == nil {
-					collidesWith = []string{}
-				}
-				resultCollidesWith := result.CollidesWith
-				if resultCollidesWith == nil {
-					resultCollidesWith = []string{}
-				}
-				if !slices.Equal(resultCollidesWith, collidesWith) {
-					t.Errorf("%s: %q collides with %q, want %q", path, id.Id, resultCollidesWith, collidesWith)
+				if result.Collides != id.Collides {
+					t.Errorf("%s: %q collides: %t, want %t", path, id.Id, result.Collides, id.Collides)
 				}
 				if result.Model == "" {
 					continue
@@ -253,6 +244,24 @@ func TestInferNormalizeModelIdBounded(t *testing.T) {
 	}
 	if _, err := InferParseModelName("p-"+fits+"-minimal", settings); err != nil {
 		t.Errorf("the longest name the bound allows was refused: %v", err)
+	}
+
+	// a hostile catalog of the most ids, every one colliding with every other, is answered id by id
+	colliding := make([]*InferProviderModel, settings.ProviderModelIdMaxCount)
+	for i := range colliding {
+		colliding[i] = &InferProviderModel{Id: "org" + strings.Repeat("x", i%7) + "/Same-Model", Label: ComputeLabelNone}
+		if i%2 == 0 {
+			colliding[i].Id = "same-model"
+		}
+	}
+	collided, err := InferNormalizeModelId("p", colliding, settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, result := range collided {
+		if !result.Collides || result.Model == "" {
+			t.Fatalf("id %d of a catalog that all collides: %+v", i, result)
+		}
 	}
 
 	tooMany := make([]*InferProviderModel, settings.ProviderModelIdMaxCount+1)
