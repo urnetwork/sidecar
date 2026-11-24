@@ -56,6 +56,13 @@
 // at most ExchangeRetryCount times. Such a failure carries errGkmNoServiceToken, so a flow that reads an unknown
 // outcome back after a lost answer knows nothing was sent.
 //
+// Neither the ride-out nor that retry is taken by a call on a repo at a role the client's state does not give, which
+// presents the repo's one scope (scopesFor): no grant this device acts on is there to wait for, so its first failure to
+// get a token ends it, whatever the keeper answered, as every one did before QD-1230. A flow holds its repo's flow
+// lock across its calls, so a wait there would hold every other flow of the repo for nothing: a network's first device
+// joins the config group at the genesis, which gives it no scope, before base 1 lands, while api's gate holds no state
+// of the network and answers 503, and its creation of the group past base 1 takes the same lock.
+//
 // Safe for concurrent use.
 
 package sidecar
@@ -327,6 +334,12 @@ type gkmCallScopes struct {
 	// Whether the client's verified state gives the call's repo at its role or a stronger one: the exchange's
 	// invalid_scope to the call's own scope is ridden out only then (QD-1230).
 	stateGives bool
+	// Whether the client's state does not give the call's repo at its role, so the call presents that one scope, which
+	// the exchange or gkm refuses: a token that could not be had for it ends the call at once, whatever the keeper
+	// answered, since no grant this device acts on is there to wait for. A network's first device asks so before its
+	// base 1 lands, joining the config group at the genesis, which gives it nothing, while api's gate holds no state
+	// of the network and answers 503: asking again would hold the repo's flow its creation of the group waits on.
+	stateLacks bool
 }
 
 // The scopes a call on repoId needing role presents: the batch holding the repo when its role covers role, else that
@@ -349,8 +362,8 @@ func (self *GkmApi) scopesFor(repoId *Id, role string) (gkmCallScopes, error) {
 	batch, ok := self.repoIdBatches[*repoId]
 	batchRole := self.repoIdRoles[*repoId]
 	if !ok || !gkmRoleCovers(batchRole, role) {
-		// a role the client's state does not give: that one scope, refused as gkm or the exchange refuses it
-		return gkmCallScopes{scopes: repoScopes}, nil
+		// a role the client's state does not give: that one scope, refused as gkm or the exchange refuses it, once
+		return gkmCallScopes{scopes: repoScopes, stateLacks: true}, nil
 	}
 	callScopes := gkmCallScopes{scopes: self.batchScopes[batch], stateGives: true}
 	if !slices.Equal(callScopes.scopes, repoScopes) {
@@ -412,8 +425,8 @@ func gkmBody(message proto.Message) ([]byte, error) {
 // (sidecarServiceTokenRefusalOf): the exchange's invalid_scope to the call's own scope, which the client's state
 // gives, goes again ReadRetryWait apart until ExchangeScopeWaitTimeout has passed since the call's first, the last try
 // at the window's end; another refusal for good ends the call at once; and a failure that may change goes again at
-// most ExchangeRetryCount times. No answer, the lb's 502 or 504 among them, comes back at once, as a transport error
-// does.
+// most ExchangeRetryCount times. A call at a role the client's state does not give goes once, whatever the keeper
+// answered. No answer, the lb's 502 or 504 among them, comes back at once, as a transport error does.
 func (self *GkmApi) do(ctx context.Context, call *gkmCall) (int, []byte, error) {
 	scopes := call.scopes.scopes
 	// whether scopes is the call's own repo scope alone or holds no other to narrow to, so nothing narrows it again
@@ -434,6 +447,10 @@ func (self *GkmApi) do(ctx context.Context, call *gkmCall) (int, []byte, error) 
 		if errors.Is(err, errGkmNoServiceToken) {
 			refusal := sidecarServiceTokenRefusalOf(err)
 			switch {
+			case call.scopes.stateLacks:
+				// a role the client's state does not give: nothing of a grant this device acts on to wait for, so the
+				// call goes once, as before QD-1230, whatever the keeper answered
+				return 0, nil, err
 			case refusal.scopeRefused && !narrowed:
 				// QD-1230: the batch was granted nothing, its scope on the call's repo left out with the rest, and the
 				// call's own scope alone may be
