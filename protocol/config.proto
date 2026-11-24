@@ -237,6 +237,10 @@ message ServiceSettings {
   bool record_required = 9;            // false; read from M6 and never set through MCP: each member's
                                        // ur install-harness writes fail-closed hooks (§16.7; owner decision 305)
   repeated TeamScopeRow team_scopes = 10;  // Team scopes' first bindings, in label order (QD-1163)
+  uint32 auth_features = 11;           // the authorization features the network turned on (DESIGN-COMPUTE §16.6;
+                                       // owner decision 775): agent_repos 1, compute_policy 2, listeners 4,
+                                       // enclaves 8; bits only accumulate, each on from the first base whose head
+                                       // sets it, and compiled into ProjectionSettings.auth_features
 }
 
 enum VersioningMode {

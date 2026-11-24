@@ -359,6 +359,10 @@ func (self *ConfigLog) CheckBase(signedHeader []byte, rows []byte, timeMs int64)
 	if _, err := bridge.VerifyBaseKeyless(entry, state.IdentityKey(signerId), rows, previousHeader); err != nil {
 		return fmt.Errorf("%w: %w", ErrConfigRule, err)
 	}
+	// a feature api's own release lacks, or bits the rows clear (§16.6)
+	if err := configCheckBaseAuthFeatures(state, rows, self.authFeatures); err != nil {
+		return err
+	}
 	chain, err := bridge.AuthChainDigest(entry.GetN(), entry.GetPrevChain(), entry.GetKind(), entry.GetTimeMs(), entry.GetBody())
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrConfigRule, err)

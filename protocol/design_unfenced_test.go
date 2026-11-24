@@ -632,6 +632,10 @@ message MailSpamModel { uint32 version = 1; repeated uint32 counts = 2; }
 message CanonicalActionDetail { repeated string cidrs = 1; uint32 target_port = 2; repeated string grant_dst = 3; }
 `
 
+// Where an authorization feature's declaration comes from: §7.9's fences name ServiceSettings' field 11, ProjectionSettings'
+// field 3 and capability bit 3 only in comments, which design-records folds into the fences with their code.
+const testAuthFeaturesSource = "DESIGN-COMPUTE.md §16.6's authorization features (owner decisions 737, 775; CACL-M11-02)"
+
 // Fields the owner's answers add to messages the design fences, ahead of design-records' fold, each with the question
 // that holds its answer. Each joins the fence it extends, so both directions stay exact, and one the design comes to
 // write fails until its line here leaves.
@@ -640,6 +644,9 @@ var testFenceAdditions = []struct {
 	field    testFenceField
 	question string
 }{
+	// §16.6's reservation, which §7.9's fences name only in comments until design-records folds them in
+	{message: "ServiceSettings", field: testFenceField{name: "auth_features", number: 11, typeName: "uint32"}, question: testAuthFeaturesSource},
+	{message: "ProjectionSettings", field: testFenceField{name: "auth_features", number: 3, typeName: "uint32"}, question: testAuthFeaturesSource},
 }
 
 // Numbers an owner's answer reserves in a message the design fences, ahead of design-records' fold, each with the
@@ -683,6 +690,8 @@ type testFenceValueAddition struct {
 // that holds its answer. Each joins the fence it extends, as testFenceAdditions' fields do, and one the design comes
 // to write fails until its line here leaves.
 var testFenceValueAdditions = []testFenceValueAddition{
+	// the enclave's capability bit 3, which §7.9's Enclave admissions paragraph names in prose alone
+	{enum: "SidecarCapability", name: "SIDECAR_CAPABILITY_ENCLAVE", number: 8, question: testAuthFeaturesSource},
 }
 
 // One value an owner's answer takes out of an enum the design fences, its number reserved.

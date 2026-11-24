@@ -12,6 +12,11 @@
 // pin included. A file that does not decode keeps nothing, and the first follow reads from api with no floor but what
 // it can check.
 //
+// The file names the authorization features the release that wrote it implemented (§16.6). A restart whose restored log
+// holds a base turning on one it did not, a faulty build's, re-derives: the log is rebuilt from the newest base it keeps,
+// every kept entry after it judged again under this release's rules, and nothing acts on it until the network's next
+// base confirms it (ConfigLog's re-derivation's wait). A file from before the field names none.
+//
 // A joining device (QD-817) keeps its rows-only log here until a base is confirmed, so its pin holds across a restart
 // as any pin it held does. A restart that still holds no generation of the config repo restores it rows-only, as the
 // rows-only pass it was; one whose keychain took a generation meanwhile restores the entries as a full reader, every
@@ -56,6 +61,8 @@ type configClientDocument struct {
 	Entries       [][]byte                  `json:"entries"`
 	Rows          [][]byte                  `json:"rows,omitempty"`
 	VerifiedHeads []*configClientHeadRecord `json:"verified_heads,omitempty"`
+	// the authorization features the release that wrote the file implemented (§16.6's update row)
+	AuthFeatures uint32 `json:"auth_features,omitempty"`
 }
 
 // A config head this device verified: its hash, version and the ServiceSettings and VersioningRules it held,
@@ -104,6 +111,7 @@ func (self *ConfigClient) save() error {
 		NetworkId:     self.args.NetworkId,
 		SignedGenesis: retained.SignedGenesis,
 		Pin:           &sidecarConfigPinReply{N: state.n, Chain: bytes.Clone(state.chain[:])},
+		AuthFeatures:  uint32(log.authFeatures),
 	}
 	if self.settings.RetainFullTail {
 		document.Entries = retained.Entries
@@ -316,7 +324,13 @@ func (self *ConfigClient) restoreFromStore() error {
 	if base := log.State().Base(); base != nil {
 		self.startBase = base.GetVersion()
 	}
+	// a kept log turned on a feature the release that kept it did not implement: it was rebuilt here under this
+	// release's rules, and waits for the network's next base before anything acts on it (§16.6's update row)
+	if faulty := log.State().AuthFeatures() &^ AuthFeature(document.AuthFeatures); faulty != 0 {
+		log.startRederive(faulty)
+	}
 	self.configLog.Store(log)
 	self.position.Set(log.Pin().GetVersion())
+	self.stopped.Set(self.Fork())
 	return nil
 }

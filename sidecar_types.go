@@ -699,6 +699,9 @@ type SidecarEvent struct {
 	CtAlarm SidecarCtAlarm
 	// mail_receiver_alarm (D-MAIL-15, reading 8): SidecarId the receiver or the record's signer, RepoId the repo.
 	MailReceiverAlarm SidecarMailReceiverAlarm
+	// upgrade_required (DESIGN-COMPUTE §16.6's hold): the authorization features the network turned on that this
+	// release lacks, which the update that ends the hold brings.
+	AuthFeatures AuthFeature
 }
 
 // Called for each event, on whatever goroutine raised it. It must not block or call CloseAndWait

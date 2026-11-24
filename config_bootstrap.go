@@ -31,6 +31,11 @@
 // takes a head's block from, unless the caller's files hold one already. Of two first devices racing, each draws its
 // own, and only the winner's head is ever pushed, so the network holds one block.
 //
+// The first head turns on every authorization feature this release implements (DESIGN-COMPUTE §16.6's turn-on row;
+// AuthFeaturesImplemented), since no device of the network is older than its creating release: its ServiceSettings,
+// the caller's or a new one, carries them in auth_features, signed by this device, the network's first Owner device,
+// after the starting policy is added. A release that implements none adds no record.
+//
 // A retry posts the same base 1 only where it signs the same genesis, head and push again, which this function does not
 // keep: a kill after base 1 leaves the device's own genesis at entry 0, so a retry with a new genesis answers Won false.
 // A retry draws another block too, so a caller whose Prepare gives back a push it kept restores that push's block in
@@ -52,6 +57,7 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
+	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
@@ -187,6 +193,9 @@ func BootstrapNetwork(ctx context.Context, args *ConfigBootstrapArgs) (*ConfigBo
 				return nil, errors.New("config bootstrap: the starting policy did not preserve Genesis")
 			}
 		}
+		if head, err = configHeadWithAuthFeatures(head, args.Sign, AuthFeaturesImplemented()); err != nil {
+			return nil, fmt.Errorf("config bootstrap: the first head's features: %w", err)
+		}
 		key, err := args.First.Draft(ctx, genesisLog.State())
 		if err != nil {
 			return nil, fmt.Errorf("config bootstrap: the config group's draft: %w", err)
@@ -194,8 +203,13 @@ func BootstrapNetwork(ctx context.Context, args *ConfigBootstrapArgs) (*ConfigBo
 		if push, err = args.First.Prepare(ctx, key, genesisLog.State(), head); err != nil {
 			return nil, fmt.Errorf("config bootstrap: the first head: %w", err)
 		}
-	} else if push, err = args.Heads.PrepareConfigHead(ctx, head, 0); err != nil {
-		return nil, err
+	} else {
+		if head, err = configHeadWithAuthFeatures(head, args.Sign, AuthFeaturesImplemented()); err != nil {
+			return nil, fmt.Errorf("config bootstrap: the first head's features: %w", err)
+		}
+		if push, err = args.Heads.PrepareConfigHead(ctx, head, 0); err != nil {
+			return nil, err
+		}
 	}
 	if push.Version != 1 {
 		return nil, fmt.Errorf("config bootstrap: the first head prepared at version %d", push.Version)
@@ -265,6 +279,35 @@ func BootstrapNetwork(ctx context.Context, args *ConfigBootstrapArgs) (*ConfigBo
 		return nil, fmt.Errorf("config bootstrap: the first head: %w", err)
 	}
 	return &ConfigBootstrapResult{SignedGenesis: signedGenesis, GenesisChain: genesisChain, Won: true, Pin: pin, Push: push, State: state}, nil
+}
+
+// head with features turned on in its ServiceSettings: the record it holds, every other field kept, or a new one, signed
+// by sign, the network's first Owner device; head itself where features are none or on already. Deterministic, as
+// sign is, so a retry signs the same record again.
+func configHeadWithAuthFeatures(head *ConfigHead, sign ConfigSignFunction, features AuthFeature) (*ConfigHead, error) {
+	if features == 0 {
+		return head, nil
+	}
+	current, _, err := head.ServiceSettings()
+	if err != nil {
+		return nil, err
+	}
+	settings := &protocol.ServiceSettings{}
+	if current != nil {
+		settings = proto.Clone(current).(*protocol.ServiceSettings)
+	}
+	if AuthFeature(settings.GetAuthFeatures())&features == features {
+		return head, nil
+	}
+	settings.AuthFeatures |= uint32(features)
+	if err := CheckServiceSettings(settings); err != nil {
+		return nil, err
+	}
+	signed, err := configSignRecord(sign, bridge.SignedType_SIGNED_SERVICE_SETTINGS, settings)
+	if err != nil {
+		return nil, err
+	}
+	return head.WithFile(ConfigHeadServiceSettingsPath, signed)
 }
 
 // This device's S(1) (the file header's S(1) row): api's entry 1 applied over the genesis, from its own rows and head.

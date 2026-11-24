@@ -3,7 +3,9 @@
 //
 //	rows       self_admit and scim_signer compile into ProjectionRows.settings, which every verifier, api and the
 //	             gates included, judges by, so a rows-only reader reaches a full reader's verdict on a member's own
-//	             admission (owner decision 112; question details-5-settings-in-rows, built on its recommendation)
+//	             admission (owner decision 112; question details-5-settings-in-rows, built on its recommendation);
+//	             and so do auth_features, the authorization features the head turns on, which every reader holds at
+//	             its base (DESIGN-COMPUTE §16.6; acl_compute_features.go)
 //	head only  team_mail, stale_leaf_days (90), witness_bound_hours (72, refused outside 24-168), directory, and the
 //	             Settings fields mail_strict (off), record_cost (on) and record_required (off), which only devices
 //	             read: a rows-only reader reports them unknown
@@ -93,11 +95,14 @@ func CheckServiceSettings(settings *protocol.ServiceSettings) error {
 	return nil
 }
 
-// The settings a head's ServiceSettings compiles to in rows: self_admit and scim_signer, the zero value for none.
+// The settings a head's ServiceSettings compiles to in rows: self_admit, scim_signer and auth_features, the zero value
+// for none. A build from before auth_features compiles rows without it, so its compile of a base turning a feature on
+// differs from the base's rows and it goes no further there (§16.6's older row).
 func ConfigProjectionSettings(settings *protocol.ServiceSettings) *bridge.ProjectionSettings {
 	return &bridge.ProjectionSettings{
-		SelfAdmit:  uint32(settings.GetSelfAdmit()),
-		ScimSigner: bytes.Clone(settings.GetScimSigner()),
+		SelfAdmit:    uint32(settings.GetSelfAdmit()),
+		ScimSigner:   bytes.Clone(settings.GetScimSigner()),
+		AuthFeatures: settings.GetAuthFeatures(),
 	}
 }
 
