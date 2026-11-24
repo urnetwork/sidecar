@@ -26,7 +26,9 @@
 //	                Steps 2 and 3 never wait on a witness stop or a fork: a Remove, a rotation and a revocation only
 //	                shrink exposure (owner decision 129). With gkm unreachable they are skipped and steps 4 and 5
 //	                answer from the keychain, so writes go on while every shrink is covered and stop at the first
-//	                that is not (KF7)
+//	                that is not (KF7). A token refused for good, the exchange's or gkm's 401, is no unreachability:
+//	                the write ends at step 2 with that refusal and seals nothing from the keychain
+//	                (gkmTokenRefused), so a revoked device's own lagging state never carries its write
 //	ForgetRepo      §11.12's shred: every record of the repo in the keychain, its RK_g, GenRotates, draft, pins,
 //	                pending and sync records, and its group's MLS state
 //
@@ -174,7 +176,7 @@ func (self *gkmGroupManager) ensureWritableInFlow(ctx context.Context) (*EvsRepo
 		return nil, err
 	}
 
-	// 2 and 3, unless gkm cannot be reached (KF7)
+	// 2 and 3, unless gkm cannot be reached (KF7); a token refused for good ends the write here
 	err = self.takeGenerationsInFlow(ctx, state)
 	switch {
 	case gkmUnreachable(ctx, err):
