@@ -5,7 +5,7 @@ This repository is licensed under the Mozilla Public License, v. 2.0. The full t
 
 The third-party modules named in this repository's go.mod files keep their own licenses.
 
-third_party/ holds the source of two of them, each under its own license and changed only as its
+third_party/ holds the source of four of them, each under its own license and changed only as its
 URNETWORK.md says:
 
 - third_party/go-smtp: github.com/emersion/go-smtp v0.25.1, under the MIT license in
@@ -15,6 +15,34 @@ URNETWORK.md says:
   third_party/mox/LICENSE.MIT. Copyright 2021 Mechiel Lukkien. The public suffix list it embeds,
   third_party/mox/publicsuffix/public_suffix_list.txt, is Mozilla's, under the Mozilla Public
   License, v. 2.0, in third_party/mox/LICENSE.MPLv2.0.
+- third_party/go-tdx-guest: seven packages of github.com/google/go-tdx-guest
+  v0.3.2-0.20261123220626-a4ee4f4ee52a and the test support they read, unchanged, under the Apache
+  License, Version 2.0, in third_party/go-tdx-guest/LICENSE. Copyright 2023, 2026 Google LLC.
+- third_party/go-sev-guest: seven packages of github.com/google/go-sev-guest
+  v0.15.1-0.20261120002523-d591100d9985 and the test support they read, unchanged, under the Apache
+  License, Version 2.0, in third_party/go-sev-guest/LICENSE. Copyright 2022-2024, 2026 Google LLC.
+
+The compute extension (DESIGN-COMPUTE.md, Appendix D's §4.5 and §4.7 row; CARCH-M11-02) adds these
+modules to the root's go.mod, each under the license its own files state, as dependencies.yml lists
+it: github.com/ebitengine/purego v0.11.2 (Apache-2.0, The Ebitengine Authors); github.com/pkg/sftp
+v1.13.12 (BSD-2-Clause, Dave Cheney) with github.com/kr/fs v0.1.0 (BSD-3-Clause, The Go Authors);
+github.com/creack/pty v1.1.24 (MIT, Keith Rarick); github.com/emersion/go-webdav v0.8.0 and
+github.com/emersion/go-ical (MIT, Simon Ser) with github.com/teambition/rrule-go v1.8.2 (MIT,
+Teambition); golang.org/x/image v0.44.0 (BSD-3-Clause, The Go Authors); github.com/cloudflare/circl
+v1.6.5 (BSD-3-Clause, Cloudflare); github.com/russellhaering/goxmldsig v1.6.1 (Apache-2.0) with
+github.com/beevik/etree v1.7.0 (BSD-2-Clause, Brett Vickers) and github.com/jonboulle/clockwork
+v0.5.0 (Apache-2.0); github.com/google/go-tpm v0.9.8 and github.com/google/logger v1.1.1
+(Apache-2.0, Google); github.com/veraison/go-cose v1.1.0 (MPL-2.0); github.com/fxamacker/cbor/v2
+v2.9.6 (MIT, Faye Amacker) and github.com/x448/float16 v0.8.4 (MIT, Montgomery Edwards and Faye
+Amacker); go.uber.org/multierr v1.11.0 (MIT, Uber Technologies); and, made direct,
+github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.1 (ISC, The btcsuite developers, The Decred
+developers, The Lightning Network Developers) and github.com/gorilla/websocket (BSD-2-Clause, The
+Gorilla WebSocket Authors).
+
+github.com/MichaelKinsy/PiG v0.7.0, a Go port of the Pi coding agent, is pinned for the Harness's
+Pi 1.5.0 goldens and the enclave image's pig (QD-1255) and is in no go.mod, so no build of this
+repository links it. It is under the MIT license, Copyright Michael Kinsy, and its own NOTICE names
+Pi's (MIT, Copyright (c) 2025 Mario Zechner) and the browser and Node assets it embeds.
 
 record_redact_rules.go and record_redact_entropy.go hold redaction rules copied from
 github.com/zricethezav/gitleaks v8.30.1's config/gitleaks.toml: their ids, regular expressions,
