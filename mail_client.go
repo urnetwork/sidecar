@@ -17,7 +17,8 @@
 //	aliases   through MailConfig, whose creations and deletions are outward actions (I-8) that Authorize runs, each
 //	          created only if absent and carrying its use's effect_key (§15.8)
 //	read      List and Read on every leg (mail_read.go)
-//	status    GET /mail/status, this device's receiver, and whether a mail indexer stands, with §15.6's prompt
+//	status    GET /mail/status, this device's receiver and sender, and whether a mail indexer stands, with §15.6's
+//	          prompt
 //	sends     Send (mail_send.go), CheckSend and SendResult (§14.5, §18.5; QD-1122), and the component's mail_send from
 //	          the member's or/ (mail_send_result.go)
 //
@@ -200,6 +201,18 @@ type MailClientReceiverStatus struct {
 	Problem string
 }
 
+// What this device's sender says of itself, as the component last saw it: §14's SmtpSender, which the component
+// composes over the member's mailbox on a locally enabled, consented prover host (mail_component_smtp.go), sending the
+// member's internet mail from its outbox.
+type MailClientSenderStatus struct {
+	// The sender is composed and its workers run.
+	Running bool
+	// Why no sender runs, empty when one does: a gate this device does not pass, such as being no prover host, whose
+	// internet mail waits in the outbox for one (D-SMTP-18), or the error its composition answered, a test binary's
+	// refusal of the public resolvers (ErrMailSenderPublicResolver) among them. Names no host or key (I-13).
+	Problem string
+}
+
 // What MailClient.Status answers.
 type MailClientStatus struct {
 	// Mail is on for the network: this device enabled it, or GET /mail/status says so.
@@ -208,6 +221,8 @@ type MailClientStatus struct {
 	Network *MailNetworkStatus
 	// This device's receiver.
 	Receiver MailClientReceiverStatus
+	// This device's sender.
+	Sender MailClientSenderStatus
 	// Whether a mail indexer stands for the network, and whether that could be told at all.
 	MailIndexer      bool
 	MailIndexerKnown bool
@@ -274,6 +289,7 @@ type MailClient struct {
 	enabledLocally bool
 	enabledNetwork bool
 	receiverStatus MailClientReceiverStatus
+	senderStatus   MailClientSenderStatus
 	// an app host's app is in the background, where a foreground-only host registers no listener (mail_host.go)
 	background bool
 	// the zone's row as the component last read it, which Network answers where the Sidecar binds
@@ -921,6 +937,23 @@ func (self *MailClient) setReceiverStatus(status MailClientReceiverStatus) {
 	self.receiverStatus = status
 }
 
+// Takes what generation run last saw of this device's sender, where run's word stands (runReportsWithLock).
+func (self *MailClient) setSenderStatus(run any, status MailClientSenderStatus) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.runReportsWithLock(run) {
+		self.senderStatus = status
+	}
+}
+
+// Whether generation run (a *mailComponentRun, on the legs that run a component) still says what this device's parts
+// are: the running generation does, and one another has replaced does not, since its teardown joins its workers and can
+// end after the new generation's first pass, which its last word would then stand over. With none running, as after
+// Close, the generation that ran keeps the last word, which its stop gives.
+func (self *MailClient) runReportsWithLock(run any) bool {
+	return self.componentRun == nil || self.componentRun == run
+}
+
 // Mail's status for `ur mail status`, `ur status` and the apps: see the file header's status row. A part that could
 // not be read is left unknown, never guessed.
 func (self *MailClient) Status(ctx context.Context) (*MailClientStatus, error) {
@@ -929,6 +962,7 @@ func (self *MailClient) Status(ctx context.Context) (*MailClientStatus, error) {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		status.Receiver = self.receiverStatus
+		status.Sender = self.senderStatus
 		return self.binding
 	}()
 	if binding != nil && binding.Api != nil {

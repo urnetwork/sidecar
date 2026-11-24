@@ -10,7 +10,8 @@
 //	          designations' sealed services over the key client's config keys (owner decision 634). A host that bound
 //	          its own (MailClient made without a Sidecar) keeps it
 //	follow    mailcfg, through MailConfig, which follows its repo itself once built
-//	send      on a locally enabled, consented prover host, prepare the release keys and drain the member's outbox
+//	send      on a locally enabled, consented prover host, prepare the release keys and drain the member's outbox;
+//	          elsewhere, or where its composition fails, Status says why no sender runs (MailClientSenderStatus)
 //	ingest    the member's mailbox: one MailIngestor running while the generation lives (MAIL-M7-15)
 //	groups    each group repo this device ingests or references a goroutine of its own, its passes brought by the
 //	          repo's hints, as the mailbox's ingest's are, and by each pass, the fallback (mail_component_group.go)
@@ -250,6 +251,7 @@ func (self *MailClient) stopRun(run *mailComponentRun) {
 		receiverClose()
 	}
 	self.setReceiverStatus(MailClientReceiverStatus{})
+	self.setSenderStatus(run, MailClientSenderStatus{})
 }
 
 // One pass: see the file header. False while the client has nothing to work on yet.
@@ -260,6 +262,7 @@ func (self *MailClient) pass(run *mailComponentRun) bool {
 	if err != nil {
 		self.replaceSmtp(run, nil)
 		self.setReceiverStatus(MailClientReceiverStatus{Problem: "mail has nothing to work on yet"})
+		self.setSenderStatus(run, MailClientSenderStatus{Problem: "mail has nothing to work on yet"})
 		return false
 	}
 	if binding.Api != nil {
@@ -290,28 +293,49 @@ func (self *MailClient) smtpEnabledLocally() bool {
 	return self.enabledLocally
 }
 
-// Starts the sending workers only for a consented member device with a prover and its own mailbox.
+// Starts the sending workers only for a consented member device with a prover and its own mailbox, and keeps why none
+// run where they do not (MailClientSenderStatus): the gate this device does not pass, or the error the composition
+// answered, which the next pass asks again.
 func (self *MailClient) passSmtp(run *mailComponentRun, binding *MailBinding) {
-	if self.sidecar == nil || self.sidecar.settings == nil || self.sidecar.settings.Connect == nil ||
-		self.sidecar.settings.Connect.SmtpProver == nil || mailSidecarSenderFactory == nil {
+	if self.sidecar == nil || self.sidecar.settings == nil || self.sidecar.settings.Connect == nil || mailSidecarSenderFactory == nil {
+		self.setSenderStatus(run, MailClientSenderStatus{Problem: "this host composes no sender"})
 		return
 	}
-	state := binding.Engine.State()
-	if state == nil || !self.smtpEnabledLocally() {
-		self.replaceSmtp(run, nil)
+	if self.sidecar.settings.Connect.SmtpProver == nil {
+		self.setSenderStatus(run, MailClientSenderStatus{Problem: "this device is no prover host: its internet mail waits in the member's outbox for one"})
 		return
 	}
-	memberId, ok := mailMemberOf(state, self.sidecarId)
-	if !ok || !state.ConsentedFor(self.sidecarId, memberId) {
+	memberId, mailboxId, why := func() (Id, Id, string) {
+		state := binding.Engine.State()
+		if state == nil {
+			return Id{}, Id{}, "mail has nothing to work on yet"
+		}
+		if !self.smtpEnabledLocally() {
+			if !self.Enabled() {
+				return Id{}, Id{}, "mail is off"
+			}
+			return Id{}, Id{}, "mail was enabled on another device: ur mail enable on this one sends from it"
+		}
+		memberId, ok := mailMemberOf(state, self.sidecarId)
+		if !ok {
+			return Id{}, Id{}, "this device sends for no member: it is tagged, or the verified state does not admit it"
+		}
+		if !state.ConsentedFor(self.sidecarId, memberId) {
+			return Id{}, Id{}, "this device is not a consented device of its member"
+		}
+		mailboxId, err := self.mailboxId()
+		if err != nil {
+			return Id{}, Id{}, err.Error()
+		}
+		return memberId, mailboxId, ""
+	}()
+	if why != "" {
 		self.replaceSmtp(run, nil)
-		return
-	}
-	mailboxId, err := self.mailboxId()
-	if err != nil {
-		self.replaceSmtp(run, nil)
+		self.setSenderStatus(run, MailClientSenderStatus{Problem: why})
 		return
 	}
 	if run.smtp != nil && run.smtp.mailboxId == mailboxId && run.smtp.memberId == memberId {
+		self.setSenderStatus(run, MailClientSenderStatus{Running: true})
 		return
 	}
 	self.replaceSmtp(run, nil)
@@ -320,9 +344,11 @@ func (self *MailClient) passSmtp(run *mailComponentRun, binding *MailBinding) {
 		if run.ctx.Err() == nil && self.log.V(1).Enabled() {
 			self.log.Infof("[mail]SMTP sender is waiting for its dependencies: %v", err)
 		}
+		self.setSenderStatus(run, MailClientSenderStatus{Problem: err.Error()})
 		return
 	}
 	self.replaceSmtp(run, smtp)
+	self.setSenderStatus(run, MailClientSenderStatus{Running: true})
 }
 
 // Replaces the generation-owned binding and joins the old workers without holding the client lock.
