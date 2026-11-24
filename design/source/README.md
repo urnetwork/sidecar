@@ -1368,3 +1368,21 @@ The design-records track dr18-compute-fences (lane slot data, wave f46e) writes 
 - **Superseded options.** 320 grep hits, none on a changed line unread, none live.
 - **Text.** No bare placeholders or HTML tags; the one research-sheet id stands; 12,728 section references with the owner's fold, with the one unresolved as before. `v7/words.json` was regenerated, and `v7/text_checks.json` regenerated unchanged.
 - **DESIGN-DEFER.md.** 107 entries and 175 pointers, as the owner's fold left them.
+
+## Validation after the eleventh fold: the support skill, the answers since the eighth late fold, and the tenth fold's leftovers (2026-11-24)
+
+The design-records track dr19-support-fold (lane slot ops, wave f47c) folds DESIGN-COMPUTE.md's support skill (its §28, the owner's statements CO-45 and CO-46 of 2026-11-24, added in b3f4e99d and merged into sidecar as cca2a415), the owner's answers recorded since the eighth late fold that are not the compute planner's own, and what the tenth fold left to join its fences with its code. It lands in pieces, each a commit of its own, recorded below as each lands.
+
+### The tenth fold's leftovers join their fences
+
+- **§7.9's fences** take `ServiceSettings.auth_features` (11), `ProjectionSettings.auth_features` (3) and `SidecarCapability`'s `SIDECAR_CAPABILITY_ENCLAVE` = 8, bit 3, which config.proto and auth.proto declare (CACL-M11-02, sidecar 4d224194); the Authorization features paragraph names the bits as the code numbers them, `agent_repos` 1, `compute_policy` 2, `listeners` 4 and `enclaves` 8, and the Enclave admissions paragraph bit 3's value, neither saying it waits.
+- **§6.11's MessageType fence** takes `DNS_SD_WATCH` 0x1B02 and `DNS_SD_WATCH_RESULT` 0x1B03, which types.proto declares beside dns.proto's bodies (sidecar 93784039); §6.11's paragraph and §12.9.1's lead no longer say they wait, and Appendix D's table lists the pair (`data_appx10.py`). §12.9.1's text block stays the watch's form, dns.proto's fields being its fields one for one.
+- **The lists.** protocol/design_unfenced_test.go's `testFenceAdditions` loses its two field lines and `testFenceValueAdditions` its three, with the source constant only they read; each list stays, empty, for the next addition.
+
+`build.sh` on this folder reproduces DESIGN.md (SHA-256 `b1d63507b55375d64765e139b7ac29cc0895645d06962d7fdea76f27213ab6e2`) and DESIGN-DEFER.md (SHA-256 `749042be18fd33e2a87c087fe0824b4224b52f37cc5def707e0de03854ac07a3`, unchanged), and the validation shows:
+
+- **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item and no §2.8 row, so no guard line.
+- **Owner decisions.** All 778 rows are present and cited; APPLY.md's section pairs hold. One open owner question, Q-REPO-6.
+- **Superseded options.** 320 grep hits, none on a changed line unread, none live.
+- **Text.** No bare placeholders or HTML tags; the one research-sheet id stands; 12,730 section references, with the one unresolved as before. `v7/words.json` was regenerated, and `v7/text_checks.json` regenerated unchanged.
+- **DESIGN-DEFER.md.** 107 entries and 175 pointers, unchanged.
