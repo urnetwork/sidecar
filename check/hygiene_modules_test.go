@@ -34,12 +34,15 @@ var repositoryReplaces = map[string]string{
 }
 
 // The third-party modules this repository carries a fork of, by the fork's directory from the root
-// module's (QD-193): D-MAIL-3's go-smtp and plan-MAIL-mox-subset's mox. A module whose graph holds one
-// replaces it with the fork, since Go does not inherit a replace and upstream's go-smtp refuses every
+// module's (QD-193): D-MAIL-3's go-smtp and plan-MAIL-mox-subset's mox, and the attestation verifiers'
+// trimmed go-tdx-guest and go-sev-guest (DESIGN-COMPUTE §5.3, CONTRACTS C-28). A module whose graph holds
+// one replaces it with the fork, since Go does not inherit a replace and upstream's go-smtp refuses every
 // session. A module may also name a fork before its graph holds it, as each names mox's.
 var forkReplaces = map[string]string{
-	"github.com/emersion/go-smtp": "third_party/go-smtp",
-	"github.com/mjl-/mox":         "third_party/mox",
+	"github.com/emersion/go-smtp":    "third_party/go-smtp",
+	"github.com/google/go-sev-guest": "third_party/go-sev-guest",
+	"github.com/google/go-tdx-guest": "third_party/go-tdx-guest",
+	"github.com/mjl-/mox":            "third_party/mox",
 }
 
 // §4.7's replaces, development layout: the four siblings exactly, one level further up in a nested

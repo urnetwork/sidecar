@@ -34,11 +34,12 @@ type wallClockException struct {
 }
 
 // Whether the rule binds a package, by its name relative to its module with the module's name in
-// front: the root, an engine and its children, mcp and device. A nested module's packages are cli/,
-// smtpproof/ and mlsinterop/'s, which it does not bind.
+// front: the root, an engine and its children, the search signer among them (isEngineDirectory), mcp and device. A
+// nested module's packages are cli/, smtpproof/ and mlsinterop/'s, which it does not bind.
 func wallClockPackage(packageName string) bool {
 	first, _, _ := strings.Cut(packageName, "/")
-	return packageName == "." || first == "mcp" || first == "device" || strings.HasSuffix(first, "service")
+	return packageName == "." || first == "mcp" || first == "device" || strings.HasSuffix(first, "service") ||
+		isEngineDirectory(first)
 }
 
 // The key an exception is listed under: the file's name in its package, the root's files bare, then

@@ -1,0 +1,735 @@
+// Copyright 2023 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package abi
+
+import (
+	"bytes"
+	"encoding/binary"
+	"testing"
+
+	pb "github.com/google/go-tdx-guest/proto/tdx"
+	test "github.com/google/go-tdx-guest/testing/testdata"
+	"google.golang.org/protobuf/proto"
+)
+
+// TODO: Use errors.Is() instead of string comparisons
+func TestQuoteToProto(t *testing.T) {
+	clone := func(b []byte) []byte {
+		c := make([]byte, len(b))
+		copy(c, b)
+		return c
+	}
+	tcs := []struct {
+		name     string
+		rawQuote []byte
+		wantErr  string
+	}{
+		{
+			name:     "empty quote",
+			rawQuote: []byte{},
+			wantErr:  ErrRawQuoteEmpty.Error(),
+		},
+		{
+			name:     "v4 quote",
+			rawQuote: test.RawQuote,
+			wantErr:  "",
+		},
+		{
+			name:     "v5 quote",
+			rawQuote: test.RawQuoteV5,
+			wantErr:  "",
+		},
+		{
+			name:     "v5 quote too small",
+			rawQuote: test.RawQuoteV5[:100],
+			wantErr:  "raw quote size is 100 bytes, a V5 TDX quote should have size a minimum size of 1026 bytes", // QuoteMinSizeV5
+		},
+		{
+			name: "v5 quote unsupported body type",
+			rawQuote: func() []byte {
+				q := clone(test.RawQuoteV5)
+				q[quoteBodyStart] = 1 // TdQuoteBodyType = 1, little-endian uint16
+				q[quoteBodyStart+1] = 0
+				return q
+			}(),
+			wantErr: "parsing TD Quote Body Descriptor failed: unsupported TD quote body type , got 1",
+		},
+		{
+			name: "v5 quote body size too large",
+			rawQuote: func() []byte {
+				q := clone(test.RawQuoteV5)
+				// modify the body size to be larger than expected (648)
+				quoteBodySizeBytes := quoteHeaderSizeV5 + quoteBodyTypeSizeV5
+				binary.LittleEndian.PutUint32(q[quoteBodySizeBytes:], uint32(999))
+				return q
+			}(),
+			wantErr: "TD quote body size is 999, a V5 TDX1.5 quote should have size 648",
+		},
+		{
+			name: "incorrect TDX version",
+			rawQuote: func() []byte {
+				q := clone(test.RawQuoteV5)
+				binary.LittleEndian.PutUint16(q[quoteHeaderSizeV5:quoteHeaderSizeV5+quoteBodyTypeSizeV5], uint16(2))
+				return q
+			}(),
+			wantErr: "TD quote body size is 648, a V5 TDX1.0 quote should have size 584",
+		},
+		{
+			name:     "quote too small to determine format",
+			rawQuote: []byte{1},
+			wantErr:  "unable to determine quote format since bytes length is less than 2 bytes",
+		},
+		{
+			name:     "v4 quote too small",
+			rawQuote: test.RawQuote[:100],
+			wantErr:  "raw quote size is 0x64, a TDX quote should have size a minimum size of 0x3fc",
+		},
+		{
+			name: "v4 quote signed data size too large",
+			rawQuote: func() []byte {
+				q := clone(test.RawQuote)
+				// SignedDataSize is at 0x278 (632)
+				binary.LittleEndian.PutUint32(q[0x278:0x27C], 0xffffffff)
+				return q
+			}(),
+			wantErr: "size of signed data is 0x10f2. Expected minimum size of 0xffffffff",
+		},
+		{
+			name: "v5 quote signed data size too large",
+			rawQuote: func() []byte {
+				q := clone(test.RawQuoteV5)
+				// In test.RawQuoteV5, it is TDX1.5, so body size is 648.
+				// Header (48) + Descriptor (654) = 702.
+				// SignedDataSize is at 702.
+				binary.LittleEndian.PutUint32(q[702:706], 0x7fffffff)
+				return q
+			}(),
+			wantErr: "size of signed data is 0x10cc. Expected minimum size of 0x7fffffff",
+		},
+		{
+			name: "v5 quote signed data size negative",
+			rawQuote: func() []byte {
+				q := clone(test.RawQuoteV5)
+				// SignedDataSize is at 702.
+				binary.LittleEndian.PutUint32(q[702:706], 0xffffffff) // -1 as int32
+				return q
+			}(),
+			wantErr: "signed data size -1 is negative",
+		},
+		{
+			name: "v4 quote invalid TEE type in header",
+			rawQuote: func() []byte {
+				q := clone(test.RawQuote)
+				// TeeType is at 4 to 8 in header
+				binary.LittleEndian.PutUint32(q[4:8], 0)
+				return q
+			}(),
+			wantErr: "parsing header failed: TEE type is not TDX",
+		},
+		{
+			name: "v4 quote signed data size too small for auth data",
+			rawQuote: func() []byte {
+				q := clone(test.RawQuote)
+				// SignedDataSize is at 0x278 (632)
+				binary.LittleEndian.PutUint32(q[0x278:0x27C], 100)
+				return q
+			}(),
+			wantErr: "signed data size is 100 bytes. Expected at least 128 bytes",
+		},
+		{
+			name: "v4 quote signed data size too small for cert data",
+			rawQuote: func() []byte {
+				q := clone(test.RawQuote)
+				// SignedDataSize is at 0x278 (632)
+				binary.LittleEndian.PutUint32(q[0x278:0x27C], 130)
+				return q
+			}(),
+			wantErr: "certification data size is 2 bytes. Expected at least 6 bytes",
+		},
+		{
+			name: "v4 quote invalid certification data type",
+			rawQuote: func() []byte {
+				q := clone(test.RawQuote)
+				// Certification data starts at 636 + 128 = 764.
+				// CertificateDataType is at 764:766. Set to 5.
+				binary.LittleEndian.PutUint16(q[764:766], 5)
+				return q
+			}(),
+			wantErr: "parsing certification data failed: certification data type invalid, got 5, expected 6",
+		},
+		{
+			name: "v4 quote rawCertificateData too small for QE report",
+			rawQuote: func() []byte {
+				q := clone(test.RawQuote)
+				// SignedDataSize is at 0x278 (632). Set to 128 + 6 + 400 = 534.
+				binary.LittleEndian.PutUint32(q[0x278:0x27C], 534)
+				// Size field in cert data is at 766:770. Set to 400.
+				binary.LittleEndian.PutUint32(q[766:770], 400)
+				return q
+			}(),
+			wantErr: "QE report certification data size is 400 bytes. Expected at least 448 bytes",
+		},
+		{
+			name: "v4 quote QE auth data too small",
+			rawQuote: func() []byte {
+				q := clone(test.RawQuote)
+				// SignedDataSize is at 0x278 (632). Set to 128 + 6 + 449 = 583.
+				binary.LittleEndian.PutUint32(q[0x278:0x27C], 583)
+				// Size field in cert data is at 766:770. Set to 449.
+				binary.LittleEndian.PutUint32(q[766:770], 449)
+				return q
+			}(),
+			wantErr: "QE auth data size is 1 bytes. Expected at least 2 bytes",
+		},
+		{
+			name: "v4 quote QE auth data parsed size mismatch",
+			rawQuote: func() []byte {
+				q := clone(test.RawQuote)
+				// Modify ParsedDataSize at 1218:1220 to 4000.
+				binary.LittleEndian.PutUint16(q[1218:1220], 4000)
+				return q
+			}(),
+			wantErr: "QE auth data size is 3717 bytes. Expected 4002 bytes",
+		},
+	}
+
+	for _, tc := range tcs {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := QuoteToProto(tc.rawQuote)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Errorf("QuoteToProto() returned error %v, want nil", err)
+				}
+				return
+			}
+			if err == nil || err.Error() != tc.wantErr {
+				t.Errorf("QuoteToProto() returned error %v, want %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestQuoteToAbiBytes(t *testing.T) {
+	quote, err := QuoteToProto(test.RawQuote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawQuote, err := QuoteToAbiBytes(quote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(test.RawQuote, rawQuote) {
+		t.Errorf("raw quote bytes got %v. Expected %v", rawQuote, test.RawQuote)
+	}
+	quoteV5, err := QuoteToProto(test.RawQuoteV5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawQuoteV5, err := QuoteToAbiBytes(quoteV5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(test.RawQuoteV5, rawQuoteV5) {
+		t.Errorf("raw quote v5 bytes got %v. Expected %v", rawQuoteV5, test.RawQuoteV5)
+	}
+}
+
+func TestCheckQuote(t *testing.T) {
+	quoteV4, err := QuoteToProto(test.RawQuote)
+	if err != nil {
+		t.Fatalf("failed to parse RawQuote: %v", err)
+	}
+
+	quoteV5, err := QuoteToProto(test.RawQuoteV5)
+	if err != nil {
+		t.Fatalf("failed to parse RawQuoteV5: %v", err)
+	}
+
+	tcs := []struct {
+		name    string
+		quote   any
+		wantErr string
+	}{
+		{
+			name:    "empty quoteV4",
+			quote:   &pb.QuoteV4{},
+			wantErr: "QuoteV4 Header error: header is nil",
+		},
+		{
+			name:    "empty quoteV5",
+			quote:   &pb.QuoteV5{},
+			wantErr: "quoteV5 Header error: header is nil",
+		},
+		{
+			name:    "correct quoteV4",
+			quote:   quoteV4,
+			wantErr: "",
+		},
+		{
+			name:    "correct quoteV5",
+			quote:   quoteV5,
+			wantErr: "",
+		},
+	}
+	for _, tc := range tcs {
+		t.Run(tc.name, func(t *testing.T) {
+			err := CheckQuote(tc.quote)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Errorf("CheckQuote() returned error %v, want nil", err)
+				}
+				return
+			}
+			if err == nil || err.Error() != tc.wantErr {
+				t.Errorf("CheckQuote() returned error %v, want %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestNilToAbiBytesConversions(t *testing.T) {
+	tcs := []struct {
+		name string
+		call func() ([]byte, error)
+		want error
+	}{
+		{
+			name: "QuoteToAbiBytes",
+			call: func() ([]byte, error) { return QuoteToAbiBytes(nil) },
+			want: ErrQuoteNil,
+		},
+		{
+			name: "signedDataToAbiBytes",
+			call: func() ([]byte, error) { return signedDataToAbiBytes(nil) },
+			want: ErrQuoteV4AuthDataNil,
+		},
+		{
+			name: "certificationDataToAbiBytes",
+			call: func() ([]byte, error) { return certificationDataToAbiBytes(nil) },
+			want: ErrCertificationDataNil,
+		},
+		{
+			name: "qeReportCertificationDataToAbiBytes",
+			call: func() ([]byte, error) { return qeReportCertificationDataToAbiBytes(nil) },
+			want: ErrQeReportCertificationDataNil,
+		},
+		{
+			name: "qeAuthDataToAbiBytes",
+			call: func() ([]byte, error) { return qeAuthDataToAbiBytes(nil) },
+			want: ErrQeAuthDataNil,
+		},
+		{
+			name: "pckCertificateChainToAbiBytes",
+			call: func() ([]byte, error) { return pckCertificateChainToAbiBytes(nil) },
+			want: ErrPckCertChainNil,
+		},
+		{
+			name: "TdQuoteBodyToAbiBytes",
+			call: func() ([]byte, error) { return TdQuoteBodyToAbiBytes(nil) },
+			want: ErrTDQuoteBodyNil,
+		},
+		{
+			name: "HeaderToAbiBytes",
+			call: func() ([]byte, error) { return HeaderToAbiBytes(nil) },
+			want: ErrHeaderNil,
+		},
+		{
+			name: "EnclaveReportToAbiBytes",
+			call: func() ([]byte, error) { return EnclaveReportToAbiBytes(nil) },
+			want: ErrQeReportNil,
+		},
+		{
+			name: "TdQuoteBodyDescriptorToAbiBytes",
+			call: func() ([]byte, error) { return TdQuoteBodyDescriptorToAbiBytes(nil) },
+			want: ErrTDQuoteBodyDescriptorNil,
+		},
+		{
+			name: "tdQuoteBodyV5ToAbiBytes",
+			call: func() ([]byte, error) { return tdQuoteBodyV5ToAbiBytes(nil, tdxVersion15BodyType) },
+			want: ErrQuoteV5Nil,
+		},
+	}
+	for _, tc := range tcs {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := tc.call(); err != tc.want {
+				t.Errorf("%s() returned error %v, want %v", tc.name, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestInvalidConversionsToAbiBytes(t *testing.T) {
+	quoteV5, err := QuoteToProto(test.RawQuoteV5)
+	if err != nil {
+		t.Fatalf("failed to parse RawQuoteV5: %v", err)
+	}
+	tdQuoteBodyV5 := quoteV5.(*pb.QuoteV5).GetTdQuoteBodyDescriptor().GetTdQuoteBodyV5()
+
+	tcs := []struct {
+		name    string
+		call    func() ([]byte, error)
+		wantErr string
+	}{
+		{
+			name:    "QuoteV4HeaderNil",
+			call:    func() ([]byte, error) { return QuoteToAbiBytes(&pb.QuoteV4{}) },
+			wantErr: "QuoteV4 invalid: QuoteV4 Header error: header is nil",
+		},
+		{
+			name:    "Ecdsa256BitQuoteV4AuthDataNil",
+			call:    func() ([]byte, error) { return signedDataToAbiBytes(&pb.Ecdsa256BitQuoteV4AuthData{}) },
+			wantErr: "QuoteV4 AuthData invalid: signature size is 0 bytes. Expected 64 bytes",
+		},
+		{
+			name:    "CertificationDataEmpty",
+			call:    func() ([]byte, error) { return certificationDataToAbiBytes(&pb.CertificationData{}) },
+			wantErr: "certification data invalid: certification data type invalid, got 0, expected 6",
+		},
+		{
+			name: "CertificationDataType7",
+			call: func() ([]byte, error) {
+				return certificationDataToAbiBytes(&pb.CertificationData{CertificateDataType: 7})
+			},
+			wantErr: "certification data invalid: certification data type invalid, got 7, expected 6",
+		},
+		{
+			name: "CertificationDataQeReportNil",
+			call: func() ([]byte, error) {
+				return certificationDataToAbiBytes(&pb.CertificationData{CertificateDataType: qeReportCertificationDataType, Size: 2})
+			},
+			wantErr: "certification data invalid: QE Report certification data error: QE Report certification data is nil",
+		},
+		{
+			name:    "QEReportCertificationDataEmpty",
+			call:    func() ([]byte, error) { return qeReportCertificationDataToAbiBytes(&pb.QEReportCertificationData{}) },
+			wantErr: "QE Report certification data invalid: QE Report error: QE Report is nil",
+		},
+		{
+			name:    "QeAuthDataEmpty",
+			call:    func() ([]byte, error) { return qeAuthDataToAbiBytes(&pb.QeAuthData{ParsedDataSize: 1}) },
+			wantErr: "QE AuthData invalid: parsed data size is 0 bytes. Expected 1 bytes",
+		},
+		{
+			name:    "PCKCertificateChainDataEmpty",
+			call:    func() ([]byte, error) { return pckCertificateChainToAbiBytes(&pb.PCKCertificateChainData{}) },
+			wantErr: "PCK certificate chain data invalid: PCK certificate chain data type invalid, got 0, expected 5",
+		},
+		{
+			name: "PCKCertificateChainDataType7",
+			call: func() ([]byte, error) {
+				return pckCertificateChainToAbiBytes(&pb.PCKCertificateChainData{CertificateDataType: 7})
+			},
+			wantErr: "PCK certificate chain data invalid: PCK certificate chain data type invalid, got 7, expected 5",
+		},
+		{
+			name: "PCKCertificateChainDataSize0",
+			call: func() ([]byte, error) {
+				return pckCertificateChainToAbiBytes(&pb.PCKCertificateChainData{CertificateDataType: pckReportCertificationDataType, Size: 2})
+			},
+			wantErr: "PCK certificate chain data invalid: PCK certificate chain size is 0. Expected size 2",
+		},
+		{
+			name:    "TDQuoteBodyEmpty",
+			call:    func() ([]byte, error) { return TdQuoteBodyToAbiBytes(&pb.TDQuoteBody{}) },
+			wantErr: "TD quote body invalid: teeTcbSvn size is 0 bytes. Expected 16 bytes",
+		},
+		{
+			name:    "HeaderEmpty",
+			call:    func() ([]byte, error) { return HeaderToAbiBytes(&pb.Header{}) },
+			wantErr: "header invalid: version 0 not supported",
+		},
+		{
+			name:    "HeaderV1",
+			call:    func() ([]byte, error) { return HeaderToAbiBytes(&pb.Header{Version: 1}) },
+			wantErr: "header invalid: version 1 not supported",
+		},
+		{
+			name: "HeaderAttestationKeyType1",
+			call: func() ([]byte, error) {
+				return HeaderToAbiBytes(&pb.Header{Version: QuoteVersionV4, AttestationKeyType: 1})
+			},
+			wantErr: "header invalid: attestation key type not supported",
+		},
+		{
+			name: "HeaderTeeType1",
+			call: func() ([]byte, error) {
+				return HeaderToAbiBytes(&pb.Header{Version: QuoteVersionV4, AttestationKeyType: AttestationKeyType, TeeType: 0x01})
+			},
+			wantErr: "header invalid: TEE type is not TDX",
+		},
+		{
+			name:    "EnclaveReportEmpty",
+			call:    func() ([]byte, error) { return EnclaveReportToAbiBytes(&pb.EnclaveReport{}) },
+			wantErr: "QE Report invalid: cpuSvn size is 0 bytes. Expected 16 bytes",
+		},
+		{
+			name:    "QuoteV5HeaderNil",
+			call:    func() ([]byte, error) { return QuoteToAbiBytes(&pb.QuoteV5{}) },
+			wantErr: "quoteV5 invalid: quoteV5 Header error: header is nil",
+		},
+		{
+			name:    "TDQuoteBodyV5Version5",
+			call:    func() ([]byte, error) { return tdQuoteBodyV5ToAbiBytes(&pb.TDQuoteBodyV5{}, 5) },
+			wantErr: "td quote body V5 invalid: tdx version 5 is not supported",
+		},
+		{
+			name:    "TDQuoteBodyV5Empty",
+			call:    func() ([]byte, error) { return tdQuoteBodyV5ToAbiBytes(&pb.TDQuoteBodyV5{}, tdxVersion10BodyType) },
+			wantErr: "td quote body V5 invalid: teeTcbSvn size is 0 bytes. Expected 16 bytes",
+		},
+		{
+			name:    "TdQuoteBodyV5Svn2ForTdx10",
+			call:    func() ([]byte, error) { return tdQuoteBodyV5ToAbiBytes(tdQuoteBodyV5, tdxVersion10BodyType) },
+			wantErr: "td quote body V5 invalid: teeTcbSvn2 is not expected to be set for TDX version 1.0",
+		},
+		{
+			name: "TdQuoteBodyV5Svn2InvalidSize",
+			call: func() ([]byte, error) {
+				body := proto.Clone(tdQuoteBodyV5).(*pb.TDQuoteBodyV5)
+				body.TeeTcbSvn2 = []byte{1}
+				return tdQuoteBodyV5ToAbiBytes(body, tdxVersion15BodyType)
+			},
+			wantErr: "td quote body V5 invalid: teeTcbSvn2 size is 1 bytes. Expected 16 bytes",
+		},
+		{
+			name:    "TDQuoteBodyDescriptorEmpty",
+			call:    func() ([]byte, error) { return TdQuoteBodyDescriptorToAbiBytes(&pb.TDQuoteBodyDescriptor{}) },
+			wantErr: "td quote body descriptor invalid: unsupported TD quote body type , got 0",
+		},
+	}
+	for _, tc := range tcs {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := tc.call(); err == nil || err.Error() != tc.wantErr {
+				t.Errorf("%s() returned error %v, want %v", tc.name, err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func quoteV4(t *testing.T) *pb.QuoteV4 {
+	t.Helper()
+	quote, err := QuoteToProto(test.RawQuote)
+	if err != nil {
+		t.Fatalf("QuoteToProto() failed: %v", err)
+	}
+	return quote.(*pb.QuoteV4)
+}
+
+func quoteV5(t *testing.T) *pb.QuoteV5 {
+	t.Helper()
+	quote, err := QuoteToProto(test.RawQuoteV5)
+	if err != nil {
+		t.Fatalf("QuoteToProto() failed: %v", err)
+	}
+	return quote.(*pb.QuoteV5)
+}
+
+func TestCheckQuoteRejectsTDX15BodySizeMismatch(t *testing.T) {
+	quote := quoteV5(t)
+	quote.GetTdQuoteBodyDescriptor().TdQuoteBodySize = 0x7FFFFFFF
+	if err := CheckQuote(quote); err == nil {
+		t.Error("CheckQuote() accepted a TDX 1.5 body descriptor with the wrong size")
+	}
+}
+
+func TestCheckQuoteRejectsTDX10BodySizeMismatch(t *testing.T) {
+	quote := quoteV5(t)
+	desc := quote.GetTdQuoteBodyDescriptor()
+	desc.TdQuoteBodyType = tdxVersion10BodyType
+	desc.TdQuoteBodySize = tdQuoteBodySizeV5TDX10
+	desc.GetTdQuoteBodyV5().TeeTcbSvn2 = nil
+	desc.GetTdQuoteBodyV5().MrServiceTd = nil
+	if err := CheckQuote(quote); err != nil {
+		t.Fatalf("CheckQuote() rejected a valid TDX 1.0 body descriptor: %v", err)
+	}
+	desc.TdQuoteBodySize = tdQuoteBodySizeV5TDX15
+	if err := CheckQuote(quote); err == nil {
+		t.Error("CheckQuote() accepted a TDX 1.0 body descriptor with the wrong size")
+	}
+}
+
+func TestCheckQuoteRejectsCertificationDataSizeMismatch(t *testing.T) {
+	quote := quoteV4(t)
+	quote.GetSignedData().GetCertificationData().Size++
+	if err := CheckQuote(quote); err == nil {
+		t.Error("CheckQuote() accepted a certification data size that does not match its contents")
+	}
+}
+
+func TestCheckQuoteRejectsV4SignedDataSizeMismatch(t *testing.T) {
+	quote := quoteV4(t)
+	quote.SignedDataSize++
+	if err := CheckQuote(quote); err == nil {
+		t.Error("CheckQuote() accepted a SignedDataSize that does not match the signed data")
+	}
+}
+
+func TestCheckQuoteRejectsV5SignedDataSizeMismatch(t *testing.T) {
+	quote := quoteV5(t)
+	quote.SignedDataSize++
+	if err := CheckQuote(quote); err == nil {
+		t.Error("CheckQuote() accepted a SignedDataSize that does not match the signed data")
+	}
+}
+
+func TestCheckQuoteRejectsV5NegativeSignedDataSize(t *testing.T) {
+	quote := quoteV5(t)
+	quote.SignedDataSize = -1
+	if err := CheckQuote(quote); err == nil {
+		t.Error("CheckQuote() accepted a negative SignedDataSize")
+	}
+}
+
+// rawQuoteV5TDX10 returns test.RawQuoteV5 with a TDX 1.0 body.
+func rawQuoteV5TDX10(f *testing.F) []byte {
+	f.Helper()
+	quote, err := QuoteToProto(test.RawQuoteV5)
+	if err != nil {
+		f.Fatalf("QuoteToProto(RawQuoteV5) failed: %v", err)
+	}
+	v5, ok := quote.(*pb.QuoteV5)
+	if !ok {
+		f.Fatalf("QuoteToProto(RawQuoteV5) returned %T, want *pb.QuoteV5", quote)
+	}
+	body := v5.GetTdQuoteBodyDescriptor().GetTdQuoteBodyV5()
+	raw, err := QuoteToAbiBytes(&pb.QuoteV5{
+		Header: v5.GetHeader(),
+		TdQuoteBodyDescriptor: &pb.TDQuoteBodyDescriptor{
+			TdQuoteBodyType: tdxVersion10BodyType,
+			TdQuoteBodySize: tdQuoteBodySizeV5TDX10,
+			TdQuoteBodyV5: &pb.TDQuoteBodyV5{
+				TeeTcbSvn:      body.GetTeeTcbSvn(),
+				MrSeam:         body.GetMrSeam(),
+				MrSignerSeam:   body.GetMrSignerSeam(),
+				SeamAttributes: body.GetSeamAttributes(),
+				TdAttributes:   body.GetTdAttributes(),
+				Xfam:           body.GetXfam(),
+				MrTd:           body.GetMrTd(),
+				MrConfigId:     body.GetMrConfigId(),
+				MrOwner:        body.GetMrOwner(),
+				MrOwnerConfig:  body.GetMrOwnerConfig(),
+				Rtmrs:          body.GetRtmrs(),
+				ReportData:     body.GetReportData(),
+			},
+		},
+		SignedDataSize: v5.GetSignedDataSize(),
+		SignedData:     v5.GetSignedData(),
+	})
+	if err != nil {
+		f.Fatalf("QuoteToAbiBytes() failed: %v", err)
+	}
+	return raw
+}
+
+func FuzzQuoteToProto(f *testing.F) {
+	seeds := [][]byte{
+		test.RawQuote,
+		test.RawQuoteV5,
+		rawQuoteV5TDX10(f),
+		test.RawQuoteCCEL,
+	}
+	for _, seed := range seeds {
+		if _, err := QuoteToProto(seed); err != nil {
+			f.Fatalf("QuoteToProto() failed on seed: %v", err)
+		}
+		f.Add(seed)
+	}
+	f.Add([]byte{})
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		quote, err := QuoteToProto(data)
+		if err != nil {
+			return
+		}
+		if quote == nil {
+			t.Fatal("QuoteToProto() returned nil quote without error")
+		}
+		// Any accepted input must serialize back to the same bytes.
+		abiBytes, err := QuoteToAbiBytes(quote)
+		if err != nil {
+			t.Fatalf("QuoteToAbiBytes() failed on quote parsed by QuoteToProto: %v", err)
+		}
+		if !bytes.Equal(data, abiBytes) {
+			t.Errorf("QuoteToAbiBytes() round-trip mismatch: got %d bytes, want %d bytes; first difference at offset %d", len(abiBytes), len(data), firstDiff(data, abiBytes))
+		}
+		// And re-parse to the same message.
+		reparsed, err := QuoteToProto(abiBytes)
+		if err != nil {
+			t.Fatalf("QuoteToProto() failed on QuoteToAbiBytes() output: %v", err)
+		}
+		if !proto.Equal(quote.(proto.Message), reparsed.(proto.Message)) {
+			t.Errorf("QuoteToProto() re-parse differs from original")
+		}
+	})
+}
+
+// marshalQuote parses raw with QuoteToProto and returns the proto wire encoding.
+func marshalQuote(f *testing.F, raw []byte) []byte {
+	f.Helper()
+	quote, err := QuoteToProto(raw)
+	if err != nil {
+		f.Fatalf("QuoteToProto() failed: %v", err)
+	}
+	data, err := proto.Marshal(quote.(proto.Message))
+	if err != nil {
+		f.Fatalf("proto.Marshal() failed: %v", err)
+	}
+	return data
+}
+
+func FuzzQuoteToAbiBytes(f *testing.F) {
+	seeds := [][]byte{
+		marshalQuote(f, test.RawQuote),
+		marshalQuote(f, test.RawQuoteV5),
+		marshalQuote(f, rawQuoteV5TDX10(f)),
+	}
+	for _, seed := range seeds {
+		f.Add(seed)
+	}
+	f.Add([]byte{})
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		for _, quote := range []proto.Message{&pb.QuoteV4{}, &pb.QuoteV5{}} {
+			if err := proto.Unmarshal(data, quote); err != nil {
+				continue
+			}
+			if err := CheckQuote(quote); err != nil {
+				continue
+			}
+			// Any quote that passes CheckQuote must serialize and parse back.
+			abiBytes, err := QuoteToAbiBytes(quote)
+			if err != nil {
+				t.Fatalf("QuoteToAbiBytes() failed on quote accepted by CheckQuote: %v", err)
+			}
+			if _, err := QuoteToProto(abiBytes); err != nil {
+				t.Fatalf("QuoteToProto() failed on QuoteToAbiBytes() output: %v", err)
+			}
+		}
+	})
+}
+
+// firstDiff returns the first offset where a and b differ, or the shorter length.
+func firstDiff(a, b []byte) int {
+	n := len(a)
+	if len(b) < n {
+		n = len(b)
+	}
+	for i := 0; i < n; i++ {
+		if a[i] != b[i] {
+			return i
+		}
+	}
+	return n
+}
