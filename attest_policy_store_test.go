@@ -1,4 +1,4 @@
-//go:build !ios_extension && !sidecar_http
+//go:build !ios_extension && !sidecar_http && !js
 
 // The store (ATTEST-M11-01): only higher versions, never one older than the release's copy, across restarts; the
 // highest version seen, persisted; the release's copy alone while the file cannot be read; and the component on a
