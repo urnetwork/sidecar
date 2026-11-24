@@ -113,9 +113,8 @@ type TlsComponent struct {
 	networkId Id
 	// the names the manager orders for, which an app listener's server names come from
 	names func(ctx context.Context) (*TlsCertNames, error)
-	// the manager's service token, which a call certs answered 401 asks again, and the keeper's drop of the token
-	// refused, nil for a serviceToken that keeps none
-	serviceToken       func(ctx context.Context, resource string, scopes []string) (string, error)
+	// the keeper's drop of the token certs refused, before a call certs answered 401 asks the manager's token again;
+	// nil for a service token that keeps none
 	forgetServiceToken func(resource string, scopes []string)
 	setSource          func(source TlsCertificateSource) error
 	// nil when the component runs no CT watch
@@ -203,9 +202,12 @@ func (self *Sidecar) tlsCertNames(ctx context.Context) (*TlsCertNames, error) {
 	if scoped && (scope.Label == "" || scope.MemberId != (Id{}) && !acl.ConsentedFor(identity.SidecarId, scope.MemberId)) {
 		return nil, ErrTlsPublishUnavailable
 	}
-	return tlsDeviceZoneNames(zone, scope.Label, func(owner string) bool {
+	names := tlsDeviceZoneNames(zone, scope.Label, func(owner string) bool {
 		return tlsDevicePublishGrant(acl, identity.SidecarId, owner, tlsCustomPublishPorts, self.clock.Now())
-	}), nil
+	})
+	// the state the grants were read at, past which a name held for a certs token refused for good is tried again
+	names.PinVersion = state.Pin().GetVersion()
+	return names, nil
 }
 
 // The carrier's canonical operator owners and this device's verified publish grants select its custom SANs.
@@ -348,7 +350,6 @@ func NewTlsComponent(ctx context.Context, args *TlsComponentArgs) (*TlsComponent
 		manager:            manager,
 		networkId:          args.Manager.NetworkId,
 		names:              args.Manager.Names,
-		serviceToken:       args.Manager.ServiceToken,
 		forgetServiceToken: args.ForgetServiceToken,
 		setSource:          args.SetSource,
 		setCtWatch:         args.SetCtWatch,
@@ -444,14 +445,14 @@ func (self *TlsComponent) Attach(env *SidecarEnv) error {
 	return nil
 }
 
-// Drops the certs token the manager presented, which certs answered 401, and mints the call's next: the manager's
-// ServiceToken for its certs audience with no scope, as the manager asks its own.
+// Drops the certs token the manager presented, which certs answered 401, and mints the call's next as the manager
+// asks its own (TlsCertManager.certsServiceToken), so a token that could not be had carries errTlsCertNoServiceToken
+// and one refused for good holds the name as the manager's own refusal does.
 func (self *TlsComponent) renewServiceToken(ctx context.Context) (string, error) {
-	resource := self.manager.settings.CertsResource
 	if self.forgetServiceToken != nil {
-		self.forgetServiceToken(resource, nil)
+		self.forgetServiceToken(self.manager.settings.CertsResource, nil)
 	}
-	return self.serviceToken(ctx, resource, nil)
+	return self.manager.certsServiceToken(ctx)
 }
 
 // §13.15's routes as the certificate manager calls them on one generation's api: an order and its status read, under
