@@ -44,18 +44,18 @@ func (self *PushFormatSettings) validate() error {
 // Resident publishers (server/connect) and the api long-poll (§6.6).
 type SidecarPublisherSettings struct {
 	// How long a publisher gathers hints after the event that woke it before it reads them, so a topic's
-	// hints in that window go out as one batch, each superseded one without its bytes: 100 ms (§6.8). It
+	// hints in that window go out as one batch, each superseded one as its seq alone: 100 ms (§6.8). It
 	// also bounds the reads one client costs: one a window. Must be positive.
 	HintCoalesceTimeout time.Duration
 	// The most hints of one topic a batch sends with their bytes: 64. A hint that a later one of its
-	// topic in the batch repeats, the same kind and the same bytes, is superseded and goes with its seq
-	// and without its bytes (§6.8). Distinct ones each keep theirs, the newest of them first, since a
-	// later hint about another group or recipient carries nothing of an earlier one's: a per-client gkm
-	// work hint for each late ask, say. Past the bound the older distinct ones go without their bytes
-	// too, as a superseded hint does, and their owners' recovery covers them (the next ask, the resync),
-	// so a topic adds at most 64 bodies to a batch, 16 KiB at the format's 256 B, well inside
-	// QueueByteCount; a burst of work for distinct groups in one window seldom passes a few. Must be
-	// positive: a topic's newest hint always keeps its bytes.
+	// topic in the batch repeats, the same kind and the same bytes, is superseded and goes as its seq
+	// alone (§6.8, QD-1397), taking no place under the bound. Distinct ones each keep theirs, the newest
+	// of them first, since a later hint about another group or recipient carries nothing of an earlier
+	// one's: a per-client gkm work hint for each late ask, say. Past the bound the older distinct ones go
+	// without their bytes, keeping their topic, version and kind, and their owners' recovery covers what
+	// the bytes named (the next ask, the resync), so a topic adds at most 64 bodies to a batch, 16 KiB at
+	// the format's 256 B, well inside QueueByteCount; a burst of work for distinct groups in one window
+	// seldom passes a few. Must be positive: a topic's newest hint always keeps its bytes.
 	TopicHintBodyCount int
 	// Resets Reset may queue while one waits to be sent: 1 per resident. A Reset past it joins the one
 	// already queued, which reads ver after it anyway. Must be positive.
