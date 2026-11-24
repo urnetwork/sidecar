@@ -11,8 +11,9 @@
 //	             rows' settings equal to its ServiceSettings, and the rows' has_document equal to whether it holds a
 //	             policy. A reader that anchors reads it at the state at the base, the compile having started there:
 //	             descent, and each push's signature under an identity key that state admits (QD-814). A read that
-//	             lacked a generation's key has the next compile list gkm for it. The Forwarder does not re-compile rows
-//	             from it: a full reader's check, the app's sidecar role's
+//	             lacked a generation's key has the next compile list gkm for it. A head that is not the base's is
+//	             head_alarm (fork), raised once while the base's retries meet it (bridge_forward.go's conditions). The
+//	             Forwarder does not re-compile rows from it: a full reader's check, the app's sidecar role's
 //	4 compile    NewAclState and CompileBridgeState for its sidecar, over the bindings it holds
 //	5 hand       the sink's SetState with the log run from the base through the captured pin
 //	6 release    the compile's record kept, the store trimmed to the base's retention point, every reference
@@ -497,9 +498,15 @@ func (self *Forwarder) judge(settings *ConfigLogSettings, signedGenesis []byte, 
 
 // Step 3: the head the base names, from the store or its reader, held to the base (the file's comment), and kept. A
 // reader that anchors reads it at anchor, the state at the base. A head that cannot be read now is an error the compile
-// retries, which lists gkm first where the read lacked a generation's key; one that is not the base's is head_alarm.
+// retries, which lists gkm first where the read lacked a generation's key; one that is not the base's is head_alarm,
+// raised once for the base while its retries meet it, and ended once a head of the compile's base holds to it.
 func (self *Forwarder) compileHead(state *ConfigState, base *bridge.ProjectionHeader, anchor *ConfigState) (*ConfigHead, error) {
 	name := forwarderHeadName(base.GetConfigVersion(), base.GetConfigHeadSha256())
+	// another head than the base's: a condition of this base's alone, so one an older base raised has ended
+	mismatched := func() {
+		self.endHeadConditions(forwarderConditionHead, func(standing string) bool { return standing == name })
+		self.raiseHeadAlarm(name, SidecarHeadAlarmFork, state.Pin(), state.Pin())
+	}
 	var head *ConfigHead
 	stored := false
 	if data, err := self.records.read(name); err == nil {
@@ -539,7 +546,7 @@ func (self *Forwarder) compileHead(state *ConfigState, base *bridge.ProjectionHe
 			}
 			if errors.Is(err, ErrConfigHeadMismatch) {
 				// the reader was served a head that is not the one the base names
-				self.emitHeadAlarm(SidecarHeadAlarmFork, state.Pin(), state.Pin())
+				mismatched()
 			}
 			return nil, err
 		}
@@ -552,9 +559,10 @@ func (self *Forwarder) compileHead(state *ConfigState, base *bridge.ProjectionHe
 		if stored {
 			_ = self.args.Store.Remove(name)
 		}
-		self.emitHeadAlarm(SidecarHeadAlarmFork, state.Pin(), state.Pin())
+		mismatched()
 		return nil, err
 	}
+	self.endHeadConditions(forwarderConditionHead, nil)
 	if !stored {
 		if err := self.records.write(name, forwarderEncodeHead(head.Files())); err != nil {
 			return nil, err

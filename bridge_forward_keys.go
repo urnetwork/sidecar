@@ -24,7 +24,9 @@
 // parent_commitment from the one below it, the newest held below the listing's first among them, and one at a held
 // generation is the one held, so a listing that leaves this component's chain stops where it leaves it and raises
 // head_alarm (fork), as a conflicting GenRotate is a member's (QD-1210; DESIGN-DETAILS 6.2.6), with the compile's pin
-// for evidence. Deliveries are read in the group listed, whose id a carried generation's body names too (rule 7).
+// for evidence: once for that generation while the listings that retry meet it, ended by one that reads it on the
+// chain, or that gkm answers whole with none off it (bridge_forward.go's conditions). Deliveries are read in the group
+// listed, whose id a carried generation's body names too (rule 7).
 //
 // The Forwarder holds a GenRotate, a GroupForm and a wrap to their signers' identity keys in the judged state, the
 // wrap to the Delegation and key it names, and RK_g to gen/<g>'s commitment. §10.9's rotation and delivery checks and
@@ -44,6 +46,8 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
+	"strings"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -427,6 +431,8 @@ func (self *Forwarder) openGenerations(ctx context.Context, state *ConfigState, 
 	signedRotates := [][]byte{}
 	// where the list stopped short of what gkm served, and why: the cause of each wanted generation from there on
 	stoppedAt, stopped := uint64(0), ""
+	// where a statement off the held chain stopped it, 0 for none: head_alarm (fork)'s condition (settleGenerationForks)
+	forkedAt := uint64(0)
 	for i, signed := range reply.GetGenerations() {
 		generation := since + 1 + uint64(i)
 		signedBytes, err := forwarderMarshal(signed)
@@ -457,20 +463,19 @@ func (self *Forwarder) openGenerations(ctx context.Context, state *ConfigState, 
 		rotate := parsed.Rotate
 		if 1 < generation && !bytes.Equal(rotate.GetParentCommitment(), below) {
 			self.log.Warningf("[forward]%s gen/%d in %s does not chain from the generation below it: the list stops there", self.args.NetworkId, generation, listing.groupId)
-			self.emitHeadAlarm(SidecarHeadAlarmFork, state.Pin(), state.Pin())
-			stoppedAt, stopped = generation, fmt.Sprintf("gen/%d in %s does not chain from the generation below it", generation, listing.groupId)
+			forkedAt, stoppedAt, stopped = generation, generation, fmt.Sprintf("gen/%d in %s does not chain from the generation below it", generation, listing.groupId)
 			break
 		}
 		if kept := held[generation]; kept != nil && !bytes.Equal(rotate.GetCommitment(), kept.generation.Rotate.GetCommitment()) {
 			self.log.Warningf("[forward]%s gen/%d in %s is not the statement held: the list stops there", self.args.NetworkId, generation, listing.groupId)
-			self.emitHeadAlarm(SidecarHeadAlarmFork, state.Pin(), state.Pin())
-			stoppedAt, stopped = generation, fmt.Sprintf("gen/%d in %s is not the statement held", generation, listing.groupId)
+			forkedAt, stoppedAt, stopped = generation, generation, fmt.Sprintf("gen/%d in %s is not the statement held", generation, listing.groupId)
 			break
 		}
 		below = rotate.GetCommitment()
 		listed = append(listed, parsed)
 		signedRotates = append(signedRotates, signedBytes)
 	}
+	self.settleGenerationForks(state.Pin(), stoppedAt, forkedAt)
 	readerKeys, err := self.args.Keys.ReaderKeys()
 	if err != nil {
 		return failed(0, fmt.Errorf("the forwarding reader keys: %w", err))
@@ -546,6 +551,28 @@ func (self *Forwarder) openGenerations(ctx context.Context, state *ConfigState, 
 	}()
 	self.alarmKeyWaits(now)
 	return opened, nil
+}
+
+// A listing's head_alarm conditions, each a generation gkm lists off the held chain (the file's comment), with the
+// compile's pin for evidence (owner decision 716): the one at forkedAt, where the list stopped, raised unless it
+// stands; every other one at or below stoppedAt ended, since the list read that generation and found it on the chain or
+// failing otherwise; and every one ended by a list that stopped nowhere, gkm listing no statement off the chain. One
+// past where the list stopped stands, unread.
+func (self *Forwarder) settleGenerationForks(pin *bridge.AuthPin, stoppedAt uint64, forkedAt uint64) {
+	forkCondition := forwarderConditionGeneration + strconv.FormatUint(forkedAt, 10)
+	self.endHeadConditions(forwarderConditionGeneration, func(condition string) bool {
+		if stoppedAt == 0 {
+			return false
+		}
+		if 0 < forkedAt && condition == forkCondition {
+			return true
+		}
+		generation, err := strconv.ParseUint(strings.TrimPrefix(condition, forwarderConditionGeneration), 10, 64)
+		return err == nil && stoppedAt < generation
+	})
+	if 0 < forkedAt {
+		self.raiseHeadAlarm(forkCondition, SidecarHeadAlarmFork, pin, pin)
+	}
 }
 
 // A Delegation as a wrap's recipient: d:<delegation_id>, as the wrap path writes it.
