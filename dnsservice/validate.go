@@ -152,6 +152,13 @@ func (self *DnsUserRecordContext) userOwnerForm(owner string) (dnsUserOwnerForm,
 		return 0, "", fmt.Errorf("is outside the zone %s", self.Apex)
 	}
 	labels := dns.SplitDomainName(strings.TrimSuffix(owner, "."+self.Apex))
+	// §12.9.1's DNS-SD names, which devices answer themselves (owner decision 778): _dns-sd._udp and every owner below
+	// it, and a _<service>._tcp or _udp pair directly under the zone with every owner below it, so no public record
+	// hides behind a private answer. The underscore rules below refuse them too; this names why.
+	if count := len(labels); self.Scope == "" && 2 <= count && strings.HasPrefix(labels[count-2], "_") &&
+		slices.Contains(dnsUserSrvProtocols, labels[count-1]) {
+		return 0, "", errors.New("is a DNS-SD name devices answer themselves (§12.9.1)")
+	}
 	host := labels[len(labels)-1]
 	checkHost := func() error {
 		switch {
