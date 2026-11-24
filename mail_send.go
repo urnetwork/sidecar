@@ -103,7 +103,8 @@ const (
 	MailSendFailed MailSendOutcome = "failed"
 )
 
-// What a Send is held to (MAIL-M7-18, MAIL-M9-01). Every value must be positive.
+// What a Send is held to (MAIL-M7-18, MAIL-M9-01), and the resolver of the sender a prover host composes. Every value
+// but ResolverFactory must be positive.
 type MailSendSettings struct {
 	// The most distinct recipients one send names: a deposit's trailer holds at most ingest's 100
 	// (MailIngestSettings.RecipientMaxCount, §20.4's mail_inbound_recipients), which a repo of all of them must pass.
@@ -126,6 +127,12 @@ type MailSendSettings struct {
 	PreviewMaxByteCount int
 	// The most bytes in one device-local send checkpoint, including one signed deposit push and its receipts.
 	CheckpointMaxByteCount int
+	// Builds the resolver of each sender the mail component composes on a prover host, which that sender owns and
+	// releases once it has ended (mail_sender_resolver.go). Nil, the default and every host's: a DohCache of the
+	// sender's own over connect's default resolvers, under the DNS root's keys (§2.8 ext-3). A sender in a test binary
+	// refuses that default, so a test names a DNS of its own here. An error, or a resolver without its Doh, leaves the
+	// sender unbuilt. Nothing reads it on a leg that composes no sender, the page Worker's and js.
+	ResolverFactory func() (*MailSenderResolver, error)
 }
 
 // The one default.
