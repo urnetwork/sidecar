@@ -51,6 +51,8 @@ type Bridge struct {
 	// §12.9's names of the state in force, nil for none, and the LocalZone that reads them
 	zone     atomic.Pointer[BridgeZone]
 	zoneView *bridgeZoneView
+	// §12.9.1's discovery view, nil for none (bridge_discovery.go), which the resolver answers DNS-SD names from
+	discovery atomic.Pointer[BridgeDiscoveryView]
 	// removes the bridge's callbacks from its link manager
 	linkCallbackRemovals []func()
 	// the provider hook, the one value EgressHook returns, and the NATs it is installed on, which CloseFlows reaches
@@ -139,6 +141,7 @@ func NewBridge(ctx context.Context, store PostureStore, host BridgeHost, setting
 	self.policy.SetShareRatchet(posture)
 	self.zoneView = &bridgeZoneView{bridge: self}
 	self.resolver = NewBridgeResolverClient(cancelCtx, self.zone.Load, nil, settings)
+	self.resolver.discovery = self.discovery.Load
 	self.hook = &bridgeEgressHook{BridgeEgressPolicy: self.policy, bridge: self}
 	self.linkCallbackRemovals = []func(){
 		self.links.AddDownCallback(self.markLinkDown),
