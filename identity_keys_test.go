@@ -219,6 +219,11 @@ func TestEverySignedTypeHasAnIdentityPurposeOrIsRefused(t *testing.T) {
 		bridge.SignedType_SIGNED_SIDECAR_BINDING: true,
 		// the identity key signs it only through AgentSubkey, never for Sign's callers (identity_agent.go)
 		bridge.SignedType_SIGNED_AGENT_CERT: true,
+		// DESIGN-COMPUTE's, reserved by CARCH-M11-05 (CONTRACTS C-25): each owner gives its purpose with its statement,
+		// attach-origin (HARN), disclosure-ack (CTRUST) and enclave-setup (ENC), and until then Sign refuses it
+		bridge.SignedType_SIGNED_ATTACH_ORIGIN:  true,
+		bridge.SignedType_SIGNED_DISCLOSURE_ACK: true,
+		bridge.SignedType_SIGNED_ENCLAVE_SETUP:  true,
 	}
 	for number := range bridge.SignedType_name {
 		signedType := bridge.SignedType(number)

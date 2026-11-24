@@ -1,10 +1,16 @@
-// Every fenced proto block in DESIGN.md, and what the design writes any other way, read against what this package
-// registers, so a wire that leaves the design fails here. testWireDifferences says exactly what is held. Whatever the
+// Every fenced proto block in DESIGN.md, RECORD.md and DESIGN-COMPUTE.md, and what the design writes any other way, read
+// against what this package registers, so a wire that leaves the design fails here. testWireDifferences says exactly what is held. Whatever the
 // package declares beyond the fences is written out in testUnfencedFence, with where the design writes it, which is
 // where a reviewer reads what this repository added to the design's wire, and a field an owner's answer adds to a
 // fenced message before design-records folds it in is in testFenceAdditions, with the question that holds the answer,
 // as one it takes out, its number reserved, is in testFenceReservations, and an enum value it takes out in
 // testFenceValueReservations.
+//
+// DESIGN-COMPUTE.md's fences (CARCH-M11-04) name no file as DESIGN.md's do, and the plan moved some of their messages
+// (CONTRACTS C-36), so testComputeFencePlacements places each declaration; three extend a declaration DESIGN.md or
+// RECORD.md writes, adding fields or values to it. Their wire lands with each compute area's task, so what they write
+// and no file declares yet, a whole message or enum or an extension's field or value, is reported as unbuilt rather
+// than as a mismatch; a compute message a file declares is compared whole, as any.
 
 package protocol
 
@@ -33,6 +39,49 @@ var testDesignPaths = []string{"../DESIGN.md", "../../DESIGN.md"}
 // Where RECORD.md is from this directory, which writes record.proto's entry bodies as its own fences (§16.8's kinds
 // row). It sits beside the module, and the second path serves a tree that moves it as DESIGN.md moves.
 var testRecordMdPaths = []string{"../RECORD.md", "../../RECORD.md"}
+
+// Where DESIGN-COMPUTE.md is from this directory, which writes compute's wire as fences of its own. It sits beside
+// DESIGN.md, and the second path serves a release branch, as testDesignPaths' does.
+var testComputeDesignPaths = []string{"../DESIGN-COMPUTE.md", "../../DESIGN-COMPUTE.md"}
+
+// Where a DESIGN-COMPUTE.md fence's declaration goes: the file the plan places it in, since the fences name none in
+// the form DESIGN.md's do, and whether the fence extends a declaration another document writes, adding to it.
+type testComputeFencePlacement struct {
+	path    string
+	extends bool
+}
+
+// Every declaration DESIGN-COMPUTE.md's fences write, with where it goes. Each fence's own words name its file where it
+// names one (attest.proto, record.proto); the design's compute.proto header and search messages go where CONTRACTS C-36
+// moved them, infer.proto and websearch.proto, so BAL's compute.proto declares neither. A declaration a fence writes
+// that is not here stops the test, so a new fence is placed when it is written.
+var testComputeFencePlacements = map[string]testComputeFencePlacement{
+	// §5.8, ATTEST-M11-01
+	"AttestationResult": {path: "protocol/attest.proto"},
+	// §6.6's header, INFER's (C-36)
+	"ComputeInferHeader": {path: "protocol/infer.proto"},
+	// §6.8's fields 11-15 on RECORD.md section 12's body: INFER-M11-07's 11-14, CTXH-M11-01's 15 (C-26)
+	"ModelCallBody": {path: "protocol/record.proto", extends: true},
+	// §21.5's payment, SRCH-M13-01's (C-36)
+	"ComputeSearchAuthorizeRequest": {path: "protocol/websearch.proto"},
+	"SearchPayee":                   {path: "protocol/websearch.proto"},
+	"SearchOutcomes":                {path: "protocol/websearch.proto"},
+	"ComputeSearchAuthorization":    {path: "protocol/websearch.proto"},
+	// §24.4's session entries and ModelCallBody's context, CTXH-M11-01's (C-26)
+	"SessionEntryBody": {path: "protocol/record.proto"},
+	"SessionPart":      {path: "protocol/record.proto"},
+	"SessionBlobBody":  {path: "protocol/record.proto"},
+	"CallContext":      {path: "protocol/record.proto"},
+	// §27.9's version 3 of DESIGN §16.8's ApprovalDecision and channel 4, and the auto_verdict entry, SAFE's (C-26)
+	"ApprovalDecision": {path: "protocol/record.proto", extends: true},
+	"AutoVerdict":      {path: "protocol/record.proto"},
+	"ApprovalChannel":  {path: "protocol/record.proto", extends: true},
+	"AutoVerdictBody":  {path: "protocol/record.proto"},
+	"AutoInput":        {path: "protocol/record.proto"},
+}
+
+// A fence's block comments, which DESIGN-COMPUTE.md's use (ApprovalChannel's /* DESIGN's 0-3 */) and DESIGN.md's do not.
+var testFenceBlockComment = regexp.MustCompile(`(?s)/\*.*?\*/`)
 
 // Written so a fence's string, identifier, number and punctuation each stay one token.
 var testFenceToken = regexp.MustCompile(`"[^"]*"|[A-Za-z_][A-Za-z0-9_.]*|0x[0-9A-Fa-f]+|[0-9]+|[{};=,<>]`)
@@ -73,6 +122,8 @@ type testFenceField struct {
 	number   int32
 	typeName string
 	repeated bool
+	// a DESIGN-COMPUTE.md fence adds it to a message another document writes, so it is unbuilt until declared
+	extension bool
 }
 
 // A message as a fence writes it, with the file that fence places it in.
@@ -81,6 +132,8 @@ type testFenceMessage struct {
 	fields          []testFenceField
 	reservedNumbers []int32
 	reservedNames   []string
+	// only DESIGN-COMPUTE.md's fences write it, so it is unbuilt until a file declares it
+	compute bool
 }
 
 // An enum as a fence writes it, with the file that fence places it in.
@@ -89,6 +142,10 @@ type testFenceEnum struct {
 	values          map[string]int32
 	reservedNumbers []int32
 	reservedNames   []string
+	// only DESIGN-COMPUTE.md's fences write it, so it is unbuilt until a file declares it
+	compute bool
+	// the values a DESIGN-COMPUTE.md fence adds to an enum another document writes, each unbuilt until declared
+	extensionValues map[string]bool
 }
 
 // Every declaration the fences write, by name.
@@ -159,14 +216,34 @@ func testParseFence(t *testing.T, fences *testFences, fence string) {
 	if firstPath == "" {
 		t.Fatalf("the fence opening with %s names no file, and testFirstDeclarationFiles does not place it", firstDeclaration)
 	}
-	pathOf := func(name string) string {
+	testParseFenceSource(t, fences, source.String(), func(name string) string {
 		if declarationPaths[name] != "" {
 			return declarationPaths[name]
 		}
 		return firstPath
-	}
+	})
+}
 
-	tokens := testFenceToken.FindAllString(source.String(), -1)
+// One DESIGN-COMPUTE.md fence's messages and enums, read into fences, each in the file testComputeFencePlacements gives
+// it. Its comments, block comments among them, are no part of its wire.
+func testParseComputeFence(t *testing.T, fences *testFences, fence string) {
+	var source strings.Builder
+	for line := range strings.SplitSeq(testFenceBlockComment.ReplaceAllString(fence, " "), "\n") {
+		code, _, _ := strings.Cut(line, "//")
+		source.WriteString(code + "\n")
+	}
+	testParseFenceSource(t, fences, source.String(), func(name string) string {
+		placement, ok := testComputeFencePlacements[name]
+		if !ok {
+			t.Fatalf("a DESIGN-COMPUTE.md fence writes %s, and testComputeFencePlacements does not place it", name)
+		}
+		return placement.path
+	})
+}
+
+// A fence's code, its comments gone, read into fences, each declaration in the file pathOf gives it.
+func testParseFenceSource(t *testing.T, fences *testFences, source string, pathOf func(name string) string) {
+	tokens := testFenceToken.FindAllString(source, -1)
 	for len(tokens) > 0 {
 		switch tokens[0] {
 		case "syntax", "package", "import", "option":
@@ -251,6 +328,18 @@ func testReadDesign(t testing.TB) []byte {
 	return design
 }
 
+// DESIGN-COMPUTE.md's bytes, from the first of testComputeDesignPaths that holds it.
+func testReadComputeDesign(t testing.TB) []byte {
+	design, err := os.ReadFile(testComputeDesignPaths[0])
+	if errors.Is(err, os.ErrNotExist) {
+		design, err = os.ReadFile(testComputeDesignPaths[1])
+	}
+	if err != nil {
+		t.Fatalf("this test needs DESIGN-COMPUTE.md beside the module: %v", err)
+	}
+	return design
+}
+
 // RECORD.md's bytes, from the first of testRecordMdPaths that holds it.
 func testReadRecordMd(t testing.TB) []byte {
 	recordMd, err := os.ReadFile(testRecordMdPaths[0])
@@ -265,6 +354,11 @@ func testReadRecordMd(t testing.TB) []byte {
 
 // Each fenced proto block in a document, read into fences, and how many there were.
 func testParseFences(t *testing.T, fences *testFences, document []byte) int {
+	return testParseFencesWith(t, fences, document, testParseFence)
+}
+
+// testParseFences with parse reading each fence.
+func testParseFencesWith(t *testing.T, fences *testFences, document []byte, parse func(t *testing.T, fences *testFences, fence string)) int {
 	var fence *strings.Builder
 	count := 0
 	for line := range strings.SplitSeq(string(document), "\n") {
@@ -273,7 +367,7 @@ func testParseFences(t *testing.T, fences *testFences, document []byte) int {
 		case fence == nil && trimmed == "```proto":
 			fence = &strings.Builder{}
 		case fence != nil && trimmed == "```":
-			testParseFence(t, fences, fence.String())
+			parse(t, fences, fence.String())
 			fence = nil
 			count++
 		case fence != nil:
@@ -299,6 +393,14 @@ func testReadFences(t *testing.T) *testFences {
 	recordMdCount := testParseFences(t, fences, testReadRecordMd(t))
 	if recordMdCount < 8 || len(fences.messages)-designMessageCount < 40 {
 		t.Fatalf("found %d fences and %d messages in RECORD.md, too few to have read it", recordMdCount, len(fences.messages)-designMessageCount)
+	}
+	computeFences := &testFences{messages: map[string]*testFenceMessage{}, enums: map[string]*testFenceEnum{}}
+	computeCount := testParseFencesWith(t, computeFences, testReadComputeDesign(t), testParseComputeFence)
+	if computeCount < 7 || len(computeFences.messages) < 15 {
+		t.Fatalf("found %d fences and %d messages in DESIGN-COMPUTE.md, too few to have read it", computeCount, len(computeFences.messages))
+	}
+	for _, finding := range testJoinComputeFences(fences, computeFences, testComputeFencePlacements) {
+		t.Error(finding)
 	}
 	testParseFence(t, fences, testUnfencedFence)
 	for _, addition := range testFenceAdditions {
@@ -326,6 +428,79 @@ func testReadFences(t *testing.T) *testFences {
 		t.Error(finding)
 	}
 	return fences
+}
+
+// Joins compute's declarations to fences. One only DESIGN-COMPUTE.md writes joins whole, marked compute; one its
+// placement marks as extending adds its fields, values and reservations to the fence that writes the rest, each field
+// and value marked an extension. Answers what cannot join: a declaration another document writes that is not marked as
+// extended, an extension of what no other fence writes, one placed in another file than its base, and a field or value
+// the base already writes or reserves, by name or number.
+func testJoinComputeFences(fences *testFences, compute *testFences, placements map[string]testComputeFencePlacement) []string {
+	findings := []string{}
+	for _, name := range slices.Sorted(maps.Keys(compute.messages)) {
+		message := compute.messages[name]
+		base := fences.messages[name]
+		switch {
+		case base == nil && placements[name].extends:
+			findings = append(findings, fmt.Sprintf("DESIGN-COMPUTE.md extends message %s, which no other fence writes", name))
+		case base == nil:
+			message.compute = true
+			fences.messages[name] = message
+		case !placements[name].extends:
+			findings = append(findings, fmt.Sprintf("message %s is written twice: by DESIGN-COMPUTE.md, and by DESIGN.md or RECORD.md", name))
+		case base.path != message.path:
+			findings = append(findings, fmt.Sprintf("DESIGN-COMPUTE.md extends %s in %s, and its fence puts it in %s", name, message.path, base.path))
+		default:
+			for _, field := range message.fields {
+				taken := slices.ContainsFunc(base.fields, func(written testFenceField) bool {
+					return written.name == field.name || written.number == field.number
+				})
+				if taken || slices.Contains(base.reservedNumbers, field.number) {
+					findings = append(findings, fmt.Sprintf("DESIGN-COMPUTE.md adds %s.%s at %d, which its fence already writes or reserves", name, field.name, field.number))
+					continue
+				}
+				field.extension = true
+				base.fields = append(base.fields, field)
+			}
+			base.reservedNumbers = append(base.reservedNumbers, message.reservedNumbers...)
+			base.reservedNames = append(base.reservedNames, message.reservedNames...)
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(compute.enums)) {
+		enum := compute.enums[name]
+		base := fences.enums[name]
+		switch {
+		case base == nil && placements[name].extends:
+			findings = append(findings, fmt.Sprintf("DESIGN-COMPUTE.md extends enum %s, which no other fence writes", name))
+		case base == nil:
+			enum.compute = true
+			fences.enums[name] = enum
+		case !placements[name].extends:
+			findings = append(findings, fmt.Sprintf("enum %s is written twice: by DESIGN-COMPUTE.md, and by DESIGN.md or RECORD.md", name))
+		case base.path != enum.path:
+			findings = append(findings, fmt.Sprintf("DESIGN-COMPUTE.md extends %s in %s, and its fence puts it in %s", name, enum.path, base.path))
+		default:
+			if base.extensionValues == nil {
+				base.extensionValues = map[string]bool{}
+			}
+			for _, valueName := range slices.Sorted(maps.Keys(enum.values)) {
+				number := enum.values[valueName]
+				_, taken := base.values[valueName]
+				for _, written := range base.values {
+					taken = taken || written == number
+				}
+				if taken || slices.Contains(base.reservedNumbers, number) {
+					findings = append(findings, fmt.Sprintf("DESIGN-COMPUTE.md adds %s.%s at %d, which its fence already writes or reserves", name, valueName, number))
+					continue
+				}
+				base.values[valueName] = number
+				base.extensionValues[valueName] = true
+			}
+			base.reservedNumbers = append(base.reservedNumbers, enum.reservedNumbers...)
+			base.reservedNames = append(base.reservedNames, enum.reservedNames...)
+		}
+	}
+	return findings
 }
 
 // Takes each field out of the fence that writes it and reserves its number there, and says which cannot leave: a
@@ -520,7 +695,16 @@ func testSorted(numbers []int32) []int32 {
 // compared: none reaches the wire. SignedType's fence is its zero value and a comment, because owners add values with
 // their formats (§6.11), so its values need only be contained, and signed_registry_test.go holds the rest.
 func testWireDifferences(fences *testFences, files *protoregistry.Files) []string {
-	differences := []string{}
+	differences, _ := testWireReport(fences, files)
+	return differences
+}
+
+// testWireDifferences, with what DESIGN-COMPUTE.md writes and no file declares yet apart: a message or enum only its
+// fences write, and a field or value they add to another document's, each unbuilt until the task that adds it lands.
+// A compute message a file declares is compared whole, as any, and so is the rest of an extended one.
+func testWireReport(fences *testFences, files *protoregistry.Files) (differences []string, unbuilt []string) {
+	differences = []string{}
+	unbuilt = []string{}
 	report := func(format string, arguments ...any) {
 		differences = append(differences, fmt.Sprintf(format, arguments...))
 	}
@@ -552,6 +736,10 @@ func testWireDifferences(fences *testFences, files *protoregistry.Files) []strin
 		for _, want := range fence.fields {
 			written[protoreflect.Name(want.name)] = true
 			field := fields.ByName(protoreflect.Name(want.name))
+			if field == nil && want.extension {
+				unbuilt = append(unbuilt, name+"."+want.name)
+				continue
+			}
 			if field == nil {
 				report("%s.%s is written and not declared", name, want.name)
 				continue
@@ -608,6 +796,10 @@ func testWireDifferences(fences *testFences, files *protoregistry.Files) []strin
 		values := enum.Values()
 		for valueName, number := range fence.values {
 			value := values.ByName(protoreflect.Name(valueName))
+			if value == nil && fence.extensionValues[valueName] {
+				unbuilt = append(unbuilt, name+"."+valueName)
+				continue
+			}
 			if value == nil {
 				report("%s.%s is written and not declared", name, valueName)
 				continue
@@ -681,22 +873,36 @@ func testWireDifferences(fences *testFences, files *protoregistry.Files) []strin
 		return true
 	})
 	for _, name := range slices.Sorted(maps.Keys(fences.messages)) {
-		if !declared[name] {
+		switch {
+		case declared[name]:
+		case fences.messages[name].compute:
+			unbuilt = append(unbuilt, "message "+name)
+		default:
 			report("message %s is written and no file declares it", name)
 		}
 	}
 	for _, name := range slices.Sorted(maps.Keys(fences.enums)) {
-		if !declared[name] {
+		switch {
+		case declared[name]:
+		case fences.enums[name].compute:
+			unbuilt = append(unbuilt, "enum "+name)
+		default:
 			report("enum %s is written and no file declares it", name)
 		}
 	}
-	return differences
+	slices.Sort(unbuilt)
+	return differences, unbuilt
 }
 
-// §4.9, and the rule that numbers stay as written.
+// §4.9, and the rule that numbers stay as written. What DESIGN-COMPUTE.md writes and no file declares yet is listed,
+// never a mismatch, until its task lands (CARCH-M11-04).
 func TestDeclarationsMatchTheirFences(t *testing.T) {
-	for _, difference := range testWireDifferences(testReadFences(t), protoregistry.GlobalFiles) {
+	differences, unbuilt := testWireReport(testReadFences(t), protoregistry.GlobalFiles)
+	for _, difference := range differences {
 		t.Error(difference)
+	}
+	if 0 < len(unbuilt) {
+		t.Logf("DESIGN-COMPUTE.md writes %d declarations, fields and values no file declares yet: %s", len(unbuilt), strings.Join(unbuilt, ", "))
 	}
 }
 
@@ -1008,5 +1214,243 @@ func TestWrittenFieldListsMatchTheirMessages(t *testing.T) {
 				t.Errorf("%s's field %d should be %s, the order the design writes", c.name, i+1, want)
 			}
 		}
+	}
+}
+
+// DESIGN-COMPUTE.md's fences, read and placed (CARCH-M11-04): each declaration in the file testComputeFencePlacements
+// gives it, the placements naming nothing the fences do not write, and the three extensions joined to the fences they
+// extend, their own fields and values marked.
+func TestComputeFencesAreReadAndPlaced(t *testing.T) {
+	fences := testReadFences(t)
+	for name, placement := range testComputeFencePlacements {
+		message, enum := fences.messages[name], fences.enums[name]
+		switch {
+		case message != nil:
+			if message.path != placement.path || message.compute == placement.extends {
+				t.Errorf("%s is in %s, compute %t; placed in %s, extending %t", name, message.path, message.compute, placement.path, placement.extends)
+			}
+		case enum != nil:
+			if enum.path != placement.path || enum.compute == placement.extends {
+				t.Errorf("%s is in %s, compute %t; placed in %s, extending %t", name, enum.path, enum.compute, placement.path, placement.extends)
+			}
+		default:
+			t.Errorf("testComputeFencePlacements places %s, which no fence writes", name)
+		}
+	}
+	extensionNumbers := func(name string) []int32 {
+		numbers := []int32{}
+		for _, field := range fences.messages[name].fields {
+			if field.extension {
+				numbers = append(numbers, field.number)
+			}
+		}
+		return testSorted(numbers)
+	}
+	if got := extensionNumbers("ModelCallBody"); !slices.Equal(got, []int32{11, 12, 13, 14, 15}) {
+		t.Errorf("ModelCallBody's extension fields are %v", got)
+	}
+	if got := extensionNumbers("ApprovalDecision"); !slices.Equal(got, []int32{15, 16}) {
+		t.Errorf("ApprovalDecision's extension fields are %v", got)
+	}
+	channels := fences.enums["ApprovalChannel"]
+	if channels.values["APPROVAL_CHANNEL_AUTO"] != 4 || !channels.extensionValues["APPROVAL_CHANNEL_AUTO"] || channels.extensionValues["APPROVAL_CHANNEL_HARNESS"] {
+		t.Errorf("ApprovalChannel: %v, extending %v", channels.values, channels.extensionValues)
+	}
+	if header := fences.messages["ComputeInferHeader"]; len(header.fields) != 9 || header.path != "protocol/infer.proto" {
+		t.Errorf("ComputeInferHeader: %+v", header)
+	}
+}
+
+// What a compute fence writes and no file declares is unbuilt, never a difference: a compute-only message, and a field a
+// fence adds to a declared message; the same field without its mark is a difference, so the mark is what spares it.
+func TestComputeFencesUnbuiltAreNoMismatch(t *testing.T) {
+	plant := func(extension bool) *testFences {
+		fences := testReadFences(t)
+		fences.messages["PlantedCompute"] = &testFenceMessage{
+			path: "protocol/types.proto", compute: true,
+			fields: []testFenceField{{name: "planted", number: 1, typeName: "uint32"}},
+		}
+		readerKey := fences.messages["ReaderKey"]
+		readerKey.fields = append(readerKey.fields, testFenceField{name: "planted_extension", number: 99, typeName: "bytes", extension: extension})
+		return fences
+	}
+	differences, unbuilt := testWireReport(plant(true), protoregistry.GlobalFiles)
+	if len(differences) != 0 {
+		t.Errorf("differences: %v", differences)
+	}
+	for _, want := range []string{"message PlantedCompute", "ReaderKey.planted_extension"} {
+		if !slices.Contains(unbuilt, want) {
+			t.Errorf("%s is not unbuilt: %v", want, unbuilt)
+		}
+	}
+	differences, _ = testWireReport(plant(false), protoregistry.GlobalFiles)
+	if !testHasDifference(differences, "ReaderKey.planted_extension is written and not declared") {
+		t.Errorf("an unmarked field passed: %v", differences)
+	}
+}
+
+// A descriptor type for a fence's scalar type name.
+func testScalarFieldType(t testing.TB, typeName string) descriptorpb.FieldDescriptorProto_Type {
+	types := map[string]descriptorpb.FieldDescriptorProto_Type{
+		"bool": descriptorpb.FieldDescriptorProto_TYPE_BOOL, "bytes": descriptorpb.FieldDescriptorProto_TYPE_BYTES,
+		"string": descriptorpb.FieldDescriptorProto_TYPE_STRING, "uint32": descriptorpb.FieldDescriptorProto_TYPE_UINT32,
+		"uint64": descriptorpb.FieldDescriptorProto_TYPE_UINT64, "int64": descriptorpb.FieldDescriptorProto_TYPE_INT64,
+		"int32": descriptorpb.FieldDescriptorProto_TYPE_INT32,
+	}
+	fieldType, ok := types[typeName]
+	if !ok {
+		t.Fatalf("no scalar type %s", typeName)
+	}
+	return fieldType
+}
+
+// Once a file declares a compute message as its fence writes it, it is compared whole: built as written it differs in
+// nothing and is no longer unbuilt, and a planted number change in the copy fails, for a compute-only message and for
+// an extension's field alike. The copy declares what the real files do not yet, and changes what they do.
+func TestComputeFenceCatchesAPlantedNumberChange(t *testing.T) {
+	fences := testReadFences(t)
+	header := fences.messages["ComputeInferHeader"]
+	route := slices.IndexFunc(fences.messages["ModelCallBody"].fields, func(field testFenceField) bool { return field.name == "route" })
+	if route < 0 {
+		t.Fatal("ModelCallBody's fences write no route")
+	}
+	routeField := fences.messages["ModelCallBody"].fields[route]
+	plant := func(headerModelNumber int32, routeNumber int32) *protoregistry.Files {
+		return testPlantedFiles(t, func(fileProtos testFileProtos) {
+			var message *descriptorpb.DescriptorProto
+			if file := fileProtos[header.path]; file != nil {
+				message = testPlantedMessage(t, fileProtos, header.path, "ComputeInferHeader")
+			} else {
+				message = &descriptorpb.DescriptorProto{Name: proto.String("ComputeInferHeader")}
+				// as protoc registers a file of this package, go_package and all
+				options := proto.Clone(fileProtos["protocol/types.proto"].GetOptions()).(*descriptorpb.FileOptions)
+				fileProtos[header.path] = &descriptorpb.FileDescriptorProto{
+					Name: proto.String(header.path), Package: proto.String(testProtoPackage), Syntax: proto.String("proto3"),
+					Options: options, MessageType: []*descriptorpb.DescriptorProto{message},
+				}
+			}
+			message.Field = nil
+			for _, field := range header.fields {
+				number := field.number
+				if field.name == "model" {
+					number = headerModelNumber
+				}
+				message.Field = append(message.Field, testNewField(field.name, number, testScalarFieldType(t, field.typeName)))
+			}
+			modelCall := testPlantedMessage(t, fileProtos, "protocol/record.proto", "ModelCallBody")
+			modelCall.Field = slices.DeleteFunc(modelCall.Field, func(field *descriptorpb.FieldDescriptorProto) bool {
+				return field.GetName() == routeField.name
+			})
+			modelCall.Field = append(modelCall.Field, testNewField(routeField.name, routeNumber, testScalarFieldType(t, routeField.typeName)))
+		})
+	}
+
+	differences, unbuilt := testWireReport(fences, plant(2, routeField.number))
+	for _, difference := range differences {
+		if strings.Contains(difference, "ComputeInferHeader") || strings.Contains(difference, "ModelCallBody.route") {
+			t.Errorf("declared as written, and still: %s", difference)
+		}
+	}
+	if slices.Contains(unbuilt, "message ComputeInferHeader") || slices.Contains(unbuilt, "ModelCallBody.route") {
+		t.Errorf("declared, and still unbuilt: %v", unbuilt)
+	}
+
+	differences, _ = testWireReport(fences, plant(19, 22))
+	for _, want := range []string{"ComputeInferHeader.model is 19, and its fence writes 2", "ModelCallBody.route is 22, and its fence writes 12"} {
+		if !testHasDifference(differences, want) {
+			t.Errorf("wanted %q, found %v", want, differences)
+		}
+	}
+}
+
+// The join's own checks, on fences planted for it: what it cannot join is a finding, never a quiet second copy.
+func TestComputeFenceJoinRefusesWhatItCannotJoin(t *testing.T) {
+	base := func() *testFences {
+		return &testFences{
+			messages: map[string]*testFenceMessage{
+				"Kept": {path: "protocol/record.proto", fields: []testFenceField{{name: "kept", number: 1, typeName: "uint32"}}, reservedNumbers: []int32{9}},
+			},
+			enums: map[string]*testFenceEnum{
+				"KeptEnum": {path: "protocol/record.proto", values: map[string]int32{"KEPT_NONE": 0}},
+			},
+		}
+	}
+	extending := map[string]testComputeFencePlacement{
+		"Kept": {path: "protocol/record.proto", extends: true}, "KeptEnum": {path: "protocol/record.proto", extends: true},
+		"Missing": {path: "protocol/record.proto", extends: true},
+	}
+	writing := map[string]testComputeFencePlacement{"Kept": {path: "protocol/record.proto"}, "Fresh": {path: "protocol/infer.proto"}}
+	cases := []struct {
+		name       string
+		compute    *testFences
+		placements map[string]testComputeFencePlacement
+		findings   int
+	}{
+		{
+			name: "a message written twice",
+			compute: &testFences{enums: map[string]*testFenceEnum{}, messages: map[string]*testFenceMessage{
+				"Kept": {path: "protocol/record.proto", fields: []testFenceField{{name: "added", number: 2, typeName: "uint32"}}},
+			}},
+			placements: writing, findings: 1,
+		},
+		{
+			name: "an extension of nothing",
+			compute: &testFences{enums: map[string]*testFenceEnum{}, messages: map[string]*testFenceMessage{
+				"Missing": {path: "protocol/record.proto", fields: []testFenceField{{name: "added", number: 2, typeName: "uint32"}}},
+			}},
+			placements: extending, findings: 1,
+		},
+		{
+			name: "an extension elsewhere",
+			compute: &testFences{enums: map[string]*testFenceEnum{}, messages: map[string]*testFenceMessage{
+				"Kept": {path: "protocol/infer.proto", fields: []testFenceField{{name: "added", number: 2, typeName: "uint32"}}},
+			}},
+			placements: extending, findings: 1,
+		},
+		{
+			name: "an extension's name, number and reserved number taken, beside one that joins",
+			compute: &testFences{enums: map[string]*testFenceEnum{}, messages: map[string]*testFenceMessage{
+				"Kept": {path: "protocol/record.proto", fields: []testFenceField{
+					{name: "kept", number: 2, typeName: "uint32"}, {name: "again", number: 1, typeName: "uint32"},
+					{name: "reserved", number: 9, typeName: "uint32"}, {name: "added", number: 3, typeName: "uint32"},
+				}},
+			}},
+			placements: extending, findings: 3,
+		},
+		{
+			name: "an enum extension's value taken, beside one that joins",
+			compute: &testFences{messages: map[string]*testFenceMessage{}, enums: map[string]*testFenceEnum{
+				"KeptEnum": {path: "protocol/record.proto", values: map[string]int32{"KEPT_NONE": 0, "KEPT_AGAIN": 0, "KEPT_ADDED": 1}},
+			}},
+			placements: extending, findings: 2,
+		},
+	}
+	for _, c := range cases {
+		if findings := testJoinComputeFences(base(), c.compute, c.placements); len(findings) != c.findings {
+			t.Errorf("%s: %d findings, want %d: %v", c.name, len(findings), c.findings, findings)
+		}
+	}
+	// what joins: a fresh message whole, marked compute; an extension's free field and value, marked
+	fences := base()
+	compute := &testFences{
+		messages: map[string]*testFenceMessage{
+			"Fresh": {path: "protocol/infer.proto", fields: []testFenceField{{name: "fresh", number: 1, typeName: "uint32"}}},
+			"Kept":  {path: "protocol/record.proto", fields: []testFenceField{{name: "added", number: 3, typeName: "uint32"}}},
+		},
+		enums: map[string]*testFenceEnum{"KeptEnum": {path: "protocol/record.proto", values: map[string]int32{"KEPT_ADDED": 1}}},
+	}
+	placements := map[string]testComputeFencePlacement{
+		"Fresh": {path: "protocol/infer.proto"}, "Kept": {path: "protocol/record.proto", extends: true},
+		"KeptEnum": {path: "protocol/record.proto", extends: true},
+	}
+	if findings := testJoinComputeFences(fences, compute, placements); len(findings) != 0 {
+		t.Fatalf("findings: %v", findings)
+	}
+	kept := fences.messages["Kept"]
+	if !fences.messages["Fresh"].compute || kept.compute || len(kept.fields) != 2 || !kept.fields[1].extension || kept.fields[0].extension {
+		t.Errorf("joined %+v and %+v", fences.messages["Fresh"], kept)
+	}
+	if enum := fences.enums["KeptEnum"]; enum.values["KEPT_ADDED"] != 1 || !enum.extensionValues["KEPT_ADDED"] || enum.extensionValues["KEPT_NONE"] {
+		t.Errorf("joined %+v", enum)
 	}
 }

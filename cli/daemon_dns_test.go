@@ -59,7 +59,8 @@ func TestDaemonPushesAPolicyNamingANetworkLabel(t *testing.T) {
 	}))
 	t.Cleanup(func() { api.ServeService("dns", nil) })
 
-	startUrDns(running, sidecar.NewNoopLogger())
+	// the zone watch's defaults ask public resolvers, which a test binary refuses, so it watches nothing here
+	startUrDns(running, nil, sidecar.NewNoopLogger())
 	if remove, err := running.AddComponent(&testUrNamedComponent{name: "dns"}); err == nil {
 		remove()
 		t.Fatal("the daemon's composition added no dns component")
