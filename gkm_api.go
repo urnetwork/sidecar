@@ -466,13 +466,13 @@ func gkmBody(message proto.Message) ([]byte, error) {
 }
 
 // Sends call and answers a success's status and body, at most ReplyMaxByteCount, or an error for any other answer.
-// gkm's own 429 or 503 goes again as call.retry allows. Its first 401 goes again once, at once, read or write, the
-// token it refused dropped with the narrowed retry's while the call may still take that (ForgetServiceToken), so the
-// call presents only tokens minted after it, and a 401 to one of those ends the call. Its 403 to a batch with narrowed
-// scopes goes again once, at once, under those scopes, which the rest of the call presents, where the batch carries a
-// stronger role on the call's repo (QD-1179) or the token's granted scopes left the batch's scope there out
-// (QD-1230); ReadRetryCount counts neither retry, and the batch's invalid_scope takes the second too. A token that
-// could not be had, the one asked after a 401 as any other, is read by why
+// gkm's own 429 or 503 goes again as call.retry allows. Its first 401 sends the call again once, at once, read or
+// write, the token it refused dropped with the narrowed retry's while the call may still take that
+// (ForgetServiceToken), so the call presents only tokens minted after it, and a 401 to one of those ends the call. Its
+// 403 to a batch with narrowed scopes goes again once, at once, under those scopes, which the rest of the call
+// presents, where the batch carries a stronger role on the call's repo (QD-1179) or the token's granted scopes left
+// the batch's scope there out (QD-1230); ReadRetryCount counts neither retry, and the batch's invalid_scope takes the
+// narrowed one too. A token that could not be had, the one asked after a 401 as any other, is read by why
 // (sidecarServiceTokenRefusalOf): the exchange's invalid_scope to the call's own scope, which the client's state
 // gives, goes again ReadRetryWait apart until ExchangeScopeWaitTimeout has passed since the call's first, the last try
 // at the window's end; another refusal for good ends the call at once; and a failure that may change goes again at
