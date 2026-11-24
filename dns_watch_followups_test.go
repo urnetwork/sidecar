@@ -7,7 +7,13 @@ package sidecar
 // no longer shows is judged on the answers that agree; a resolver failing at the once more degrades the pass; and a
 // split whose once more gathers nothing judges nothing, rather than one side of it. A watch asks at least two
 // resolvers, which NewDnsWatch and the DoH settings hold, and a DoH resolver of three compares all three. Passes wait
-// at least the settings' PassMinWait, and settings out of range are refused. Every name and address is synthetic.
+// at least the settings' PassMinWait, and settings out of range are refused.
+//
+// A host that stays up runs the network's watch through its component: composed at the first client generation that
+// can, once, on the host's settings, its file in the network's dns/ directory, its passes on the Sidecar's clock, its
+// degraded state in SidecarStatus and its alarms the Sidecar's dns_alarm events; a locked keychain, no network or the
+// public defaults in a test compose nothing and leave it to a later generation; and Close detaches it, ends it and
+// releases its resolvers. Every name and address is synthetic.
 
 import (
 	"context"
@@ -15,6 +21,7 @@ import (
 	"net/netip"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -360,5 +367,243 @@ func TestDnsWatchPassesWaitAtLeastPassMinWait(t *testing.T) {
 	}
 	if DefaultDnsWatchSettings().PassMinWait != time.Second {
 		t.Errorf("the default floor is %s", DefaultDnsWatchSettings().PassMinWait)
+	}
+}
+
+// A forwarder that fails while failing is set, and asks the one it wraps otherwise.
+type testDnsWatchFailingForwarder struct {
+	forwarder *testDnsWatchSeamForwarder
+	failing   atomic.Bool
+}
+
+func (self *testDnsWatchFailingForwarder) Forward(ctx context.Context, qType dnsmessage.Type, domain string) ([]byte, bool) {
+	if self.failing.Load() {
+		return nil, false
+	}
+	return self.forwarder.Forward(ctx, qType, domain)
+}
+
+// A ForwarderFactory of two forwarders a build, the second able to fail, every build and release counted.
+type testDnsWatchComponentForwarders struct {
+	stateLock    sync.Mutex
+	built        [][]*testDnsWatchSeamForwarder
+	failing      []*testDnsWatchFailingForwarder
+	releaseCount []int
+}
+
+func (self *testDnsWatchComponentForwarders) factory() (*DnsWatchForwarders, error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	pair := []*testDnsWatchSeamForwarder{newTestDnsWatchSeamForwarder(), newTestDnsWatchSeamForwarder()}
+	failing := &testDnsWatchFailingForwarder{forwarder: pair[1]}
+	index := len(self.built)
+	self.built = append(self.built, pair)
+	self.failing = append(self.failing, failing)
+	self.releaseCount = append(self.releaseCount, 0)
+	return &DnsWatchForwarders{
+		Forwarders: []DnsWatchForwarder{pair[0], failing},
+		Close: func() {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			self.releaseCount[index] += 1
+		},
+	}, nil
+}
+
+// How many builds there were, and how many times each was released.
+func (self *testDnsWatchComponentForwarders) counts() (int, []int) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return len(self.built), slices.Clone(self.releaseCount)
+}
+
+// Build index's two forwarders, and the wrapper the second answers through.
+func (self *testDnsWatchComponentForwarders) build(index int) ([]*testDnsWatchSeamForwarder, *testDnsWatchFailingForwarder) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.built[index], self.failing[index]
+}
+
+// A Sidecar enrolled in zone's network on an instance in memory, whose time is clock and whose DnsClient reads zone
+// from a fake dns block on real time.
+func newTestDnsWatchSidecar(t *testing.T, clock Clock, zone *DnsZone) (*Sidecar, *SidecarInstance) {
+	t.Helper()
+	instance := newInstanceOn(t, NewSidecarMemoryBackend(), newFakeKeyStore())
+	if err := instance.Unlock(nil); err != nil {
+		t.Fatal(err)
+	}
+	networkId := zone.NetworkId
+	enrollTestNetwork(t, instance, networkId)
+	settings := validSidecarSettings()
+	settings.Clock = clock
+	running := newSidecarBase(nil, settings)
+	running.instance = instance
+	running.networkId = &networkId
+	running.dns.client = newTestDnsClient(t, newTestDnsBlock(zone), nil, networkId)
+	return running, instance
+}
+
+// The component settings over forwarders, unjittered.
+func testDnsWatchComponentSettings(forwarders *testDnsWatchComponentForwarders) *DnsWatchComponentSettings {
+	settings := DefaultDnsWatchComponentSettings()
+	settings.Watch.Jitter = 0
+	settings.Doh.ForwarderFactory = forwarders.factory
+	return settings
+}
+
+// Waits until the watch's run loop has armed its wait after a pass, counting armed waits from after from: a lookup
+// arms LookupTimeout, the loop Interval. Answers the count that wait was.
+func awaitTestDnsWatchNextWait(t *testing.T, clock *tokenTestClock, from int, interval time.Duration) int {
+	t.Helper()
+	for count := from + 1; ; count += 1 {
+		if clock.awaitArmed(t, count) == interval {
+			return count
+		}
+	}
+}
+
+// The component composes the network's watch at its first generation, once, on its settings' resolvers, attached to
+// the Sidecar, its file the network's own in dns/; each pass runs at the settings' interval on the Sidecar's clock, a
+// failing resolver showing as "zone watch degraded" in SidecarStatus and a split raising the Sidecar's dns_alarm; and
+// Close detaches the watch, ends it and releases its resolvers once, after which no generation composes another.
+func TestDnsWatchComponentRunsTheNetworksWatch(t *testing.T) {
+	clock := newTokenTestClock()
+	running, _ := newTestDnsWatchSidecar(t, clock, testDnsWatchFollowupZone(testConfigId("watched network")))
+	alarms := make(chan SidecarDnsAlarm, 16)
+	removeCallback := running.AddEventCallback(func(event SidecarEvent) {
+		if event.Kind == SidecarEventDnsAlarm {
+			alarms <- event.DnsAlarm
+		}
+	})
+	defer removeCallback()
+	forwarders := &testDnsWatchComponentForwarders{}
+	settings := testDnsWatchComponentSettings(forwarders)
+	component := running.NewDnsWatchComponent(settings)
+	if component.Name() != "dns-watch" || checkSidecarComponentName(component.Name()) != nil {
+		t.Fatalf("component name %q", component.Name())
+	}
+	if running.mailDnsWatch() != nil {
+		t.Fatal("a watch before any generation")
+	}
+	env := &SidecarEnv{Ctx: t.Context(), Log: NewNoopLogger()}
+	if err := component.Attach(env); err != nil {
+		t.Fatal(err)
+	}
+	watch := running.mailDnsWatch()
+	if watch == nil {
+		t.Fatal("the first generation composed no watch")
+	}
+	if err := component.Attach(env); err != nil || running.mailDnsWatch() != watch {
+		t.Fatalf("the next generation composed another watch: %v", err)
+	}
+	if built, releases := forwarders.counts(); built != 1 || releases[0] != 0 {
+		t.Fatalf("%d resolvers built, released %v", built, releases)
+	}
+	// the watch's file is the network's own, in its dns/ directory under class dns
+	if err := watch.Watch(testDnsWatchHost); err != nil {
+		t.Fatal(err)
+	}
+	store, err := running.LocalStore().Directory(dnsDirectoryName, dnsDirectoryName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if file, err := readDnsWatchFile(store); err != nil || !slices.Equal(file.Names, []string{testDnsWatchHost}) {
+		t.Fatalf("the network's watch file: %+v %v", file, err)
+	}
+
+	// a pass at the interval, the second resolver failing: degraded, and no alarm
+	interval := settings.Watch.Interval
+	if wait := clock.awaitArmed(t, 1); wait != interval {
+		t.Fatalf("the first pass waits %s, not the settings' %s", wait, interval)
+	}
+	pair, second := forwarders.build(0)
+	for _, forwarder := range pair {
+		forwarder.set(testDnsWatchHost, netip.MustParseAddr("192.0.2.44"), netip.MustParseAddr("2001:db8::44"))
+	}
+	second.failing.Store(true)
+	clock.Advance(interval)
+	armed := awaitTestDnsWatchNextWait(t, clock, 1, interval)
+	if !running.Status().ZoneWatchDegraded {
+		t.Fatal("a failing resolver left SidecarStatus undegraded")
+	}
+	if status := watch.Status(); status.NameCount != 3 {
+		t.Fatalf("the pass watched %d names and types", status.NameCount)
+	}
+
+	// the next, the second resolver answering another address: a split, the Sidecar's dns_alarm
+	second.failing.Store(false)
+	pair[1].set(testDnsWatchHost, netip.MustParseAddr("198.51.100.66"), netip.MustParseAddr("2001:db8::44"))
+	clock.Advance(interval)
+	awaitTestDnsWatchNextWait(t, clock, armed, interval)
+	if running.Status().ZoneWatchDegraded {
+		t.Fatal("every resolver answered, but SidecarStatus is degraded")
+	}
+	select {
+	case alarm := <-alarms:
+		if alarm != SidecarDnsAlarmSplit {
+			t.Fatalf("alarm %s", alarm)
+		}
+	default:
+		t.Fatal("the split raised no dns_alarm on the Sidecar")
+	}
+
+	component.Close()
+	if running.mailDnsWatch() != nil || running.Status().ZoneWatchDegraded {
+		t.Fatal("Close left the watch attached")
+	}
+	if built, releases := forwarders.counts(); built != 1 || releases[0] != 1 {
+		t.Fatalf("Close: %d resolvers built, released %v", built, releases)
+	}
+	if err := component.Attach(env); err != nil || running.mailDnsWatch() != nil {
+		t.Fatalf("a generation after Close composed a watch: %v", err)
+	}
+	component.Close()
+	if built, releases := forwarders.counts(); built != 1 || releases[0] != 1 {
+		t.Fatalf("a second Close: %d resolvers built, released %v", built, releases)
+	}
+}
+
+// A generation that cannot compose the watch leaves it to the next and still attaches: with the keychain locked the
+// watch's file does not read, and the resolver built for it is released; the generation after the unlock composes it.
+// A Sidecar with no network asks for no resolver, and in a test binary the public defaults compose nothing.
+func TestDnsWatchComponentWaitsForAGenerationThatCan(t *testing.T) {
+	running, instance := newTestDnsWatchSidecar(t, newTokenTestClock(), testDnsWatchFollowupZone(testConfigId("locked network")))
+	forwarders := &testDnsWatchComponentForwarders{}
+	component := running.NewDnsWatchComponent(testDnsWatchComponentSettings(forwarders))
+	defer component.Close()
+	env := &SidecarEnv{Ctx: t.Context(), Log: NewNoopLogger()}
+	instance.Lock()
+	if err := component.Attach(env); err != nil || running.mailDnsWatch() != nil {
+		t.Fatalf("a locked keychain's generation: %v", err)
+	}
+	if built, releases := forwarders.counts(); built != 1 || releases[0] != 1 {
+		t.Fatalf("a locked keychain's generation: %d resolvers built, released %v", built, releases)
+	}
+	if err := instance.Unlock(nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := component.Attach(env); err != nil || running.mailDnsWatch() == nil {
+		t.Fatalf("the generation after the unlock composed no watch: %v", err)
+	}
+	if built, releases := forwarders.counts(); built != 2 || releases[1] != 0 {
+		t.Fatalf("after the unlock: %d resolvers built, released %v", built, releases)
+	}
+
+	unenrolled := newSidecarBase(nil, validSidecarSettings())
+	idle := &testDnsWatchComponentForwarders{}
+	unenrolledComponent := unenrolled.NewDnsWatchComponent(testDnsWatchComponentSettings(idle))
+	defer unenrolledComponent.Close()
+	if err := unenrolledComponent.Attach(env); err != nil || unenrolled.mailDnsWatch() != nil {
+		t.Fatalf("a Sidecar with no network: %v", err)
+	}
+	if built, _ := idle.counts(); built != 0 {
+		t.Fatalf("a Sidecar with no network built %d resolvers", built)
+	}
+
+	public, _ := newTestDnsWatchSidecar(t, newTokenTestClock(), testDnsWatchFollowupZone(testConfigId("public network")))
+	defaults := public.NewDnsWatchComponent(nil)
+	defer defaults.Close()
+	if err := defaults.Attach(env); err != nil || public.mailDnsWatch() != nil {
+		t.Fatalf("the public defaults in a test binary: %v", err)
 	}
 }
