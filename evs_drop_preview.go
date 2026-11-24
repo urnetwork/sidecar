@@ -22,9 +22,13 @@
 //	           evs_drop_previews_per_day, which evs counts
 //	Drops      GET .../drops: each drop's status, with the names of the paths this device knows that its lineages
 //	           cover, at most DropNamesCount (I-13: names stay on the device). A DROP's body is read from its push's
-//	           record, else from the bodies this device checked and keeps (evs_drop_state.go); a drop whose body this
-//	           device cannot read is listed with no names. Each state evs reports raises history_drop once
-//	           (EVS2-M10-22): pending, cancelled, executing, done (a held or observed drop reads done) and refused
+//	           record by the statement at the drop's version as this device's verified reader holds it: the walk of a
+//	           head read from the ref's pin, one a listing, or at or below that pin the statement evs's log serves,
+//	           verified on its own (dropStatement); the statement must be the table's DROP, and its body a drop of
+//	           the table's drop id. Else the body comes from the bodies this device checked and keeps
+//	           (evs_drop_state.go); a drop whose body this device cannot read is listed with no names. Each state evs
+//	           reports raises history_drop once (EVS2-M10-22): pending, cancelled, executing, done (a held or
+//	           observed drop reads done) and refused
 //
 // On every leg but ios_extension. Safe for concurrent use.
 
@@ -402,11 +406,26 @@ func (self *EvsRepo) Drops(ctx context.Context, args *EvsDropsArgs) ([]*EvsDrop,
 		return nil, err
 	}
 	drops := []*EvsDrop{}
+	// the ref's head, read once the first drop on it needs its body, and what that read answered
+	var head *EvsVerifiedHead
+	var headErr error
+	headOnce := func() (*EvsVerifiedHead, error) {
+		if head == nil && headErr == nil {
+			head, headErr = self.readHeadAlone(ctx, refId, true)
+		}
+		return head, headErr
+	}
 	for _, status := range reply.GetDrops() {
 		drop := &EvsDrop{Status: status}
 		drops = append(drops, drop)
 		if bytes.Equal(status.GetRefId(), refId.Bytes()) && 0 < len(args.KnownPaths) {
-			body, err := self.dropBody(ctx, refId, status)
+			body, err := func() (*protocol.EvsDropHistory, error) {
+				head, err := headOnce()
+				if err != nil {
+					return nil, err
+				}
+				return self.dropBody(ctx, head, status)
+			}()
 			if err != nil {
 				body = self.keptDropBody(refId, status)
 			}
@@ -486,24 +505,71 @@ func (self *EvsRepo) keptDropBody(refId Id, status *protocol.EvsDropStatus) *pro
 	return lists.History()
 }
 
-// The DROP body a status names, read from its push's record through the ref's verified head.
-func (self *EvsRepo) dropBody(ctx context.Context, refId Id, status *protocol.EvsDropStatus) (*protocol.EvsDropHistory, error) {
-	head, err := self.pinnedHead(ctx, refId)
+// The DROP statement a drop table's status names, at its version on the ref of head, a head read from the ref's pin and
+// verified (readHeadAlone), from where this device's verified reader holds it (DESIGN-DETAILS 10.2.3's H1, §11.9's
+// judged and trusts rows): above the pin that read asked at, the statement its walk verified and the chain placed at
+// that version; at or below it, where the reader keeps no statement, the one evs's log serves at that version,
+// verified on its own as any statement below a pin is, its signature, ref and refs table held and its base below the
+// version, where it stands being evs's word. Either way it must be the status's push with a DROP's flag alone, else
+// ErrEvsDropNotPending, as for a version past head or one the log does not serve. One that does not verify answers
+// as VerifyStatement does.
+func (self *EvsRepo) dropStatement(ctx context.Context, head *EvsVerifiedHead, status *protocol.EvsDropStatus) (*EvsVerifiedStatement, error) {
+	version := status.GetVersion()
+	if version == 0 || head.Version < version {
+		return nil, fmt.Errorf("%w: a drop at version %d of a ref whose verified head is at %d", ErrEvsDropNotPending, version, head.Version)
+	}
+	statement, walked := head.StatementAt(version)
+	if !walked {
+		logged, err := self.client.readLog(ctx, self.repoId, head.RefId, version, version)
+		if err != nil {
+			return nil, err
+		}
+		var sent []byte
+		for _, read := range logged {
+			if read.GetVersion() == version {
+				sent = read.GetStatement()
+			}
+		}
+		if len(sent) == 0 {
+			return nil, fmt.Errorf("%w: evs's log serves no statement at the drop's version %d", ErrEvsDropNotPending, version)
+		}
+		verified, err := self.client.verifier.VerifyStatement(ctx, sent, self.repoId, head.RefId)
+		if err != nil {
+			return nil, err
+		}
+		statement = &EvsVerifiedStatement{Version: version, Statement: verified}
+	}
+	push := statement.Statement.Push
+	if !bytes.Equal(push.GetPushId(), status.GetPushId()) || push.GetFlags() != uint32(protocol.EvsPushFlag_EVS_PUSH_DROP) {
+		return nil, fmt.Errorf("%w: the statement at the drop's version is no DROP of its push", ErrEvsDropNotPending)
+	}
+	if version <= push.GetBaseVersion() {
+		// a push commits past the head it read: no statement on this base stands at this version
+		return nil, fmt.Errorf("%w: a DROP on base %d served at version %d", ErrEvsDropNotPending, push.GetBaseVersion(), version)
+	}
+	return statement, nil
+}
+
+// The DROP body a drop table's status names: the statement dropStatement finds at its version, then its push's
+// record, read by that statement's push id and version and checked against it, a push in parts read whole
+// (pushContent). The body must be a drop's, action 1, of the status's drop id, else ErrEvsDropNotPending.
+func (self *EvsRepo) dropBody(ctx context.Context, head *EvsVerifiedHead, status *protocol.EvsDropStatus) (*protocol.EvsDropHistory, error) {
+	statement, err := self.dropStatement(ctx, head, status)
 	if err != nil {
 		return nil, err
 	}
-	statement, ok := head.StatementAt(status.GetVersion())
-	if !ok || !bytes.Equal(statement.Statement.Push.GetPushId(), status.GetPushId()) {
-		return nil, fmt.Errorf("%w: a drop's statement the head does not hold", ErrEvsObjectMissing)
-	}
-	payload, err := self.pushPayload(ctx, head, statement)
+	payload, err := self.pushContent(ctx, head, statement)
 	if err != nil {
 		return nil, err
 	}
 	if payload.Drop == nil || payload.Drop.History == nil {
 		return nil, fmt.Errorf("%w: a drop's push with no body", ErrEvsReplyInvalid)
 	}
-	return payload.Drop.History, nil
+	history := payload.Drop.History
+	if history.GetAction() != evsDropActionDrop || !bytes.Equal(history.GetDropId(), status.GetDropId()) {
+		return nil, fmt.Errorf("%w: the DROP at the drop's version is not the drop its entry names", ErrEvsDropNotPending)
+	}
+	return history, nil
 }
 
 // The known paths a DROP's lineages cover, at most DropNamesCount: a path whose token path in a lineage entry's epoch

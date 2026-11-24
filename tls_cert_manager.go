@@ -227,6 +227,8 @@ type TlsCertManager struct {
 
 	ctx    context.Context
 	cancel context.CancelFunc
+	// closed once the pass loop has returned
+	done chan struct{}
 	// one pass at a time: a sync, an order's placing, or a status read with its install
 	passLock chan struct{}
 	// raised when the installed custom chains or what they present change: an install, an expiry, a revocation
@@ -279,6 +281,7 @@ func NewTlsCertManager(ctx context.Context, args *TlsCertManagerArgs) (*TlsCertM
 		log:           loggerOrDefault(args.Log),
 		ctx:           managerCtx,
 		cancel:        cancel,
+		done:          make(chan struct{}),
 		passLock:      make(chan struct{}, 1),
 		customVersion: NewMonitorValue[uint64](0),
 		wake:          make(chan struct{}, 1),
@@ -289,7 +292,7 @@ func NewTlsCertManager(ctx context.Context, args *TlsCertManagerArgs) (*TlsCertM
 	return manager, nil
 }
 
-// Ends the pass. What is installed stays in the store.
+// Ends the pass, without waiting for the loop: done closes once it has returned. What is installed stays in the store.
 func (self *TlsCertManager) Close() {
 	self.cancel()
 }
@@ -322,24 +325,54 @@ func (self *TlsCertManager) requestPass() {
 }
 
 // The pass loop: a pass at each hint, at CertResyncInterval with none, and when an installed certificate reaches its
-// expiry, with at least CertHintMinInterval between two.
+// expiry, with at least CertHintMinInterval between two. No pass starts once the manager has closed, a hint or a timer
+// taken as it closed included, and a closed manager asks the clock for nothing.
 func (self *TlsCertManager) run() {
-	for {
+	defer close(self.done)
+	for self.ctx.Err() == nil {
 		select {
 		case <-self.ctx.Done():
-			return
 		case <-self.wake:
 		case <-self.clock.After(self.nextPassWait()):
+		}
+		// select takes any of its ready cases at random: a hint or a timer taken as the manager closed reads as the end
+		if self.ctx.Err() != nil {
+			return
 		}
 		if err := self.Sync(self.ctx); err != nil && self.log.V(1).Enabled() {
 			self.log.Infof("[tls]certificate pass: %s\n", tlsCertErrorText(err))
 		}
-		select {
-		case <-self.ctx.Done():
+		if self.wait(self.ctx, self.settings.CertHintMinInterval) != nil {
 			return
-		case <-self.clock.After(self.settings.CertHintMinInterval):
 		}
 	}
+}
+
+// ctx's error once ctx has ended, else ErrTlsCertManagerClosed once the manager has, else nil.
+func (self *TlsCertManager) endErr(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if self.ctx.Err() != nil {
+		return ErrTlsCertManagerClosed
+	}
+	return nil
+}
+
+// Waits timeout on the manager's clock, or until ctx or the manager ends. nil only for a timeout passed with both
+// live, else endErr's answer, a timer that fired as either ended included, so no step or pass follows a wait past its
+// context; an ended context asks the clock for nothing.
+func (self *TlsCertManager) wait(ctx context.Context, timeout time.Duration) error {
+	if err := self.endErr(ctx); err != nil {
+		return err
+	}
+	select {
+	case <-ctx.Done():
+	case <-self.ctx.Done():
+	case <-self.clock.After(timeout):
+	}
+	// select takes any of its ready cases at random: a timer that fired as a context ended reads as the end
+	return self.endErr(ctx)
 }
 
 // How long the loop waits with no hint: the resync, or less when an installed certificate expires sooner.
@@ -376,16 +409,27 @@ func tlsCertErrorText(err error) string {
 	return "failed"
 }
 
-// Takes the pass lock, or answers ctx's or the manager's end.
+// Takes the pass lock, or answers endErr's error once ctx or the manager has ended, the lock free or not, so no pass
+// or step starts on an ended context.
 func (self *TlsCertManager) acquirePass(ctx context.Context) error {
+	if err := self.endErr(ctx); err != nil {
+		return err
+	}
+	taken := false
 	select {
 	case self.passLock <- struct{}{}:
-		return nil
+		taken = true
 	case <-ctx.Done():
-		return ctx.Err()
 	case <-self.ctx.Done():
-		return ErrTlsCertManagerClosed
 	}
+	// select takes any of its ready cases at random: a lock taken as a context ended goes back, and the end answers
+	if err := self.endErr(ctx); err != nil {
+		if taken {
+			self.releasePass()
+		}
+		return err
+	}
+	return nil
 }
 
 // Gives the pass lock back.
@@ -1050,10 +1094,11 @@ func (self *TlsCertManager) networkReplaces(now time.Time) string {
 
 // The network's certificate on this device's key (§13.8, §13.10's step 3): the installed one when it is live on the
 // key that should serve, else an order through certs' CSR proxy, followed at GET /tls/cert-order/<id> by its
-// retry_after until it issues, fails, or ctx ends. A rotation's pending key is the one ordered for, with `replaces`,
-// and the certificate on the old key serves until that chain installs. Asking once makes the background pass keep
-// the certificate from then on. Refusals: ErrTlsCertsUnconfigured, ErrTlsCertsOffline, certs' own as a
-// *SidecarApiError, ErrTlsCertOrderFailed, ErrTlsCertChain for a chain that does not check.
+// retry_after until it issues, fails, or ctx or the manager ends, which answers ctx's error or ErrTlsCertManagerClosed
+// and takes no step after the end. A rotation's pending key is the one ordered for, with `replaces`, and the
+// certificate on the old key serves until that chain installs. Asking once makes the background pass keep the
+// certificate from then on. Refusals: ErrTlsCertsUnconfigured, ErrTlsCertsOffline, certs' own as a *SidecarApiError,
+// ErrTlsCertOrderFailed, ErrTlsCertChain for a chain that does not check.
 func (self *TlsCertManager) EnsureTlsCertificate(ctx context.Context) (*tls.Certificate, error) {
 	names, err := self.names(ctx)
 	if err != nil {
@@ -1121,12 +1166,9 @@ func (self *TlsCertManager) EnsureTlsCertificate(ctx context.Context) (*tls.Cert
 			}
 			return certificate, nil
 		}
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-self.ctx.Done():
-			return nil, ErrTlsCertManagerClosed
-		case <-self.clock.After(wait):
+		// a poll whose timer fired as ctx or the manager ended takes no further step
+		if err := self.wait(ctx, wait); err != nil {
+			return nil, err
 		}
 	}
 }

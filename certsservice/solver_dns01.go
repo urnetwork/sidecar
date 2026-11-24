@@ -54,8 +54,9 @@ var (
 	// A /dns/* route answered 503 while a restore runs (§12.6): the call is tried again after a wait.
 	// TLS-M5-16's client returns it for a 503.
 	ErrCertsDnsRestoring = errors.New("dns is restoring")
-	// POST /dns/acme-challenge refused the write, past its 10 per name per hour (D-DNS-8) or for a
-	// suspended zone. Not tried again: the order fails, and its chain queues it again later.
+	// POST /dns/acme-challenge refused the write, a 400 for a name or values the path refuses, a suspended
+	// zone among them, or past its 10 per name per hour (D-DNS-8), which is ErrCertsDnsWriteRateLimited as
+	// well (service.go). Not tried again: the order fails, and its chain queues it again later.
 	ErrCertsDnsWriteRefused = errors.New("dns refused the challenge write")
 	// More values for one name than it holds (DnsChallengeValueMaxCount), which no order of a set and its
 	// wildcard needs.

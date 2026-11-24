@@ -212,6 +212,12 @@ func (self *testForwarderGkm) Wraps(ctx context.Context, repoId Id, groupId Id, 
 	return &protocol.GkmWrapsReply{Wraps: slices.Clone(self.wraps[generation][query.Recipient])}, nil
 }
 
+// None: generations are listed in the hand-off's group, as a gkm holding no form of the repo has them
+// (bridge_forward_keys_reform_test.go's gkm serves a re-formed config's).
+func (self *testForwarderGkm) Forms(ctx context.Context, repoId Id) (*protocol.GkmFormsReply, error) {
+	return &protocol.GkmFormsReply{}, nil
+}
+
 // The heads the net's writer saved, each with the fixture's block, as the forwarding reader key opens them.
 type testForwarderHeads struct {
 	world *testForwarderWorld
@@ -269,6 +275,8 @@ type testForwarderWorld struct {
 	sink         *testForwarderSink
 	keys         *testForwarderKeys
 	gkm          *testForwarderGkm
+	// the gkm the Forwarder is built over, gkm where nil
+	forwardGkm   ForwarderGkm
 	forwardHeads *testForwarderHeads
 	// the reader the Forwarder is built over, forwardHeads where nil
 	heads        ConfigHeadReader
@@ -452,6 +460,10 @@ func (self *testForwarderWorld) forwarderIn(ctx context.Context) *Forwarder {
 	if self.heads != nil {
 		heads = self.heads
 	}
+	var gkm ForwarderGkm = self.gkm
+	if self.forwardGkm != nil {
+		gkm = self.forwardGkm
+	}
 	forwarder, err := NewForwarder(ctx, &ForwarderArgs{
 		NetworkId:     self.net.networkId,
 		SidecarId:     self.host.sidecarId,
@@ -460,7 +472,7 @@ func (self *testForwarderWorld) forwarderIn(ctx context.Context) *Forwarder {
 		ConfigGroupId: self.groupId,
 		Projection:    self.api,
 		Heads:         heads,
-		Gkm:           self.gkm,
+		Gkm:           gkm,
 		Binding: func(ctx context.Context, sidecarId Id) ([]byte, error) {
 			self.stateLock.Lock()
 			defer self.stateLock.Unlock()

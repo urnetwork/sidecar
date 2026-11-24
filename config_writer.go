@@ -13,7 +13,11 @@
 //	publish  POST /network/config/projection {Signed ProjectionHeader, rows, config_pushes}; on 409 the device catches
 //	         up and re-signs at the new tip, keeping its fold and its compile while folded_through stays within 1,024
 //	         of the tip and no other base landed, so a stream of statements never starves it; a base that landed
-//	         meanwhile replans from its rows, so no stale compile is signed
+//	         meanwhile replans from its rows, so no stale compile is signed. A tip that moved while the base was
+//	         planned, before its edit and any push, or between the plan and its signing, is the same race seen first
+//	         here, and is caught up the same way: a plan is signed only at the tip it was made or kept at. Where
+//	         another writer's base already names this publish's head, or one pushed past it, folded as far, the
+//	         publish lands at that base
 //
 // The fold loop (run) folds once the oldest unfolded statement or tick is 1,024 positions behind the tip or 24 h old,
 // at once at a start after being offline, after a random delay of up to 10 min that another base cancels. A config
@@ -24,11 +28,15 @@
 // edit the head, which saves with the fold where it is and lands as a base.
 //
 // A head that holds no bridge block, an older network's or one bootstrapped before the bridge shipped, gets the
-// network's first from this writer's next head, whatever saves it, through FirstBridgeBlock (§17.4's first block row).
+// network's first from this writer's next head, whatever saves it, and a block whose signer no longer stands is signed
+// again there, through BridgeBlock, whichever head and bases carried it since (§17.4's first block row; QD-1205).
+// SaveBridgeBlock saves a head for that alone, as a revocation's own flow does on the device that made it, so the
+// re-sign comes at once even where no other save follows, as in ur daemon, whose one writer saves only what a person
+// confirmed (ConfigClient.ConfirmedWriter).
 //
-// It signs heads, bases and that first block only; statements are CORE's acts (C-01). The clock, the delay's randomness
-// and the block's draw come through ConfigWriterSettings, so a test steers all three. Every leg, no connect type. Safe
-// for concurrent use; one publish runs at a time.
+// It signs heads, bases and that block only; statements are CORE's acts (C-01). The clock, the delay's randomness and
+// the block's draw come through ConfigWriterSettings, so a test steers all three. Every leg, no connect type. Safe for
+// concurrent use; one publish runs at a time.
 
 package sidecar
 
@@ -57,11 +65,22 @@ var (
 	ErrConfigWriterNotWriter = errors.New("config writer: not a config writer here")
 	// The config repo's ref moved since the head was read: read it again and save on top.
 	ErrConfigHeadConflict = errors.New("config head conflict")
-	// The base did not land within ConfigWriterSettings.PublishAttemptCount re-signs: the tip kept moving, or api kept
-	// finding other shrinks at its time than this device's clock gave (QD-746).
+	// The base did not land within ConfigWriterSettings.PublishAttemptCount attempts: the tip kept moving while it was
+	// planned or at api, or api kept finding other shrinks at its time than this device's clock gave (QD-746). It wraps
+	// the last attempt's ErrConfigTipMoved.
 	ErrConfigWriterGaveUp = errors.New("config writer: the tip kept moving")
 	// A base would keep both the newest base's fold and its head: it says nothing new, so none is published.
 	ErrConfigWriterNothing = errors.New("config writer: nothing new to publish")
+)
+
+// The points a fault schedule holds a writer at (§22.8), keyed by the network id. The plan's: after the plan read the
+// config head and before it judges under the follow lock whether the log moved since it took its state, so an entry
+// applied there moves the tip under the plan. The signing's: after a plan was made or kept and before signBase judges
+// under the follow lock whether the log moved past the tip the plan was made or kept at, so an entry applied there, a
+// base above all, moves the tip between the plan and its signing.
+const (
+	configWriterBarrierPlanTip = "config_writer.plan.tip"
+	configWriterBarrierSignTip = "config_writer.sign.tip"
 )
 
 // A head push signed and not yet sent: what a base names and carries before its head lands (plan-TEAM-api-config-head-
@@ -154,13 +173,21 @@ type ConfigWriterSettings struct {
 	// How often the loop looks again with nothing landing: 1 min, so a pending head and a fold due by age are seen
 	// within it.
 	CheckInterval time.Duration
-	// How many times a publish re-signs after api's 409 before it gives up until the next pass: 16.
+	// How many times one publish plans and signs a base, again after each tip that moved, at api's 409 or while the
+	// base was planned, before it gives up until the next pass: 16. Non-positive makes one attempt.
 	PublishAttemptCount int
 	// How long one publish may take: 60 s.
 	PublishTimeout time.Duration
+	// How many times SaveBridgeBlock tries: 4. A try after another writer's head landed at the ref first reads the head
+	// that landed, so one that leaves the block nothing to do ends it. Non-positive tries once.
+	BridgeBlockAttemptCount int
+	// How long SaveBridgeBlock waits before trying again after an answer that refuses nothing (a 429 or 503 from gkm or
+	// evs) or gkm's wait: 2 s, the time a gate takes to load the revocation its hint names. Non-positive tries again at
+	// once.
+	BridgeBlockRetryWait time.Duration
 	// The fold delay's randomness, a fraction in [0, 1). Nil is crypto/rand.
 	Random func() float64
-	// The first bridge block's draw (ConfigWriterArgs.FirstBridgeBlock). Nil is crypto/rand's reader.
+	// The first bridge block's draw (ConfigWriterArgs.BridgeBlock). Nil is crypto/rand's reader.
 	BridgeBlockRandom io.Reader
 	// The clock; nil is real time.
 	Clock Clock
@@ -171,13 +198,15 @@ type ConfigWriterSettings struct {
 // §7.9's values.
 func DefaultConfigWriterSettings() *ConfigWriterSettings {
 	return &ConfigWriterSettings{
-		FoldEntryCount:      1024,
-		FoldAge:             24 * time.Hour,
-		FoldDelayMax:        10 * time.Minute,
-		PendingHeadTimeout:  10 * time.Minute,
-		CheckInterval:       time.Minute,
-		PublishAttemptCount: 16,
-		PublishTimeout:      60 * time.Second,
+		FoldEntryCount:          1024,
+		FoldAge:                 24 * time.Hour,
+		FoldDelayMax:            10 * time.Minute,
+		PendingHeadTimeout:      10 * time.Minute,
+		CheckInterval:           time.Minute,
+		PublishAttemptCount:     16,
+		PublishTimeout:          60 * time.Second,
+		BridgeBlockAttemptCount: 4,
+		BridgeBlockRetryWait:    2 * time.Second,
 	}
 }
 
@@ -187,10 +216,11 @@ func DefaultConfigWriterSettings() *ConfigWriterSettings {
 // below the one asked. BridgeBodyJudge.Fold is one.
 type ConfigBridgeFold func(previous *ConfigHead, state *ConfigState, foldedThrough uint64, entryTimeMs func(n uint64) (int64, bool)) (*BridgeLedgerFold, error)
 
-// The network's first bridge block on a head a writer's plan is about to save (§17.4's first block row): head with a
-// bridge/block sign signed, drawn with random, where head holds none and readers at state take sign's block, and head
-// itself otherwise. WithFirstBridgeBlock is one.
-type ConfigFirstBridgeBlock func(state *ConfigState, head *ConfigHead, sign ConfigSignFunction, random io.Reader) (*ConfigHead, error)
+// The network's bridge block on a head a writer's plan is about to save (§17.4's first block row; QD-1205): head with
+// the network's first block drawn with random where it holds none, or with the block every reader of state's newest
+// base holds signed again where head carries its record and that record's signer no longer stands, each signed by sign
+// and only where readers at state take sign's block; head itself otherwise. WithBridgeBlock is one.
+type ConfigBridgeBlock func(state *ConfigState, head *ConfigHead, sign ConfigSignFunction, random io.Reader) (*ConfigHead, error)
 
 // What a ConfigWriter runs on.
 type ConfigWriterArgs struct {
@@ -205,10 +235,10 @@ type ConfigWriterArgs struct {
 	// The bridge ledger's fold. Nil folds no bridge statement: a fold stops below the first one, or keeps the previous
 	// fold where §7.9's fold rule does not allow that, so no head this writer saves misses its ledger.
 	BridgeFold ConfigBridgeFold
-	// The first bridge block a head that holds none gets from this writer's next head, which the follower's writers
-	// take (WithFirstBridgeBlock). Nil adds none: no writer runs on the ios_extension legs, which link no block draw, and
-	// a network's block then waits for a writer that has one.
-	FirstBridgeBlock ConfigFirstBridgeBlock
+	// The bridge block this writer's next head draws where a head holds none, or signs again where its signer no longer
+	// stands, which the follower's writers take (WithBridgeBlock). Nil does neither: no writer runs on the ios_extension
+	// legs, which link no block draw, and a network's block then waits for a writer that has one.
+	BridgeBlock ConfigBridgeBlock
 }
 
 // One device's config writer.
@@ -319,6 +349,47 @@ func (self *ConfigWriter) PublishBase(ctx context.Context, fold bool) (*bridge.A
 	return self.publish(ctx, fold, nil, nil)
 }
 
+// Saves a head only for the network's bridge block, and publishes its base: its first drawn where the head holds none,
+// or the block every reader holds signed again where its signer no longer stands (ConfigWriterArgs.BridgeBlock;
+// QD-1205), as a revocation this device made needs at once (Sidecar.saveBridgeBlockAfter). Nil, with nothing saved,
+// where the block needs neither, so it publishes no fold of its own, and where no BridgeBlock is installed. Up to
+// BridgeBlockAttemptCount tries, each bounded by PublishTimeout: another writer's head landing at the ref first is read
+// and planned on again at once, and an answer that refuses nothing, gkm's or evs's 429 or 503, or gkm's wait for a
+// covering generation or for the log, is tried again after BridgeBlockRetryWait, since right after a revocation their
+// gates may not have loaded it yet, which its hint brings. Answers the base's pin.
+func (self *ConfigWriter) SaveBridgeBlock(ctx context.Context) (*bridge.AuthPin, error) {
+	var last error
+	for range max(self.settings.BridgeBlockAttemptCount, 1) {
+		pin, err := func() (*bridge.AuthPin, error) {
+			attemptCtx, cancel := context.WithTimeout(ctx, self.settings.PublishTimeout)
+			defer cancel()
+			return self.publishRequest(attemptCtx, &configWriterRequest{blockOnly: true})
+		}()
+		var transient interface{ RefusesNothing() bool }
+		switch {
+		case err == nil:
+			return pin, nil
+		case errors.Is(err, ErrConfigWriterNothing):
+			return nil, nil
+		case errors.Is(err, ErrConfigHeadConflict):
+			last = err
+			if err := self.args.Client.CatchUp(ctx); err != nil {
+				return nil, err
+			}
+		case errors.As(err, &transient) && transient.RefusesNothing(), errors.Is(err, ErrGkmWait), errors.Is(err, ErrGkmAuthAhead):
+			last = err
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-self.clock.After(self.settings.BridgeBlockRetryWait):
+			}
+		default:
+			return nil, err
+		}
+	}
+	return nil, last
+}
+
 // What one publish holds across re-signs: its fold, the head it names and the pushes that reach it, and the rows.
 type configWriterPlan struct {
 	// the base the plan stands on
@@ -329,29 +400,76 @@ type configWriterPlan struct {
 	pushes        [][]byte
 	rows          []byte
 	threshold     uint32
+	// the tip (n, A_n) the plan was made or last kept at, the only one signBase signs it at: its fold, rows and pushes
+	// were judged against the newest base there
+	tipN     uint64
+	tipChain [sha256.Size]byte
+	// set alone where another writer's base already names the head an earlier plan of this publish saved or stood on,
+	// or one pushed past it, with the fold this plan would publish: that base's (n, A_n), which the publish answers
+	landed *bridge.AuthPin
 }
 
-// One publish (DESIGN-DETAILS 5.2.4's WriterPublishBase), re-signing at each new tip up to PublishAttemptCount times.
+// What one publish asks of its plans.
+type configWriterRequest struct {
+	// fold through the tip, where the fold rule does not already
+	fold bool
+	// the change the first plan makes to the head, nil for none; a later plan re-reads the head it saved
+	edit func(head *ConfigHead) (*ConfigHead, error)
+	// the head a confirmed save previewed, which the plan must stand on; nil for whichever is current
+	expected *ConfigHeadTip
+	// the first plan saves a head only where the bridge block step changes it (SaveBridgeBlock), answering
+	// ErrConfigWriterNothing otherwise, whatever the fold would do
+	blockOnly bool
+}
+
+// One publish (DESIGN-DETAILS 5.2.4's WriterPublishBase), planned and signed at each new tip up to PublishAttemptCount
+// times (publishRequest).
 func (self *ConfigWriter) publish(ctx context.Context, fold bool, edit func(head *ConfigHead) (*ConfigHead, error), expected *ConfigHeadTip) (*bridge.AuthPin, error) {
+	return self.publishRequest(ctx, &configWriterRequest{fold: fold, edit: edit, expected: expected})
+}
+
+// The publish request asks for, planned and signed at each new tip up to PublishAttemptCount times. The tip moves under
+// a base three ways, which it treats alike: api answers 409 to the base signed; the log applies an entry while the plan
+// reads the config head, which plan answers ErrConfigTipMoved before the request's edit, its block and any push; or
+// the log applies one between the plan and its signing, which signBase answers ErrConfigTipMoved rather than sign a
+// plan judged against a base no longer the newest. Each way the writer catches up and plans again at the new tip: a
+// plan made in full is kept, its fold and compile, where plan keeps one, and an edit or a block not yet made is made
+// there; past the bound it gives up with the last moved tip. Where another writer's base already names the head a
+// plan of this publish saved or stood on, or one pushed past it, folded as far as the next plan would, nothing is left
+// to publish, and the publish answers that base.
+func (self *ConfigWriter) publishRequest(ctx context.Context, request *configWriterRequest) (*bridge.AuthPin, error) {
 	self.publishLock.Lock()
 	defer self.publishLock.Unlock()
 	var plan *configWriterPlan
-	for range max(self.settings.PublishAttemptCount, 1) {
-		var err error
-		plan, err = self.plan(ctx, plan, fold, edit, expected)
+	// one attempt, which leaves plan and request as they were where its plan fails: a confirmed save whose push landed
+	// keeps requiring that push's head when it plans again (plan's expected rule), and an edit or a block is made once
+	attempt := func() (*bridge.AuthPin, error) {
+		next, err := self.plan(ctx, plan, request)
 		if err != nil {
 			return nil, err
 		}
-		edit = nil
+		if next.landed != nil {
+			if self.log.V(1).Enabled() {
+				self.log.Infof("[config]%s the base at %d already names config head %d of this publish's plan or past it", self.args.Client.NetworkId(), next.landed.GetVersion(), plan.configVersion)
+			}
+			return next.landed, nil
+		}
+		// the head the first plan saved holds its edit and its block, pushed or found there, never made again
+		plan, request = next, &configWriterRequest{fold: request.fold, expected: request.expected}
 		signedHeader, err := self.signBase(plan)
 		if err != nil {
 			return nil, err
 		}
 		pin, err := self.args.Publisher.PublishConfigBase(ctx, &ConfigBasePublish{SignedHeader: signedHeader, Rows: plan.rows, ConfigPushes: plan.pushes})
+		if err == nil && self.log.V(1).Enabled() {
+			self.log.Infof("[config]%s published a base at %d folding through %d", self.args.Client.NetworkId(), pin.GetVersion(), plan.foldedThrough)
+		}
+		return pin, err
+	}
+	var moved error
+	for range max(self.settings.PublishAttemptCount, 1) {
+		pin, err := attempt()
 		if err == nil {
-			if self.log.V(1).Enabled() {
-				self.log.Infof("[config]%s published a base at %d folding through %d", self.args.Client.NetworkId(), pin.GetVersion(), plan.foldedThrough)
-			}
 			if _, err := self.args.Client.WaitFor(ctx, pin.GetVersion()); err != nil {
 				return pin, err
 			}
@@ -360,18 +478,27 @@ func (self *ConfigWriter) publish(ctx context.Context, fold bool, edit func(head
 		if !errors.Is(err, ErrConfigTipMoved) {
 			return nil, err
 		}
-		// the tip moved: catch up and re-sign at the new tip
+		if self.log.V(1).Enabled() {
+			self.log.Infof("[config]%s the tip moved under a base: %v", self.args.Client.NetworkId(), err)
+		}
+		moved = err
+		// catch up and plan again at the new tip
 		if err := self.args.Client.CatchUp(ctx); err != nil {
 			return nil, err
 		}
 	}
-	return nil, ErrConfigWriterGaveUp
+	return nil, fmt.Errorf("%w: %w", ErrConfigWriterGaveUp, moved)
 }
 
-// The plan for a base at the client's tip. A plan from the attempt before is kept, its fold and compile, while no
-// other base landed and its fold stays within FoldEntryCount of the tip; else the fold, the head and the rows are
-// planned anew from the newest base.
-func (self *ConfigWriter) plan(ctx context.Context, previous *configWriterPlan, fold bool, edit func(head *ConfigHead) (*ConfigHead, error), expected *ConfigHeadTip) (*configWriterPlan, error) {
+// The plan for a base at the client's tip, which it records as the tip the plan was made or kept at. A plan from the
+// attempt before is kept, its fold and compile, while no other base landed and its fold stays within FoldEntryCount of
+// the tip; else the fold, the head and the rows are planned anew from the newest base. Its own ErrConfigTipMoved only
+// where the log applied an entry while the head was read, which it finds before the edit, the block and any push, so
+// nothing of this plan was made yet. ErrConfigWriterNothing where the base would keep the newest base's fold and head;
+// but where a plan from the attempt before was made, so this publish's head was pushed or stood on already, the newest
+// base naming that head or one pushed past it published it, and the plan answers that base as landed.
+func (self *ConfigWriter) plan(ctx context.Context, previous *configWriterPlan, request *configWriterRequest) (*configWriterPlan, error) {
+	fold, edit, expected := request.fold, request.edit, request.expected
 	state := self.args.Client.State()
 	if state == nil {
 		return nil, ErrConfigWriterNotWriter
@@ -385,6 +512,9 @@ func (self *ConfigWriter) plan(ctx context.Context, previous *configWriterPlan, 
 	}
 	if previous != nil && previous.previousN == base.GetVersion() && state.n-previous.foldedThrough <= uint64(max(self.settings.FoldEntryCount, 1)) &&
 		state.n-previous.foldedThrough <= configTailMax {
+		// kept, the same plan, at this tip, which signBase signs it at, past entries the tail's verdicts carry; the
+		// plan is this publish's alone, under publishLock
+		previous.tipN, previous.tipChain = state.n, state.chain
 		return previous, nil
 	}
 
@@ -417,12 +547,14 @@ func (self *ConfigWriter) plan(ctx context.Context, previous *configWriterPlan, 
 	var records []ConfigFoldRecord
 	var compileRows *ConfigCompileRows
 	var ledgerFold *BridgeLedgerFold
+	testHookBarrier(configWriterBarrierPlanTip, state.NetworkId().String())
 	err = func() error {
 		self.args.Client.followLock.Lock()
 		defer self.args.Client.followLock.Unlock()
 		log := self.args.Client.configLog.Load()
 		if log == nil || log.State().n != state.n {
-			return ErrConfigTipMoved
+			// publish catches up and plans again, as after api's 409
+			return fmt.Errorf("%w: the log moved past %d while the base was planned", ErrConfigTipMoved, state.n)
 		}
 		if fork := log.Fork(); fork != nil {
 			return fmt.Errorf("%w: %w", ErrConfigWriterNotWriter, fork)
@@ -448,18 +580,25 @@ func (self *ConfigWriter) plan(ctx context.Context, previous *configWriterPlan, 
 		return nil, err
 	}
 
-	// the head: the current one with the edit, the network's first bridge block where it holds none, the bridge ledger
-	// and the fold, saved when any changes it
+	// the head: the current one with the edit, the network's bridge block where it holds none or its signer no longer
+	// stands, the bridge ledger and the fold, saved when any changes it
 	next := head
 	if edit != nil {
 		if next, err = edit(next); err != nil {
 			return nil, err
 		}
 	}
-	if self.args.FirstBridgeBlock != nil {
-		if next, err = self.args.FirstBridgeBlock(state, next, self.args.Sign, self.settings.BridgeBlockRandom); err != nil {
+	if self.args.BridgeBlock != nil {
+		edited := next
+		if next, err = self.args.BridgeBlock(state, next, self.args.Sign, self.settings.BridgeBlockRandom); err != nil {
 			return nil, err
 		}
+		if request.blockOnly && configHeadsEqual(next, edited) {
+			// the block needs no head: the save asked for one only for it
+			return nil, ErrConfigWriterNothing
+		}
+	} else if request.blockOnly {
+		return nil, ErrConfigWriterNothing
 	}
 	if ledgerFold != nil {
 		if next, err = ledgerFold.Apply(next); err != nil {
@@ -488,6 +627,13 @@ func (self *ConfigWriter) plan(ctx context.Context, previous *configWriterPlan, 
 		version, chain = push.Version, push.Chain
 	}
 	if foldedThrough == base.GetFoldedThrough() && version == base.GetConfigVersion() {
+		// a plan this publish made before pushed its head or stood on one, and the newest base names that head, or one
+		// pushed past it on the ref, with the fold this plan would publish: another writer's base published it. A
+		// confirmed save gets here only on the exact head it pushed (the expected rule above)
+		if previous != nil && bytes.Equal(base.GetConfigHeadSha256(), chain[:]) &&
+			(previous.configVersion < version || previous.configVersion == version && previous.headChain == chain) {
+			return &configWriterPlan{landed: &bridge.AuthPin{Version: state.base.n, Chain: bytes.Clone(state.base.chain[:])}}, nil
+		}
 		return nil, ErrConfigWriterNothing
 	}
 	pushes, err := self.args.Heads.ConfigHeadPushes(ctx, base.GetConfigVersion(), version)
@@ -506,6 +652,8 @@ func (self *ConfigWriter) plan(ctx context.Context, previous *configWriterPlan, 
 		pushes:        pushes,
 		rows:          rows,
 		threshold:     state.threshold,
+		tipN:          state.n,
+		tipChain:      state.chain,
 	}, nil
 }
 
@@ -564,8 +712,14 @@ func configHeadsEqual(a *ConfigHead, b *ConfigHead) bool {
 }
 
 // The plan's Signed ProjectionHeader at the client's tip: version tip+1, prev_chain A_tip, the tail's verdicts as this
-// device holds them, and the repos the base's own change shrinks at this device's clock.
+// device holds them, and the repos the base's own change shrinks at this device's clock. Signed only at the tip the
+// plan was made or kept at, judged under the follow lock it signs under: an entry the log applied since moves the tip,
+// and a base among them leaves the plan's fold, rows and pushes judged against a base no longer the newest, which api
+// refuses (403: config_version or folded_through below the newest base's, or pushes that walk from another head).
+// ErrConfigTipMoved there, so publish plans again at the new tip, keeping the plan where no base landed, as after
+// api's 409.
 func (self *ConfigWriter) signBase(plan *configWriterPlan) ([]byte, error) {
+	testHookBarrier(configWriterBarrierSignTip, self.args.Client.NetworkId().String())
 	var header *bridge.ProjectionHeader
 	err := func() error {
 		self.args.Client.followLock.Lock()
@@ -575,6 +729,9 @@ func (self *ConfigWriter) signBase(plan *configWriterPlan) ([]byte, error) {
 			return ErrConfigClientClosed
 		}
 		state := log.State()
+		if state.n != plan.tipN || state.chain != plan.tipChain {
+			return fmt.Errorf("%w: the log moved past %d before the base was signed", ErrConfigTipMoved, plan.tipN)
+		}
 		verdicts := []uint8{}
 		for k := plan.foldedThrough + 1; k <= state.n; k += 1 {
 			kept := log.keptEntry(k)

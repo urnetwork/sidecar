@@ -1521,7 +1521,11 @@ I-EVS-18 a slot object has one origin for its life, the statement whose create s
 pins      every statement declares the authorization pin auth = (n, A_n) (§7.9's AuthPin) and the generation pin
           {group_id, generation, C_g}; the head records the newest committed ones; generation pins compare
           (g, C_g), a new group_id at an equal (g, C_g) being taken only along a verified GroupForm chain, and
-          evs and readers resolve a statement's gen/<g> through the repo's newest GroupForm (§10.8's re-form)
+          evs and readers resolve a statement's gen/<g> through the repo's newest GroupForm (§10.8's re-form);
+          a reader judges a statement's auth pin by 11.9's judged row: by its own verdict at or below its ref
+          pin, after waiting for its log above its own state, and not at all before its retained window,
+          where only the refs table's rules that no right at the pin excuses still apply (owner decisions
+          706, 707, 722)
 fence     step 7 commits only if (1) the push's pins pass §10.6's gate predicate against the newest authorization
           state evs holds, and (2) neither pin is below the head's (equal versions need equal chains and
           commitments); the head If-Match makes (2) atomic with the commit, so once any commit carries a newer
@@ -1692,6 +1696,33 @@ reader    checks each returned statement's signature against its config's writer
           record, a directory's by its newest delta's commit, is still refused, gap or not (owner decision 600);
           a head below its pin is refused unless a verified EvsReseed covers it (11.13, §19.10), which it shows
           as a loss
+judged    (owner decisions 706, 707) each statement's authority is judged at its own auth pin: at or below this
+          device's pin for the ref it stands as verified, judged when it was new, I-16 still refusing a lower
+          pin; above the reader's own config state it waits for the log to reach the pin, within
+          EvsSettings.AuthPinWaitTimeout (60 s), on every walk, and is judged there, withheld past the bound,
+          the read answering as before; pinned before the reader's retained window and above its ref pin, as a
+          device that started at a base or one long offline meets, it is not judged and counts against no one:
+          it stands where it lies on a walk whose chain reaches the head the reader verifies and pins, needing
+          no judged statement after it, its signature checked against the signer's identity key in the oldest
+          retained rows that admit it, which refuses a forged statement, a never-admitted signer, one admitted
+          after its pin and one revoked at or before it; only a pin off the chain, one no state of the log
+          reaches, or a signature that does not verify refuses, as §10.9's judged row has it for gkm; accepted:
+          where every statement from a reader's pin to the head is pinned before its window, the reader judges
+          no writer, so a malicious evs holding the key of a sidecar the rows once admitted could serve such a
+          device a history of old-pinned statements no writer signed, which a reader whose pin lies past that
+          history refuses, its pin's chain refusing a fork, as every reader does once a current writer writes;
+          such a statement still meets 11.8's refs-table rules that refuse it whatever rights its signer held
+          at its pin, the repo's kind read from the reader's newest state, which no state after the repo's
+          creation changes, and a repo that state does not hold refused: the ref kind known, a deposit ref at
+          its depositor's id and the erasure ref at the repo's, an owned ref signed by its owner except a BASE
+          or CLOSURE on a record-class stream, a deposit signed by its depositor, a CONSUME's and a BASE's
+          changes removals, and a deposit's, the erasure ref's and a stream's changes creations, a stream's
+          directories also taking add-only deltas, with no FORCE or DELETE; the rules that ask a right at the
+          pin it does not judge: a shared ref's writer and the admin its FORCE or DELETE needs, an owned
+          ref's owner still writing, an admin's BASE or CLOSURE of another's stream, a CONSUME's writer, an
+          erasure push's admin, format 2's CUT signer, the config repo's genesis writer and the lock rows; a
+          statement that breaks a rule no right excuses is refused and alarms as tampering (owner decision
+          722)
 collected from T, the end of the UTC minute in the replacing record's EvsPlace plus 60 s, every read of a replaced
           versionless version answers `collected` by evs's checked clock, whether or not its bytes remain (staged in
           a batch, purge: observe, or kept by a hold), evs serving it before T and never using time_ms, which may
@@ -2040,7 +2071,7 @@ secret       any number a member, owner-bound:  record-class   the owner's conse
 
 **Grants (owner decisions 7, 8, 60, 114, 144, 182).** Member devices are leaves of the repo's MLS group, except readers of the config and of the team directory past §7.9's first 1,000, which read by wraps; the directory's readers are fixed by kind, which refuses `RepoAdmin` adds, `RepoGrant` and `RepoRevoke` (§8.5, D-ACL-24); tagged, ephemeral, CI and cloud sidecars hold per-generation `ReaderWrap`s or a covering Delegation's wrap (§10.5), and RecoveryWraps hold recovery copies (owner decision 62). Writers are sidecars whose pushes readers accept. Repo admins and config writers sign the access log (§8.8), which clients verify from the config repo and the token exchange mirrors as scopes. `ur mount share` files a grant, or an `EvsShare` for owner-bound kinds; `ur share` is §9's (D-SOCK-16).
 
-**Deposits.** `Deposit(name, reader)` checks the drop key against §10's `GenRotate_g` and §10.5's depositor rule, then appends entries under random ids, each body under a random key that a slot holds HPKE-wrapped to the drop key (below), to the depositor's `deposit` ref (11.6); entries may span segments, so 50 MiB messages pass the lb (§15). Receivers and tagged or headless sidecars deposit; a reader with `rw` ingests in version order, then commits a CONSUME deleting the entries and their slots. A depositor learns its own ref's version and chain, so it can infer that and when a reader consumed, and nothing else of the head: EvsDepositHead {version, chain, consumed_through} rides a push's 200 on the caller's own deposit ref (the version committed, or for a 5a retry the current head) and 5f's 409 BASE_STALE there, read from the cluster head and final, so nothing is recorded; every read route stays closed to it (FS-23). It keeps the newest in its sealed store and builds each push on it, rebuilding after BASE_STALE under a new push id and new slot ids and keeping receipts under 24 h old; a new ref's first push uses version 0 and C_0, which it computes. The ingester's CONSUME declares consumed_through, the highest version of the deposit ref at or below which no unconsumed deposit remains by its own read, which evs copies to the head, never falling, so a depositor, receipt-only readers included, learns when its deposits were ingested: it prunes its spooled deposits at or below the mark and keeps the rest within §16.7's 1 GiB, oldest dropped first and coverage naming spool_drop, with no age bound, since ingest lets no outcome hold a ref back. A reader of an owner-bound repo that is not its writer deposits only `read` receipts (§16.8): at most `evs_read_receipt_bytes` (4 KiB) each and `evs_read_receipts_per_repo_day` (256) a day per repo, which evs counts through `Quota.CountRate` on the repo's network under a key naming the repo and no day, the push id its debit id, so a retry counts nothing twice, else 429 with `retry_after_ms` to the next 00:00 UTC (§20.4; owner decision 519); evs sees only sealed bytes, so the owner's ingest enforces the kind, taking from such a depositor only entries of kind `read` with source `observed` and consuming any other without ingesting it, with an alarm.
+**Deposits.** `Deposit(name, reader)` checks the drop key against §10's `GenRotate_g` and §10.5's depositor rule, then appends entries under random ids, each body under a random key that a slot holds HPKE-wrapped to the drop key (below), to the depositor's `deposit` ref (11.6); entries may span segments, so 50 MiB messages pass the lb (§15). Receivers and tagged or headless sidecars deposit; a reader with `rw` ingests in version order, then commits a CONSUME deleting the entries and their slots. A depositor learns its own ref's version and chain, so it can infer that and when a reader consumed, and nothing else of the head: EvsDepositHead {version, chain, consumed_through} rides a push's 200 on the caller's own deposit ref (the version committed, or for a 5a retry the current head) and 5f's 409 BASE_STALE there, read from the cluster head and final, so nothing is recorded; every read route stays closed to it (FS-23). It keeps the newest in its sealed store and builds each push on it, rebuilding after BASE_STALE under a new push id and new slot ids and keeping receipts under 24 h old; a new ref's first push uses version 0 and C_0, which it computes. The ingester's CONSUME declares consumed_through, the highest version of the deposit ref at or below which no unconsumed deposit remains by its own read, which evs copies to the head, never falling, so a depositor, receipt-only readers included, learns when its deposits were ingested: it prunes its spooled deposits at or below the mark and keeps the rest within §16.7's 1 GiB, oldest dropped first and coverage naming spool_drop, with no age bound, since ingest lets no outcome hold a ref back. A reader of an owner-bound repo that is not its writer deposits only `read` receipts (§16.8): at most `evs_read_receipt_bytes` (4 KiB) each and `evs_read_receipts_per_repo_day` (256) a day per repo, which evs counts through `Quota.CountRate` on the repo's network under a key naming the repo and no day, the push id its debit id, so a retry counts nothing twice, else 429 with `retry_after_ms` to the next 00:00 UTC (§20.4; owner decision 519); evs sees only sealed bytes, so the owner's ingest enforces the kind, taking from such a depositor only entries of kind `read` with source `observed` and consuming any other without ingesting it, with an alarm. Receipts come only from an owner-bound repo's readers: in a general repo, a group inbox among them, a depositor holding deposit or write deposits mail even while it reads, and ingest classes it so (§15.7; owner decision 711). A read refuses a deposit its depositor did not sign, at any pin, one pinned before the reader's window included (11.9's judged row; owner decision 722), and ingest holds each deposit's signer to its ref's depositor as a second check, consuming one another sidecar signed with the depositor alarm (owner decision 712).
 
 **Erasure** (owner decisions 61, 133) is key destruction:
 

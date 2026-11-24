@@ -12,7 +12,7 @@
 //	           statements with the keys held; past UnfoldedBodyMaxByteCount it refuses with ledger_over_budget
 //	7 build    S's addresses; the sender's entries, links and egress; S's maps and served routes in force; the
 //	           subjects with their rows
-//	8 state    BridgeState at the pin, its names, identities and listeners
+//	8 state    BridgeState at the pin, its names, identities and listeners, and the key its newest base verified under
 //	9 digest   SHA-256 of the state's deterministic marshal
 //
 // What the compile needs from a server, a target's binding and a subject's client ids, it reads from
@@ -129,6 +129,8 @@ type BridgeCompiled struct {
 	Alarms []BridgeAlarm
 	// The block in force, the next compile's PreviousBlock; the previous one when this one was refused.
 	Block *bridge.BridgeBlock
+	// The Signed record Block came from, the next compile's PreviousBlockRecord; nil for none.
+	BlockRecord []byte
 	// Every sidecar the state names in a link of this network, an entry's or an exit's, ascending: the targets
 	// Sidecar.SignWindowDelegation signs for.
 	LinkTargets []Id
@@ -388,9 +390,9 @@ func CompileBridgeState(view BridgeConfigView, local *BridgeCompileLocal, settin
 	selfState := compiler.acl.sidecarState(compiler.self)
 	compiler.selfDenied = selfState == nil || selfState.hardDeny(compiler.t) != 0
 
-	// a refused compile changes nothing: the next one reads at the block held before it
+	// a refused compile changes nothing: the next one reads at the block held before it, and its record
 	refused := func(err error) (*BridgeCompiled, error) {
-		compiler.compiled.Block = local.PreviousBlock
+		compiler.compiled.Block, compiler.compiled.BlockRecord = local.PreviousBlock, local.PreviousBlockRecord
 		return compiler.compiled, err
 	}
 	compiler.readBlock()
@@ -422,18 +424,19 @@ func (self *bridgeCompiler) wait(wait BridgeCompileWait) {
 	}
 }
 
-// Step 1: the block, judged at the state the head's base lands on, with the previous block kept on a refusal; the
-// previous prefix compiles while t is before its drain_until.
+// Step 1: the block, judged at the state the head's base lands on, with the previous block kept on a refusal, and kept
+// unjudged from a head carrying the record it came from (QD-1205); the previous prefix compiles while t is before its
+// drain_until.
 func (self *bridgeCompiler) readBlock() {
-	block, err := self.local.PreviousBlock, error(nil)
+	block, record, err := self.local.PreviousBlock, self.local.PreviousBlockRecord, error(nil)
 	if head := self.view.Head(); head != nil {
-		block, err = ReadBridgeBlock(head, self.baseState(), self.local.PreviousBlock)
+		block, record, err = readBridgeBlockHeld(head, self.baseState(), self.local.PreviousBlock, self.local.PreviousBlockRecord)
 	}
 	if err != nil {
 		self.alarm(SidecarBridgeAlarmBlockRefused, 0, Id{}, "the head's block is refused; the previous one stands")
 	}
 	self.block = block
-	self.compiled.Block = block
+	self.compiled.Block, self.compiled.BlockRecord = block, record
 	if block == nil {
 		return
 	}
@@ -589,15 +592,16 @@ func (self *bridgeCompiler) finish(rules *bridge.BridgeRules) error {
 		return fmt.Errorf("%w: %w", ErrBridgeCompileRefused, err)
 	}
 	state := &bridge.BridgeState{
-		Auth:            self.state.Pin(),
-		GenesisSha256:   bytes.Clone(self.state.genesisChain[:]),
-		HasDocument:     self.hasDocument,
-		Rules:           rulesBytes,
-		Names:           self.names(),
-		NameZones:       self.nameZones(),
-		Identities:      self.identities(rules),
-		ShareKeys:       self.shareKeys,
-		DaemonListeners: slices.Clone(self.local.DaemonListeners),
+		Auth:                        self.state.Pin(),
+		GenesisSha256:               bytes.Clone(self.state.genesisChain[:]),
+		HasDocument:                 self.hasDocument,
+		Rules:                       rulesBytes,
+		Names:                       self.names(),
+		NameZones:                   self.nameZones(),
+		Identities:                  self.identities(rules),
+		ShareKeys:                   self.shareKeys,
+		DaemonListeners:             slices.Clone(self.local.DaemonListeners),
+		BaseSignerIdentityPublicKey: bridgeCompileBaseSignerKey(self.state),
 	}
 	digest, err := BridgeStateDigest(state)
 	if err != nil {
@@ -693,6 +697,45 @@ func (self *bridgeCompiler) identities(rules *bridge.BridgeRules) []*bridge.Brid
 		identities = append(identities, identity)
 	}
 	return identities
+}
+
+// The identity key the state's newest base b verified under (QD-1200): its signer's at S(b-1), where the judge checked
+// it (applyBase; startAtBase's S(b-1) as rebuilt, QD-1192), which the posture tries for that signer under the state
+// where no rows it reads name it (QD-1193): a writer admitted after b's fold, one revoked since b, one the tail
+// promoted. Every state from b-1 on gives the signer that one key, since a sidecar_id is admitted once and its row
+// stays, revoked or not, its key with it (config_admit.go), and the Genesis gives its device the key no row gives; so it
+// is read here at S(n), which holds no S(b-1) when its reader started at b. The base's Signed names the signer: the
+// log's window (config_state_at.go) keeps b's entry from b on, read as keptEntryAt reads it, which the extension legs
+// do not link, and held to b's (n, A_n). The key must verify the Signed, as the judge's did. Nil before base 1, and
+// where the window holds no entry at b or the key does not verify it: the posture then has a key fewer to try, which
+// fails closed.
+func bridgeCompileBaseSignerKey(state *ConfigState) []byte {
+	if state.base == nil || state.history == nil {
+		return nil
+	}
+	n := state.base.n
+	view := state.history.view.Load()
+	if view == nil || n < view.from || view.from+uint64(len(view.entries)) <= n {
+		return nil
+	}
+	kept := view.entries[n-view.from]
+	if kept == nil || kept.n != n || kept.chain != state.base.chain || kept.entry.GetKind() != bridge.AuthEntryKindBase {
+		return nil
+	}
+	signed, _, err := configParseBase(kept.entry)
+	if err != nil {
+		return nil
+	}
+	signerId, err := configBaseSigner(signed)
+	if err != nil {
+		return nil
+	}
+	key := state.IdentityKey(signerId)
+	if len(key) != ed25519.PublicKeySize || bridge.VerifySigned(signed, bridge.SignedPurposeAuthority,
+		bridge.SignedType_SIGNED_PROJECTION_HEADER, bridge.SignedKeyAlgEd25519, key) != nil {
+		return nil
+	}
+	return bytes.Clone(key)
 }
 
 // Every sidecar the rules link to over a link of this network, ascending, each once.

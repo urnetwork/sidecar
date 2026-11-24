@@ -390,6 +390,18 @@ gkm/<group_id>/epoch/<n>                      If-None-Match, once n-1       a Gk
                                                                             GenWrap_n of the newest generation; at
                                                                             most 16 leaves, the sealed GroupInfo and
                                                                             the generation that seals it
+gkm/<group_id>/closed                         If-None-Match, by gkm at a    the closing marker: the Signed GroupForm
+                                                re-form's POST, after the   that re-forms the group, byte for byte,
+                                                new owner marker, before    naming the new group and the generation its
+                                                the form; emptied by        ladder carries; empty once a void closing
+                                                If-Match at a void          reopened the group; kept until the repo's
+                                                closing, or taken by        shred (owner decision 709)
+                                                another re-form
+gkm/<group_id>/closing/<h>                    If-None-Match, once per       a closing's verdict: the closing form's
+                                                closing, by its first try   bytes (sealed) or none (void), h their
+                                                                            SHA-256; every try of the request follows
+                                                                            the one that won; kept until the repo's
+                                                                            shred
 gkm/<group_id>/gen/<g>                        If-None-Match, by the         the Signed GenRotate, for the repo's life,
                                                 rotating writer (10.5)      or until a gen pack holds it (10.16)
 gkm/<group_id>/group-info                     If-Match, rising              a GkmGroupInfoObject: at most 16 leaves, a
@@ -437,7 +449,7 @@ in Redis (soft state, owner decision 136)
                                                 daily                       since, the family's creation time; 31 d
 keys: <n>, <g> and <seq> are 20 decimal digits, zero-padded, as proj/'s are (§7.9), <seq> from 1; sidecar_id,
   member_id, repo_id, group_id and network_id 32 lowercase hex characters with no dashes, not Id.String()'s form;
-  delegation_id and <ref> 64; c8, k8 and b8 16; s: and d: literal ASCII prefixes; testdata/gkm/wrap_paths.json
+  delegation_id, <ref> and <h> 64; c8, k8 and b8 16; s: and d: literal ASCII prefixes; testdata/gkm/wrap_paths.json
   pins them
 c8 = hex(C_g[0:8]); staged objects whose c8 is not gen/<g>'s are deleted after 24 h; a recipient's delivery of
   g to an older key goes 30 days after one of g to a newer key of that recipient exists
@@ -514,7 +526,29 @@ checks             the token scopes the repo that gkm/<group_id>/owner names (ow
                    auth pin and time (the causes of 10.9's REMOVE that gkm can see, a poisoned parent not among
                    them), and a commit to epoch/<n>, whose PrivateMessage gkm cannot read, counts as a Remove
                    only while that state shows a holder dropped since epoch/<n-1>'s auth pin and time (10.9's
-                   roster row); else each is §11.13's P1
+                   roster row); else each is §11.13's P1; a device's gkm client, which presents a batch of repos
+                   each at the strongest role its own state gives it (§7.8), meets a 403 once, within the same
+                   call, under that call's repo scope alone at the role the call needs, where the batch held a
+                   stronger role on that repo, since an ACL save that moves the device's role leaves its state and
+                   gkm's apart for a moment and the guard honors a right set only whole; evs's client presents
+                   each call's own role and needs none (owner decision 708)
+fence              (owner decision 709) a re-form closes the group it re-forms: its forms POST writes the old
+                   group's closed marker after the new group's owner marker and before its form, reads the old
+                   group's gen/<form's generation + 1>, and records the closing's verdict once by creating
+                   closing/<h>: sealed, and the form filed, where no generation stands past the form's; void where
+                   one does, the marker emptied by If-Match to reopen the group, whose generations written
+                   meanwhile are its own, and the form answered 409 with the newer generation; every try of the
+                   request follows the verdict that won the create; a claim, a wrap batch and a recovery-wrap
+                   batch in the old group write and then read the marker, a claim reading it before its create
+                   too, and a standing marker answers 409 with its bytes, the rotator following the form; an epoch
+                   commit reads it before its PUT; GET gen and the drop-key route serve no generation past the
+                   closing form's; another re-form at a standing marker answers 409 unless that closing is void,
+                   or has no verdict while the old group holds a generation past its form's, or has no verdict
+                   and a marker older than GkmServiceSettings.ReformClosingStallAge (10 min, by its LastModified)
+                   while this re-form's generation is at least the marker's, when it voids that closing and takes
+                   the marker by If-Match, the verdict's one create keeping a takeover safe at any age; the rebind
+                   re-wrap and the group-info, Welcome and KeyPackage-claim writes, which rotate nothing, are
+                   not fenced
 Welcomes           written only after their epoch object, by its uploader, so a loser's never exist; joiners get
                    a pointer, keyed by group and epoch (owner decision 363), and a welcome hint; a writer leaf
                    that adopted an Add at epoch n asks HEAD welcome/<n> once GkmSettings.WelcomeTimeout, 10
@@ -790,7 +824,11 @@ In v0 each flow runs on deliveries (10.4; owner decision 610): a creation stages
 
 ```text
 form      a re-form draws a new 16-byte group_id, and its GroupForm names previous_group_id and generation,
-          the newest g the re-former holds
+          the newest g the re-former holds; it closes the old group first (10.6's fence), and a form refused
+          409 with a newer generation of the old group, which a claim wrote first, is dropped, the re-former
+          taking that generation and forming again at it, at most GkmSettings.ReformRedraftCount (3) times,
+          then waiting (ErrGkmWait); a closing its re-former left with no verdict is taken over once its
+          marker is ReformClosingStallAge old (owner decision 709)
 bytes     the new group's gen/<k>, k <= the form's generation, holds the old Signed GenRotate byte for byte,
           naming its old group_id, from the copy each client keeps beside RK_g (10.5); GenLink's AAD and C_g
           hold no group_id, so the ladder carries over
@@ -972,11 +1010,11 @@ use       the recipient opens only a delivery to itself and to a key it holds wh
 
 **D-KEYS-12 (proposed).** With MLS, Later (owner decision 610), MLS is 10.4's subset on ciphersuite 0x0010, migrating through GroupForm and the ladder if IANA assigns this suite another value; v0 freezes no MLS wire. *Why:* owner decision 44.
 
-**D-KEYS-13 (proposed).** After a site loss, repo admins' devices, and for owner-bound kinds the owner's consented devices, re-seed each group from their keychains under a GroupForm linked through the ladder (10.8): the form draws a new group_id and names the previous one and its generation, the old Signed GenRotates go up byte for byte from the copies clients keep, and pins follow (g, C_g) only along a verified GroupForm chain. *Why:* gkm has no off-site copy (owner decisions 90, 94); a GenRotate's signature cannot be rebuilt, and GenLink's AAD and C_g hold no group_id.
+**D-KEYS-13 (proposed).** After a site loss, repo admins' devices, and for owner-bound kinds the owner's consented devices, re-seed each group from their keychains under a GroupForm linked through the ladder (10.8): the form draws a new group_id and names the previous one and its generation, the old Signed GenRotates go up byte for byte from the copies clients keep, and pins follow (g, C_g) only along a verified GroupForm chain; a re-form fences the old group first, so no claim, wrap or commit lands there once its form stands (10.6's fence; owner decision 709). *Why:* gkm has no off-site copy (owner decisions 90, 94); a GenRotate's signature cannot be rebuilt, and GenLink's AAD and C_g hold no group_id.
 
 **D-KEYS-14 (proposed).** With MLS, Later (owner decision 610), groups scale by 10.6's sizes: 10.4's self-update interval, KF5's resync, GroupInfo on demand above 16 leaves, daily acks, trees on disk, which the engine streams rather than holding whole (owner decision 366); in v0 a rotation costs a delivery a holder. *Why:* a full 1,000-leaf tree is 2.8 MB, which a per-epoch GroupInfo would rewrite about 143 times a day.
 
-**D-KEYS-15 (proposed).** `gkm/<group_id>/gen/<g>`, created If-None-Match by the rotating writer, is the only place a generation is created, which a gen pack later holds verbatim (10.16); MLS commits never raise the generation, and a removal is a Remove commit followed by an independent rotation (10.5). *Why:* two paths minting g+1 fork the ladder; one claim object serializes every rotator (owner decisions 1, 114, 128).
+**D-KEYS-15 (proposed).** `gkm/<group_id>/gen/<g>`, created If-None-Match by the rotating writer, is the only place a generation is created, which a gen pack later holds verbatim (10.16), and none is created in a group a re-form closed (10.6's fence; owner decision 709); MLS commits never raise the generation, and a removal is a Remove commit followed by an independent rotation (10.5). *Why:* two paths minting g+1 fork the ladder; one claim object serializes every rotator (owner decisions 1, 114, 128).
 
 **D-KEYS-16 (proposed).** KeyHolders are leaves (in the config and directory groups, member devices past their first 1,000 by wrap), uncovered agents, live Delegations over their reach (the config, a team's directory and the repos a grant names one of their tags for; a forwarding Delegation's, the config alone, its holder its sidecar's forwarding, which a newer one keeps; owner decision 197) and recovery keys; live Delegations get DelegationWraps keyed by delegation_id; a covered agent's reap, or an ephemeral one's own `not_after`, is no shrink, and a Delegation's key drops at its end (§7.9's delegation row), at `not_after`, and at any other revocation but a reap, or any `Suspend`, of one of its agents, which no `Unsuspend` undoes (10.5). *Why:* owner decision 114's read-at-once, bounded, with no dropped party signing the rotation that excludes it; a suspended agent must lose what the server can still deliver to its Delegation's key, and an ephemeral agent can close itself, or api reap it, before any cutoff keyed to its own expiry.
 

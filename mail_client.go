@@ -143,6 +143,9 @@ type mailClientParts interface {
 	repos(args *MailReposArgs) *MailRepos
 	ingestor(repoId Id, args *MailIngestArgs) (*MailIngestor, error)
 	groupRefs(groupId, mailboxId Id) (*MailGroupRefs, error)
+	// Calls wake, which never blocks, at each change of the repo's refs until stop, as an ingestor's watch does
+	// (mailIngestRepo.Watch); an error where no watch stands.
+	watch(ctx context.Context, repoId Id, wake func()) (stop func(), err error)
 }
 
 // The parts over an EvsClient.
@@ -177,6 +180,11 @@ func (self *mailEvsClientParts) groupRefs(groupId, mailboxId Id) (*MailGroupRefs
 func (self *mailEvsClientParts) ingestor(repoId Id, args *MailIngestArgs) (*MailIngestor, error) {
 	args.Repo = self.evs.Repo(repoId)
 	return NewMailIngestor(args)
+}
+
+// A subscription to every ref of the repo, as its ingestor holds one.
+func (self *mailEvsClientParts) watch(ctx context.Context, repoId Id, wake func()) (func(), error) {
+	return (&mailIngestEvsRepo{repo: self.evs.Repo(repoId)}).Watch(ctx, wake)
 }
 
 // What this device's receiver says of itself, as the component last saw it.
@@ -238,6 +246,9 @@ type MailClient struct {
 	sidecar *Sidecar
 	// rises at each message this device's ingest writes: IDLE's hint (mail_imap.go)
 	imapHints *MonitorValue[uint64]
+	// held across one registration of the mailcfg reader's Lookups on its gate, so a reader the client no longer
+	// keeps never registers after the one that replaced it (registerConfigLookups); never taken with stateLock held
+	configLookupLock sync.Mutex
 
 	stateLock sync.Mutex
 	binding   *MailBinding
@@ -489,7 +500,11 @@ func (self *MailClient) mailboxId() (Id, error) {
 	return mailboxId, nil
 }
 
-// The network's MailConfig, built over its mailcfg repo once that stands, or ErrMailNoConfig.
+// The network's MailConfig, built over its mailcfg repo once that stands, or ErrMailNoConfig; ErrMailUnbound once the
+// client is closed. Two first uses may each build one: the client keeps the one installed first and closes the other.
+// Only the kept one registers its alias Lookups on the gate, and before any caller has it, since §16.6's gate refuses a
+// kind with no registered Lookup before its Reserve (record_effect.go): a build that registered at construction would
+// take the kept one's Lookups off the gate as it closed, and the gate would refuse every alias and burner creation.
 func (self *MailClient) mailConfig() (*MailConfig, error) {
 	repos, _, err := self.mailRepos()
 	if err != nil {
@@ -503,15 +518,23 @@ func (self *MailClient) mailConfig() (*MailConfig, error) {
 	if err != nil {
 		return nil, err
 	}
-	held := func() *MailConfig {
+	held, closed := func() (*MailConfig, bool) {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
-		if self.config != nil && self.configRepoId == repoId {
-			return self.config
+		if self.closed {
+			return nil, true
 		}
-		return nil
+		if self.config != nil && self.configRepoId == repoId {
+			return self.config, false
+		}
+		return nil, false
 	}()
+	if closed {
+		return nil, fmt.Errorf("%w: the client is closed", ErrMailUnbound)
+	}
 	if held != nil {
+		// installed by a caller that may not have registered it yet
+		self.registerConfigLookups(held)
 		return held, nil
 	}
 	config, err := parts.config(repoId, &MailConfigArgs{
@@ -522,26 +545,38 @@ func (self *MailClient) mailConfig() (*MailConfig, error) {
 		Alarm: func(alarm *MailConfigAlarm) {
 			self.raiseReceiverAlarm(SidecarMailReceiverAlarmRecord, alarm.SidecarId, alarm.RepoId)
 		},
-		BurnerLabels: self.burnerLabels(),
-		Clock:        self.clock,
-		Log:          self.log,
-		Settings:     self.settings.Config,
+		BurnerLabels:     self.burnerLabels(),
+		Clock:            self.clock,
+		Log:              self.log,
+		Settings:         self.settings.Config,
+		lookupsOnInstall: true,
 	})
 	if err != nil {
 		return nil, err
 	}
+	testHookBarrier("mail.client.config.install.before", repoId.String())
 	var replaced *MailConfig
-	winner := func() *MailConfig {
+	winner, closed := func() (*MailConfig, bool) {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
+		if self.closed {
+			return nil, true
+		}
 		if self.config != nil && self.configRepoId == repoId {
-			return self.config
+			return self.config, false
 		}
 		replaced = self.config
 		self.config = config
 		self.configRepoId = repoId
-		return config
+		return config, false
 	}()
+	testHookBarrier("mail.client.config.install.after", repoId.String())
+	if closed {
+		config.Close()
+		return nil, fmt.Errorf("%w: the client is closed", ErrMailUnbound)
+	}
+	// the kept one's Lookups before another closes, so the gate never lacks them while a reader stands
+	self.registerConfigLookups(winner)
 	if winner != config {
 		config.Close()
 	}
@@ -549,6 +584,21 @@ func (self *MailClient) mailConfig() (*MailConfig, error) {
 		replaced.Close()
 	}
 	return winner, nil
+}
+
+// Registers config's Lookups on its gate (MailConfig.registerLookups) while it is the reader this client keeps, so one
+// a racing build or a rebind left behind never registers after, and in place of, the one that stands.
+func (self *MailClient) registerConfigLookups(config *MailConfig) {
+	self.configLookupLock.Lock()
+	defer self.configLookupLock.Unlock()
+	kept := func() bool {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		return self.config == config
+	}()
+	if kept {
+		config.registerLookups()
+	}
 }
 
 // The network's MailConfig synced at least once.

@@ -11,6 +11,27 @@ import (
 	"github.com/urnetwork/sidecar"
 )
 
+// The filer's args over a network's standing follower and its client. ur daemon's follower runs no general config
+// writer, only the one a person's confirmed save takes (ConfigClient.ConfirmedWriter), which `ur bridge block` saves its
+// head through (QD-1205); a share's accept and activation keep to a general one.
+func urBridgeFilerArgs(running *sidecar.Sidecar, follower *sidecar.SidecarConfigFollower, client *sidecar.ConfigClient, grants *sidecar.AclGrantFiler) *sidecar.BridgeFilerArgs {
+	return &sidecar.BridgeFilerArgs{
+		Sidecar: running, Config: client, Heads: follower.Heads(), Grants: grants, AclLocal: follower.AclLocal,
+		HeadWriter: func() sidecar.BridgeHeadWriter {
+			if writer := client.Writer(); writer != nil {
+				return writer
+			}
+			return nil
+		},
+		ConfirmedHeadWriter: func() sidecar.BridgeHeadWriter {
+			if writer := client.ConfirmedWriter(); writer != nil {
+				return writer
+			}
+			return nil
+		},
+	}
+}
+
 // Both control and MCP reach this network's own signer and verified log. The effect lookups retire with the wire.
 func newUrBridgeFilingNetwork(wire *urBridgeWire, running *sidecar.Sidecar, follower *sidecar.SidecarConfigFollower, client *sidecar.ConfigClient) (*urBridgeNetwork, error) {
 	identity := running.Identity()
@@ -21,15 +42,7 @@ func newUrBridgeFilingNetwork(wire *urBridgeWire, running *sidecar.Sidecar, foll
 		return nil, errUrBridgeUnwired
 	}
 	grants := sidecar.NewAclGrantFiler(running, engine)
-	filer, err := sidecar.NewBridgeFiler(&sidecar.BridgeFilerArgs{
-		Sidecar: running, Config: client, Heads: follower.Heads(), Grants: grants, AclLocal: follower.AclLocal,
-		HeadWriter: func() sidecar.BridgeHeadWriter {
-			if writer := client.Writer(); writer != nil {
-				return writer
-			}
-			return nil
-		},
-	})
+	filer, err := sidecar.NewBridgeFiler(urBridgeFilerArgs(running, follower, client, grants))
 	if err != nil {
 		wire.close()
 		return nil, err

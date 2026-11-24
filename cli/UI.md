@@ -12,7 +12,8 @@ it asked for.
 
 ```text
 ur socket                               every socket the daemon holds, listens and dial forwards
-ur socket listen <addr> <target>        listen on <addr>, forwarding each stream to <target>
+ur socket listen <addr> <target> [--expires=<d>]
+                                        listen on <addr>, forwarding each stream to <target>
 ur socket dial <addr> [--listen=<local>]
 ur socket ls [<net>]                    the network's names, unsealed on this device
 ur socket drain <addr>                  drain the daemon's sockets on <addr>
@@ -24,6 +25,11 @@ ur socket drain <addr>                  drain the daemon's sockets on <addr>
 - An outward name, `tls/` or `smtp/`, passes §5.4's gate first. While a person's decision is awaited, `listen` prints
   `ur approve <id>` for another approval-capable device and exits 1; the listen runs once it is run again after the
   approval.
+- `--expires` is how long an outward name's grant lasts, a duration such as `36h` or whole days as `7d`, held to the
+  requests rule's `maxExpiry`, which refuses a longer one, as `ur bridge public-tls --expires` is; omitted, the rule's
+  `expiresDefault`, 1 h unless the document says otherwise (owner decision 687). Run the listen again after the
+  approval with the same `--expires`, since another lifetime is another request. A name whose listen asks no grant,
+  and a standing grant's, ask nothing of it: the first refuses it, the second passes whatever it asks.
 - `dial --listen=[<ip>:]<port>` is a local forward on every interface (0.0.0.0 and ::) unless `<ip>` is given, carrying
   raw bytes with no TLS-only rule (D-TRUST-8; owner decisions 84, 130). `ur status` lists it, LAN-exposed when it is.
 - `dial` with no `--listen` relays stdin and stdout to one stream, for `ssh -o ProxyCommand='ur socket dial %h'`.

@@ -2438,3 +2438,168 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     "identity lookup under the gate prefix (686), following @@OD:340@@; a listen's grant expiry (687), following "
     "@@OD:74@@; write implying deposit (688), extending @@OD:333@@; edge clients' derived identities (689), "
     "extending @@OD:428@@ and @@OD:577@@; and a label drawn with its zone (690), extending @@OD:14@@. ")
+
+# The sixth late fold (dr15-late-fold, 2026-11-23): the answers the end-to-end integration phase raised after the fifth
+# late fold, QD-1176 to QD-1209, numbered as folded: a restarted peer reached at once (691-694), then the config log,
+# teams and access control (695-705), then storage, group keys and mail (706-712) and DNS and certificates
+# (713-715).
+INDEX += [
+    (691, 'A restarted responder reached at once',
+     "connect's per-peer session recovers against a responder restarted under the same identity, §4.6's C21."),
+    (692, 'A lost peer session ends the Hello',
+     "connect reports a nack demotion, which ends the peer's Hello; an open refused after it is opened again."),
+    (693, 'An unasked HelloResult prompts a Hello',
+     'A HelloResult no Hello awaits, from a sidecar holding no Hello here, runs a fresh Hello at once.'),
+    (694, 'A replayed open after a restart',
+     'A listen_id is fresh at every Listen, so step 2 refuses a replayed open; the replay set stays in memory.'),
+    (695, "A base's signer at a start",
+     "A reader starting at a base judges its signer, and reads the anchor's head, at S(b-1) rebuilt from b's rows and tail."),
+    (696, "A later writer's base at the posture",
+     "Under a compiled state the posture takes a base's signer key from the state, which carries the key its base verified under."),
+    (697, "A start's fork held",
+     'A ConfigClient whose start meets a fork holds it and stops, as a long-running reader stops at a fork.'),
+    (698, 'A carried bridge block',
+     "A reader keeps a carried BridgeBlock it holds unjudged, and an admin's next head re-signs one whose signer is gone."),
+    (699, 'Carried settings records',
+     'A reader keeps a carried ServiceSettings or VersioningRules record it holds unjudged; no writer re-signs them.'),
+    (700, 'Tagged credentials outlive sponsors',
+     "A team's tagged clients are minted on its owner of record, taken only as an active tagged client's credential."),
+    (701, "A key follows its creator's role",
+     "A tagged or pre-approved auth key enrolls only while its creator's current role holds the keys permission."),
+    (702, 'The consented list follows consent',
+     "An owner-bound repo's consented_sidecar_ids lists exactly its owner's consented devices, entry by entry."),
+    (703, 'Every confirmation counts',
+     "§8.5's consent replay counts every confirmation a device's row keeps, not the newest of each kind."),
+    (704, "A read-only sidecar's deposits",
+     'A read_only sidecar deposits only in an owner-bound repo it reads, for receipts, and reads alone elsewhere.'),
+    (705, 'An approval fixes the statement type',
+     'Readers void a bridge map filed under an approval naming cidrs, and a route under one naming a port or expiry.'),
+    (706, 'Unjudged evs statements',
+     "An evs reader keeps its own verdict to its ref pin and takes statements before its window unjudged on the chain."),
+    (707, 'A pin ahead of the reader',
+     'An evs reader meeting a statement pinned above its own state waits for its log to reach the pin, within a bound.'),
+    (708, "gkm's client retries a stale scope",
+     "gkm's client meets a 403 once under the call's own scope where its batch held a stronger role."),
+    (709, 'The re-form fence',
+     'A re-form closes the old group with a marker and a verdict recorded once; a stalled closing is taken over.'),
+    (710, "A personal network's group deposits",
+     "On a personal network group-create grants deposit to autogroup:member, so the member's devices deposit."),
+    (711, 'Receipts only in owner-bound repos',
+     'Ingest classes a reader that does not write as a receipt depositor only in an owner-bound repo.'),
+    (712, 'A deposit before the window',
+     'Ingest classes a deposit pinned before what it retains at its installed state, unjudged where no right holds.'),
+    (713, 'One order of a challenge name',
+     "certs admits one order of a set, or of a shared challenge name, at a time, and holds a name dns's cap refuses."),
+    (714, 'Copy rows at hosts with records',
+     "dns copies *'s records to any owner whose own rows hold no address or CNAME, so user records hide no address."),
+    (715, "No scope _mta-sts",
+     "A Team scope's zone publishes no _mta-sts until a scope publish exists; that publish is deferred."),
+]
+for _n, _note in [
+        (22, ' Extended by @@OD:691@@ and @@OD:692@@: C21 and C22.'),
+        (689, " Followed by @@OD:691@@: connect's session recovers against a restarted responder."),
+        (83, " Extended by @@OD:700@@: a tagged agent's api credential outlives its sponsor."),
+        (126, ' Followed by @@OD:702@@ and @@OD:703@@: the consented list and every confirmation.'),
+        (197, " Extended by @@OD:696@@: under a compiled state the posture takes a later writer's base."),
+        (218, ' Followed by @@OD:705@@: an approval fixes the statement type.'),
+        (318, " Refined by @@OD:695@@: the keys of b's rows with its tail re-applied, b's signer judged at S(b-1)."),
+        (688, " Refined by @@OD:704@@: a read_only sidecar's deposit is a receipt's, in an owner-bound repo only."
+              ' Extended by @@OD:710@@: a personal network\'s groups take deposits from the member\'s devices.'),
+        (201, ' Extended by @@OD:709@@: a re-form fences the group it replaces.'),
+        (335, " Extended by @@OD:714@@: a host with records of its own keeps *'s addresses through a copy."),
+        (430, " Followed by @@OD:713@@: certs holds a set's further orders and a capped challenge name."),
+        (563, " Followed by @@OD:708@@: gkm's client retries a refused batch under the call's own role."),
+        (630, " Followed by @@OD:715@@: a Team scope's set holds no _mta-sts."),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 716))
+DATES.update({_n: '2026-11-22' for _n in range(691, 716)})
+DATES[697] = '2026-11-23'
+_D690 = "and a label drawn with its zone (690), extending @@OD:14@@. "
+assert DECISIONS_INTRO.count(_D690) == 1, 'decisions lead moved'
+_D15 = ("A sixth late fold, on 2026-11-23, numbers as it folds them the answers the end-to-end integration phase raised "
+        "after that: a responder restarted under its identity reached at once (691), following @@OD:689@@, a lost peer "
+        "session ending the Hello (692) and an unasked HelloResult prompting one (693), adding C21 and C22 to "
+        "@@OD:22@@'s connect changes, and a replayed open refused at a fresh listen_id (694); then a base's signer "
+        "judged at a start (695), refining @@OD:318@@, a later writer's base at the posture (696), extending "
+        "@@OD:197@@, a start's fork held (697), carried bridge blocks (698) and settings records (699), tagged "
+        "credentials past their sponsor (700), extending @@OD:83@@, a key following its creator's role (701), the "
+        "consented list (702) and every confirmation counting (703), following @@OD:126@@, a read-only sidecar's "
+        "deposits (704), refining @@OD:688@@, and an approval's statement type (705), following @@OD:218@@; then evs "
+        "statements pinned before a reader's window (706) or above its state (707), gkm's client retrying a stale "
+        "scope (708), following @@OD:563@@, the re-form fence (709), extending @@OD:201@@, a personal network's "
+        "group deposits (710), extending @@OD:688@@, receipts only in owner-bound repos (711) and a deposit before "
+        "the ingester's window (712); and one order of a challenge name (713), following @@OD:430@@, copy rows at "
+        "hosts with records (714), extending @@OD:335@@, and no scope _mta-sts (715), following @@OD:630@@. ")
+DECISIONS_INTRO = DECISIONS_INTRO.replace(_D690, _D690 + _D15)
+
+# The seventh late fold (dr16-late-fold, 2026-11-23): the answers the end-to-end phase's fix tracks raised after the
+# sixth late fold, QD-1210 to QD-1221, numbered as folded, one topic's answers sharing an entry. Its first piece:
+# a forwarding role's key alarms, a removal ending the member's keys, topic sock raised and the exact-head saves of
+# a person's confirmed commands (716-719).
+INDEX += [
+    (716, "Forwarding's config key alarms",
+     'A forwarding role alarms config_key_waiting for a generation it wants and cannot open, naming the cause, and '
+     'head_alarm (fork) off its chain.'),
+    (717, "A removal ends the member's keys",
+     "A team member's removal ends the auth keys and API keys it made, so a re-join revives none of them."),
+    (718, 'Topic sock is a raised clock',
+     "Sockets' hint versions are raised past the stored value as mail's are, so a second hint in one ms is "
+     'delivered.'),
+    (719, "Confirmed commands' exact-head saves",
+     "The stock daemon sets EXACT_HEAD for every head a person's confirmed command, or its flow, saves, `ur bridge "
+     "block` included."),
+]
+for _n, _note in [
+        (141, " Amended by @@OD:719@@: the stock daemon sets it for every head a person's confirmed command, or "
+              "that command's flow, saves."),
+        (197, ' Extended by @@OD:716@@: a forwarding role alarms a generation it cannot open and a listing off its '
+              'chain.'),
+        (698, ' Followed by @@OD:719@@: in ur daemon the re-signing head is saved through its writer for confirmed '
+              'saves.'),
+        (701, ' Extended by @@OD:717@@: a removal ends every key the member made, API keys included.'),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 720))
+DATES.update({_n: '2026-11-23' for _n in range(716, 720)})
+_D715 = "and no scope _mta-sts (715), following @@OD:630@@. "
+assert DECISIONS_INTRO.count(_D715) == 1, 'decisions lead moved'
+_D16 = ("A seventh late fold the same day numbers the answers the end-to-end phase's fix tracks raised after that, "
+        "one topic's answers sharing an entry: a forwarding role's config key alarms (716), extending @@OD:197@@; a "
+        "removal ending the keys a member made (717), extending @@OD:701@@; topic sock raised as a clock (718); and "
+        "the exact-head saves of a person's confirmed commands (719), amending @@OD:141@@ and following "
+        "@@OD:698@@. ")
+DECISIONS_INTRO = DECISIONS_INTRO.replace(_D715, _D715 + _D16)
+
+# The same fold's second piece: who a team's notices and billing mail reach and the network they name, the outbox's
+# record after a send, and unjudged evs statements held to the refs table's rules that need no right (720-722).
+INDEX += [
+    (720, "A team's notices and billing mail",
+     "A team's key and authority notices reach its Owners and Admins, its wallet and billing mail its Owners and "
+     'Billing admins, Owners first, naming the network.'),
+    (721, 'The outbox records after the send',
+     "The account message outbox records a send's outcome on a context made after the send, so a slow send is not "
+     'sent twice.'),
+    (722, 'Unjudged statements meet the refs table',
+     "An evs statement pinned before the reader's window still meets the refs table's rules no right at its pin "
+     'excuses.'),
+]
+for _n, _note in [
+        (706, " Refined by @@OD:722@@: an unjudged statement still meets the refs table's rules no right excuses."),
+        (712, ' Followed by @@OD:722@@: the read refuses a deposit its depositor did not sign, at any pin.'),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 723))
+DATES.update({_n: '2026-11-23' for _n in range(720, 723)})
+_D719 = "(719), amending @@OD:141@@ and following @@OD:698@@. "
+assert DECISIONS_INTRO.count(_D719) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D719, _D719 + "Its second piece numbers who a team's security notices and billing mail reach, and the network "
+    "they name (720), the account message outbox recording a send's outcome after the send (721), and unjudged evs "
+    "statements held to the refs table's rules that need no right at their pin (722), refining @@OD:706@@. ")

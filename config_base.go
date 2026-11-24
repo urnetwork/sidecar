@@ -72,10 +72,11 @@ type ConfigFoldRecord struct {
 // What a full reader's check of one base's config head is given (§7.9's base row; DESIGN-DETAILS 5.2.4's ApplyBase and
 // StartAtBase).
 type ConfigHeadCheck struct {
-	// The state the base lands on, S(n-1), for a reader standing there: its config writers judge the head's
-	// ServiceSettings, and its base is the one the head must descend from. Nil for a reader starting at this base, a
-	// new device or one restarting after it fell behind, which checks the anchor instead (GenesisChain, FoldedFrom,
-	// FirstPrevChain, Floor).
+	// The state the base lands on, S(n-1), for a reader standing there: it judges the signer of each record the head
+	// holds alone, a ServiceSettings or VersioningRules, that its own base's head did not hold byte for byte (QD-1207),
+	// and its base is the one the head must descend from. Nil for a reader starting at this base, a new device or one
+	// restarting after it fell behind, which checks the anchor instead (GenesisChain, FoldedFrom, FirstPrevChain,
+	// Floor).
 	Previous *ConfigState
 	// The base's header, verified.
 	Header *bridge.ProjectionHeader
@@ -101,6 +102,10 @@ type ConfigHeadCheck struct {
 	// ConfigHeadAnchorReader judges the signers of the head's pushes (QD-814), since this reader holds no state at
 	// their pins. Nil leaves each push to the reader's judgment at its own pin, which withholds an anchor's head.
 	Anchor ConfigHeadAnchor
+	// Without Previous: S(n-1) as this reader rebuilt it, at which it judges the head's BridgeBlock as one a head first
+	// holds, since it cannot tell a carried record from a new one (QD-1205); a block whose signer no longer stands there
+	// is then held by none here. Nil holds none.
+	AnchorState *ConfigState
 	// With Previous: the bridge ledger's check of the head (CheckBridgeLedgerFold, DESIGN-DETAILS 12.2.3), which
 	// CheckConfigBase calls, an error being ErrConfigHeadMismatch's fork, or ErrConfigHeadUnavailable's wait. Nil
 	// checks no ledger: a reader with no BridgeBodyJudge.
@@ -114,6 +119,13 @@ type ConfigHeadFacts struct {
 	Settings *protocol.ServiceSettings
 	// The VersioningRules record the head holds, nil for none, so the platform rule holds (§7.9, §11.7).
 	VersioningRules *protocol.VersioningRules
+	// SHA-256 of the head's Signed ServiceSettings and VersioningRules, verbatim, nil for none: what the state the
+	// base gives holds beside the records, so the next base's check knows a record it carries (QD-1207)
+	settingsRecordSha256        []byte
+	versioningRulesRecordSha256 []byte
+	// SHA-256 of the Signed BridgeBlock readers hold from this base on (configBridgeBlockRecordHeld), nil for none: what
+	// the state the base gives holds, which a block's refusal never forks (D-BRIDGE-16; QD-1205)
+	bridgeBlockRecordSha256 []byte
 }
 
 // Where a ConfigLog takes a base's rows and its config head's check from. A full reader's source opens the config
@@ -368,6 +380,7 @@ func (self *ConfigLog) stateFromBase(previous *ConfigState, kept *configKeptEntr
 	state.threshold = header.GetThreshold()
 	state.settings = configRowsSettingsOrDefault(rows.GetSettings())
 	state.headSettings, state.headSettingsKnown, state.headVersioningRules = nil, false, nil
+	state.headSettingsRecordSha256, state.headVersioningRulesRecordSha256, state.bridgeBlockRecordSha256 = nil, nil, nil
 	next.membersOwned, next.sidecarsOwned, next.delegationsOwned, next.keysOwned, next.proposalsOwned = true, true, true, true, true
 	next.indexersOwned = true
 	// every row came from these rows, so the builder owns them all
@@ -392,11 +405,13 @@ func (self *ConfigLog) stateFromBase(previous *ConfigState, kept *configKeptEntr
 }
 
 // Holds what a full reader's head check found on the state a base's rows give: the head's ServiceSettings, to which
-// the rows' settings must compile (DESIGN-DETAILS 5.2.3). A rows-only reader opens no head, so its head-only settings
-// are unknown.
+// the rows' settings must compile (DESIGN-DETAILS 5.2.3), and its VersioningRules, each beside its Signed bytes' hash,
+// which the next base's check reads to know a record its head carries (QD-1207), and the BridgeBlock readers hold
+// (QD-1205). A rows-only reader opens no head, so its head-only settings are unknown and it holds no record.
 func (self *ConfigLog) holdHeadFacts(state *ConfigState, rows *bridge.ProjectionRows, facts *ConfigHeadFacts) error {
 	if self.rowsOnly {
 		state.headSettings, state.headSettingsKnown, state.headVersioningRules = nil, false, nil
+		state.headSettingsRecordSha256, state.headVersioningRulesRecordSha256, state.bridgeBlockRecordSha256 = nil, nil, nil
 		return nil
 	}
 	if facts == nil {
@@ -408,6 +423,9 @@ func (self *ConfigLog) holdHeadFacts(state *ConfigState, rows *bridge.Projection
 	state.recoveryBodies = facts.recoveryBodies
 	state.base.recoveryBodies = facts.recoveryBodies
 	state.headSettings, state.headSettingsKnown, state.headVersioningRules = facts.Settings, true, facts.VersioningRules
+	state.headSettingsRecordSha256 = bytes.Clone(facts.settingsRecordSha256)
+	state.headVersioningRulesRecordSha256 = bytes.Clone(facts.versioningRulesRecordSha256)
+	state.bridgeBlockRecordSha256 = bytes.Clone(facts.bridgeBlockRecordSha256)
 	return nil
 }
 

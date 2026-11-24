@@ -15,7 +15,9 @@
 //	renumber a host keeps its host bits across a block change while the old block drains (RenumberBridgeAddress)
 //	first    a network's first block, drawn at its bootstrap into its first config head, and for a head that holds
 //	         none, an older network's or one bootstrapped before the bridge shipped, by any config writer's next head
-//	         (WithFirstBridgeBlock; §17.4's first block row, plan-BRIDGE-small-readings #13)
+//	         (WithBridgeBlock; §17.4's first block row, plan-BRIDGE-small-readings #13)
+//	carry    a block every reader took whose signer no longer stands, a revoked device's, signed again by a config
+//	         writer's next head, unchanged, so a reader holding none takes it again (WithBridgeBlock; QD-1205)
 //
 // A client proposes and the log decides: the first claim in log order wins, so an address this allocates is a proposal
 // until its BridgeAddress takes effect and the ledger shows it. An address is bound to its sidecar_id, which survives
@@ -26,9 +28,9 @@
 // A block in 10.0.0.0/8 can collide with connect's tun ranges, 10.a.b.0/24, which the sdk's avoid list handles
 // (BRIDGE-M4-21); 169.254.0.0/16 is outside every block a network may hold.
 //
-// Pure but for the random source a caller passes, and the identity key's signature a first block carries. Every leg but
-// the ios_extension legs', which write no config head, with no connect import. Nothing here creates, derives or unwraps
-// a key, so nothing calls testHookSecret.
+// Pure but for the random source a caller passes, and the identity key's signature a written block carries. Every leg
+// but the ios_extension legs', which write no config head, with no connect import. Nothing here creates, derives or
+// unwraps a key, so nothing calls testHookSecret.
 
 package sidecar
 
@@ -104,7 +106,7 @@ func ChooseBridgeBlock(random io.Reader) (*bridge.BridgeIpv4Prefix, error) {
 
 // A network's first block as a config head's bridge/block holds it: a /16 ChooseBridgeBlock draws with random, in a
 // BridgeBlock with no block before it, signed by sign as an admin's device signs a head's record (§17.8's BridgeBlock
-// row). BootstrapNetwork writes it into the first head, and WithFirstBridgeBlock into a writer's next head.
+// row). BootstrapNetwork writes it into the first head, and WithBridgeBlock into a writer's next head.
 func bridgeFirstBlockRecord(sign ConfigSignFunction, random io.Reader) ([]byte, error) {
 	prefix, err := ChooseBridgeBlock(random)
 	if err != nil {
@@ -113,25 +115,56 @@ func bridgeFirstBlockRecord(sign ConfigSignFunction, random io.Reader) ([]byte, 
 	return configSignRecord(sign, bridge.SignedType_SIGNED_BRIDGE_BLOCK, &bridge.BridgeBlock{Ipv4Prefix: prefix})
 }
 
-// ConfigWriterArgs.FirstBridgeBlock, which the follower's config writers take (§17.4's first block row): head with the
-// network's first block where it holds no bridge/block, an older network's or one bootstrapped before the bridge
-// shipped, drawn with random (crypto/rand's reader when nil) and signed by sign. head itself where it holds one, refused
-// or not, since only an admin's `ur bridge block` replaces a block; and where every reader would refuse sign's block at
-// state, a Network or IT admin's writer's (configHeadRecordSignedByAdmin), so an Owner's or Admin's writer adds it.
+// ConfigWriterArgs.BridgeBlock, which the follower's config writers take, on the head a writer's plan is about to save:
+//
+//	first    where head holds no bridge/block, an older network's or one bootstrapped before the bridge shipped, the
+//	         network's first block, drawn with random (crypto/rand's reader when nil) (§17.4's first block row)
+//	re-sign  where head carries the record every reader of state's newest base holds (ConfigState's bridge block
+//	         record), taken where a head first held it under a signer standing there and carried byte for byte since,
+//	         and that signer no longer stands at state, the same block signed again, its prefix, previous_prefix and
+//	         drain_until kept, so a reader with no previous block, a new device's, holds it again from this head on
+//	         (QD-1205); whichever head the plan stands on, a pending one's included, and whoever's bases carried the
+//	         record since, so a Network or IT admin's base in between, which cannot re-sign it, strands nothing
+//
+// each signed by sign, and only where readers at state take sign's block, an Owner's or Admin's device's
+// (configHeadRecordSignedByAdmin), so a Network or IT admin's writer leaves it to one. head itself otherwise: a record
+// that stands, and any record readers do not hold, one the head being saved replaces, one a head first holds that no
+// base has judged, one readers refused, since re-signing those could put in force a block no admin chose, and only an
+// admin's `ur bridge block` replaces a block. A rows-only state holds no record, and re-signs none.
 //
 // Two writers drawing at once leave one block: a head is saved over the version it was read at, If-Match, so of two
 // heads drawn from one blockless head one lands and the other's save conflicts, and its retry reads the first one's
-// block and draws none.
-func WithFirstBridgeBlock(state *ConfigState, head *ConfigHead, sign ConfigSignFunction, random io.Reader) (*ConfigHead, error) {
-	if head == nil || head.File(ConfigHeadBridgeBlockPath) != nil {
+// block and draws none. Two re-signing at once leave one record alike.
+func WithBridgeBlock(state *ConfigState, head *ConfigHead, sign ConfigSignFunction, random io.Reader) (*ConfigHead, error) {
+	if head == nil {
 		return head, nil
 	}
 	if state == nil || sign == nil {
-		return nil, errors.New("first bridge block: no state or signer")
+		return nil, errors.New("bridge block: no state or signer")
 	}
-	signedBytes, err := bridgeFirstBlockRecord(sign, random)
+	var block *bridge.BridgeBlock
+	if head.File(ConfigHeadBridgeBlockPath) == nil {
+		prefix, err := ChooseBridgeBlock(random)
+		if err != nil {
+			return nil, fmt.Errorf("first bridge block: %w", err)
+		}
+		block = &bridge.BridgeBlock{Ipv4Prefix: prefix}
+	} else {
+		if !configHeadRecordCarried(state.bridgeBlockRecordSha256, head.recordSha256(ConfigHeadBridgeBlockPath)) {
+			return head, nil
+		}
+		signed, message, err := head.signedRecord(ConfigHeadBridgeBlockPath, bridge.SignedType_SIGNED_BRIDGE_BLOCK)
+		if err != nil || configHeadRecordSignedByAdmin(state, signed, bridge.SignedType_SIGNED_BRIDGE_BLOCK) == nil {
+			return head, nil
+		}
+		block = message.(*bridge.BridgeBlock)
+		if CheckBridgeBlock(block) != nil {
+			return head, nil
+		}
+	}
+	signedBytes, err := configSignRecord(sign, bridge.SignedType_SIGNED_BRIDGE_BLOCK, block)
 	if err != nil {
-		return nil, fmt.Errorf("first bridge block: %w", err)
+		return nil, fmt.Errorf("bridge block: %w", err)
 	}
 	signed := &bridge.Signed{}
 	if err := proto.Unmarshal(signedBytes, signed); err != nil {

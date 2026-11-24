@@ -312,6 +312,9 @@ type DnsApiSettings struct {
 	// The most bytes a POST /dns/records body may hold (DNS-M5-12): far above any write §12.7's caps let
 	// a zone hold. Must be positive.
 	RecordsRequestMaxByteCount int `yaml:"records_request_max_bytes"`
+	// The most bytes a POST acme-challenge body may hold: a name and two digests, many times over. Must
+	// be positive.
+	ChallengeRequestMaxByteCount int `yaml:"challenge_request_max_bytes"`
 }
 
 // The DNSKEY windows (§12.6's Keys, D-DNS-5; DNS-M5-19), in seconds but for the TTL. A window serves from
@@ -589,8 +592,9 @@ func DefaultDnsSettings() *DnsSettings {
 			StoreTimeoutSeconds:    5,
 			DrainSeconds:           5,
 			// warp's lb template
-			LbProxyReadTimeoutSeconds:  30,
-			RecordsRequestMaxByteCount: 1024 * 1024,
+			LbProxyReadTimeoutSeconds:    30,
+			RecordsRequestMaxByteCount:   1024 * 1024,
+			ChallengeRequestMaxByteCount: 16 * 1024,
 		},
 		Keys: DnsKeySettings{
 			WindowSeconds:       14 * 24 * 3600,
@@ -942,6 +946,8 @@ func (self *DnsApiSettings) validate() error {
 		return fmt.Errorf("ready_hold_s is not positive and under the lb's %d s", self.LbProxyReadTimeoutSeconds)
 	case self.RecordsRequestMaxByteCount <= 0:
 		return errors.New("records_request_max_bytes is not positive")
+	case self.ChallengeRequestMaxByteCount <= 0:
+		return errors.New("challenge_request_max_bytes is not positive")
 	case self.RowLimit <= 0:
 		return errors.New("row_limit is not positive")
 	case self.SoaReadIntervalSeconds <= 0:

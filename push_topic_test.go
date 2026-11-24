@@ -15,7 +15,7 @@ func TestPushTopicClasses(t *testing.T) {
 	}{
 		{topic: PushTopicCore, class: PushTopicClock, raising: true},
 		{topic: PushTopicTeam, class: PushTopicDurable},
-		{topic: PushTopicSock, class: PushTopicClock},
+		{topic: PushTopicSock, class: PushTopicClock, raising: true},
 		{topic: PushTopicMail, class: PushTopicClock, raising: true},
 		{topic: PushTopicTls, class: PushTopicClock, raising: true},
 		{topic: PushTopicDns, class: PushTopicDurable},

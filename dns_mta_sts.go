@@ -7,7 +7,8 @@
 // dns writer at the zone's records and the receivers at their publish, so they never disagree.
 //
 // Burner domains publish no policy, and senders never take a parent zone's (RFC 8461 §3.4), so a <blabel> gets
-// none: only a zone's apex, a network's, an alias's or a Team scope's, has one.
+// none: only a zone's apex, a network's or an alias's, has one. A Team scope's apex gets none either until a scope
+// publish exists, since no receiver serves a scope's policy (§13.9 names no scope publish; QD-1206).
 
 package sidecar
 

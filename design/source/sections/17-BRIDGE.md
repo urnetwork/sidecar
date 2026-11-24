@@ -37,7 +37,7 @@ Missing: overlay addresses, destination routing, port mapping, per-port provider
 | Item | Value |
 |---|---|
 | Block | One IPv4 /16 per network, at random from 100.64.0.0/10 (owner decision 28) except 100.64.0.0/16 (likeliest in use) and 100.100.0.0/16 (Tailscale's 100.100.100.100); no IPv6 overlay |
-| First block | Drawn at the network's bootstrap into its first config head; a head that holds none, an older network's or one bootstrapped before the bridge shipped, gets one from any config writer's next head; until then `ur tun ip` reports no block and files nothing |
+| First block | Drawn at the network's bootstrap into its first config head; a head that holds none, an older network's or one bootstrapped before the bridge shipped, gets one from any config writer's next head; until then `ur tun ip` reports no block and files nothing. Every head carries the block forward; a reader keeps a byte-identical record it holds without judging its signer again, and once that signer no longer stands any Owner's or Admin's config writer's next head re-signs the record, keeping its prefix, previous prefix and drain, so a revoked first device costs no reader its block, a reader holding none taking it from that head on (§7.9's Writes; owner decision 698) |
 | Cycle or choose | An admin re-rolls it or picks a /16 in 100.64.0.0/10 or RFC 1918 only (owner decision 132; D-BRIDGE-16); hosts keep their host bits while the old block drains (17.8) |
 | Uniqueness | None across networks; a device whose networks share a block (owner decision 23) routes it only to the first-joined one, warning in `ur status` and a `SidecarEvent` until an admin cycles one |
 | Host address | A random free /32 of the lower /17 outside `<block>.0.0/24`, which holds services (the resolver at `<block>.0.53`); once that is full, the highest free /32 of the upper /17, whose bottom aliases fill first-fit (17.9); never x.y.z.0 or x.y.z.255; a chosen address (`ur tun ip <ip>`) must lie in the lower /17 |
@@ -241,7 +241,8 @@ never AclEngine, whose AllowRoute serves the compiler and ur bridge's previews
 statement (sidecar/protocol/bridge/bridge.proto; §6.9 Signed,             signer; carried in
   purpose bridge, SignedType 0x1901-0x1907 in row order; a delta
   begins with auth.proto's StatementHeader, §7.9; §4.4)
-BridgeBlock{ipv4_prefix, previous_prefix, drain_until}                    an admin; a head (owner decisions 28, 132)
+BridgeBlock{ipv4_prefix, previous_prefix, drain_until}                    an admin; a head, carried and kept
+                                                                            (17.4; owner decisions 28, 132, 698)
 BridgeAddress{sidecar_id, ipv4}                                           the sidecar or an admin; a delta
 BridgeRoute{route_id, advertiser, prefixes, exposed_prefix, site_id,      the advertiser; a delta, active once
             weight, kind subnet|exit, drain_seconds, approval}              approved (17.7)
@@ -254,7 +255,11 @@ BridgeAlias{share_id, target_index, alias_prefix, host sidecar_id,        the ac
             host identity key}
 BridgeWithdraw{rule_id, reset|drain}                                      the rule's signer or an admin; ids only
 approval  none under a standing grant (17.7), or the I-8 decisions and this use's CanonicalAction (§16.8),
-          which readers verify as §8.8 does a GrantActivate's, the signer being every decision's requester;
+          which readers verify as §8.8 does a GrantActivate's, the signer being every decision's requester,
+          holding the body to the action the person saw: a route's prefixes inside its cidrs, an exit needing
+          0.0.0.0/0, a map's target port and expiry to the action's where it sets them, and the statement type
+          to the action's shape, a map void under an action naming cidrs and a route void under one naming a
+          target port or an expiry (owner decision 705);
           under a multi-use decision also template_action, the template every decision's payload_sha256
           hashes, which this use's action must match (ActionMatchesTemplate), so one decision files up to
           its uses rules, the ledger's count binding them; with it unset the single-use reading stands
@@ -274,7 +279,9 @@ The statements' bytes, a delta's `StatementHeader` first and its sealed part in 
 ```proto
 // sidecar/protocol/bridge/bridge.proto: the table's statements, a delta's header first, then the fields api sees
 // in the order the table writes them, and a sealed_body opening to its *Body for the rest
-message BridgeBlock {                     // a head's record, with no header
+message BridgeBlock {                     // a head's record, with no header; a reader keeps a carried one it
+                                          // holds byte for byte unjudged, and an admin's next head re-signs one
+                                          // whose signer no longer stands (17.4; owner decision 698)
   BridgeIpv4Prefix ipv4_prefix = 1;
   BridgeIpv4Prefix previous_prefix = 2;
   int64 drain_until = 3;
@@ -394,7 +401,7 @@ never                 an unsigned has_document, a projection that does not chain
                       state; one that fails to verify leaves it and alarms
 ```
 
-- **Forwarding roles** (owner decisions 87, 197). An app's VPN component compiles its own `BridgeState` from the config it reads by its forwarding Delegation's reader key, with `Pending` from forwarding's setup (§18.6), its `Names` feeding C14's zone (§12.9). The compile's judge is §7.9's rows-only verifier, as api's: the forwarding role checks a head against the base that names it and does not re-compile rows from it, which the app's sidecar role, a full reader, does whenever it runs (§18.6's witness). Between compiles its posture applies as denials the log's `SidecarRevoke`, `MemberRevoke`, `Suspend`, `GrantRevoke`, `BridgeWithdraw` and `DelegationRevoke` entries and a newer forwarding Delegation's supersession, each on its signer's identity key in the rows it holds, verified against the anchor (§7.9) with `protocol/bridge`'s types alone, a `SidecarRevoke`, `MemberRevoke` or `Suspend` that §7.9's presence row covers on its identity signature as a denial that the next compile, which checks the countersignature, confirms or reverses (owner decisions 185, 187, 189), and it lifts nothing: an `Unsuspend` and every opening take effect at the next compile. A statement that could narrow reach and that it cannot check waits for the next compile, the last compiled state staying in force: the component never goes pending for it, and raises `bridge_alarm` with the statement's age once it has waited 10 minutes, again at doubling intervals (20 minutes, 40 minutes and so on) up to once a day while the condition lasts and at once whenever a further such statement becomes overdue, the condition staying in the posture's status until a compile clears it, so a revocation the posture cannot check does not apply on a device that cannot compile, an accepted cost (owner decisions 216, 487; DESIGN-DETAILS.md section 4). It holds the denials in its overlay, which goes to the component's sealed store in the review phase and until then, past its bound, makes the posture's decision pending rather than stop applying them (§18.6's posture; owner decision 485). So rules and revocations apply whether or not the app runs.
+- **Forwarding roles** (owner decisions 87, 197). An app's VPN component compiles its own `BridgeState` from the config it reads by its forwarding Delegation's reader key, with `Pending` from forwarding's setup (§18.6), its `Names` feeding C14's zone (§12.9). The compile's judge is §7.9's rows-only verifier, as api's: the forwarding role checks a head against the base that names it and does not re-compile rows from it, which the app's sidecar role, a full reader, does whenever it runs (§18.6's witness). Between compiles its posture applies as denials the log's `SidecarRevoke`, `MemberRevoke`, `Suspend`, `GrantRevoke`, `BridgeWithdraw` and `DelegationRevoke` entries and a newer forwarding Delegation's supersession, each on its signer's identity key in the rows it holds, verified against the anchor (§7.9) with `protocol/bridge`'s types alone, a `SidecarRevoke`, `MemberRevoke` or `Suspend` that §7.9's presence row covers on its identity signature as a denial that the next compile, which checks the countersignature, confirms or reverses (owner decisions 185, 187, 189), and it lifts nothing: an `Unsuspend` and every opening take effect at the next compile. A statement that could narrow reach and that it cannot check waits for the next compile, the last compiled state staying in force: the component never goes pending for it, and raises `bridge_alarm` with the statement's age once it has waited 10 minutes, again at doubling intervals (20 minutes, 40 minutes and so on) up to once a day while the condition lasts and at once whenever a further such statement becomes overdue, the condition staying in the posture's status until a compile clears it, so a revocation the posture cannot check does not apply on a device that cannot compile, an accepted cost (owner decisions 216, 487; DESIGN-DETAILS.md section 4). It holds the denials in its overlay, which goes to the component's sealed store in the review phase and until then, past its bound, makes the posture's decision pending rather than stop applying them (§18.6's posture; owner decision 485). So rules and revocations apply whether or not the app runs. A base whose signer the rows the posture holds do not name, as a config writer admitted after them, is followed by its chain and waits for a compile, the denials after it still applying; under a compiled state the posture takes that signer's key from the state's `base_signer_identity_public_key`, the key the judge verified the base under (17.9's `BridgeState`; owner decision 696). A compile opens the config's generations by DelegationWraps to the forwarding reader key, listed in the group the config repo's newest GroupForm makes, which the role follows only along a chain of verified forms, none re-forming below a generation it holds (§10.8's re-form). Every generation a compile wants and has not opened, whether or not gkm lists it, raises `config_key_waiting` once it has waited `KeyWaitAlarmInterval` (10 minutes), and again each interval while it waits, its detail naming the cause: no wrap yet, no such generation listed, forms that do not lead on, a listing stopped short, or a failed read; and a listed GenRotate that conflicts with a generation the role holds, or breaks its chain by `parent_commitment`, opens nothing and raises `head_alarm` (fork), the compile's pin its evidence (DESIGN-DETAILS.md section 4; owner decision 716).
 - **Limits.** None per network (owner decision 66); the block bounds addresses at 64,770.
 
 ```proto
@@ -430,6 +437,12 @@ message BridgeState {
   repeated BridgeIdentity identities = 7;  // the subjects its rules let reach this host (17.9), ~64 B each
   repeated BridgeShareKey share_keys = 8;  // the shares this host serves (17.9)
   repeated string daemon_listeners = 9;    // rule 0 (17.6): the daemon's listener binds, host:port
+  bytes base_signer_identity_public_key = 10;  // the Ed25519 key, 32 B, the judge verified the newest base at or
+                                           // below auth under, its signer's identity key at S(b-1), which the
+                                           // posture tries for that signer under this state past the rows'
+                                           // writers and the identities (DESIGN-DETAILS.md section 4, 4.2.5);
+                                           // empty before base 1, or where the compile holds no entry of the
+                                           // base, which fails closed (owner decision 696)
 }
 message BridgeIdentity { bytes sidecar_id = 1; bytes identity_public_key = 2; uint64 admitted_at = 3;
                          bool revoked = 4; bool suspended = 5;

@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/urnetwork/sidecar/dnsservice"
 )
@@ -117,6 +120,56 @@ func TestDnsChallengeMapsRefusals(t *testing.T) {
 	}
 	if len(writer.calls) != before {
 		t.Error("writes off reached the writer")
+	}
+}
+
+// The hourly cap's 429 names when the name takes a write again, when the writer says (QD-1204): its wait
+// rounded up to whole seconds, at least one, so certs does not ask again before then; a writer that
+// knows no time, a bare ErrDnsChallengeRate among them, gives a 429 with none.
+func TestDnsChallengeRateNamesItsRetryAfter(t *testing.T) {
+	writer := &fakeChallengeWriter{}
+	api := newTestApi(t, func(deps *dnsservice.DnsApiDeps) { deps.Challenges = writer })
+	cases := []struct {
+		err        error
+		retryAfter string
+	}{
+		{err: &dnsservice.DnsChallengeRateError{RetryAfter: 59*time.Minute + 30*time.Second}, retryAfter: "3570"},
+		{err: &dnsservice.DnsChallengeRateError{RetryAfter: 1200*time.Second + time.Millisecond}, retryAfter: "1201"},
+		{err: &dnsservice.DnsChallengeRateError{RetryAfter: time.Microsecond}, retryAfter: "1"},
+		{err: fmt.Errorf("the writer's: %w", &dnsservice.DnsChallengeRateError{RetryAfter: 2 * time.Second, Err: errors.New("the model's")}), retryAfter: "2"},
+		{err: &dnsservice.DnsChallengeRateError{}, retryAfter: ""},
+		{err: dnsservice.ErrDnsChallengeRate, retryAfter: ""},
+	}
+	for _, c := range cases {
+		writer.stateLock.Lock()
+		writer.err = c.err
+		writer.stateLock.Unlock()
+		recorder := api.serve(api.request(http.MethodPost, dnsservice.DnsAcmeChallengePath, dnsservice.DnsCallerCerts, challengeTestBody(t, "abcdefghij.zone.example.", "one")))
+		if recorder.Code != http.StatusTooManyRequests {
+			t.Errorf("%v: %d", c.err, recorder.Code)
+		}
+		if retryAfter := recorder.Header().Get("Retry-After"); retryAfter != c.retryAfter {
+			t.Errorf("%v: Retry-After %q, not %q", c.err, retryAfter, c.retryAfter)
+		}
+	}
+	// the writer's own refusal stays in the chain beside the route's
+	cause := errors.New("the model's")
+	rateErr := &dnsservice.DnsChallengeRateError{RetryAfter: time.Second, Err: cause}
+	if !errors.Is(rateErr, dnsservice.ErrDnsChallengeRate) || !errors.Is(rateErr, cause) || !strings.Contains(rateErr.Error(), "the model's") {
+		t.Fatalf("%v", rateErr)
+	}
+}
+
+// A body past challenge_request_max_bytes is 400 and reaches no writer.
+func TestDnsChallengeRefusesABodyPastItsBound(t *testing.T) {
+	writer := &fakeChallengeWriter{serial: 1}
+	api := newTestApi(t, func(deps *dnsservice.DnsApiDeps) { deps.Challenges = writer })
+	body := challengeTestBody(t, "abcdefghij.zone.example.", strings.Repeat("v", api.settings.Api.ChallengeRequestMaxByteCount))
+	if recorder := api.serve(api.request(http.MethodPost, dnsservice.DnsAcmeChallengePath, dnsservice.DnsCallerCerts, body)); recorder.Code != http.StatusBadRequest {
+		t.Fatalf("%d", recorder.Code)
+	}
+	if len(writer.calls) != 0 {
+		t.Fatalf("calls %+v", writer.calls)
 	}
 }
 

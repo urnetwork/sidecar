@@ -8,7 +8,9 @@
 //     accepted conns each splice to a local TCP target, 127.0.0.1 unless the person names an address. While the
 //     target refuses, the listener sets serving false, keeping its lease and taking no tickets (§9.5), and dials it
 //     again every TargetProbeInterval until it answers. An outward name (tls/, smtp/) passes §5.4's gate inside
-//     Listen first, which may answer pending; the reply then names the approval, for ur approve <id>.
+//     Listen first, which may answer pending; the reply then names the approval, for ur approve <id>. Its grant asks
+//     ur socket listen's --expires from now, else the requests rule's expiresDefault (owner decision 687); the
+//     socket_listen tool asks none.
 //   - A dial forward (ur socket dial <addr> --listen=[<ip>:]<port>) is a DaemonLocalListen of the forward service, on
 //     every interface unless <ip> or the daemon's --listen narrows it, raw bytes with no TLS-only rule (D-TRUST-8;
 //     owner decisions 84, 130), each local conn spliced to a fresh Sidecar.Dial. ur status lists it, LAN-exposed when
@@ -94,6 +96,9 @@ type DaemonSocketListenParams struct {
 	Address string `json:"address"`
 	// The local target, [<ip>:]<port>: 127.0.0.1 unless an ip is given.
 	Target string `json:"target"`
+	// --expires, in milliseconds from now: how long the grant a tls/ or smtp/ listen asks lasts, its
+	// SocketListenSettings.Expires (owner decision 687). 0 takes the requests rule's expiresDefault.
+	ExpiresMs int64 `json:"expires_ms,omitempty"`
 }
 
 // One socket the daemon holds, as ur socket, ur status and socket_status show it: ids, the name and local addresses,
@@ -558,8 +563,13 @@ func (self *DaemonSockets) addressNetwork(address *SocketAddress, callNetworkId 
 }
 
 // A listen forward on address to target (ur socket listen, socket_listen): see the file header. A pending §5.4 gate
-// answers the approval and holds nothing.
+// answers the approval and holds nothing. A tls/ or smtp/ listen asks its grant for the requests rule's expiresDefault.
 func (self *DaemonSockets) Listen(ctx context.Context, networkId Id, addressText string, targetText string) (*DaemonSocketListenReply, error) {
+	return self.listenForward(ctx, networkId, addressText, targetText, &SocketListenSettings{})
+}
+
+// Listen's body, the listen asking settings: ur socket listen's --expires rides them as Expires.
+func (self *DaemonSockets) listenForward(ctx context.Context, networkId Id, addressText string, targetText string, settings *SocketListenSettings) (*DaemonSocketListenReply, error) {
 	address, err := ParseSocketAddress(addressText)
 	if err != nil {
 		return nil, err
@@ -589,7 +599,7 @@ func (self *DaemonSockets) Listen(ctx context.Context, networkId Id, addressText
 	if taken {
 		return nil, ErrDaemonSocketListening
 	}
-	listener, err := backend.listen(ctx, address, &SocketListenSettings{}, false)
+	listener, err := backend.listen(ctx, address, settings, false)
 	if err != nil {
 		var pending *ApprovalPendingError
 		if errors.As(err, &pending) {
@@ -970,7 +980,12 @@ func (self *DaemonSockets) Methods() []*DaemonMethod {
 				if err := decodeDaemonSocketParams(call, params); err != nil {
 					return nil, err
 				}
-				return self.Listen(ctx, call.NetworkId, params.Address, params.Target)
+				// a negative expiry reaches the listen, which refuses it; one past what a duration holds is no duration
+				expires := time.Duration(params.ExpiresMs) * time.Millisecond
+				if expires/time.Millisecond != time.Duration(params.ExpiresMs) {
+					return nil, errDaemonSocketParams
+				}
+				return self.listenForward(ctx, call.NetworkId, params.Address, params.Target, &SocketListenSettings{Expires: expires})
 			},
 		},
 		{

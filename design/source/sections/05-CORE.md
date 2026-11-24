@@ -781,7 +781,11 @@ unpair  ur login -> top-level client as the next generation -> remove C
                     re-sealed as the device applies each change to that member's current binding (a
                     RecoveryBind or RecoveryRebind, or §7.9's cascade voiding the one in effect, which
                     leaves none), with no HPKE copy while none is current
-    keychain.ur     AEAD(R_n): n's client jwt, ClientKey seed, identity and agent keys, ReaderKeys
+    keychain.ur     AEAD(R_n): n's client jwt, ClientKey seed, the generation's connect identity
+                    (connect_identity: a 32 B seed under the client id and generation it was drawn
+                    for, at its first start, from which its client's sequence certificate and provide
+                    keys derive, so a restart presents them again and peers' contracts hold, §6.9; a
+                    predecessor's gives way to a new seed), identity and agent keys, ReaderKeys
                     (a fresh X-Wing pair once the current is 6 days old, each with a not_after at most
                     7 days after signing, never re-signed; a replaced or lapsed private key kept until
                     30 days past its not_after, for the deliveries made to it, §10.5), a Delegation's

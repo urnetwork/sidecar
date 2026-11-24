@@ -28,11 +28,12 @@
 //	          else a walk of the ref's log from its first statement, verified, which only a restart between a read
 //	          and its copy's write needs
 //	cards     the shared file-mode ref cards: one read for its head and the window's statements after the copy's
-//	          version, GET .../log past the window, CardsPageVersionCount statements a page, verified from the version
-//	          and pinned (the pins row). Each statement's push record is read, ReadObjectCount to a read, and its
-//	          changes taken in commit order: a directory's delta teaches the names it adds, a file's version is
-//	          rebuilt (its per-path keys from its slots, a page's slots and segment ranges read together) and a
-//	          removal is one. Each file is named by its plaintext path, found from its token path in its push's epoch
+//	          version, asked again fresh where evs's head cache served a head below this device's own last push
+//	          (evs_read.go's own pushes row), GET .../log past the window, CardsPageVersionCount statements a page,
+//	          verified from the version and pinned (the pins row). Each statement's push record is read, ReadObjectCount
+//	          to a read, and its changes taken in commit order: a directory's delta teaches the names it adds, a file's
+//	          version is rebuilt (its per-path keys from its slots, a page's slots and segment ranges read together) and
+//	          a removal is one. Each file is named by its plaintext path, found from its token path in its push's epoch
 //	          among the names this binding knows: the rows of the deltas it read, the shards of q/, d/ and r/, the
 //	          copy's own paths (DirectoryCardsCopyPaths), and for a token no known name gives the listing of the
 //	          directory above it at the head (EvsRepo.List). A change no name places is no file the copy holds or will
@@ -1291,9 +1292,10 @@ func (self *DirectoryEvsCards) readCardsOnce(ctx context.Context, repo *EvsRepo,
 		return nil, err
 	}
 	// the head, and the window's statements after the version held: past evs's head cache when a lease's hint named a
-	// newer version (§11.9's cache row)
+	// newer version (§11.9's cache row), and asked again fresh when the cache served a head below this device's own last
+	// push, as every read's is (evs_read.go's own pushes row), so a card this device wrote reads at once
 	fresh = fresh || afterVersion < self.client.hintedVersion(repoId, refId)
-	reply, objects, err := self.client.postRead(ctx, repoId, &protocol.EvsReadRequest{RefId: refId.Bytes(), PinVersion: afterVersion, Fresh: fresh})
+	reply, objects, err := repo.postReadSeeingOwnPushes(ctx, refId, &protocol.EvsReadRequest{RefId: refId.Bytes(), PinVersion: afterVersion, Fresh: fresh})
 	if err != nil {
 		return nil, recordEvsRefusal(err)
 	}
@@ -1320,6 +1322,9 @@ func (self *DirectoryEvsCards) readCardsOnce(ctx context.Context, repo *EvsRepo,
 		if fromChain != headChain {
 			return nil, fmt.Errorf("%w: a head at the version held with another chain", ErrEvsHeadForked)
 		}
+		// the head is the version the copy verified: what it shows of this device's own pushes is noted, as a verified
+		// head's is (evs_read.go's own pushes row)
+		repo.noteOwnPushesShown(refId, reply, headVersion, true)
 		return changes, nil
 	}
 	through := min(headVersion, afterVersion+uint64(max(1, self.settings.CardsPageVersionCount)))
@@ -1350,6 +1355,9 @@ func (self *DirectoryEvsCards) readCardsOnce(ctx context.Context, repo *EvsRepo,
 		}); err != nil {
 			return nil, err
 		}
+		// walked to and pinned, and only now what it shows of this device's own pushes noted (evs_read.go's own pushes
+		// row); a page short of the head notes nothing, its head still evs's word
+		repo.noteOwnPushesShown(refId, reply, headVersion, true)
 	} else if err := self.raisePin(repoId, refId, ask, afterVersion, fromChain, walked); err != nil {
 		return nil, err
 	}

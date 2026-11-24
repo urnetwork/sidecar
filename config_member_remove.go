@@ -261,8 +261,9 @@ func (self *Sidecar) signMemberRevoke(ctx context.Context, memberId Id, check Si
 }
 
 // Runs a landed MemberRevoke's effects at entry: this device's Removes of each device the entry revoked, then the
-// revoker's tracking of its position (§7.10's commit and confirm rows). With no effects installed the revocation still
-// stands, and any writer leaf commits the Removes.
+// revoker's tracking of its position (§7.10's commit and confirm rows), then the bridge block's head where the removal
+// left its signer no longer standing (Sidecar.saveBridgeBlockAfter; QD-1205). With no effects installed the revocation
+// still stands, and any writer leaf commits the Removes.
 func (self *Sidecar) runMemberRevokeEffects(ctx context.Context, memberId Id, entry *bridge.AuthPin) {
 	effects := func() SidecarRevokeEffects {
 		self.revokePlans.stateLock.Lock()
@@ -271,6 +272,8 @@ func (self *Sidecar) runMemberRevokeEffects(ctx context.Context, memberId Id, en
 	}()
 	testHookBarrier("config.member_remove.effects.before", memberId.String())
 	defer testHookBarrier("config.member_remove.effects.after", memberId.String())
+	// last, whatever returns first
+	defer self.saveBridgeBlockAfter(ctx, entry)
 	if effects == nil {
 		self.log.Infof("[config]the MemberRevoke at %d landed with no committer installed: a writer leaf commits its Removes", entry.GetVersion())
 		return

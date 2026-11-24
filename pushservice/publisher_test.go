@@ -508,24 +508,27 @@ func TestPublisherHintBetweenTailAndVersionsArrives(t *testing.T) {
 	}
 }
 
-// Every hint of a topic but the batch's last of it keeps its seq and loses its bytes, so seqs run on
-// with no gap; other topics keep theirs; only the batch's last frame carries an ack.
+// A hint of a topic that a later one of the batch repeats keeps its seq and loses its bytes, so seqs run
+// on with no gap and the later one carries them; distinct hints of the topic and other topics keep
+// theirs; only the batch's last frame carries an ack.
 func TestPublisherCoalescesATopicKeepingSeq(t *testing.T) {
 	env := newTestPublisherEnv(t, nil)
 	env.startIdle(nil)
 	env.hint(sidecar.PushTopicTeam, 1, []byte("a"))
 	env.hint(sidecar.PushTopicDns, 5, []byte("d"))
-	env.hint(sidecar.PushTopicTeam, 2, []byte("b"))
-	env.hint(sidecar.PushTopicTeam, 3, []byte("c"))
+	env.hint(sidecar.PushTopicTeam, 2, []byte("c"))
+	env.hint(sidecar.PushTopicTeam, 3, []byte("a"))
+	env.hint(sidecar.PushTopicTeam, 4, []byte("c"))
 	env.publisher.Kick()
 	env.passWindow()
 	env.awaitCall("xrange")
-	messages := env.awaitHints(4)
+	messages := env.awaitHints(5)
 	want := []*protocol.PushHint{
 		{Seq: 1, Topic: sidecar.PushTopicTeam, Version: 1, Kind: 0x0A01},
 		{Seq: 2, Topic: sidecar.PushTopicDns, Version: 5, Kind: 0x0A01, Hint: []byte("d")},
 		{Seq: 3, Topic: sidecar.PushTopicTeam, Version: 2, Kind: 0x0A01},
-		{Seq: 4, Topic: sidecar.PushTopicTeam, Version: 3, Kind: 0x0A01, Hint: []byte("c")},
+		{Seq: 4, Topic: sidecar.PushTopicTeam, Version: 3, Kind: 0x0A01, Hint: []byte("a")},
+		{Seq: 5, Topic: sidecar.PushTopicTeam, Version: 4, Kind: 0x0A01, Hint: []byte("c")},
 	}
 	for index, message := range messages {
 		if !proto.Equal(message.hint, want[index]) {
@@ -535,7 +538,7 @@ func TestPublisherCoalescesATopicKeepingSeq(t *testing.T) {
 			t.Errorf("hint %d's ack is set: %t", index, message.ack != nil)
 		}
 	}
-	if stats := env.publisher.Stats(); stats.HintCount != 4 || stats.CoalescedCount != 2 {
+	if stats := env.publisher.Stats(); stats.HintCount != 5 || stats.CoalescedCount != 2 || stats.BodyBoundCount != 0 {
 		t.Errorf("stats %+v", stats)
 	}
 	// the next read finds nothing past the last one sent
@@ -904,6 +907,7 @@ func TestPublisherCloseWhileSendBlocksJoins(t *testing.T) {
 func TestPublisherRefusesWhatItCannotRunOn(t *testing.T) {
 	for _, change := range []func(settings *pushservice.SidecarPublisherSettings){
 		func(settings *pushservice.SidecarPublisherSettings) { settings.HintCoalesceTimeout = 0 },
+		func(settings *pushservice.SidecarPublisherSettings) { settings.TopicHintBodyCount = 0 },
 		func(settings *pushservice.SidecarPublisherSettings) { settings.PendingResetCount = 0 },
 		func(settings *pushservice.SidecarPublisherSettings) { settings.QueueByteCount = 1024 },
 		func(settings *pushservice.SidecarPublisherSettings) { settings.ReadHintCount = 0 },

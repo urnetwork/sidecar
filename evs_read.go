@@ -15,6 +15,21 @@
 // its read held when it asked, never against what another read raised since, and a head another read raised the pin
 // past stands as read or is read again (evs_pin_store.go's header).
 //
+// Own pushes. evs caches a commit's head only in step 8, after it answered the push (§11.9's cache row), so for a
+// while a request that is not fresh is served the head before this device's own last push, up to 10 min after a lost
+// step-8 put: a device would not read what it had just written, and a writer that takes a path's version from its read
+// (mail_store.go's IfVersion) would be refused as moved again and again until the cache caught up. So a round, or a
+// head-alone read, that was not asked fresh and is served a head below the version this device's own push committed
+// at (evsClientEpochs.committedVersion) is asked once more, fresh, before anything judges it
+// (postReadSeeingOwnPushes): ReadHead, List and History, a write's and a git update's plan (evs_plan.go), and
+// CONSUME's and ERASE's plans all read through it. A fresh request is never sent again. One whose head verifies
+// below this device's push, evs's cluster behind it as a site loss leaves it until its reseed, holds this device's
+// reads of the ref to what the cluster holds instead (evsClientEpochs.ownFloor), so none goes fresh again for that
+// push. Only a head the walk and VerifyHead passed is noted, never one evs's word gives, and the floor falls once, to
+// the first such head, never below what a verified head showed, the ref's pin among them (noteOwnPushesShown): a
+// reply evs forged below the push is refused and lowers no floor, so it cannot hold this device's reads below its own
+// pushes. Another device's reads are held only to its own pushes.
+//
 // Objects the reply carries (segment ranges, slots) stream into spills (evs_reconstruct.go), never a whole reply in
 // memory. Nothing is decrypted before the head and the path verify and the head is pinned, and nothing at all of an
 // owner-bound repo this sidecar does not write until EVS1-M2-29's receipt gate deposits a read receipt: until that
@@ -448,7 +463,8 @@ func (self *EvsRepo) read(ctx context.Context, refId Id, paths []string, version
 	return self.readPaths(ctx, refId, readPaths, fresh)
 }
 
-// One round: the request naming each path in the epochs the loop chose, its framed reply, and the head's check from
+// One round: the request naming each path in the epochs the loop chose, its framed reply, asked again fresh where
+// evs's cache served a head below this device's own last push (postReadSeeingOwnPushes), and the head's check from
 // the pin, or from the oldest read record's pin of the paths asked, so every statement since is walked. The paths'
 // checks, the pin and the records are the loop's.
 func (self *EvsRepo) readRound(ctx context.Context, refId Id, keys *evsReadKeys, paths []*evsReadPath, fresh bool) (*evsReadRound, error) {
@@ -491,7 +507,7 @@ func (self *EvsRepo) readRoundFromPin(ctx context.Context, refId Id, keys *evsRe
 		}
 		request.Paths = append(request.Paths, readPath)
 	}
-	reply, objects, err := self.client.postRead(ctx, self.repoId, request)
+	reply, objects, err := self.postReadSeeingOwnPushes(ctx, refId, request)
 	if err != nil {
 		return nil, err
 	}
@@ -509,6 +525,42 @@ func (self *EvsRepo) readRoundFromPin(ctx context.Context, refId Id, keys *evsRe
 			return self.readRoundFromPin(ctx, refId, keys, paths, true, false)
 		}
 	}
+	head, err := self.verifyReplyHead(ctx, refId, reply, fromVersion, fromChain, ask)
+	if err != nil {
+		objects.close()
+		return nil, err
+	}
+	return &evsReadRound{reply: reply, objects: objects, head: head, keys: keys, refPinVersion: refPinVersion}, nil
+}
+
+// POST .../read for one request of the ref's head, held to this device's own pushes (the file header's own pushes
+// row): a reply to a request that was not fresh whose head is below what this device's reads of the ref are held to
+// (evsClientEpochs.ownFloor) was served from evs's head cache before step 8 of this device's own push, and is asked
+// for once more, request.Fresh set. A fresh request is never sent again. Nothing here judges a reply or notes what it
+// shows: the reply keeps whether it was asked fresh and the version this device's push had committed at when it was
+// sent, and the caller verifies it and only then notes its head (noteOwnPushesShown).
+func (self *EvsRepo) postReadSeeingOwnPushes(ctx context.Context, refId Id, request *protocol.EvsReadRequest) (*evsReadReply, *evsReadObjects, error) {
+	epochs := self.client.epochs
+	committed := epochs.committedVersion(self.repoId, refId)
+	reply, objects, err := self.client.postRead(ctx, self.repoId, request)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !request.Fresh && reply.head.GetVersion() < epochs.ownFloor(self.repoId, refId) {
+		objects.close()
+		request.Fresh = true
+		committed = epochs.committedVersion(self.repoId, refId)
+		if reply, objects, err = self.client.postRead(ctx, self.repoId, request); err != nil {
+			return nil, nil, err
+		}
+	}
+	reply.sentFresh, reply.sentCommitted = request.Fresh, committed
+	return reply, objects, nil
+}
+
+// VerifyHead over a reply of postReadSeeingOwnPushes, read from fromVersion and C there at the pin ask holds, and,
+// the head verified, what it shows of this device's own pushes noted (noteOwnPushesShown).
+func (self *EvsRepo) verifyReplyHead(ctx context.Context, refId Id, reply *evsReadReply, fromVersion uint64, fromChain [sha256.Size]byte, ask *evsPinAsk) (*EvsVerifiedHead, error) {
 	head, err := self.client.verifier.VerifyHead(ctx, &EvsHeadRead{
 		RepoId:      self.repoId,
 		RefId:       refId,
@@ -520,10 +572,33 @@ func (self *EvsRepo) readRoundFromPin(ctx context.Context, refId Id, keys *evsRe
 		ask:         ask,
 	})
 	if err != nil {
-		objects.close()
 		return nil, err
 	}
-	return &evsReadRound{reply: reply, objects: objects, head: head, keys: keys, refPinVersion: refPinVersion}, nil
+	self.noteOwnPushesShown(refId, reply, head.Version, !head.Gap)
+	return head, nil
+}
+
+// Notes what a reply of postReadSeeingOwnPushes shows of this device's own pushes once its head verified at version
+// (the file header's own pushes row): VerifyHead's walk from the pin, or a reader's own walk to the head, passed it
+// (walked), so the head is a writer's statement on the chain and not evs's word. A reply to a fresh request is noted
+// against the version this device's push had committed at when it was sent, raised to the ref's pin as it now stands,
+// the newest head this device verified (evsClientEpochs.noteFreshHead), so the floor never falls below what a verified
+// head showed. Nothing else is noted: a reply that did not verify, which is never passed here, so one evs forged
+// lowers no floor; a gap head past the catch-up budget, whose version and chain are evs's word; and a reply to a
+// request that was not fresh, which its floor did not send below it.
+func (self *EvsRepo) noteOwnPushesShown(refId Id, reply *evsReadReply, version uint64, walked bool) {
+	if !reply.sentFresh || !walked {
+		return
+	}
+	pin, pinned, err := self.client.pins.Pin(self.repoId, refId)
+	if err != nil {
+		// no pin to hold the floor to: nothing noted, which lowers nothing
+		return
+	}
+	if pinned {
+		version = max(version, pin.Version)
+	}
+	self.client.epochs.noteFreshHead(self.repoId, refId, reply.sentCommitted, version)
 }
 
 // A head served below this device's pin of the ref (§11.9's reader row; §11.13's re-seed row, §19.10): the shorter
@@ -568,6 +643,11 @@ type evsReadReply struct {
 	// The ref's Signed EvsReseed as evs keeps it, served after a head below the request's pin_version (§11.13;
 	// QD-725); nil when the reply carried none. Unverified: EvsVerifier.AcceptReseed checks it.
 	reseed []byte
+	// Set by postReadSeeingOwnPushes: whether the request this answers was sent fresh, and the version this device's
+	// own push on the ref had committed at when it was, which the head is noted against only once it verifies
+	// (EvsRepo.noteOwnPushesShown)
+	sentFresh     bool
+	sentCommitted uint64
 }
 
 // POST /evs/v1/repos/<id>/read, its frames read one at a time: the head first, then statements, paths and objects,

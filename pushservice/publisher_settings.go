@@ -44,9 +44,19 @@ func (self *PushFormatSettings) validate() error {
 // Resident publishers (server/connect) and the api long-poll (§6.6).
 type SidecarPublisherSettings struct {
 	// How long a publisher gathers hints after the event that woke it before it reads them, so a topic's
-	// hints in that window go out as one batch, every one but the last of a topic without its bytes: 100
-	// ms (§6.8). It also bounds the reads one client costs: one a window. Must be positive.
+	// hints in that window go out as one batch, each superseded one without its bytes: 100 ms (§6.8). It
+	// also bounds the reads one client costs: one a window. Must be positive.
 	HintCoalesceTimeout time.Duration
+	// The most hints of one topic a batch sends with their bytes: 64. A hint that a later one of its
+	// topic in the batch repeats, the same kind and the same bytes, is superseded and goes with its seq
+	// and without its bytes (§6.8). Distinct ones each keep theirs, the newest of them first, since a
+	// later hint about another group or recipient carries nothing of an earlier one's: a per-client gkm
+	// work hint for each late ask, say. Past the bound the older distinct ones go without their bytes
+	// too, as a superseded hint does, and their owners' recovery covers them (the next ask, the resync),
+	// so a topic adds at most 64 bodies to a batch, 16 KiB at the format's 256 B, well inside
+	// QueueByteCount; a burst of work for distinct groups in one window seldom passes a few. Must be
+	// positive: a topic's newest hint always keeps its bytes.
+	TopicHintBodyCount int
 	// Resets Reset may queue while one waits to be sent: 1 per resident. A Reset past it joins the one
 	// already queued, which reads ver after it anyway. Must be positive.
 	PendingResetCount int
@@ -83,6 +93,7 @@ type SidecarPublisherSettings struct {
 func DefaultSidecarPublisherSettings() *SidecarPublisherSettings {
 	return &SidecarPublisherSettings{
 		HintCoalesceTimeout: 100 * time.Millisecond,
+		TopicHintBodyCount:  64,
 		PendingResetCount:   1,
 		QueueByteCount:      64 * 1024,
 		LongPollHoldTimeout: 25 * time.Second,
@@ -101,7 +112,7 @@ func DefaultSidecarPublisherSettings() *SidecarPublisherSettings {
 // LongPollHoldTimeout is the long-poll's, which checks it.
 func (self *SidecarPublisherSettings) validate() error {
 	switch {
-	case self.HintCoalesceTimeout <= 0, self.PendingResetCount <= 0, self.ReadHintCount <= 0:
+	case self.HintCoalesceTimeout <= 0, self.TopicHintBodyCount <= 0, self.PendingResetCount <= 0, self.ReadHintCount <= 0:
 		return errPublisherSettings
 	case self.QueueByteCount < sidecar.MaxEnvelopeByteCount:
 		return errPublisherSettings

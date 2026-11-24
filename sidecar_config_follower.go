@@ -767,8 +767,9 @@ func (self *SidecarConfigFollower) startClient(networkId Id, genesisChain [sha25
 			Sign: func(purpose string, signedType bridge.SignedType, body []byte) (*bridge.Signed, error) {
 				return self.sidecar.Sign(purpose, signedType, body, nil)
 			},
-			// §17.4: a head that holds no bridge block gets one from this writer's next head
-			FirstBridgeBlock: WithFirstBridgeBlock,
+			// §17.4 and QD-1205: a head that holds no bridge block gets one from this writer's next head, and a
+			// block whose signer no longer stands is signed again there
+			BridgeBlock: WithBridgeBlock,
 		}
 		if judge := client.logSettings.BridgeBodyJudge; judge != nil {
 			args.BridgeFold = judge.Fold
@@ -781,7 +782,8 @@ func (self *SidecarConfigFollower) startClient(networkId Id, genesisChain [sha25
 			}
 			context.AfterFunc(client.ctx, writer.Close)
 		} else {
-			// Only aclSaveContext can select this writer. It never registers a general
+			// Only a person's confirmed save selects this writer (ConfigClient.ConfirmedWriter): an ACL save, `ur bridge
+			// block`, and a revocation's own flow re-signing the bridge block (QD-1205). It never registers a general
 			// config writer or starts a periodic fold. A confirmed save performs its own fold.
 			client.confirmedAclWriter = newConfigWriter(client.ctx, args)
 		}

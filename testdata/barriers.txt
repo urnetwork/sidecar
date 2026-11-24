@@ -43,6 +43,8 @@ barrier bridge_file.egress.after bridge_file.go
 barrier bridge_file.egress.before bridge_file.go
 barrier bridge_file.rule.after bridge_file.go
 barrier bridge_file.rule.before bridge_file.go
+barrier bridge_file.standing.after bridge_file.go
+barrier bridge_file.standing.before bridge_file.go
 barrier bridge_forward.compile.hand bridge_forward_compile.go
 barrier bridge_forward.compile.head bridge_forward_compile.go
 barrier bridge_forward.compile.judge bridge_forward_compile.go
@@ -53,6 +55,7 @@ barrier bridge_forward.follow.read bridge_forward_follow.go
 barrier bridge_forward.follow.store bridge_forward_follow.go
 barrier bridge_forward.fork.before bridge_forward_follow.go
 barrier bridge_forward.generation.store bridge_forward_keys.go
+barrier bridge_forward.groups.store bridge_forward_keys.go
 barrier bridge_forward.pending.before bridge_forward.go
 barrier bridge_forward.sign bridge_forward_sign.go
 barrier bridge_forward_setup.step.after bridge_setup_forward.go
@@ -123,6 +126,8 @@ barrier config.run.checked config_rows_only.go
 barrier config_client.confirm.after config_client.go
 barrier config_client.confirm.before config_client.go
 barrier config_client.unconfirmed config_client.go
+barrier config_writer.plan.tip config_writer.go
+barrier config_writer.sign.tip config_writer.go
 barrier daemon.claims.choose.after daemon_claims.go
 barrier daemon.claims.choose.before daemon_claims.go
 barrier daemon.directory.list.taint.after daemon_directory.go
@@ -375,6 +380,8 @@ barrier evs.reseed.statement_put.after evsservice/reseed.go
 barrier evs.reseed.statement_put.before evsservice/reseed.go
 barrier evs.shred.step.after evsservice/shred.go
 barrier evs.shred.step.before evsservice/shred.go
+barrier evs.subscribe.pin_held evs_subscribe_pin_wait.go
+barrier evs.subscribe.pin_released evs_subscribe_pin_wait.go
 barrier evs.sweep.delete.after evsservice/sweep.go
 barrier evs.sweep.delete.before evsservice/sweep.go
 barrier gkm.ack_write.after gkmservice/acks.go
@@ -397,6 +404,7 @@ barrier gkm.group_create.after gkmservice/groups.go
 barrier gkm.group_create.before gkmservice/groups.go
 barrier gkm.group_owner.after gkmservice/groups.go
 barrier gkm.group_owner.before gkmservice/groups.go
+barrier gkm.hinted_groups.end gkm_sync.go
 barrier gkm.kp_claim.after gkmservice/keypackages.go
 barrier gkm.kp_claim.before gkmservice/keypackages.go
 barrier gkm.late-ask.follow gkm_group.go
@@ -495,6 +503,8 @@ barrier mail.auth.slots.take.after mail_auth_slots.go
 barrier mail.auth.slots.take.before mail_auth_slots.go
 barrier mail.burner.retire.after mail_burner_reply.go
 barrier mail.burner.retire.before mail_burner_reply.go
+barrier mail.client.config.install.after mail_client.go
+barrier mail.client.config.install.before mail_client.go
 barrier mail.config.remove.after mail_config_write.go
 barrier mail.config.remove.before mail_config_write.go
 barrier mail.config.write.after mail_config_write.go
@@ -735,6 +745,8 @@ barrier sidecar.authorize.after sidecar_gate.go
 barrier sidecar.authorize.before sidecar_gate.go
 barrier sidecar.core_sync.accepted push_poll.go
 barrier sidecar.drop.applied state_drop_apply.go
+barrier sidecar.generation.repost.after sidecar_generation.go
+barrier sidecar.generation.repost.before sidecar_generation.go
 barrier sidecar.generation.start.after sidecar_generation.go
 barrier sidecar.generation.start.before sidecar_generation.go
 barrier sidecar.generation.stop.after sidecar_generation.go
