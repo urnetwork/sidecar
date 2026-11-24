@@ -17,6 +17,16 @@
 // dropped and a resync asked for instead. A notice that does not decode, or one the push marks as a resync, asks for
 // a resync.
 //
+// A resident's publisher sends a hint without its bytes, keeping its seq, topic, version and kind, when a later hint
+// of its batch repeats it (§6.8's superseded hint), and past its topic's TopicHintBodyCount or the format's bytes.
+// On a gkm:<group_id> topic that loses nothing: the topic names the group and commit is the one kind it carries, so
+// the notice is the group's commit wake at its version, as v0 reads it, which coalesces with its repeat's as any
+// commit wake does and asks no resync. A draft MLS sender's epoch goes with the bytes, so its packed version reads as
+// the generation, which no handler reads. On the per-client gkm topic the hint's kind, group and recipient went with
+// the bytes, and nothing a client receives tells a repeat whose copy follows in the batch from a hint dropped past
+// the bound, which only a resync recovers, so such a notice asks for a resync (question
+// gkm-hint-intake-bodyless-superseded-mark).
+//
 // Each kind's handler is its flow's: KEYS-M2-18's upkeep takes key-packages-low, and KEYS-M2-19 to KEYS-M2-23 the
 // rest as they land; a kind with no handler yet is passed over, which the resync covers once one is set.
 //
@@ -36,7 +46,8 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 )
 
-// A commit wake carries the group's generation and, for a draft MLS sender, its epoch.
+// A commit wake carries the group's generation and, for a draft MLS sender, its epoch; one the push sent without its
+// bytes carries its version as v0 reads it, and no epoch (the file header).
 // Work hints carry the kind, group and recipient to fetch and leave the generation at zero.
 type GkmHintWake struct {
 	Kind protocol.GkmHintKind
@@ -203,13 +214,25 @@ func (self *GkmHints) Receive(notice PushNotice) {
 }
 
 // The wake a notice names, nil for a resync notice, or an error for a hint that does not decode or does not hold
-// its topic's form.
+// its topic's form, or a per-client one that came without its bytes (the file header).
 func gkmHintWakeOf(notice PushNotice) (*GkmHintWake, error) {
 	if notice.Resync {
 		return nil, nil
 	}
 	if notice.Kind != uint32(protocol.MessageType_GKM_HINT) {
 		return nil, errors.New("gkm hints: another message type")
+	}
+	if len(notice.Hint) == 0 {
+		idText, ok := strings.CutPrefix(notice.Topic, PushTopicGkmGroupPrefix)
+		if !ok {
+			return nil, errors.New("gkm hints: a work hint without its bytes")
+		}
+		groupId, err := ParseId(idText)
+		if err != nil || groupId.String() != idText {
+			return nil, errors.New("gkm hints: a group topic out of form")
+		}
+		// the topic's one kind for the group it names, at the full generation a v0 version is
+		return &GkmHintWake{Kind: protocol.GkmHintKind_GKM_HINT_COMMIT, GroupId: &groupId, Generation: notice.Version}, nil
 	}
 	hint := &protocol.GkmHint{}
 	if err := proto.Unmarshal(notice.Hint, hint); err != nil {
