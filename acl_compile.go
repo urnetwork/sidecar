@@ -343,6 +343,9 @@ type AclLocalPolicy struct {
 	Requests []AclLocalRequest
 	// The names behind the atoms and repos the rows name, for previews (§8.8's Saving).
 	Names []AclLocalName
+	// The document's discovery block, nil with none or no document: what §17.7.1's effective list of service types
+	// reads (owner decision 778). It enters no row.
+	Discovery *AclDiscoveryBlock
 }
 
 // One rule's detail.
@@ -472,6 +475,9 @@ func newAclCompilerTables(input *AclCompileInput) (*aclCompiler, error) {
 	}
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrAclCompile, err)
+	}
+	if self.hasDocument {
+		self.local.Discovery = self.policy.Discovery
 	}
 	if err := self.indexTables(); err != nil {
 		return nil, err
