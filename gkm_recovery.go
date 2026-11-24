@@ -536,10 +536,11 @@ func (self *GkmGroupClient) RunRecovery(ctx context.Context, args *GkmRecoverArg
 }
 
 // Whether an error of one repo's recovery step leaves that repo waiting without failing the pass: a key, a state,
-// a GroupInfo, another leaf's commit, or gkm itself.
+// a GroupInfo, another leaf's commit, or gkm itself, or a token refused for good under the repo's scopes
+// (gkmTokenRefused), which ends that repo's step and opens nothing from the keychain, so the pass goes on to the rest.
 func gkmRecoveryWaits(ctx context.Context, err error) bool {
 	return gkmLeafWaits(err) || errors.Is(err, ErrGkmAuthAhead) || errors.Is(err, ErrGkmNotWriter) || errors.Is(err, ErrGkmNoRepo) ||
-		gkmUnreachable(ctx, err)
+		gkmUnreachable(ctx, err) || gkmTokenRefused(err)
 }
 
 // One repo's pass of RunRecovery.
@@ -1095,7 +1096,8 @@ func (self *GkmGroupClient) rebindRecovery(ctx context.Context, args *GkmRecover
 		case err == nil:
 		case self.args.RecoveryKeyAt != nil && (errors.Is(err, errGkmGroupUnformed) || IsGkmStatus(err, http.StatusNotFound)):
 			// There is no winning generation to rotate. The member-wide check still covers every formed repo.
-		case gkmLeafWaits(err) || errors.Is(err, ErrGkmAuthAhead) || gkmUnreachable(ctx, err):
+		case gkmLeafWaits(err) || errors.Is(err, ErrGkmAuthAhead) || gkmUnreachable(ctx, err) || gkmTokenRefused(err):
+			// this repo waits, the rest go on: a token refused for good under its scopes rotated nothing
 			waits = append(waits, err)
 		default:
 			return err

@@ -67,12 +67,12 @@ func gkmUnreachable(ctx context.Context, err error) bool {
 }
 
 // Whether an error holds a refusal of this device's token for gkm that no wait within a flow mends, so every call
-// the flow, or a pass over many, would make under it meets the same answer: a token the call could not have, which
-// sidecarServiceTokenRefusalOf calls final (the exchange's invalid_grant, its invalid_scope once GkmApi has ridden
-// out QD-1230's window, any other refusal of api's but a 429 or 5xx, a request SidecarApi would not send as given, a
-// 2xx that was not the exchange's, no enrolled client), or gkm's 401 to the token the call presented, one that does
-// not authenticate or whose subject rev/ voids (§10.6's guard). Nothing reached gkm in the first case; gkm refused
-// in the second. Neither is KF7's unreachability (gkmUnreachable).
+// the flow, or a pass over many, would make under the same scopes meets the same answer: a token the call could not
+// have, which sidecarServiceTokenRefusalOf calls final (the exchange's invalid_grant, its invalid_scope past whatever
+// of QD-1230's window GkmApi rode out for the call, any other refusal of api's but a 429 or 5xx, a request SidecarApi
+// would not send as given, a 2xx that was not the exchange's, no enrolled client), or gkm's 401 to the token the call
+// presented, one that does not authenticate or whose subject rev/ voids (§10.6's guard). Nothing reached gkm in the
+// first case; gkm refused in the second. Neither is KF7's unreachability (gkmUnreachable).
 func gkmTokenRefused(err error) bool {
 	if errors.Is(err, ErrGkmTokenRefused) {
 		return true

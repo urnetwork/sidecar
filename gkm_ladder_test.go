@@ -52,7 +52,7 @@ func gkmTestTokenError(t *testing.T, refusal error) error {
 // SidecarApi's refusal to send or read, and no enrolled client, and gkm's own 401. A token the keeper cannot have for
 // now is KF7's unreachability, as gkm's transport failing is: no answer from api, its 429 or 5xx, a keychain still
 // locked, no api. gkm's other answers are no token refusal, whether they refuse or not. Nothing is unreachable past
-// the caller's ctx.
+// the caller's ctx. A recovery pass leaves a repo waiting at either, as it did when both read as unreachable.
 func TestGkmUnreachableReadsATokenRefusedForGoodAsARefusal(t *testing.T) {
 	ctx := context.Background()
 	ended, cancel := context.WithCancel(ctx)
@@ -78,6 +78,9 @@ func TestGkmUnreachableReadsATokenRefusedForGoodAsARefusal(t *testing.T) {
 			}
 			if gkmUnreachable(ended, read) {
 				t.Errorf("%s reads as gkm unreachable past the caller's ctx", name)
+			}
+			if !gkmRecoveryWaits(ctx, read) {
+				t.Errorf("%s fails a recovery pass rather than leave its repo waiting: %v", name, read)
 			}
 		}
 	}
