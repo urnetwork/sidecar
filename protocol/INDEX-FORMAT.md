@@ -58,7 +58,7 @@ x/text's normalization inserts U+034F after 30 non-starters (the stream-safe rul
 
 What the steps leave open, settled (DESIGN-DETAILS 11.2.2): step 1 counts bytes, not maximal subparts, so an overlong form, a surrogate, a value past U+10FFFF and a sequence cut short by the end of the value each give one U+FFFD a byte, and a well-formed U+FFFD stays. Steps 1 to 5 run on each field's value by itself, step 4's "nearest code point before" starting afresh, and on each chunk by itself, so a chunk that begins or ends inside a character shows U+FFFD there. Step 6 cuts after step 5, on normalized bytes, and may cut between a base and a mark step 4 kept. No step maps a code point to nothing but step 4, which keeps the letter, so a value that is not empty never normalizes to nothing, and step 7's test reads the same on the value before normalization.
 
-**Tables.** Normalizer 1 is Unicode 17.0.0 from golang.org/x/text v0.43.0, read through `norm.Version`, `cases.UnicodeVersion` and `unicode.Version`, and the module version as `runtime/debug.ReadBuildInfo` reports it. A build linking anything else is another normalizer: it writes nothing, and a search of an index needing normalizer 1 reads status `update`. `IndexFileHeader.unicode_version` and `text_module_version` are read from the linked build at run time and are never constants.
+**Tables.** Normalizer 1 is Unicode 17.0.0 from golang.org/x/text v0.44.0, read through `norm.Version`, `cases.UnicodeVersion` and `unicode.Version`, and the module version as `runtime/debug.ReadBuildInfo` reports it. A build linking anything else is another normalizer: it writes nothing, and a search of an index needing normalizer 1 reads status `update`. `IndexFileHeader.unicode_version` and `text_module_version` are read from the linked build at run time and are never constants. Normalizer 1 was v0.43.0 until x/crypto's raise brought v0.44.0 into every module (QD-1385): v0.44.0 changes only idna's punycode and language's tag list parser, and its unicode/norm, cases and encoding packages and their tables are v0.43.0's byte for byte, so normalizer 1 was re-pinned rather than another assigned, and only the module version a header records changed.
 
 **Trigrams.** A document's key set is the distinct keys of every 3-byte window of its text, windows across a field's padding included. A text under 3 bytes has none.
 
@@ -245,11 +245,12 @@ ShardLone          128 B   what D6 counts for the header, doc_key, version and t
 
 ```text
 Unicode       17.0.0: general categories and scripts from Go's unicode package (unicode.Version), normalization
-              and case folding from golang.org/x/text v0.43.0 (norm.Version, cases.UnicodeVersion). A build
+              and case folding from golang.org/x/text v0.44.0 (norm.Version, cases.UnicodeVersion). A build
               linking anything else is another normalizer and writes nothing (Normalizer 1's Tables).
-charsets      golang.org/x/text v0.43.0's encoding/htmlindex: 228 labels naming 40 encodings, listed in
-              charsets.json (SHA-256 9c94ee72a1db3f894cd3765b3805839835b66fcca57f9530cbee31968b36a4da), and
-              that module's decoder for each (C1-C3)
+charsets      golang.org/x/text v0.44.0's encoding/htmlindex, v0.43.0's byte for byte, whose labels charsets.json
+              lists from v0.43.0: 228 labels naming 40 encodings (charsets.json's SHA-256
+              9c94ee72a1db3f894cd3765b3805839835b66fcca57f9530cbee31968b36a4da), and that module's decoder for
+              each (C1-C3)
 references    HTML's 2,231 named character references, 106 of them also without their ';' and 93 of them two
               code points: entities.json, SHA-256 9e7bac4a454044f307050b23fefa224beea56525742cc4774e1d4c6da6d40e57
 block tags    address article aside blockquote br center dd details dialog dir div dl dt fieldset figcaption
@@ -369,7 +370,7 @@ C1  A label is trimmed. It names an encoding when every byte of it is 0x21 to 0x
     of charsets.json's 228 labels.
 C2  No label, a label that names nothing, and a label that names utf-8 or replacement leave the bytes as
     they are. Ill-formed UTF-8 then meets N1.
-C3  Any other label's bytes are decoded by x/text v0.43.0's decoder for its encoding. Those decoders answer
+C3  Any other label's bytes are decoded by x/text v0.44.0's decoder for its encoding. Those decoders answer
     malformed input with U+FFFD and never fail. No charset is guessed from content.
 ```
 

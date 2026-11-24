@@ -2,7 +2,7 @@
  "norm_version": "17.0.0",
  "cases_version": "17.0.0",
  "unicode_version": "17.0.0",
- "text_module_version": "v0.43.0",
+ "text_module_version": "v0.44.0",
  "vectors": [
   {
    "name": "empty",

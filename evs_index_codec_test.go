@@ -54,7 +54,7 @@ func testIndexKeys(start int, count int, step int) indexKeySet {
 // A slot's header with every field a slot needs, on tables that are fixed so a header's bytes do not ride on the
 // build running the test.
 func testSlotHeader(fileType uint32) *protocol.IndexFileHeader {
-	header := indexNewFileHeader(fileType, indexTables{normVersion: "17.0.0", textModuleVersion: "v0.43.0"})
+	header := indexNewFileHeader(fileType, indexTables{normVersion: "17.0.0", textModuleVersion: "v0.44.0"})
 	header.BucketStartDay = 20340
 	header.BucketDays = 30
 	header.WriterSidecarId = testIndexIdBytes("writer", 1)

@@ -25,7 +25,7 @@ import (
 const (
 	searchOracleUnicodeVersion    = "17.0.0"
 	searchOracleTextModulePath    = "golang.org/x/text"
-	searchOracleTextModuleVersion = "v0.43.0"
+	searchOracleTextModuleVersion = "v0.44.0"
 	// Step 6: fields 1-4 keep at most this much of their normalized text.
 	searchOracleHeaderFieldByteCount = 1024
 	// A key set that encodes past this skips its chunk (§11.14's sniff row).
@@ -37,7 +37,7 @@ const (
 var ErrSearchOracleTables = errors.New("search oracle: the linked tables are not normalizer 1's")
 
 // Nil when the linked build carries normalizer 1's tables: norm.Version, cases.UnicodeVersion and
-// unicode.Version at 17.0.0, and golang.org/x/text at v0.43.0 with no replace, as
+// unicode.Version at 17.0.0, and golang.org/x/text at v0.44.0 with no replace, as
 // runtime/debug.ReadBuildInfo reports it.
 func searchOracleTablesErr() error {
 	for _, linked := range [][2]string{
