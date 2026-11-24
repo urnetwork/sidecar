@@ -4,7 +4,8 @@
 // above it stands only as REMOVE; a rotation pinned past the judged state waits for the log; a DelegationWrap the
 // delivery checks refuse opens nothing, one pinned off the judged chain raising head_alarm (fork) once; a GroupForm and a
 // rotation pinned between the previous base and the newest are judged, and are not where the store cannot restore at
-// the previous base; and the admission rule falls back to the newest base's estimate.
+// the previous base; the store keeps a previous base's tail, so the judge restores there; and the admission rule falls
+// back to the newest base's estimate.
 
 package sidecar
 
@@ -376,6 +377,50 @@ func TestARotationPinnedBeforeTheNewestBaseIsJudgedWhereThePreviousBaseRestores(
 			t.Fatalf("keeping the previous base's rows %t: gen/2 %s", keepRows, testForwarderKeyOpened(forwarder.RepoKeyAt(2)))
 		}
 		forwarder.Close()
+	}
+}
+
+// A previous base whose rows fold short of it, so a restore there re-applies its tail, keeps that tail in the store
+// past the compile at the newest base, and the compiles after it restore at it: a re-form whose form a member's device
+// signed, pinned between it and the newest base and served only after that compile trimmed the store, is judged and not
+// followed. Were the tail dropped, the later compile would restore at the newest base, and the form, pinned before it,
+// would count against no one and be followed.
+func TestTheStoreKeepsThePreviousBasesTailSoTheJudgeRestoresThere(t *testing.T) {
+	world := newTestForwarderWorld(t)
+	gkm := newTestForwarderReformGkm(world)
+	world.rotate(world.recipient())
+	world.bind(world.peer)
+	forwarder := world.forwarder()
+	net := world.net
+	foldedThrough := net.n
+	net.consentedMember("in the second base's tail")
+	world.ledger.foldLedger(foldedThrough, nil)
+	second := net.log.State().Base()
+	tailFrom := second.GetFoldedThrough() + 1
+	if second.GetVersion() <= tailFrom {
+		t.Fatalf("the second base at %d folds through %d: no tail", second.GetVersion(), second.GetFoldedThrough())
+	}
+	world.hint(forwarder)
+	formPin := net.log.State().Pin()
+	net.consentedMember("before the third base")
+	world.ledger.foldLedger(net.n, nil)
+	world.hint(forwarder)
+	if status := forwarder.Status(); status.CompiledPin.GetVersion() != net.n {
+		t.Fatalf("at the third base: %+v", status)
+	}
+	if from, _, err := forwarder.records.logRange(); err != nil || tailFrom < from {
+		t.Fatalf("the store's log starts at %d, past the second base's tail from %d: %v", from, tailFrom, err)
+	}
+
+	reformedGroupId := testConfigId("re-formed config group")
+	gkm.reform(reformedGroupId)
+	gkm.replaceForm(world.groupFormBy(world.peer, reformedGroupId, world.groupId, 1, formPin))
+	gkm.rotateIn(world.recipient())
+	world.postRouteSealedTo("claimed", 2)
+	world.hint(forwarder)
+	world.advancePastKeyWaitAlarm(forwarder)
+	if alarm := testForwarderAlarm(forwarder.Status(), ForwarderAlarmConfigKeyWaiting); alarm == nil || !strings.Contains(alarm.Detail, "may not form the group") || forwarder.RepoKeyAt(2) != nil {
+		t.Fatalf("a form pinned between a tailed base and the newest: key %s, alarm %+v", testForwarderKeyOpened(forwarder.RepoKeyAt(2)), alarm)
 	}
 }
 
