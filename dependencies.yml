@@ -21,6 +21,11 @@ modules:
     spdx: MIT
     reason: through utls, for TLS certificate compression in connect's fingerprinted dials; and sidecartest's privacy scan, which opens brotli to look inside (§22.7)
     leg: [client, engine, cli, test]
+  - module: github.com/beevik/etree
+    spdx: BSD-2-Clause
+    reason: through goxmldsig, the XML tree NVIDIA's reference integrity manifests are read into (DESIGN-COMPUTE §5.3, ATTEST-M15-02), at v1.7.0 as goxmldsig v1.6.1 requires it; read from its LICENSE (CARCH-M11-02)
+    leg: [client, engine, cli, test]
+    planned: true
   - module: github.com/bits-and-blooms/bitset
     spdx: BSD-3-Clause
     reason: through gnark, for smtpproof's prover (§14)
@@ -31,8 +36,8 @@ modules:
     leg: [engine, cli, test]
   - module: github.com/cloudflare/circl
     spdx: BSD-3-Clause
-    reason: through go-crypto, in go-git's commit signature checks, which mlsinterop's oracle links and never calls
-    leg: [test]
+    reason: through go-crypto, in go-git's commit signature checks, which mlsinterop's oracle links and never calls; and BLS12-381, for drand's beacon signatures (DESIGN-COMPUTE §5.6, ATTEST-M15-03; QD-1254), which the root requires at v1.6.5 and no shipped leg links yet, and mlsinterop now selects too (CARCH-M11-02)
+    leg: [client, engine, cli, test]
   - module: github.com/consensys/gnark
     spdx: Apache-2.0 AND MIT
     reason: the proof system of smtpproof's prover and verifier (§14), which server and cli inject; its frontend/schema links reflectwalk under MIT
@@ -41,13 +46,18 @@ modules:
     spdx: Apache-2.0
     reason: gnark's curves and hashes, for smtpproof (§14)
     leg: [engine, cli, test]
+  - module: github.com/creack/pty
+    spdx: MIT
+    reason: v1.1.24, the enclave SSH server's shell sessions on a pty (DESIGN-COMPUTE §12.4, Appendix D), on the enclave's ur alone; read from its LICENSE (CARCH-M11-02)
+    leg: [cli]
+    planned: true
   - module: github.com/cyphar/filepath-securejoin
     spdx: BSD-3-Clause AND MPL-2.0
     reason: through go-billy's osfs, which go-git's object package links for mlsinterop's oracle
     leg: [test]
   - module: github.com/decred/dcrd/dcrec/secp256k1/v4
     spdx: ISC
-    reason: connect's use of secp256k1 signatures
+    reason: connect's use of secp256k1 signatures; and direct in the root since CARCH-M11-02 for the search signer's EIP-712 signatures (DESIGN-COMPUTE §21.5)
     leg: [client, engine, cli, test]
   - module: github.com/docopt/docopt-go
     spdx: MIT
@@ -55,8 +65,13 @@ modules:
     leg: [cli]
   - module: github.com/ebitengine/purego
     spdx: Apache-2.0
-    reason: v0.11.2 reaches the macOS Keychain without cgo, from cli (§5.10, D-CORE-12)
+    reason: v0.11.2 reaches the macOS Keychain without cgo, from cli (§5.10, D-CORE-12); and, required by the root since CARCH-M11-02, loads LiteRT-LM's and ONNX Runtime's C libraries without cgo in the local engine's helper and the safety classifier (DESIGN-COMPUTE §6.5, §27.5)
     leg: [cli]
+  - module: github.com/emersion/go-ical
+    spdx: MIT
+    reason: calendars' iCalendar parsing and writing (DESIGN-COMPUTE §23.7, Appendix D), at its newest pseudo-version, v0.0.0-20261112170022-46c5b53a1723, as no release is tagged; read from its LICENSE (CARCH-M11-02)
+    leg: [client, engine, cli, test]
+    planned: true
   - module: github.com/emersion/go-imap/v2
     spdx: MIT
     reason: MAIL-M8-07's IMAP server, its imapserver behind the daemon's thin seam, and its imapclient as the stock client of the server's tests (§15.7, D-MAIL-11, I-17), at v2.0.0-beta.9, a pre-release, since v2 has only pre-release tags and this was the newest when MAIL-M8-07 began (QD-470); read from its LICENSE
@@ -73,6 +88,11 @@ modules:
     spdx: MIT
     reason: D-MAIL-3's receiver, platform listener and submission sessions at v0.25.1, through QD-193's fork in third_party/go-smtp, whose ServeTlsConn mail_smtp_serve.go reaches; v0.25.1 differs from §15.3's v0.25.0 only in its client
     leg: [client, engine, cli, test]
+  - module: github.com/emersion/go-webdav
+    spdx: MIT
+    reason: v0.8.0, the first release with a conditional PUT, calendars' CalDAV client (DESIGN-COMPUTE §23.7, Appendix D); read from its LICENSE (CARCH-M11-02)
+    leg: [client, engine, cli, test]
+    planned: true
   - module: github.com/emirpasic/gods
     spdx: BSD-2-Clause AND ISC
     reason: go-git's commit walkers, linked by the object package for mlsinterop's oracle
@@ -83,8 +103,8 @@ modules:
     leg: [cli]
   - module: github.com/fxamacker/cbor/v2
     spdx: MIT
-    reason: through gnark, for smtpproof's prover (§14)
-    leg: [engine, cli, test]
+    reason: through gnark, for smtpproof's prover (§14); and through go-tdx-guest's abi, which reads DICE-signed TDX quotes (DESIGN-COMPUTE §5.3), whose v2.9.6 every module now selects (CARCH-M11-02)
+    leg: [client, engine, cli, test]
   - module: github.com/go-git/gcfg
     spdx: BSD-3-Clause
     reason: go-git's config reader, linked by the object package for mlsinterop's oracle
@@ -113,10 +133,30 @@ modules:
     spdx: Apache-2.0
     reason: through gVisor's netstack
     leg: [client, engine, cli, test]
+  - module: github.com/google/go-sev-guest
+    spdx: Apache-2.0
+    reason: SEV-SNP report verification (DESIGN-COMPUTE §5.3, ATTEST-M14-02) through the trimmed copy in third_party/go-sev-guest, main at v0.15.1-0.20261120002523-d591100d9985 as the design's research read it, which every module that links the root replaces it with (CONTRACTS C-28); read from its LICENSE (CARCH-M11-02)
+    leg: [client, engine, cli, test]
+    planned: true
+  - module: github.com/google/go-tdx-guest
+    spdx: Apache-2.0
+    reason: TDX quote verification, quotes v4 and v5 (DESIGN-COMPUTE §5.3, ATTEST-M14-01) through the trimmed copy in third_party/go-tdx-guest, main at v0.3.2-0.20261123220626-a4ee4f4ee52a as the design's research read it, since the one tag, v0.3.1, reads no v5 quote; every module that links the root replaces it with the copy (CONTRACTS C-28); read from its LICENSE (CARCH-M11-02)
+    leg: [client, engine, cli, test]
+    planned: true
+  - module: github.com/google/go-tpm
+    spdx: Apache-2.0
+    reason: v0.9.8, the TPM 2.0 structures of SVSM's vTPM quote check and credential activation (DESIGN-COMPUTE §11.7, ENC-M14-07; QD-1254); read from its LICENSE (CARCH-M11-02)
+    leg: [client, engine, cli, test]
+    planned: true
   - module: github.com/google/jsonschema-go
     spdx: MIT
     reason: go-sdk's tool schemas, for mcp/ (§16), at v0.4.3 as go-sdk and server require it; read from its LICENSE
     leg: [cli]
+  - module: github.com/google/logger
+    spdx: Apache-2.0
+    reason: through go-tdx-guest's and go-sev-guest's verifiers (DESIGN-COMPUTE §5.3), at v1.1.1 as both require it; read from its LICENSE (CARCH-M11-02)
+    leg: [client, engine, cli, test]
+    planned: true
   - module: github.com/google/pprof
     spdx: Apache-2.0
     reason: through gnark, for smtpproof's prover (§14)
@@ -127,16 +167,26 @@ modules:
     leg: [client, engine, cli, test]
   - module: github.com/gorilla/websocket
     spdx: BSD-2-Clause
-    reason: connect's websocket transport
+    reason: connect's websocket transport; and direct in the root since CARCH-M11-02 for the evidence tunnel (DESIGN-COMPUTE §5.7, ATTEST-M14-03; QD-1254)
     leg: [client, engine, cli, test]
   - module: github.com/jbenet/go-context
     spdx: MIT
     reason: go-git's context-aware readers, linked by its packfile package for mlsinterop's oracle
     leg: [test]
+  - module: github.com/jonboulle/clockwork
+    spdx: Apache-2.0
+    reason: through goxmldsig, its validation clock, for NVIDIA's reference integrity manifests (DESIGN-COMPUTE §5.3, ATTEST-M15-02), at v0.5.0 as goxmldsig v1.6.1 requires it; read from its LICENSE (CARCH-M11-02)
+    leg: [client, engine, cli, test]
+    planned: true
   - module: github.com/klauspost/compress
     spdx: Apache-2.0 AND BSD-3-Clause AND MIT
     reason: through utls, for TLS certificate compression; and sidecartest's privacy scan, which opens zstd to look inside (§22.7)
     leg: [client, engine, cli, test]
+  - module: github.com/kr/fs
+    spdx: BSD-3-Clause
+    reason: through pkg/sftp, its file system walker, for the enclave SSH server's sftp (DESIGN-COMPUTE §12.4), at v0.1.0 as sftp v1.13.12 requires it; read from its LICENSE, the Go Authors' (CARCH-M11-02)
+    leg: [cli]
+    planned: true
   - module: github.com/letsencrypt/challtestsrv
     spdx: MPL-2.0
     reason: through Pebble's validation authority, which reads one of its OIDs, for certs' T2 rows (§22.9); read from its LICENSE
@@ -157,6 +207,11 @@ modules:
     spdx: Apache-2.0
     reason: v3.1.7 is certs' ACME client (§13.8, TLS-M5-15), its ARI, replaces, EAB and key rollover; TLS-M6-05's ordering desktops on the cli leg (QD-288, reading 17), never an sdk leg; read from its LICENSE, its THIRD-PARTY notice quoting x/crypto's BSD terms for a file it adapted
     leg: [engine, cli, test]
+  - module: github.com/MichaelKinsy/PiG
+    spdx: MIT
+    reason: never linked into ur, so no leg ever links it and the row stays planned. PiG is the pinned source of the Harness's Pi 1.5.0 goldens (HARN-M11-01) and the pig the enclave image builds (HARN-M14-07), taken through the module proxy at v0.7.0 (h1:afCNB1Jg/m67tKonylq7vfLe5zFCGRzqAl0bL1iOiEg=, Pi 1.5.0 at f9a26365), the newest version the proxy serves, which cannot fetch main's 40b509fb (QD-1255). Its id is its LICENSE's; its NOTICE lists browser and Node assets it embeds under BSD-3-Clause, ISC and BlueOak-1.0.0, which the image's review reads (CARCH-M11-02)
+    leg: [test]
+    planned: true
   - module: github.com/miekg/dns
     spdx: BSD-3-Clause
     reason: v1.1.72 is dnsservice's message, zone-file and RRSIG code (§12.6); it has TypeNXNAME for compact denial
@@ -253,6 +308,11 @@ modules:
     spdx: Apache-2.0
     reason: go-git's SHA-1 with collision detection, for mlsinterop's oracle
     leg: [test]
+  - module: github.com/pkg/sftp
+    spdx: BSD-2-Clause
+    reason: v1.13.12, the enclave SSH server's sftp subsystem (DESIGN-COMPUTE §12.4, Appendix D), on the enclave's ur alone; read from its LICENSE (CARCH-M11-02)
+    leg: [cli]
+    planned: true
   - module: github.com/ProtonMail/go-crypto
     spdx: BSD-3-Clause
     reason: go-git's commit signature checks, which mlsinterop's oracle links and never calls
@@ -277,6 +337,11 @@ modules:
     spdx: MIT
     reason: gnark's logger, for smtpproof (§14)
     leg: [engine, cli, test]
+  - module: github.com/russellhaering/goxmldsig
+    spdx: Apache-2.0
+    reason: v1.6.1, the XML signatures of NVIDIA's reference integrity manifests (DESIGN-COMPUTE §5.3, ATTEST-M15-02; QD-1254); read from its LICENSE (CARCH-M11-02)
+    leg: [client, engine, cli, test]
+    planned: true
   - module: github.com/segmentio/asm
     spdx: MIT
     reason: through segmentio/encoding, for go-sdk's JSON in mcp/ (§16), at v1.1.3 as server holds it; read from its LICENSE
@@ -289,6 +354,11 @@ modules:
     spdx: MIT
     reason: go-git's file diffs, linked by the object package for mlsinterop's oracle
     leg: [test]
+  - module: github.com/teambition/rrule-go
+    spdx: MIT
+    reason: through go-ical, whose RecurrenceSet imports it, at v1.8.2 as go-ical requires it; calendars expand recurrences through the copy MAILCAL-M13-02 vendors under third_party (DESIGN-COMPUTE §23.7, Appendix D); read from its LICENSE (CARCH-M11-02)
+    leg: [client, engine, cli, test]
+    planned: true
   - module: github.com/theodorsm/covert-dtls
     spdx: MIT
     reason: connect's DTLS fingerprints
@@ -318,26 +388,41 @@ modules:
     reason: operator-core's conformance suites, for the test leg alone once sidecartest's fakes move there in the review phase (owner decision 251, §4.18)
     leg: [test]
     planned: true
+  - module: github.com/veraison/go-cose
+    spdx: MPL-2.0
+    reason: through go-tdx-guest's abi, which reads DICE-signed TDX quotes, for DESIGN-COMPUTE §5.3, at v1.1.0 as go-tdx-guest requires it; read from its LICENSE (CARCH-M11-02)
+    leg: [client, engine, cli, test]
+    planned: true
   - module: github.com/wlynxg/anet
     spdx: BSD-3-Clause
     reason: Android interface listing for connect and pion
     leg: [client, engine, cli, test]
   - module: github.com/x448/float16
     spdx: MIT
-    reason: through gnark's cbor, for smtpproof (§14)
-    leg: [engine, cli, test]
+    reason: through gnark's cbor, for smtpproof (§14); and through go-tdx-guest's cbor (DESIGN-COMPUTE §5.3, CARCH-M11-02)
+    leg: [client, engine, cli, test]
   - module: github.com/yosida95/uritemplate/v3
     spdx: BSD-3-Clause
     reason: go-sdk's resource templates, for mcp/ (§16), at v3.0.2 as server holds it; read from its LICENSE
     leg: [cli]
+  - module: go.uber.org/multierr
+    spdx: MIT
+    reason: through go-tdx-guest's and go-sev-guest's verifiers (DESIGN-COMPUTE §5.3), at v1.11.0 as both require it and server holds it; read from its LICENSE.txt (CARCH-M11-02)
+    leg: [client, engine, cli, test]
+    planned: true
   - module: golang.org/x/crypto
     spdx: BSD-3-Clause
-    reason: §4.7's initial list; connect's and pion's primitives too
+    reason: §4.7's initial list; connect's and pion's primitives too; held at v0.58.0, below DESIGN-COMPUTE's v0.59.0 or later (D-SSH-1, CVE-2026-46595), since v0.59.0 brings x/text v0.44.0, normalizer 1's pin (question compute-modules-x-crypto-raise)
     leg: [client, engine, cli, test]
   - module: golang.org/x/exp
     spdx: BSD-3-Clause
     reason: through gVisor's netstack
     leg: [client, engine, cli, test]
+  - module: golang.org/x/image
+    spdx: BSD-3-Clause
+    reason: its webp decoder, for the gateway's re-encoding of oversized WebP images (DESIGN-COMPUTE §8.5; QD-1254), at v0.44.0 as server and sdk require it; read from its LICENSE, the Go Authors' (CARCH-M11-02)
+    leg: [client, engine, cli, test]
+    planned: true
   - module: golang.org/x/net
     spdx: BSD-3-Clause
     reason: connect's and quic-go's networking

@@ -110,6 +110,9 @@ type Sidecar struct {
 	// An app host's approval parts: the approval log installed in place of the record's, and the phone's part
 	// (record_approval_app.go). Held as any, as search is: the forwarding leg decides no approval.
 	approvalApps atomic.Value
+	// DESIGN-COMPUTE §3.3's components, constructed as the Sidecar starts and closed as its run loop ends
+	// (compute_sidecar.go). Held as any, as search is: the forwarding and page Worker legs run no compute.
+	compute atomic.Value
 
 	stateLock sync.Mutex
 	lifecycle sidecarLifecycle
