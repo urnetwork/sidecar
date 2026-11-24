@@ -160,3 +160,24 @@ D['D-EVS-22'] = ("Git-mode refs require their tip. File-mode refs admit disjoint
                  "the signed base version and chain.")
 Q['Q-EVS-8'] = (Q['Q-EVS-8'][0], "Git requires its tip; file mode admits disjoint writes unless the writer "
                 "signs EXACT_HEAD.")
+
+# Owner decision 778 (2026-11-24): service discovery across hosts, §17.7.1 and §12.9.1, its three questions decided as
+# recommended under the owner's standing acceptance.
+for _k in ('D-BRIDGE-22', 'D-BRIDGE-23', 'D-BRIDGE-24', 'D-BRIDGE-25', 'D-BRIDGE-26', 'D-DNS-12'):
+    assert _k not in D, (_k, 'row exists')
+for _k in ('Q-BRIDGE-9', 'Q-BRIDGE-10', 'Q-BRIDGE-11'):
+    assert _k not in Q, (_k, 'row exists')
+D['D-BRIDGE-22'] = "Discovery crosses hosts as DNS-SD records each host answers to watches by its hook; no mDNS crosses a link."
+D['D-BRIDGE-23'] = "A host publishes its own services and only shared LAN devices, at addresses it serves, never link-local or IPv6."
+D['D-BRIDGE-24'] = "Sharing a LAN device files its /32 route under an exposed /32, approved; a move out withdraws it."
+D['D-BRIDGE-25'] = ("The advertising proxy registers instances on the viewer's machine alone, never a LAN; nothing a watch "
+                    "brought is republished.")
+D['D-BRIDGE-26'] = "`ur tun` translates an IPv6 address per proxied instance to its IPv4 one at the sender (RFC 7915)."
+D['D-DNS-12'] = ("Devices answer the zone's DNS-SD names from their discovery view, 10 s TTLs, forwarding none; no automatic "
+                 "browse domain.")
+Q['Q-BRIDGE-9'] = ("Is discovery on by default for a host's own services, its LAN's devices and the advertising proxy, each "
+                   "separately?", "(a), owner decision 778: own services on, LAN devices once shared, proxy on.")
+Q['Q-BRIDGE-10'] = ("Which service types does a host gather and publish?",
+                    "(b), owner decision 778: a curated list, Apple's types included; documents widen or trim it.")
+Q['Q-BRIDGE-11'] = ("How does the advertising proxy name a remote instance whose name and type are already in view on the "
+                    "machine?", "(a), owner decision 778: its own name unless taken, then a suffix naming its host.")

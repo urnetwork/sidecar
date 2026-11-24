@@ -30,7 +30,7 @@ Stage: Later
 
 ### sdk-v1: §18's v1 set
 Stage: v1 (M6, M10)
-- **Deferred:** §18.17's v1 rows. At M6 (RS2): the team console on the page Worker, with the directory's read-only views; the `sdk.Sidecar` shell with `SignEdgeLogin`; the directory's seams. At M10 (owner decision 169): the search policy and targets, `SidecarSearch`, windows on app hosts and remote search's requester side; the page Worker's search; `Write`'s versioning argument, the drop calls and `History`'s states (owner decisions 173, 183).
+- **Deferred:** §18.17's v1 rows. At M6 (RS2): `GetDiscovery` in the desktop apps beside `ur daemon` (owner decision 778); the team console on the page Worker, with the directory's read-only views; the `sdk.Sidecar` shell with `SignEdgeLogin`; the directory's seams. At M10 (owner decision 169): the search policy and targets, `SidecarSearch`, windows on app hosts and remote search's requester side; the page Worker's search; `Write`'s versioning argument, the drop calls and `History`'s states (owner decisions 173, 183).
 - **Why:** Team ships at M6 and format 2 with search at M10.
 - **Launch instead:** v0: CLI hosts through M1-M4, the ur.io/recurd page at M4 (RS1), app hosts at M8 (BS1).
 - **Lost:** Until M6: the team console. Until M10: search and drops in the SDK.

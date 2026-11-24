@@ -11,11 +11,11 @@
  {
   "num": 2,
   "code": "TRUST",
-  "words": 9986,
+  "words": 10139,
   "code_words": 23949,
   "ceiling": 3000,
-  "over": 6986,
-  "over_pct": 232.9
+  "over": 7139,
+  "over_pct": 238.0
  },
  {
   "num": 3,
@@ -47,11 +47,11 @@
  {
   "num": 6,
   "code": "PROTO",
-  "words": 9982,
+  "words": 10031,
   "code_words": 4279,
   "ceiling": 3800,
-  "over": 6182,
-  "over_pct": 162.7
+  "over": 6231,
+  "over_pct": 164.0
  },
  {
   "num": 7,
@@ -65,11 +65,11 @@
  {
   "num": 8,
   "code": "ACL",
-  "words": 14059,
+  "words": 14099,
   "code_words": 5514,
   "ceiling": 3800,
-  "over": 10259,
-  "over_pct": 270.0
+  "over": 10299,
+  "over_pct": 271.0
  },
  {
   "num": 9,
@@ -101,11 +101,11 @@
  {
   "num": 12,
   "code": "DNS",
-  "words": 6752,
-  "code_words": 2270,
+  "words": 7681,
+  "code_words": 2514,
   "ceiling": 3000,
-  "over": 3752,
-  "over_pct": 125.1
+  "over": 4681,
+  "over_pct": 156.0
  },
  {
   "num": 13,
@@ -146,20 +146,20 @@
  {
   "num": 17,
   "code": "BRIDGE",
-  "words": 10512,
-  "code_words": 6574,
+  "words": 13731,
+  "code_words": 8104,
   "ceiling": 3800,
-  "over": 6712,
-  "over_pct": 176.6
+  "over": 9931,
+  "over_pct": 261.3
  },
  {
   "num": 18,
   "code": "SDK",
-  "words": 10662,
-  "code_words": 11606,
+  "words": 10741,
+  "code_words": 11727,
   "ceiling": 3000,
-  "over": 7662,
-  "over_pct": 255.4
+  "over": 7741,
+  "over_pct": 258.0
  },
  {
   "num": 19,
@@ -191,19 +191,19 @@
  {
   "num": 22,
   "code": "TEST",
-  "words": 7919,
-  "code_words": 41761,
+  "words": 8081,
+  "code_words": 42089,
   "ceiling": 2500,
-  "over": 5419,
-  "over_pct": 216.8
+  "over": 5581,
+  "over_pct": 223.2
  },
  {
   "num": 23,
   "code": "PHASE",
-  "words": 7868,
-  "code_words": 1172,
+  "words": 7926,
+  "code_words": 1185,
   "ceiling": 2500,
-  "over": 5368,
-  "over_pct": 214.7
+  "over": 5426,
+  "over_pct": 217.0
  }
 ]
