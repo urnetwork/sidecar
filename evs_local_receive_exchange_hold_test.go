@@ -2,7 +2,7 @@
 
 // An owned ref's queue holds on the token exchange's refusal for good of its push's scope as it holds on evs's 403
 // SCOPE (DESIGN-DETAILS 8.2.8's queue rows; the brief's fourth item), with stock git pushing to a mount as
-// evs_local_receive_test.go's tests do; and goes again at QueueInterval on what can change.
+// evs_local_receive_test.go's tests do; and goes again at QueueInterval on what can change, the exchange's answers.
 
 package sidecar
 
@@ -81,9 +81,9 @@ func TestEvsLocalReceiveQueueHeldOnAnExchangeRefusalForGood(t *testing.T) {
 	}
 }
 
-// What can change holds nothing: the exchange's 503 past the call's bound, and a sidecar with no enrolled client, the
-// sidecar's own state that the queue waits out as it waits for the connection, each end the push with their error and
-// leave the journal unheld, the queue to go again at QueueInterval.
+// What can change holds nothing: the exchange's 503 past the call's bound ends the push with its error and leaves the
+// journal unheld, the queue to go again at QueueInterval. No enrolled client, the sidecar's own state, holds offline
+// until a reconnect since service-token-refusal-classify (evs_local_receive_offline_hold_test.go).
 func TestEvsLocalReceiveQueueNotHeldOnWhatCanChange(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -98,16 +98,6 @@ func TestEvsLocalReceiveQueueNotHeldOnWhatCanChange(t *testing.T) {
 			var apiErr *SidecarApiError
 			return errors.As(err, &apiErr) && apiErr.Status == http.StatusServiceUnavailable
 		}},
-		{name: "no enrolled client", install: func(t *testing.T, writer *evsTestWriter) {
-			writeScope := evsTestWriteScope(writer)
-			tokens := writer.test.tokens
-			writer.test.client.http.serviceToken = func(ctx context.Context, resource string, scopes []string) (string, error) {
-				if len(scopes) == 1 && scopes[0] == writeScope {
-					return "", ErrSidecarServiceTokenNoClient
-				}
-				return tokens.token(ctx, resource, scopes)
-			}
-		}, check: func(err error) bool { return errors.Is(err, ErrSidecarServiceTokenNoClient) }},
 	}
 	ctx := context.Background()
 	for _, c := range cases {
