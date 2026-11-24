@@ -596,7 +596,8 @@ type SidecarTlsSettings struct {
 	// patience.
 	CertOrderPollMaxInterval time.Duration
 	// The first wait after an order's refusal or failure before the background pass tries that name again: 1 min,
-	// doubling from there. A person's EnsureTlsCertificate does not wait on it.
+	// doubling from there. A person's EnsureTlsCertificate does not wait on it. An order whose certs token was refused
+	// for good waits on no time: the name is held until the device's state or its enrollment moves (tls_cert_manager.go).
 	CertRetryMinInterval time.Duration
 	// The longest that wait grows to: 1 h.
 	CertRetryMaxInterval time.Duration
