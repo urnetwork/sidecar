@@ -9,8 +9,9 @@
 // desktop's and the CLI's sidecar role (§18.4), where ur bridge public-tls publishes and the network's mail indexers
 // receive, so it adds this component beside the dns component for each network it hosts (cli's daemon_dns.go). An
 // app's sidecar role runs only while the app is open (owner decision 197), where a pass about every 6 h would seldom
-// come, so sdk's hosts add none and leave the watch to the network's daemons, as with the CT watch; question
-// dns-watch-followups-app-hosts asks whether that stands.
+// come, so sdk's hosts add none and leave the watch to the network's daemons, as sdk's foreground classes leave the
+// CT watch; question dns-watch-followups-app-hosts asks whether that stands, and whether sdk's desktop class, which
+// runs the CT watch, should run this one too.
 //
 // The component composes the watch at the first client generation that can: the network known, its DnsClient made
 // and the watch's file in the network's dns/ directory read, which a locked keychain refuses. A generation that
