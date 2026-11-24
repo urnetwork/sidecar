@@ -174,7 +174,7 @@ func fiSearchTombstone(label string, version uint64) *oracleIndexEntry {
 func fiSearchFileHeader(fileType uint32, bucket uint32, writer [16]byte, seq uint32) *protocol.IndexFileHeader {
 	header := &protocol.IndexFileHeader{
 		Format: oracleIndexFormatVersion, Type: fileType, Normalizer: oracleIndexNormalizer, Extractor: oracleIndexExtractor,
-		UnicodeVersion: "17.0.0", TextModuleVersion: "v0.43.0",
+		UnicodeVersion: "17.0.0", TextModuleVersion: "v0.44.0",
 	}
 	switch fileType {
 	case oracleIndexTypeSlot, oracleIndexTypeLargeEntry:

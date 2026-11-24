@@ -177,7 +177,7 @@ func TestIndexDirectoryWindows(t *testing.T) {
 // A slot file for a writer in a bucket, entries as given.
 func testViewSlotFile(t testing.TB, window indexBucketWindow, writer Id, seq uint32, fileType uint32, entries ...*indexEntry) []byte {
 	t.Helper()
-	header := indexNewFileHeader(fileType, indexTables{normVersion: "17.0.0", textModuleVersion: "v0.43.0"})
+	header := indexNewFileHeader(fileType, indexTables{normVersion: "17.0.0", textModuleVersion: "v0.44.0"})
 	header.BucketStartDay = window.startDay
 	header.BucketDays = window.days
 	header.WriterSidecarId = writer.Bytes()
@@ -209,7 +209,7 @@ func testReservedKindSlotFile(t testing.TB, window indexBucketWindow, writer Id,
 	if body, err = (indexKeySet{}).appendEncoded(body); err != nil {
 		t.Fatal(err)
 	}
-	header := indexNewFileHeader(indexFileSlot, indexTables{normVersion: "17.0.0", textModuleVersion: "v0.43.0"})
+	header := indexNewFileHeader(indexFileSlot, indexTables{normVersion: "17.0.0", textModuleVersion: "v0.44.0"})
 	header.BucketStartDay = window.startDay
 	header.BucketDays = window.days
 	header.WriterSidecarId = writer.Bytes()
@@ -455,7 +455,7 @@ func TestIndexViewSaysANewerFormat(t *testing.T) {
 	ref := testNewIndexRef()
 	writer := evsTestId("writer")
 	window := indexBucketWindow{startDay: 20340, days: 30}
-	header := indexNewFileHeader(indexFileSlot, indexTables{normVersion: "17.0.0", textModuleVersion: "v0.43.0"})
+	header := indexNewFileHeader(indexFileSlot, indexTables{normVersion: "17.0.0", textModuleVersion: "v0.44.0"})
 	header.Format = 2
 	header.BucketStartDay, header.BucketDays, header.WriterSidecarId, header.Seq = window.startDay, window.days, writer.Bytes(), 1
 	encoded, err := indexMarshalHeader(header)

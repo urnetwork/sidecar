@@ -24,7 +24,8 @@ type rowSwitches struct {
 	// protocol/bridge alone.
 	iosExtensionHoldsItsList bool
 	// §4.7 and §4.18, from M10: every leg selects normalizer 1's golang.org/x/text. Held since M0:
-	// connect and all four sdk modules moved to v0.43.0 ahead of the design's dates.
+	// connect and all four sdk modules moved to v0.43.0 ahead of the design's dates, and every
+	// repository to v0.44.0 together with x/crypto's raise (QD-1385).
 	xTextIsNormalizerOnes bool
 	// §18.10, §4.18 and DESIGN-DETAILS 4.2.3, from M4: make size holds what the forwarding leg adds to
 	// iosExtensionAddedMaxByteCount.
@@ -130,7 +131,7 @@ func defaultCheckSettings() *checkSettings {
 		},
 		goVersion:                 "1.27.4",
 		protocGenGoTool:           "google.golang.org/protobuf/cmd/protoc-gen-go",
-		normalizerOneXTextVersion: "v0.43.0",
+		normalizerOneXTextVersion: "v0.44.0",
 		allowedLicenses: []string{
 			"MIT", "BSD-2-Clause", "BSD-3-Clause", "Apache-2.0", "ISC", "MPL-2.0", "X11",
 		},

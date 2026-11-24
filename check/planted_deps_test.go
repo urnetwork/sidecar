@@ -210,25 +210,26 @@ func plantXText(t *testing.T, version string) *repository {
 	return fixture.open()
 }
 
+// v0.43.0 was normalizer 1's until QD-1385 re-pinned it, so a leg left there is the likely older one.
 func TestDepsFailsOnAnOlderXText(t *testing.T) {
-	wantFindings(t, plantXText(t, "v0.42.0").xTextFindings(t),
-		". selects golang.org/x/text v0.42.0, and normalizer 1's is v0.43.0",
+	wantFindings(t, plantXText(t, "v0.43.0").xTextFindings(t),
+		". selects golang.org/x/text v0.43.0, and normalizer 1's is v0.44.0",
 		". replaces golang.org/x/text with ../faketext",
-		"cli selects golang.org/x/text v0.42.0, and normalizer 1's is v0.43.0",
+		"cli selects golang.org/x/text v0.43.0, and normalizer 1's is v0.44.0",
 		"cli replaces golang.org/x/text with ../../faketext")
 }
 
 // Normalizer 1 is one version, not a floor: another is another normalizer (§11.14).
 func TestDepsFailsOnANewerXText(t *testing.T) {
-	wantFindings(t, plantXText(t, "v0.44.0").xTextFindings(t),
-		". selects golang.org/x/text v0.44.0, and normalizer 1's is v0.43.0",
+	wantFindings(t, plantXText(t, "v0.45.0").xTextFindings(t),
+		". selects golang.org/x/text v0.45.0, and normalizer 1's is v0.44.0",
 		". replaces golang.org/x/text with ../faketext",
-		"cli selects golang.org/x/text v0.44.0, and normalizer 1's is v0.43.0",
+		"cli selects golang.org/x/text v0.45.0, and normalizer 1's is v0.44.0",
 		"cli replaces golang.org/x/text with ../../faketext")
 }
 
 func TestDepsFailsOnAReplacedXText(t *testing.T) {
-	wantFindings(t, plantXText(t, "v0.43.0").xTextFindings(t),
+	wantFindings(t, plantXText(t, "v0.44.0").xTextFindings(t),
 		". replaces golang.org/x/text with ../faketext",
 		"cli replaces golang.org/x/text with ../../faketext")
 }

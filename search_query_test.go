@@ -192,7 +192,7 @@ func testSearchHolding() *searchIndexHolding {
 		refId:             evsTestId("ref"),
 		normalizer:        indexNormalizerId,
 		unicodeVersion:    "17.0.0",
-		textModuleVersion: "v0.43.0",
+		textModuleVersion: "v0.44.0",
 		windowDays:        30,
 		buckets: []*searchHeldBucket{
 			{window: indexBucketWindow{startDay: 20250, days: 30}, retained: true},
@@ -209,7 +209,7 @@ func testSearchHolding() *searchIndexHolding {
 }
 
 // The tables a holding's tests read with: normalizer 1's.
-var testSearchTables = indexTables{normVersion: "17.0.0", casesVersion: "17.0.0", unicodeVersion: "17.0.0", textModuleVersion: "v0.43.0"}
+var testSearchTables = indexTables{normVersion: "17.0.0", casesVersion: "17.0.0", unicodeVersion: "17.0.0", textModuleVersion: "v0.44.0"}
 
 // A step as a test expects it.
 type testStep struct {

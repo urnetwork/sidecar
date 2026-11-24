@@ -412,7 +412,7 @@ modules:
     planned: true
   - module: golang.org/x/crypto
     spdx: BSD-3-Clause
-    reason: §4.7's initial list; connect's and pion's primitives too; held at v0.58.0, below DESIGN-COMPUTE's v0.59.0 or later (D-SSH-1, CVE-2026-46595), since v0.59.0 brings x/text v0.44.0, normalizer 1's pin (question compute-modules-x-crypto-raise)
+    reason: §4.7's initial list; connect's and pion's primitives too; at v0.59.0, DESIGN-COMPUTE's v0.59.0 or later (D-SSH-1, CVE-2026-46595), raised in every repository with x/sys, x/term, x/text, x/tools, x/mod and x/sync and normalizer 1 re-pinned at x/text v0.44.0 (QD-1385)
     leg: [client, engine, cli, test]
   - module: golang.org/x/exp
     spdx: BSD-3-Clause

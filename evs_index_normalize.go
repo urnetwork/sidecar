@@ -29,8 +29,10 @@ const indexNormalizerId = 1
 const indexNormalizerUnicodeVersion = "17.0.0"
 
 // Normalizer 1's x/text module. One norm.Version does not fix NFC: v0.40.0 and v0.41.0 report 17.0.0 too, and compose
-// U+05D2 U+0307 to U+105C9 (§11.14's tables row).
-const indexNormalizerTextModuleVersion = "v0.43.0"
+// U+05D2 U+0307 to U+105C9 (§11.14's tables row). Re-pinned from v0.43.0 with x/crypto's raise (QD-1385): v0.44.0
+// changes only idna's punycode and language's tag list parser, and its unicode/norm, cases and encoding packages and
+// their tables are v0.43.0's byte for byte, so normalizer 1 gives the same output.
+const indexNormalizerTextModuleVersion = "v0.44.0"
 
 const indexTextModulePath = "golang.org/x/text"
 
