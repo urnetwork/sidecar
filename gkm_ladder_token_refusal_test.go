@@ -41,11 +41,12 @@ func gkmTokenRefusalIsExchangeCode(err error, code string) bool {
 }
 
 // A revoked writer whose own state lags its revocation, generation 1 covering every holder that state knows of: with
-// gkm's gate holding the revocation and api's behind it, the exchange grants the token and gkm refuses it 401, and the
-// write ends with ErrGkmTokenRefused after that one read of the generations; with api's gate holding it too, the
-// exchange refuses invalid_grant, and the write ends with that after one ask, nothing reaching gkm. The clock does not
-// move, no key is answered, and no claim reaches gkm. The code before read both refusals as gkm unreachable (KF7) and
-// answered generation 1's key from the keychain, the write going on sealed to it until evs's own exchange refused it.
+// gkm's gate holding the revocation and api's behind it, the exchange grants the token and gkm refuses it 401, and
+// the new token the read asks for at once too (gkm_api.go's renewal), and the write ends with ErrGkmTokenRefused after
+// those two reads of the generations and two asks; with api's gate holding it too, the exchange refuses
+// invalid_grant, and the write ends with that after one ask, nothing reaching gkm. The clock does not move, no key is
+// answered, and no claim reaches gkm. The code before read both refusals as gkm unreachable (KF7) and answered
+// generation 1's key from the keychain, the write going on sealed to it until evs's own exchange refused it.
 func TestARevokedDevicesWriteEndsAtItsTokensRefusal(t *testing.T) {
 	lag := newGkmGrantLagReader(t, true)
 	agent := lag.device
@@ -57,12 +58,17 @@ func TestARevokedDevicesWriteEndsAtItsTokensRefusal(t *testing.T) {
 	revoked := lag.stateFor(agent.gkmWorldDevice)
 
 	generationsBefore := len(lag.gkm.taken("Generations"))
+	renewAsksBefore := lag.exchange.count(agent.id)
 	key, err, took := lag.ensureWritable()
 	if key != nil || !errors.Is(err, sidecar.ErrGkmTokenRefused) || took != 0 {
 		t.Errorf("a revoked writer, api's gate behind: %v after %s, answering a key: %t", err, took, key != nil)
 	}
-	if generations := lag.gkm.taken("Generations")[generationsBefore:]; len(generations) != 1 || generations[0].status != http.StatusUnauthorized {
+	generations := lag.gkm.taken("Generations")[generationsBefore:]
+	if len(generations) != 2 || generations[0].status != http.StatusUnauthorized || generations[1].status != http.StatusUnauthorized {
 		t.Errorf("gkm took %d reads of the generations", len(generations))
+	}
+	if asks := lag.exchange.count(agent.id) - renewAsksBefore; asks != 2 {
+		t.Errorf("the write asked the exchange %d times, not once and once more after gkm's 401", asks)
 	}
 
 	lag.exchange.apply(revoked)
