@@ -12,11 +12,17 @@
 
 package sidecar
 
-// DESIGN-COMPUTE §11, secure enclaves: their formats, admission, provisioning, egress and runtime. Empty until ENC's
-// tasks add their fields.
-type EnclaveSettings struct{}
+// DESIGN-COMPUTE §11, secure enclaves: their formats, admission, provisioning, egress and runtime. ENC's tasks add
+// their fields.
+type EnclaveSettings struct {
+	// §11.10's agents' and edit containers and the container socket, which the enclave's daemon runs
+	// (enclave_container.go; ENC-M14-13, ENC-M14-14).
+	Container *EnclaveContainerSettings
+}
 
 // The component's defaults, the only place one is set.
 func DefaultEnclaveSettings() *EnclaveSettings {
-	return &EnclaveSettings{}
+	return &EnclaveSettings{
+		Container: DefaultEnclaveContainerSettings(),
+	}
 }
