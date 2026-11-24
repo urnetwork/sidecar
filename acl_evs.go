@@ -95,6 +95,14 @@ type AclEvsAccess struct {
 	AclDecision
 }
 
+// Whether kind is one of §11.12's nine, general to secret. acl.proto also declares the kinds DESIGN-COMPUTE.md's
+// authorization features turn on, agents, agent and listeners (§16.6; CACL-M11-05), which no reader takes until its
+// feature's readers land (SKILL-M11-01, LSTN-M13-05), each before that feature's base refused as a reader that predates
+// the value refuses it, so the declaration alone changes nothing a reader accepts.
+func aclRepoKindKnown(kind protocol.RepoKind) bool {
+	return protocol.RepoKind_REPO_KIND_GENERAL <= kind && kind <= protocol.RepoKind_REPO_KIND_SECRET
+}
+
 // The owner-bound kinds, whose readers only the owner's consent adds (§8.5, owner decision 126).
 func aclRepoKindOwnerBound(kind protocol.RepoKind) bool {
 	switch kind {

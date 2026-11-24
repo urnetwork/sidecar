@@ -80,6 +80,10 @@ func newSealedCanonicalAction(clear *protocol.CanonicalAction, detail *protocol.
 	if len(clear.GetSealedDetail()) != 0 {
 		return nil, fmt.Errorf("%w: an action sealed already", ErrCanonicalActionInvalid)
 	}
+	if row, ok := CanonicalActionFields(SidecarActionKind(clear.GetKind())); ok && canonicalActionBuildVersion(clear, row) == canonicalActionVersionCompute {
+		// a version-5 action seals a CanonicalActionDetail5 under its own context (NewSealedCanonicalAction5)
+		return nil, fmt.Errorf("%w: a version-3 or version-4 detail beside a version-5 action", ErrCanonicalActionInvalid)
+	}
 	if err := CheckCanonicalActionDetail(clear, detail); err != nil {
 		return nil, err
 	}

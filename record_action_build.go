@@ -46,6 +46,10 @@ var canonicalActionFieldByteCounts = map[protoreflect.FieldNumber]int{
 	30: recordIdByteCount,
 	// a share's other network
 	canonicalActionFieldShareNetworkId: recordIdByteCount,
+	// version 5's subject, a calendar link's repo id and its target's SHA-256 (DESIGN-COMPUTE §16.3, §23.9); the ids
+	// inside version 5's messages are its rules' (approval_compute_kinds.go)
+	canonicalActionFieldCalendarLink:   recordIdByteCount,
+	canonicalActionFieldCalendarTarget: recordHashByteCount,
 }
 
 // The field numbers set on message, in number order.
@@ -255,7 +259,8 @@ func protoValueEqual(field protoreflect.FieldDescriptor, a protoreflect.Value, b
 	return protoScalarEqual(field.Kind(), a, b)
 }
 
-// Whether two scalar values of kind are equal. CanonicalAction holds no message or map field.
+// Whether two scalar values of kind are equal. CanonicalAction holds no map field, and its message fields are version
+// 5's, which takes no template, so a template's never reach here.
 func protoScalarEqual(kind protoreflect.Kind, a protoreflect.Value, b protoreflect.Value) bool {
 	if kind == protoreflect.BytesKind {
 		return bytes.Equal(a.Bytes(), b.Bytes())
@@ -282,12 +287,17 @@ func CanonicalActionRisk(action *StoredCanonicalAction, policy SidecarRisk, agen
 // the column's fields, nothing more, so recipients, previews and paths never reach a server even from a builder that
 // filled them, nor a field this build cannot name, such as a listen's name at its old 23 (QD-772), whose listen
 // passes on the grant's fields alone. A kind no server path takes is refused. api, every reader's GrantActivate check
-// and each gate run this on the stored bytes, after ParseStoredCanonicalAction.
+// and each gate run this on the stored bytes, after ParseStoredCanonicalAction. Version 5 reaches a server only as
+// kind 19's create and kind 21's raise, the broker's (DESIGN-COMPUTE §16.3), every other version-5 action refused whole.
 func CheckCanonicalActionForServer(action *StoredCanonicalAction) error {
 	if action == nil || action.Action == nil {
 		return fmt.Errorf("%w: no action", ErrCanonicalActionInvalid)
 	}
-	row, ok := CanonicalActionFields(SidecarActionKind(action.Action.GetKind()))
+	kind := SidecarActionKind(action.Action.GetKind())
+	if action.Action.GetVersion() == canonicalActionVersionCompute && kind != SidecarActionEnclaveCreate && kind != SidecarActionComputeBudgetRaise {
+		return fmt.Errorf("%w: kind %d at version 5 takes no server path", ErrCanonicalActionInvalid, kind)
+	}
+	row, ok := CanonicalActionFields(kind)
 	if !ok || len(row.Server) == 0 {
 		return fmt.Errorf("%w: kind %d takes no server path", ErrCanonicalActionInvalid, action.Action.GetKind())
 	}
