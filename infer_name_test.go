@@ -271,7 +271,7 @@ func TestInferNormalizeModelIdBounded(t *testing.T) {
 	if _, err := InferNormalizeModelId("p", tooMany, settings); !errors.Is(err, ErrInferNormalizeTooMany) {
 		t.Errorf("too many ids: %v", err)
 	}
-	for _, provider := range []string{"", "Chutes", "chutes-ai", "chutes.ai", "chutes/x"} {
+	for _, provider := range []string{"", "Chutes", "chutes-ai", "chutes.v2", "chutes/x"} {
 		if _, err := InferNormalizeModelId(provider, nil, settings); !errors.Is(err, ErrInferProviderInvalid) {
 			t.Errorf("provider %q: %v", provider, err)
 		}
