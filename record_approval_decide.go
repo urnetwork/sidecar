@@ -30,6 +30,9 @@
 //	         keys under the context the action's own clear fields derive (QD-771), never one a caller makes; where the
 //	         device has no opener or the detail does not open, the render says so, the request lists deny alone, and
 //	         an approval is refused, so no prefix or port is approved unseen (D-MCP-17)
+//	unshown  an action holding a field the render cannot show as one value, version 5's nested messages (DESIGN-COMPUTE
+//	         §16.3), renders it named and unshown, lists deny alone and takes no approval, until version 5's render
+//	         lands (CACL-M12-02)
 //	listen   a listen's request names its socket in socket_name (QD-772), which the render shows from the opened
 //	         request, and which this device reads against the action's grant_dst before it approves: a tls/ or smtp/
 //	         name is its sock: entry itself, an application name its token path under the network's K_sock as this
@@ -311,7 +314,7 @@ func (self *ApprovalApprover) Pending(ctx context.Context) ([]*SidecarRequestIte
 		item.Render.Flagged = waiting.Flagged
 		item.Render.NameUnread = nameErr != nil
 		item.Channel, item.Decisions = approverChannel(self.host, waiting.Request, identity, own)
-		if (detailErr != nil || nameErr != nil) && 0 < len(item.Decisions) {
+		if (detailErr != nil || nameErr != nil || item.Render.Unshown) && 0 < len(item.Decisions) {
 			// what it could not show or check it may only refuse
 			item.Decisions = []string{SidecarDecisionDeny}
 		}
@@ -374,6 +377,9 @@ func (self *ApprovalApprover) Decide(ctx context.Context, approvalId Id, decisio
 		verdict = protocol.ApprovalVerdict_APPROVAL_VERDICT_DENY
 	} else if uses, err = approvalDecisionUses(request, decision.Uses); err != nil {
 		return err
+	} else if !approvalRenderShowsWhole(request.Action.Action) {
+		// an approval signs only what this device showed whole: version 5's nested fields wait for its render
+		return ErrApprovalUnshown
 	} else if _, err := self.openDetail(request); err != nil {
 		// an approval signs only what this device opened and showed
 		return err

@@ -36,6 +36,7 @@ package sidecar
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -58,6 +59,13 @@ const (
 
 // What names a field an opened sealed_detail holds, ahead of its record.proto name.
 const approvalRenderSealedPrefix = "sealed_detail."
+
+// What a render shows for a field it cannot show as one value: a version-5 action's nested message (DESIGN-COMPUTE
+// §16.3), until version 5's render shows it field by field (CACL-M12-02).
+const approvalRenderUnshownValue = "(not shown by this build)"
+
+// The action holds a field this device's render cannot show whole, so it approves nothing it did not show (D-MCP-17).
+var ErrApprovalUnshown = errors.New("the action holds a field this device cannot show, so it is not approved here")
 
 // One daemon-built field of a request's action.
 type ApprovalRenderField struct {
@@ -97,6 +105,10 @@ type ApprovalRender struct {
 	// holds no K_sock to derive the token path of, or a name naming another socket than grant_dst does. The device
 	// shows the rest and takes no approval. Set by the approver's device, which reads the name.
 	NameUnread bool
+	// The action holds a field this render cannot show as one value, a version-5 action's nested message (DESIGN-COMPUTE
+	// §16.3), which shows as approvalRenderUnshownValue: the device shows the rest and takes no approval
+	// (approvalRenderShowsWhole).
+	Unshown bool
 	// The agent's own words and the daemon's preview, untrusted, printable.
 	Summary string
 	Preview string
@@ -191,8 +203,27 @@ func approvalRenderMeaning(action *protocol.CanonicalAction) string {
 	return ""
 }
 
-// One field's value, printable.
+// Whether every field action sets shows as one value: none of version 5's nested messages, which this render does
+// not show until version 5's render lands (CACL-M12-02), so an approver takes no approval of an action that holds one.
+func approvalRenderShowsWhole(action *protocol.CanonicalAction) bool {
+	whole := true
+	action.ProtoReflect().Range(func(field protoreflect.FieldDescriptor, value protoreflect.Value) bool {
+		whole = !approvalRenderNested(field)
+		return whole
+	})
+	return whole
+}
+
+// Whether field holds messages, which a render cannot show as one value.
+func approvalRenderNested(field protoreflect.FieldDescriptor) bool {
+	return field.Kind() == protoreflect.MessageKind || field.Kind() == protoreflect.GroupKind
+}
+
+// One field's value, printable; a nested message's approvalRenderUnshownValue.
 func approvalRenderValue(field protoreflect.FieldDescriptor, value protoreflect.Value) string {
+	if approvalRenderNested(field) {
+		return approvalRenderUnshownValue
+	}
 	scalar := func(value protoreflect.Value) string {
 		switch field.Kind() {
 		case protoreflect.StringKind:
@@ -277,6 +308,10 @@ func RenderApprovalRequestDetail(request *StoredApprovalRequest, detail *protoco
 			continue
 		}
 		field := message.Descriptor().Fields().ByNumber(number)
+		if approvalRenderNested(field) {
+			// shown whole by version 5's render alone (CACL-M12-02): until then, named and not approved here
+			render.Unshown = true
+		}
 		render.Fields = append(render.Fields, &ApprovalRenderField{
 			Name:  string(field.Name()),
 			Value: approvalRenderValue(field, message.Get(field)),
@@ -330,6 +365,9 @@ func (self *ApprovalRender) Text() string {
 	}
 	if self.NameUnread {
 		lines = append(lines, "  socket_name: it does not read as the action's grant_dst on this device, so it takes no approval here")
+	}
+	if self.Unshown {
+		lines = append(lines, "  this build cannot show every field of the action, so it takes no approval here")
 	}
 	asked := fmt.Sprintf("asked by sidecar %s", self.RequesterSidecarId)
 	if self.RunId != (Id{}) {

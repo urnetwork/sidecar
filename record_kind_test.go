@@ -111,6 +111,30 @@ func TestRecordClassesMatchSectionEight(t *testing.T) {
 	}
 }
 
+// One value DESIGN-COMPUTE.md adds to a section 6.2 row ahead of a design-records fold, with the section that writes
+// it and the compute planner's amendment entry (.stack/plan/COMPUTE-AMENDMENTS.md) that fold deletes it by.
+type testRecordEnumerationAddition struct {
+	key    string
+	number int
+	name   string
+	source string
+}
+
+// The values the compute extension adds to section 6.2's rows, which RECORD.md section 21 leaves to the fold while
+// record.proto takes them with their code (QD-1366, compute-plan-record-registry-fold). A line whose value section 6.2
+// comes to give fails until it leaves.
+var testRecordEnumerationAdditions = []testRecordEnumerationAddition{
+	{key: "CanonicalAction.kind", number: 19, name: "enclave_create", source: "DESIGN-COMPUTE.md §16.3; CA-13"},
+	{key: "CanonicalAction.kind", number: 20, name: "enclave_egress_direct", source: "DESIGN-COMPUTE.md §16.3; CA-13"},
+	{key: "CanonicalAction.kind", number: 21, name: "compute_budget_raise", source: "DESIGN-COMPUTE.md §16.3; CA-13"},
+	{key: "CanonicalAction.kind", number: 22, name: "enclave_delete", source: "DESIGN-COMPUTE.md §16.3; CA-13"},
+	{key: "CanonicalAction.kind", number: 23, name: "fetch_unlisted_url", source: "DESIGN-COMPUTE.md §16.3; CA-13"},
+	{key: "CanonicalAction.kind", number: 24, name: "tainted_send", source: "DESIGN-COMPUTE.md §16.3; CA-13"},
+	{key: "CanonicalAction.kind", number: 25, name: "calendar_write", source: "DESIGN-COMPUTE.md §16.3, §23.9; CA-13"},
+	{key: "CanonicalAction.kind", number: 26, name: "service_write", source: "DESIGN-COMPUTE.md §16.3, §25.10; CA-13"},
+	{key: "ApprovalDecision.channel", number: 4, name: "auto", source: "DESIGN-COMPUTE.md §27.9; CA-30"},
+}
+
 // The value and name pairs of one of section 6.2's rows, cut before its parenthesis.
 func testRecordEnumerationRow(t *testing.T, doc *recordMd, key string) map[int]string {
 	row := doc.row(t, "6.2", key)
@@ -184,6 +208,16 @@ func TestRecordEnumerationsMatchSectionSixTwo(t *testing.T) {
 	}
 	for _, c := range enumCases {
 		pairs := testRecordEnumerationRow(t, doc, c.key)
+		for _, addition := range testRecordEnumerationAdditions {
+			if addition.key != c.key {
+				continue
+			}
+			if written, ok := pairs[addition.number]; ok {
+				t.Errorf("section 6.2's %s now gives %d %s: drop its line from testRecordEnumerationAdditions (%s)", c.key, addition.number, written, addition.source)
+				continue
+			}
+			pairs[addition.number] = addition.name
+		}
 		if len(c.names) != len(pairs)+1 {
 			t.Errorf("%s: record.proto holds %d values and section 6.2 %d besides 0", c.key, len(c.names), len(pairs))
 		}
@@ -391,6 +425,15 @@ func TestSidecarActionKindsTakeTheProtoNumbers(t *testing.T) {
 		{kind: SidecarActionPayment, name: "SIDECAR_ACTION_KIND_PAYMENT"},
 		{kind: SidecarActionRestore, name: "SIDECAR_ACTION_KIND_RESTORE"},
 		{kind: SidecarActionMailTlsUnauthenticated, name: "SIDECAR_ACTION_KIND_MAIL_TLS_UNAUTHENTICATED"},
+		// DESIGN-COMPUTE.md §16.3's (CACL-M11-04)
+		{kind: SidecarActionEnclaveCreate, name: "SIDECAR_ACTION_KIND_ENCLAVE_CREATE"},
+		{kind: SidecarActionEnclaveEgressDirect, name: "SIDECAR_ACTION_KIND_ENCLAVE_EGRESS_DIRECT"},
+		{kind: SidecarActionComputeBudgetRaise, name: "SIDECAR_ACTION_KIND_COMPUTE_BUDGET_RAISE"},
+		{kind: SidecarActionEnclaveDelete, name: "SIDECAR_ACTION_KIND_ENCLAVE_DELETE"},
+		{kind: SidecarActionFetchUnlistedUrl, name: "SIDECAR_ACTION_KIND_FETCH_UNLISTED_URL"},
+		{kind: SidecarActionTaintedSend, name: "SIDECAR_ACTION_KIND_TAINTED_SEND"},
+		{kind: SidecarActionCalendarWrite, name: "SIDECAR_ACTION_KIND_CALENDAR_WRITE"},
+		{kind: SidecarActionServiceWrite, name: "SIDECAR_ACTION_KIND_SERVICE_WRITE"},
 	}
 	for _, c := range kindCases {
 		value, ok := protocol.SidecarActionKind_value[c.name]

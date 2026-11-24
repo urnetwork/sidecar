@@ -5,6 +5,15 @@
 // §8.8 writes AclAtom, AclRule, AclRepo and its statements as field lists without numbers, and §8.4 and
 // §11.12 write actions, autogroups and kinds as names. They take numbers in the order written, a
 // statement's StatementHeader being field 1, and are open to review until these formats freeze at M2.
+//
+// DESIGN-COMPUTE.md's additions, this file's one change for them (CACL-M11-05; CONTRACTS C-27), each number appended
+// after the existing ones: §16.2's actions infer, create, buy, query and ssh; AclTarget's model_glob, compute_resource
+// and listener; AclRows' compute_rows, §16.4's compute block as the broker enforces it (compute-6, and api-7's compute
+// words); and the repo kinds agents and agent (§20.4) and listeners (§26.6) and the inbox marker team (§20.4). Each is
+// declared alone here: their parse, compile and readers are their areas' (CACL-M12-03, CACL-M12-04, SKILL, LSTN), and
+// every reader refuses each before the base that turns its authorization feature on (§16.6), until then refusing them
+// as a reader that predates them does. An ssh grant's users and check period, a compute:enclave rule's shapes and a
+// listener grant's ports never enter rows: they stay in AclLocalPolicy, as ports and prefixes do.
 
 syntax = "proto3";
 package urnetwork.sidecar;
@@ -28,6 +37,49 @@ message AclRows {
   // ApprovalDecision.channel values accepted for an action no requests rule names (dns_set, dns_delete,
   // bridge_expose); default all three (QD-727)
   repeated uint32 evidence_default = 10;
+  // DESIGN-COMPUTE.md §16.4's compute block as the broker enforces it from the signed id-only projection
+  // (compute-6), once the network's compute_policy feature is on (§16.6); unset, the broker applies §16.5's defaults
+  AclComputeRows compute_rows = 11;
+}
+
+// What the broker reads of a network's compute block (DESIGN-COMPUTE.md §16.4), ids and amounts only, each list
+// sorted so one block compiles to one encoding. Assurances order none < AP < A1 < A2, 0 unset reading as the
+// default: none for inference, AP for enclaves (§16.5). The rest of the block (fetch, calendar, connect, approvals,
+// history and disclosures) stays out: the broker checks none of it.
+message AclComputeRows {
+  ComputeAssurance assurance_floor = 1;
+  ComputeAssurance enclave_assurance_floor = 2;
+  repeated string providers = 3;          // remote inference providers' slugs, * for all
+  repeated string enclave_shapes = 4;
+  bool search_enabled = 5;
+  uint32 search_day_max = 6;              // a network's searches a UTC day
+  repeated AclComputeBudgetRow budgets = 7;
+}
+
+// One subject's budget: per 1 subject, 2 agent, 3 member, 4 network; each amount a cap on what its subjects are
+// charged, in nano-USD, 0 none (§16.4).
+message AclComputeBudgetRow {
+  bytes subject = 1;                      // an atom, as AclRule.src_atoms holds one
+  uint32 per = 2;
+  uint64 day_nano_usd = 3;
+  uint64 month_nano_usd = 4;
+}
+
+// §4.3's labels as a floor names them (DESIGN-COMPUTE.md §16.4), in their order.
+enum ComputeAssurance {
+  COMPUTE_ASSURANCE_UNSPECIFIED = 0;
+  COMPUTE_ASSURANCE_NONE = 1;
+  COMPUTE_ASSURANCE_AP = 2;
+  COMPUTE_ASSURANCE_A1 = 3;
+  COMPUTE_ASSURANCE_A2 = 4;
+}
+
+// §16.2's compute: resources, an AclTarget's compute_resource.
+enum AclComputeResource {
+  ACL_COMPUTE_RESOURCE_UNSPECIFIED = 0;
+  ACL_COMPUTE_RESOURCE_ENCLAVE = 1;       // compute:enclave, create and admin
+  ACL_COMPUTE_RESOURCE_BUY = 2;           // compute:buy
+  ACL_COMPUTE_RESOURCE_SEARCH = 3;        // compute:search, query
 }
 
 // A tag or group atom, or a selector with no table name compiled to a derived atom: the first 16 bytes of
@@ -79,6 +131,12 @@ enum AclAction {
   ACL_ACTION_DEPOSIT = 7;
   ACL_ACTION_PUBLISH = 8;
   ACL_ACTION_SEND = 9;
+  // DESIGN-COMPUTE.md §16.2's, in its order; admin and dial serve it too
+  ACL_ACTION_INFER = 10;                  // on model:
+  ACL_ACTION_CREATE = 11;                 // on compute:enclave
+  ACL_ACTION_BUY = 12;                    // on compute:buy, which §16.2 names no word for
+  ACL_ACTION_QUERY = 13;                  // on compute:search
+  ACL_ACTION_SSH = 14;                    // on a subject, an enclave
 }
 
 enum AclAudience {
@@ -152,6 +210,11 @@ enum RepoKind {
   REPO_KIND_VAULT = 7;
   REPO_KIND_MAILBOX = 8;
   REPO_KIND_SECRET = 9;
+  // DESIGN-COMPUTE.md's, each under its authorization feature (§16.6): agent_repos' agents, one a member, and agent,
+  // one an agent (§20.4), and listeners', one a network (§26.6)
+  REPO_KIND_AGENTS = 10;
+  REPO_KIND_AGENT = 11;
+  REPO_KIND_LISTENERS = 12;
 }
 
 enum RepoGrantRole {
@@ -268,6 +331,11 @@ message AclTarget {
   bool mail_send = 9;
   bytes client_id = 10;                   // a client no binding names, under an unrestricted grant
                                           // (D-ACL-5; plan-ACL-nonsidecar-subjects)
+  // DESIGN-COMPUTE.md §16.2's targets, each its own kind
+  string model_glob = 11;                 // model:<glob>, a glob within canonical names, never read as a label
+  AclComputeResource compute_resource = 12;
+  bytes listener = 13;                    // listener:<selector>: an atom, as atom holds one, whose subjects'
+                                          // listed sockets and map entries the target names (§26.7)
 }
 
 // An active Suspend a fold keeps until an Unsuspend of its own suspend_id lands. signer_class settles who may
@@ -323,6 +391,7 @@ enum RepoInbox {
   REPO_INBOX_NONE = 0;
   REPO_INBOX_GROUP = 1;
   REPO_INBOX_ADMIN = 2;
+  REPO_INBOX_TEAM = 3;                    // DESIGN-COMPUTE.md §20.4's Team inbox, under agent_repos (§16.6)
 }
 
 enum RepoAdminChange {

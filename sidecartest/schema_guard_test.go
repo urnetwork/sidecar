@@ -149,6 +149,9 @@ func TestSchemaGuardCallsNoFieldAServerMaySeeUnset(t *testing.T) {
 		{kind: "a bridge_expose", fieldNumbers: []protoreflect.FieldNumber{8, 9, 26, 27}},
 		{kind: "a dns_set or dns_delete", fieldNumbers: []protoreflect.FieldNumber{18, 19, 20, 21}},
 		{kind: "an access request", fieldNumbers: []protoreflect.FieldNumber{8, 10, 11, 14, 26, 29, 38}},
+		// DESIGN-COMPUTE §16.3's version 5 at the broker's gates (CACL-M12-01)
+		{kind: "a version-5 enclave_create", fieldNumbers: []protoreflect.FieldNumber{38, 39, 42}},
+		{kind: "a version-5 compute_budget_raise", fieldNumbers: []protoreflect.FieldNumber{38, 43}},
 	} {
 		for _, fieldNumber := range admitted.fieldNumbers {
 			field := actionFields.ByNumber(fieldNumber)
@@ -249,7 +252,10 @@ func TestSchemaGuardRefusesRecordProtosOldHeader(t *testing.T) {
 	}
 	findings := guard.protoFindings()
 	slices.Sort(findings)
-	wantGuardFindings(t, findings, "message ApprovalCancel", "message ApprovalDecision", "message CanonicalAction")
+	// and the two version-5 messages the broker's gates parse inside a CanonicalAction, kind 19's enclave and kind
+	// 21's budget (DESIGN-COMPUTE §16.3)
+	wantGuardFindings(t, findings, "message ApprovalCancel", "message ApprovalDecision", "message BudgetFields",
+		"message CanonicalAction", "message EnclaveFields")
 }
 
 // The test tree's list: rows for each kind of backing, and one withdrawn.

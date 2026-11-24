@@ -117,6 +117,19 @@ func ApprovalPayloadSha256(storedAction []byte) [sha256.Size]byte {
 // stored, and a server sees no value it does not hold already. Bytes that do not read as protobuf's wire format, carry
 // field 38 more than once, or a zero network, derive nothing.
 func CanonicalActionDetailSealContext(networkId Id, storedAction []byte) (*ConfigSealContext, error) {
+	return canonicalActionDetailSealContext(networkId, storedAction, bridge.SignedType_SIGNED_GRANT_ACTIVATE)
+}
+
+// What a version-5 action's sealed_detail, a CanonicalActionDetail5, is sealed to (DESIGN-COMPUTE §16.3): the context
+// CanonicalActionDetailSealContext derives, the same network and the same nonce over the action's own clear fields as
+// stored, under SignedType SIGNED_APPROVAL_DECISION, the record that carries a version-5 action to the broker's gates,
+// rather than SIGNED_GRANT_ACTIVATE, so a detail sealed for either form opens under the other's context nowhere.
+func CanonicalActionDetail5SealContext(networkId Id, storedAction []byte) (*ConfigSealContext, error) {
+	return canonicalActionDetailSealContext(networkId, storedAction, bridge.SignedType_SIGNED_APPROVAL_DECISION)
+}
+
+// The context a sealed_detail is sealed to under signedType, as CanonicalActionDetailSealContext describes.
+func canonicalActionDetailSealContext(networkId Id, storedAction []byte, signedType bridge.SignedType) (*ConfigSealContext, error) {
 	if networkId == (Id{}) {
 		return nil, fmt.Errorf("%w: a sealed_detail's context names no network", ErrCanonicalActionInvalid)
 	}
@@ -144,7 +157,7 @@ func CanonicalActionDetailSealContext(networkId Id, storedAction []byte) (*Confi
 	}
 	clearSha256 := sha256.Sum256(clear)
 	return &ConfigSealContext{
-		SignedType: bridge.SignedType_SIGNED_GRANT_ACTIVATE,
+		SignedType: signedType,
 		NetworkId:  networkId.Bytes(),
 		Nonce:      bytes.Clone(clearSha256[:configNonceByteCount]),
 	}, nil
@@ -292,6 +305,12 @@ func parseStoredCanonicalAction(stored []byte, known func(version uint32) bool) 
 	if err := canonicalActionCheck(action, known); err != nil {
 		return nil, err
 	}
+	if action.GetVersion() == canonicalActionVersionCompute {
+		// what only the stored bytes say: a kind-24 send's hash over field 46 as stored (DESIGN-COMPUTE §16.3)
+		if err := approvalComputeStoredCheck(action, stored); err != nil {
+			return nil, err
+		}
+	}
 	return &StoredCanonicalAction{Action: action, Bytes: bytes.Clone(stored)}, nil
 }
 
@@ -334,6 +353,12 @@ func approvalRequestVersionKnown(version uint32) bool {
 // (approvalRequestDetailCheck); and uses as its version writes it (approvalRequestUsesCheck; QD-1010). summary and
 // preview stay untrusted text for the approver to show as such.
 func ParseStoredApprovalRequest(stored []byte) (*StoredApprovalRequest, error) {
+	return parseStoredApprovalRequest(stored, CanonicalActionVersionKnown)
+}
+
+// ParseStoredApprovalRequest, given which CanonicalAction versions are known: CanonicalActionVersionKnown outside
+// tests, where a build that predates a version is one whose known set lacks it.
+func parseStoredApprovalRequest(stored []byte, known func(version uint32) bool) (*StoredApprovalRequest, error) {
 	request := &protocol.ApprovalRequest{}
 	if err := proto.Unmarshal(stored, request); err != nil {
 		return nil, fmt.Errorf("%w: approval request: %v", ErrRecordStoredInvalid, err)
@@ -366,7 +391,7 @@ func ParseStoredApprovalRequest(stored []byte) (*StoredApprovalRequest, error) {
 	if request.GetNotAfterMillis() <= 0 {
 		return nil, fmt.Errorf("%w: no expiry", ErrRecordStoredInvalid)
 	}
-	action, err := ParseStoredCanonicalAction(request.GetCanonicalAction())
+	action, err := parseStoredCanonicalAction(request.GetCanonicalAction(), known)
 	if err != nil {
 		return nil, err
 	}
@@ -487,9 +512,32 @@ type StoredApprovalDecision struct {
 	Bytes []byte
 }
 
+// ApprovalDecision's versions: 1, §16.8's; 2, which adds selected, a kind-25 approval's events (DESIGN-COMPUTE §23.9);
+// and 3, channel 4's alone, which adds auto and auto_verdict and may carry selected (§27.9). A reader that predates a
+// version refuses it whole.
+const (
+	approvalDecisionVersion1        uint32 = 1
+	approvalDecisionVersionSelected uint32 = 2
+	approvalDecisionVersionAuto     uint32 = 3
+)
+
+// The scale AutoVerdict's score and threshold are in, basis points (DESIGN-COMPUTE §27.6).
+const approvalAutoBasisPoints = 10000
+
+// AutoVerdict's values a channel-4 decision carries (§27.9): verdict 1 allow, since an ask files no decision, and
+// reason 1 clean, §27.6's one allowing reason, numbered in its list's order (QD-1371).
+const (
+	approvalAutoVerdictAllow uint32 = 1
+	approvalAutoReasonClean  uint32 = 1
+)
+
 // ApprovalDecision versions this build knows.
 func approvalDecisionVersionKnown(version uint32) bool {
-	return version == 1
+	switch version {
+	case approvalDecisionVersion1, approvalDecisionVersionSelected, approvalDecisionVersionAuto:
+		return true
+	}
+	return false
 }
 
 // Parses a Signed ApprovalDecision as stored, as ParseSignedApprovalDecision does.
@@ -507,7 +555,19 @@ func ParseStoredApprovalDecision(storedSigned []byte) (*StoredApprovalDecision, 
 // harness and empty on device and presence (record-md-presence-evidence-sha256). sshsig is ignored and never trusted,
 // since no decision needs one (plan-MCP-risk-classifier#1). The signature is Verify's, given the signer's key, and the
 // rest of §16.6's spend check is the spender's.
+//
+// DESIGN-COMPUTE.md's versions (§23.9, §27.9): version 1 carries no selection and no automatic fields; version 2's
+// selection is unique and ascending, an approval's selecting at least one event and a denial's none; version 3 exists
+// only on channel 4, auto, and channel 4 only at version 3: auto set, an approval of one use, evidence_sha256 the
+// SHA-256 of its auto_verdict entry, and an AutoVerdict that allowed, clean, its score under its threshold, naming its
+// model by name and SHA-256, its inputs by SHA-256, and counting at least one window, run and day; it may carry a
+// selection as version 2's. Whether a selection fits its action is CheckApprovalDecisionSelection's.
 func ParseSignedApprovalDecision(signed *bridge.Signed) (*StoredApprovalDecision, error) {
+	return parseSignedApprovalDecision(signed, approvalDecisionVersionKnown)
+}
+
+// ParseSignedApprovalDecision, given which decision versions are known: approvalDecisionVersionKnown outside tests.
+func parseSignedApprovalDecision(signed *bridge.Signed, known func(version uint32) bool) (*StoredApprovalDecision, error) {
 	if signed == nil {
 		return nil, fmt.Errorf("%w: no Signed", ErrRecordStoredInvalid)
 	}
@@ -521,7 +581,7 @@ func ParseSignedApprovalDecision(signed *bridge.Signed) (*StoredApprovalDecision
 	if len(decision.ProtoReflect().GetUnknown()) != 0 {
 		return nil, fmt.Errorf("%w: approval decision carries a field this build cannot name", ErrRecordStoredInvalid)
 	}
-	if !approvalDecisionVersionKnown(decision.GetVersion()) {
+	if !known(decision.GetVersion()) {
 		return nil, fmt.Errorf("%w: approval decision version %d", ErrApprovalVersionUnknown, decision.GetVersion())
 	}
 	checks := []error{
@@ -543,12 +603,16 @@ func ParseSignedApprovalDecision(signed *bridge.Signed) (*StoredApprovalDecision
 		if len(decision.GetEvidenceSha256()) != 0 {
 			return nil, fmt.Errorf("%w: evidence_sha256 on channel %d", ErrRecordStoredInvalid, decision.GetChannel())
 		}
-	case protocol.ApprovalChannel_APPROVAL_CHANNEL_HARNESS:
+	case protocol.ApprovalChannel_APPROVAL_CHANNEL_HARNESS, protocol.ApprovalChannel_APPROVAL_CHANNEL_AUTO:
+		// harness: the matched hook event; auto: its auto_verdict entry's body (DESIGN-COMPUTE §27.9)
 		if err := recordCheckLength("evidence_sha256", decision.GetEvidenceSha256(), recordHashByteCount, false); err != nil {
 			return nil, err
 		}
 	default:
 		return nil, fmt.Errorf("%w: channel %d", ErrRecordStoredInvalid, decision.GetChannel())
+	}
+	if err := approvalDecisionVersionCheck(decision); err != nil {
+		return nil, err
 	}
 	if verdict == protocol.ApprovalVerdict_APPROVAL_VERDICT_APPROVE && decision.GetUses() == 0 {
 		return nil, fmt.Errorf("%w: an approval of no uses", ErrRecordStoredInvalid)
@@ -560,6 +624,99 @@ func ParseSignedApprovalDecision(signed *bridge.Signed) (*StoredApprovalDecision
 		return nil, fmt.Errorf("%w: no auth pin", ErrRecordStoredInvalid)
 	}
 	return &StoredApprovalDecision{Decision: decision, Signed: signed, Bytes: bytes.Clone(signed.GetBody())}, nil
+}
+
+// Holds a decision to its version's fields (DESIGN-COMPUTE §23.9, §27.9), as ParseSignedApprovalDecision describes.
+func approvalDecisionVersionCheck(decision *protocol.ApprovalDecision) error {
+	version := decision.GetVersion()
+	auto := protocol.ApprovalChannel(decision.GetChannel()) == protocol.ApprovalChannel_APPROVAL_CHANNEL_AUTO
+	if auto != (version == approvalDecisionVersionAuto) {
+		return fmt.Errorf("%w: channel %d at decision version %d", ErrRecordStoredInvalid, decision.GetChannel(), version)
+	}
+	if decision.GetAuto() != auto || (decision.GetAutoVerdict() != nil) != auto {
+		return fmt.Errorf("%w: auto or auto_verdict at decision version %d", ErrRecordStoredInvalid, version)
+	}
+	approve := protocol.ApprovalVerdict(decision.GetDecision()) == protocol.ApprovalVerdict_APPROVAL_VERDICT_APPROVE
+	selected := decision.GetSelected()
+	for i, index := range selected {
+		if 0 < i && index <= selected[i-1] {
+			return fmt.Errorf("%w: a selection out of order or repeated", ErrRecordStoredInvalid)
+		}
+	}
+	switch version {
+	case approvalDecisionVersion1:
+		if len(selected) != 0 {
+			return fmt.Errorf("%w: a selection at decision version 1", ErrRecordStoredInvalid)
+		}
+	case approvalDecisionVersionSelected:
+		// an empty list approves none, which no device signs, and a denial selects nothing
+		if approve == (len(selected) == 0) {
+			return fmt.Errorf("%w: a version-2 %s selecting %d events", ErrRecordStoredInvalid, protocol.ApprovalVerdict(decision.GetDecision()), len(selected))
+		}
+	case approvalDecisionVersionAuto:
+		if !approve || decision.GetUses() != 1 {
+			return fmt.Errorf("%w: a channel-4 decision that is no approval of one use", ErrRecordStoredInvalid)
+		}
+		if err := approvalAutoVerdictCheck(decision.GetAutoVerdict()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Holds a channel-4 decision's verdict to §27.9's: an allow, clean, its score under its threshold in basis points,
+// naming its model and hashing its inputs, and counting what it scored and this run's and this day's automatic
+// approvals, itself included.
+func approvalAutoVerdictCheck(verdict *protocol.AutoVerdict) error {
+	switch {
+	case len(verdict.ProtoReflect().GetUnknown()) != 0:
+		return fmt.Errorf("%w: an auto_verdict with a field this build cannot name", ErrRecordStoredInvalid)
+	case verdict.GetVerdict() != approvalAutoVerdictAllow || verdict.GetReason() != approvalAutoReasonClean:
+		return fmt.Errorf("%w: an auto_verdict of verdict %d, reason %d", ErrRecordStoredInvalid, verdict.GetVerdict(), verdict.GetReason())
+	case approvalAutoBasisPoints < verdict.GetThreshold() || verdict.GetThreshold() <= verdict.GetScore():
+		return fmt.Errorf("%w: an auto_verdict scoring %d against %d", ErrRecordStoredInvalid, verdict.GetScore(), verdict.GetThreshold())
+	case verdict.GetModel() == "" || verdict.GetWindows() == 0 || verdict.GetRunCount() == 0 || verdict.GetDayCount() == 0:
+		return fmt.Errorf("%w: an auto_verdict naming no model or counting nothing", ErrRecordStoredInvalid)
+	}
+	return errors.Join(
+		recordCheckLength("auto_verdict's model_sha256", verdict.GetModelSha256(), recordHashByteCount, false),
+		recordCheckLength("auto_verdict's inputs_sha256", verdict.GetInputsSha256(), recordHashByteCount, false),
+	)
+}
+
+// Whether decision's selection fits action (DESIGN-COMPUTE §23.9, §27.9): an approval of a kind-25 action selects its
+// events at version 2 or 3, each index below the action's event count, an automatic one every event; a decision on
+// any other action selects none and is no version 2's. A denial approves nothing, so its selection is the parse's
+// alone. The spend check runs this beside its payload step, so no decision spends on events it did not select or that
+// its action does not hold.
+func CheckApprovalDecisionSelection(decision *StoredApprovalDecision, action *StoredCanonicalAction) error {
+	if decision == nil || decision.Decision == nil || action == nil || action.Action == nil {
+		return fmt.Errorf("%w: no decision or action", ErrRecordStoredInvalid)
+	}
+	body := decision.Decision
+	selected := body.GetSelected()
+	if SidecarActionKind(action.Action.GetKind()) != SidecarActionCalendarWrite {
+		if len(selected) != 0 || body.GetVersion() == approvalDecisionVersionSelected {
+			return fmt.Errorf("%w: a selection on an action of kind %d", ErrRecordStoredInvalid, action.Action.GetKind())
+		}
+		return nil
+	}
+	if protocol.ApprovalVerdict(body.GetDecision()) != protocol.ApprovalVerdict_APPROVAL_VERDICT_APPROVE {
+		return nil
+	}
+	if body.GetVersion() == approvalDecisionVersion1 {
+		return fmt.Errorf("%w: a kind-25 approval selecting no events", ErrRecordStoredInvalid)
+	}
+	eventCount := len(action.Action.GetCalendarEvents())
+	for _, index := range selected {
+		if eventCount <= int(index) {
+			return fmt.Errorf("%w: a selection past the action's %d events", ErrRecordStoredInvalid, eventCount)
+		}
+	}
+	if body.GetVersion() == approvalDecisionVersionAuto && len(selected) != eventCount {
+		return fmt.Errorf("%w: an automatic decision selecting %d of %d events", ErrRecordStoredInvalid, len(selected), eventCount)
+	}
+	return nil
 }
 
 // Whether the decision verifies under its signer's key: §6.9's Signed, purpose approval, SIGNED_APPROVAL_DECISION.

@@ -666,11 +666,12 @@ func TestParseStoredApprovalRequestRefuses(t *testing.T) {
 			},
 			err: ErrRecordStoredInvalid,
 		},
-		"action version 5": {
+		"action version 6": {
 			change: func(request *protocol.ApprovalRequest) {
-				// 2 is known from M10 (RECORD-M10-03), so 5 stands for a version this build does not know
+				// 2 is known from M10 (RECORD-M10-03) and 5 from M12a (CACL-M12-01), so 6 stands for a version this
+				// build does not know
 				action := testRecordDnsAction()
-				action.Version = 5
+				action.Version = 6
 				request.CanonicalAction = testRecordStored(t, action)
 				payloadSha256 := ApprovalPayloadSha256(request.CanonicalAction)
 				actionId := ApprovalActionId(Id(request.ApprovalId), request.CanonicalAction)
@@ -723,7 +724,9 @@ func TestParseSignedApprovalDecisionRefuses(t *testing.T) {
 		change func(decision *protocol.ApprovalDecision)
 		err    error
 	}{
-		"version 2":            {change: func(decision *protocol.ApprovalDecision) { decision.Version = 2 }, err: ErrApprovalVersionUnknown},
+		// 2 and 3 are DESIGN-COMPUTE.md's (CACL-M12-01), so 4 stands for a version this build does not know
+		"version 4":            {change: func(decision *protocol.ApprovalDecision) { decision.Version = 4 }, err: ErrApprovalVersionUnknown},
+		"version 2, no events": {change: func(decision *protocol.ApprovalDecision) { decision.Version = 2 }, err: ErrRecordStoredInvalid},
 		"verdict 0":            {change: func(decision *protocol.ApprovalDecision) { decision.Decision = 0 }, err: ErrRecordStoredInvalid},
 		"verdict 3":            {change: func(decision *protocol.ApprovalDecision) { decision.Decision = 3 }, err: ErrRecordStoredInvalid},
 		"channel 0":            {change: func(decision *protocol.ApprovalDecision) { decision.Channel = 0 }, err: ErrRecordStoredInvalid},

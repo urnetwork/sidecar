@@ -34,6 +34,7 @@ const (
 	ServiceGateMxedge   = operator.ServiceGateMxedge
 	ServiceGateSmtpedge = operator.ServiceGateSmtpedge
 	ServiceGateDns      = operator.ServiceGateDns
+	ServiceGateCompute  = operator.ServiceGateCompute
 )
 
 // §19.11's switches, each only `enabled`.
@@ -85,12 +86,26 @@ func NewFormat2Gate(gate ServiceGate, purge string, drop string) Format2Gate {
 // plan-EVSB-settle-gate's entry for one cluster. The zero value has passed nothing.
 type FileClusterGate = operator.FileClusterGate
 
-// §19.11's reread interval, which a host with no gates of its own asks a refused caller to wait.
-const ClosedServiceGatesRetryAfter = 60 * time.Second
+// The tunables of a host that set no gates.
+type ClosedServiceGatesSettings struct {
+	// What a refused caller is asked to wait: §19.11's reread interval, 60 s, so it asks again when a host that
+	// reads the file would have read it again.
+	RetryAfter time.Duration
+}
+
+// The defaults.
+func DefaultClosedServiceGatesSettings() *ClosedServiceGatesSettings {
+	return &ClosedServiceGatesSettings{
+		RetryAfter: 60 * time.Second,
+	}
+}
 
 // Every gate closed: what an absent file, or a host that set no gates, answers. Nothing is on, no
-// network is admitted, and every cluster has passed nothing.
-type ClosedServiceGates struct{}
+// network is admitted, and every cluster has passed nothing. The zero value takes the default settings.
+type ClosedServiceGates struct {
+	// nil: DefaultClosedServiceGatesSettings.
+	Settings *ClosedServiceGatesSettings
+}
 
 // Closed, for every service.
 func (self ClosedServiceGates) Service(service string) ServiceGate {
@@ -137,9 +152,13 @@ func (self ClosedServiceGates) FileCluster(clusterId string) FileClusterGate {
 	return FileClusterGate{}
 }
 
-// §19.11's reread interval.
+// §19.11's reread interval, from the settings.
 func (self ClosedServiceGates) RetryAfter() time.Duration {
-	return ClosedServiceGatesRetryAfter
+	settings := self.Settings
+	if settings == nil {
+		settings = DefaultClosedServiceGatesSettings()
+	}
+	return settings.RetryAfter
 }
 
 // A network's bucket, 0 to 99: the first 8 bytes of SHA-256 over the id's 16 bytes, big-endian, mod

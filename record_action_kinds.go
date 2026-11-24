@@ -50,6 +50,9 @@
 // alias or every recipient, and its body's hash and preview empty (TemplateEmpty), so it is the alias and the set alone
 // and no approver reads one message's text as the template's (NewMailTemplateAction).
 //
+// Kinds 19 to 26 are DESIGN-COMPUTE.md §16.3's, at CanonicalAction version 5 alone, their rows approval_compute_kinds.go's
+// (CACL-M12-01), appended here, and kind 5 takes version 5 for its field 49 alone.
+//
 // Package-level functions are safe for concurrent use: the table never changes.
 
 package sidecar
@@ -112,6 +115,9 @@ type CanonicalActionKindFields struct {
 	Versions []uint32
 	// Fields the kind may fill only at version 2: field 37, format 2's versioning.
 	Version2 []protoreflect.FieldNumber
+	// Fields the kind may fill only at version 5: kind 5's took_tainted, field 49 (DESIGN-COMPUTE §16.3), whose action
+	// is version 5's.
+	Version5 []protoreflect.FieldNumber
 	// The fields an action bound for a GrantActivate or a gate may carry beside kind, version and scope, which api,
 	// every reader's GrantActivate check and each gate admit and nothing more (QD-064). Empty for a kind no server
 	// path takes, which every server refuses.
@@ -138,8 +144,9 @@ type CanonicalActionKindFields struct {
 	TemplateEmpty []protoreflect.FieldNumber
 }
 
-// The rows, one a kind with an O tool, in SidecarActionKind's order.
-var canonicalActionKindRows = []*CanonicalActionKindFields{
+// The rows, one a kind with an O tool, in SidecarActionKind's order, DESIGN-COMPUTE.md's version-5 kinds appended
+// (approval_compute_kinds.go).
+var canonicalActionKindRows = append([]*CanonicalActionKindFields{
 	{
 		// tls_publish: host, port, audience and app_mode, which a publish always writes resolved and non-zero, then the
 		// grant's fields and a raw link's SPKI pin (§13.7, §13.10); its request binds the local port and the ALPNs
@@ -192,11 +199,14 @@ var canonicalActionKindRows = []*CanonicalActionKindFields{
 	{
 		// egress_change (QD-799): the subject and its mode, and under exits the exits in grant_dst and the requirement
 		// of default egress (QD-1060); a template names the subject and the mode too, and binds the requirement set or
-		// not. No server path takes it
+		// not. No server path takes it. An enclave's leaving none after it took tainted input there sets field 49,
+		// took_tainted, at version 5, which never sets the requirement and takes no template (DESIGN-COMPUTE §16.3,
+		// §7.10)
 		Kind:             SidecarActionEgressChange,
 		Required:         []protoreflect.FieldNumber{29, canonicalActionFieldEgressMode},
 		Optional:         []protoreflect.FieldNumber{canonicalActionFieldGrantDst, canonicalActionFieldRequireDefaultEgress},
-		Versions:         []uint32{1},
+		Versions:         []uint32{1, canonicalActionVersionCompute},
+		Version5:         []protoreflect.FieldNumber{canonicalActionFieldTookTainted},
 		TemplateRequired: []protoreflect.FieldNumber{29, canonicalActionFieldEgressMode},
 		TemplateBound:    []protoreflect.FieldNumber{canonicalActionFieldRequireDefaultEgress},
 	},
@@ -283,7 +293,7 @@ var canonicalActionKindRows = []*CanonicalActionKindFields{
 		Domains:          []protoreflect.FieldNumber{5},
 		TemplateRequired: []protoreflect.FieldNumber{5},
 	},
-}
+}, approvalComputeKindRows...)
 
 // A kind's row: what it must and may fill. False for a kind with no row, which no builder or server takes.
 func CanonicalActionFields(kind SidecarActionKind) (*CanonicalActionKindFields, bool) {
@@ -298,7 +308,8 @@ func CanonicalActionFields(kind SidecarActionKind) (*CanonicalActionKindFields, 
 // Whether an action of this row at version may fill field.
 func (self *CanonicalActionKindFields) allows(field protoreflect.FieldNumber, version uint32) bool {
 	return slices.Contains(canonicalActionCommonFields, field) || slices.Contains(self.Required, field) ||
-		slices.Contains(self.Optional, field) || (version == 2 && slices.Contains(self.Version2, field))
+		slices.Contains(self.Optional, field) || (version == 2 && slices.Contains(self.Version2, field)) ||
+		(version == canonicalActionVersionCompute && slices.Contains(self.Version5, field))
 }
 
 // Whether name is a domain in the one form a row's Domains fields take: dot-separated labels of 1 to 63 lowercase

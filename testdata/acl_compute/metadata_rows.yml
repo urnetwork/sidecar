@@ -1,0 +1,23 @@
+# The protocol/acl.proto fields DESIGN-COMPUTE.md adds to what api and every gate read, for I-18 (CACL-M11-05): each
+# field's number and type, and the §2.8 row that shows it. `sees` quotes that row, so a row that stops saying it fails
+# §22.7's guard. The projection's compute fields are api-7's words since metadata_list.yml v68 (CARCH-M11-03, QD-1367),
+# and the broker reads the same signed rows for its budgets (compute-6). The repo kinds and the inbox marker are
+# enum values, which api-7's repo kinds name and no line here maps.
+
+AclRows.compute_rows: {number: 11, type: AclComputeRows, row: api-7, sees: "the compute block's projected fields"}
+AclComputeRows.assurance_floor: {number: 1, type: ComputeAssurance, row: api-7, sees: "its assurance floors"}
+AclComputeRows.enclave_assurance_floor: {number: 2, type: ComputeAssurance, row: api-7, sees: "its assurance floors"}
+AclComputeRows.providers: {number: 3, type: repeated string, row: api-7, sees: "the providers allowed"}
+AclComputeRows.enclave_shapes: {number: 4, type: repeated string, row: api-7, sees: "the enclave shapes"}
+AclComputeRows.search_enabled: {number: 5, type: bool, row: api-7, sees: "the compute block's projected fields"}
+AclComputeRows.search_day_max: {number: 6, type: uint32, row: api-7, sees: "the search day cap"}
+AclComputeRows.budgets: {number: 7, type: repeated AclComputeBudgetRow, row: api-7, sees: "budget amounts with their subjects"}
+AclComputeBudgetRow.subject: {number: 1, type: bytes, row: api-7, sees: "budget amounts with their subjects"}
+AclComputeBudgetRow.per: {number: 2, type: uint32, row: api-7, sees: "budget amounts with their subjects"}
+AclComputeBudgetRow.day_nano_usd: {number: 3, type: uint64, row: api-7, sees: "budget amounts with their subjects"}
+AclComputeBudgetRow.month_nano_usd: {number: 4, type: uint64, row: api-7, sees: "budget amounts with their subjects"}
+
+# §16.2's targets, a rule's like any other target
+AclTarget.model_glob: {number: 11, type: string, row: api-7, sees: "rules with targets"}
+AclTarget.compute_resource: {number: 12, type: AclComputeResource, row: api-7, sees: "rules with targets"}
+AclTarget.listener: {number: 13, type: bytes, row: api-7, sees: "rules with targets"}

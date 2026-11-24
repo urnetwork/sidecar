@@ -12,6 +12,10 @@
 // keyset.json in lowercase hex and name keyset.json, a contribution's name or a verifying key's, as keyset.json
 // gives them. No proving key is published, and nothing there needs a token.
 //
+// The compute broker (DESIGN-COMPUTE §14.2, CSRV-M12-03) is an optional service as the key sets' host is, needed only
+// with remote models, enclaves and web searches: ComputeUrl is its base, empty for a list that names none, which still
+// applies.
+//
 // The issuer SPKIs are data the release supplies (§18.9). Until it does an entry has none, and a probe cannot tell
 // an intercepted chain from a real one, which ur status says rather than guesses.
 //
@@ -57,6 +61,9 @@ const (
 	SidecarHostServiceDns      SidecarHostService = "dns"
 	// The host of the mail prover's key sets, which fills no url of SidecarSettings: SmtpProofKeysUrl.
 	SidecarHostServiceSmtpProofKeys SidecarHostService = "smtp-proof-keys"
+	// DESIGN-COMPUTE §14.2's broker, which fills no url of SidecarSettings either: ComputeUrl, which the device's
+	// compute clients read (CSRV-M12-03).
+	SidecarHostServiceCompute SidecarHostService = "compute"
 )
 
 // Where the key sets sit under their host: an identifier of the published layout, as /recurd/hosts/v1.json is.
@@ -76,6 +83,7 @@ var sidecarHostServices = []SidecarHostService{
 // The services a list may name and need not: a host with none of them still runs.
 var sidecarHostOptionalServices = []SidecarHostService{
 	SidecarHostServiceSmtpProofKeys,
+	SidecarHostServiceCompute,
 }
 
 // When a host is needed: §18.9's need column, as a value.
@@ -92,6 +100,9 @@ const (
 	SidecarHostWithDns SidecarHostRequirement = "dns"
 	// With tls: the CT watch (§13).
 	SidecarHostWithTls SidecarHostRequirement = "tls"
+	// With remote models, enclaves and web searches (DESIGN-COMPUTE §14.2): the broker. A device that uses none of them,
+	// local inference included (CO-9), never reaches it.
+	SidecarHostWithCompute SidecarHostRequirement = "compute"
 	// Never needed to run.
 	SidecarHostOptional SidecarHostRequirement = "optional"
 )
@@ -103,6 +114,7 @@ var sidecarHostRequirements = []SidecarHostRequirement{
 	SidecarHostWithSockets,
 	SidecarHostWithDns,
 	SidecarHostWithTls,
+	SidecarHostWithCompute,
 	SidecarHostOptional,
 }
 
@@ -226,6 +238,10 @@ func (self *SidecarHostList) validate() error {
 				// no host needs the key sets to run: only one that sends mail fetches them, at idle
 				return refuse("host %d's service %q is not optional", i, entry.Service)
 			}
+			if entry.Service == SidecarHostServiceCompute && entry.Requirement != SidecarHostWithCompute {
+				// the broker is needed only with what reaches it, so no list makes it required
+				return refuse("host %d's service %q is needed with compute alone", i, entry.Service)
+			}
 			if services[entry.Service] {
 				return refuse("service %q is listed twice", entry.Service)
 			}
@@ -333,6 +349,22 @@ func (self *SidecarHostList) SmtpProofKeysUrl() string {
 		authority = entry.Address()
 	}
 	return "https://" + authority + sidecarSmtpProofKeysPath
+}
+
+// The broker's base url (DESIGN-COMPUTE §14.2): https://<host>, with :<tcp> unless it is 443, and no trailing slash, so
+// a compute route is <url>/v1/<route>. Empty when the list names no compute host, as a list from before the broker
+// does: such a list still applies, and a device given it answers every remote call, enclave and web search as
+// unavailable while its local inference runs on.
+func (self *SidecarHostList) ComputeUrl() string {
+	entry, ok := self.ServiceEntry(SidecarHostServiceCompute)
+	if !ok {
+		return ""
+	}
+	authority := entry.Host
+	if entry.Tcp != 443 {
+		authority = entry.Address()
+	}
+	return "https://" + authority
 }
 
 // The list as mmm publishes it (QD-566): {"version":1,"hosts":[{"host","tcp","need"}]}, indented, with a final
