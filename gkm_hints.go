@@ -46,7 +46,8 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 )
 
-// A commit wake carries the group's generation and, for a draft MLS sender, its epoch.
+// A commit wake carries the group's generation and, for a draft MLS sender, its epoch; one the push sent without its
+// bytes carries its version as v0 reads it, and no epoch (the file header).
 // Work hints carry the kind, group and recipient to fetch and leave the generation at zero.
 type GkmHintWake struct {
 	Kind protocol.GkmHintKind
