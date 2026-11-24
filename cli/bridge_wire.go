@@ -396,6 +396,8 @@ type urBridgeNetwork struct {
 	choices urTunChoiceStore
 	// the connect client's destination under auto, nil for none, which is every network's today (tun_default.go)
 	destination urTunDestination
+	// §17.7.1's discovery beside the bridge, nil where none runs (bridge_discovery_wire.go)
+	discovery *urBridgeDiscovery
 }
 
 // What builds a network's bridge over the daemon's config follower for it.
@@ -623,16 +625,29 @@ func (self *urBridgeDaemon) tunUp(networkId sidecar.Id, running *sidecar.Sidecar
 		defer self.stateLock.Unlock()
 		self.tun = tun
 	}()
+	// the device can send into the overlay now, so its discovery watches (§17.7.1's viewer row)
+	if network.discovery != nil {
+		network.discovery.setViewing(true)
+	}
 	self.log.Infof("[tun]%s up", networkId)
 	return tun.status(), nil
 }
 
-// Forgets the tun once it has closed, on whichever path: the tun's OnClose.
+// Forgets the tun once it has closed, on whichever path: the tun's OnClose. The network's discovery stops watching.
 func (self *urBridgeDaemon) forgetTun(tun *urTun, reason error) {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	if self.tun == tun {
-		self.tun = nil
+	discovery := func() *urBridgeDiscovery {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		if self.tun == tun {
+			self.tun = nil
+		}
+		if network := self.networks[tun.networkId]; network != nil {
+			return network.discovery
+		}
+		return nil
+	}()
+	if discovery != nil {
+		discovery.setViewing(false)
 	}
 }
 
