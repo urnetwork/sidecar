@@ -1,0 +1,28 @@
+// Attestation's wire (DESIGN-COMPUTE §5): what a device records of a pass it verified itself. AttestationResult is
+// carried in the record's model_call and enclave entries (§6.8, §11.12) and in events, as the device that holds the
+// plaintext wrote it; no server writes one, and no reader trusts one a server answered (R-ATTEST-1). Nothing here is
+// sent to a server, so no field has a §14.6 row of its own: the record reaches storage only as EVS ciphertext.
+
+syntax = "proto3";
+package urnetwork.sidecar;
+
+option go_package = "github.com/urnetwork/sidecar/protocol";
+
+// sidecar/protocol/attest.proto (§5.8): one verified pass, as the device that checked the evidence saw it.
+message AttestationResult {
+  string provider = 1;                 // "chutes"
+  string label = 2;                    // "A1", "A2", "AP"
+  string scheme = 3;                   // "chutes-e2e-v1"
+  string cpu = 4;                      // "tdx" | "snp"
+  string profile_id = 5;               // the policy profile matched
+  string profile_review = 6;           // "reproduced" | "listed"
+  string tcb = 7;                      // "UpToDate", or the SNP firmware level
+  repeated string gpus = 8;            // "b200", ...
+  uint64 policy_version = 9;
+  bytes evidence_sha256 = 10;          // of the evidence as received
+  bytes key_sha256 = 11;               // of the key bound
+  string instance_id = 12;
+  int64 verified_millis = 13;
+  string verifier = 14;                // "ur 2027.1.3 / nras" | "ur … / local"
+  string provider_model_id = 15;       // the id the policy pins for the model (Chutes: its chute_id)
+}

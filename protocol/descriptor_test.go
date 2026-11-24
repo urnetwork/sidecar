@@ -38,6 +38,7 @@ func TestEvsExactHeadCapabilityWire(t *testing.T) {
 // §4.4's files and those the service sections add, each registered by its root-relative path.
 var testProtoFiles = []string{
 	"protocol/acl.proto",
+	"protocol/attest.proto",
 	"protocol/config.proto",
 	"protocol/core.proto",
 	"protocol/directory.proto",
