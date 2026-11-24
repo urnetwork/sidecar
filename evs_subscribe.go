@@ -629,14 +629,14 @@ func (self *evsSubscriber) subscribe(ctx context.Context, repo *EvsRepo, args *E
 // until 200): whether it is final, a refusal that settles, and whether it is the token exchange's invalid_scope, final
 // only once ExchangeScopeWaitTimeout has passed since the subscription's first (lease). Final are evs's refusals that
 // refuse something (a scope, a cap, an invalid request), its 401 twice (ErrEvsUnauthorized), an answer not of §11.20's
-// form (ErrEvsReplyInvalid), a subscription Subscribe refuses, a cancel, and a service token the exchange refused for
-// good or that no enrolled client can have (sidecarServiceTokenRefusalOf). Everything else goes again: evs's 429 and
-// 503 that refuse nothing, the lb's 502 and 504, which are no answer at all (QD-758), no answer, the exchange's 429 and
-// 5xx, a keychain still locked and no api yet.
+// form (ErrEvsReplyInvalid), a subscription Subscribe refuses, and a service token the exchange refused for good or
+// that no enrolled client can have (sidecarServiceTokenRefusalOf). Everything else goes again: evs's 429 and 503 that
+// refuse nothing, the lb's 502 and 504, which are no answer at all (QD-758), no answer, a request that passed
+// RequestTimeout, whose own context's cancel net/http answers, the exchange's 429 and 5xx, a keychain still locked and
+// no api yet. The caller's own cancel is final, which lease reads from its context, not from the error.
 func evsLeaseRefusalOf(err error) (final bool, scopeRefused bool) {
 	switch {
-	case errors.Is(err, ErrEvsSubscriptionInvalid), errors.Is(err, context.Canceled), errors.Is(err, ErrEvsUnauthorized),
-		errors.Is(err, ErrEvsReplyInvalid):
+	case errors.Is(err, ErrEvsSubscriptionInvalid), errors.Is(err, ErrEvsUnauthorized), errors.Is(err, ErrEvsReplyInvalid):
 		return true, false
 	}
 	if evsError, ok := EvsErrorOf(err); ok {
@@ -897,6 +897,10 @@ func (self *evsSubscriber) lease(ctx context.Context, id Id) (bool, error) {
 				left := state.scopeRefusedAt.Add(settings.ExchangeScopeWaitTimeout).Sub(now)
 				final = left <= 0
 				wait = min(wait, left)
+			}
+			if ctx.Err() != nil {
+				// the caller's own cancel, never a request's own RequestTimeout, which is no answer
+				final = true
 			}
 			if final {
 				// final for now: asked again at the hourly resync's pace, and a new window for a grant then
