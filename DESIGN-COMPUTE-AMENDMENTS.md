@@ -2,7 +2,7 @@
 
 This file holds the answers DESIGN-COMPUTE.md does not yet carry, for the owner to fold when they revise it.
 
-The compute planner raised 151 questions about DESIGN-COMPUTE.md on 2026-11-24 (`.stack/questions/compute-plan-*.md`, listed in `.stack/plan/COMPUTE-PLAN.md`), and the owner answered all of them the same day, QD-1233 to QD-1383, each with the recommended option, under the owner's standing acceptance of recommended options (2026-11-16, restated 2026-11-19). The run's question ledger (`.stack/decisions/LEDGER.json`), `.stack/decisions/RESOLUTIONS.md` and `.stack/decisions/later-pending.md` record them outside git; this file is their durable copy in the sidecar repo, each answer stated as the rule it makes. Track dr17-compute-answers wrote it on 2026-11-24.
+The compute planner raised 151 questions about DESIGN-COMPUTE.md on 2026-11-24 (`.stack/questions/compute-plan-*.md`, listed in `.stack/plan/COMPUTE-PLAN.md`), and the owner answered all of them the same day, QD-1233 to QD-1383, each with the recommended option, under the owner's standing acceptance of recommended options (2026-11-16, restated 2026-11-19). The run's question ledger (`.stack/decisions/LEDGER.json`), `.stack/decisions/RESOLUTIONS.md` and `.stack/decisions/later-pending.md` record them outside git; this file is their durable copy in the sidecar repo, each answer stated as the rule it makes. Track dr17-compute-answers wrote it on 2026-11-24. One answer recorded after them that amends DESIGN-COMPUTE.md alone, QD-1386, the catalog's tie rule, which the build raised while implementing §6.3 (INFER-M11-01) and the owner answered the same day, is filed under §6 by track dr17-late-fold, which folded the rest of that day's later answers into DESIGN.md.
 
 The answers are of two kinds:
 
@@ -26,7 +26,7 @@ A reading appears in every row whose section it amends, and is written once, bel
 | §3 Architecture and flows | | QD-1244, QD-1250 |
 | §4 Providers | QD-1344 | QD-1247, QD-1257 |
 | §5 Attestation and the policy | | QD-1242, QD-1243, QD-1254, QD-1256, QD-1379 |
-| §6 Inference | QD-1324, QD-1325, QD-1326 | QD-1237, QD-1241, QD-1246, QD-1247, QD-1370 |
+| §6 Inference | QD-1324, QD-1325, QD-1326; QD-1386, the build's | QD-1237, QD-1241, QD-1246, QD-1247, QD-1370 |
 | §7 The Harness | QD-1313 to QD-1323 | QD-1255 |
 | §8 The local gateway | QD-1306 to QD-1312 | QD-1254 |
 | §9 The compute balance | QD-1258 to QD-1262 | QD-1238, QD-1247, QD-1252, QD-1376 |
@@ -98,6 +98,13 @@ Builds: nothing yet. Question: `compute-plan-q-infer-6-name-let-urnetwork-pick-p
 One disclosure per provider, its text naming any model whose exposure differs; a provider whose models differ more gets a disclosure id per group of models. engy's text names its one model without zero-retention workers, and SayGM's points to the upstream the signed policy names for each model. Why: the exposure follows the provider and its label, who reads a request and under which terms, and one acknowledgment per provider keeps the prompts few.
 
 Builds: CTRUST-M11-01. Question: `compute-plan-q-infer-7-disclosure-per-provider-per-model.md`.
+
+### QD-1386: When an alias's requested effort lies equally near two efforts its model lists, which does the call run at?
+*§6.3. A question the build raised (infer-m11-01), answered by the owner on 2026-11-24, one at a time. Option 1, the recommendation.*
+
+The lower of the two, on the order off < minimal < low < medium < high < xhigh < max: medium against a model listing low and high runs at low, xhigh against high and max at high, minimal against off and low at off. Why: an alias then never runs a model harder, slower or dearer than its request asked, the conservative choice for the person's balance and budgets and what most providers' own tables do for medium; a person who wants a particular effort names the full name, which Q-INFER-5 already leaves them. §6.3 gave no tie rule.
+
+Builds: INFER-M11-01 (`inferNearestEffort`, held by `TestInferNearestEffort` and `TestInferAliasMapsToNearestEffort`), already built. Question: `infer-m11-01-alias-effort-tie.md`.
 
 ## §7 The Harness
 
