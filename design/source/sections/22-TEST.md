@@ -4,7 +4,7 @@
 
 This section owns verification: tiers, harness, hot-path gates, fuzzing, scenarios, privacy, admission and revocation suites, load, soak, the fault-schedule program, storage benchmarks, conformance, platform budgets and internal review gates. Sections keep their targets and mechanisms; this one names each target's test, invariant and gate. §19 owns environments, §23 milestones and the gate map.
 
-Compute's verification, its tiers, gates, fuzz targets, scenarios and conformance, is DESIGN-COMPUTE.md §18, which adds to this section's suites and is built with the compute tracks (owner decisions 733, 746, 771).
+Compute's verification, its tiers, gates, fuzz targets, scenarios and conformance, is DESIGN-COMPUTE.md §18, which adds to this section's suites and is built with the compute tracks (owner decisions 733, 746, 771), the support skill's among them: a canary corpus driven through every component's inputs that leaves no byte in any support log's ring or bundle, the secret scan refusing an agent's message, and a message posted only to the policy's support host, filed in its member's thread (owner decision 783).
 
 ### 22.2 Requirements
 

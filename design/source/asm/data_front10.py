@@ -2879,3 +2879,35 @@ _S778 = "and on 2026-11-24 with owner decision 778, service discovery across hos
 assert STATUS.count(_S778) == 1, 'status moved'
 STATUS = STATUS.replace(_S778, "and on 2026-11-24 with owner decision 778, service discovery across hosts, and the "
                         "build's later answers, owner decisions 779 to 782. ")
+
+# Owner decisions 783 and 784 (2026-11-24): DESIGN-COMPUTE.md's support skill, CO-45 and CO-46, folded by the eleventh
+# fold after the build's answers it numbered first.
+INDEX += [
+    (783, 'Compute: the support skill',
+     "The built-in tools include the support skill, the app's support chat: agents send feedback with logs and read "
+     'replies (CO-45).'),
+    (784, "Compute: the support skill's answers",
+     'The support conversation is fully read by the platform, nothing sealed; files and private data ask; triage may '
+     'use a named subprocessor (CO-46).'),
+]
+for _n, _note in [
+        (142, ' Amended by @@OD:783@@: and for a tainted run\'s message to URnetwork\'s support.'),
+        (772, " Amended by @@OD:783@@: kind 27, a message to URnetwork's support, joins the kinds it decides."),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 785))
+DATES.update({783: '2026-11-24', 784: '2026-11-24'})
+_D782 = "and coalesced hints, a superseded one sent as its seq alone (782). "
+assert DECISIONS_INTRO.count(_D782) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D782, _D782 + "It then enters DESIGN-COMPUTE.md's owner statements of 2026-11-24, CO-45 and CO-46, its support "
+    "skill: agents writing into the app's support conversation with sidecar's own content-free log, notified of "
+    "replies and reading them (783), amending @@OD:772@@, and the owner's answers to its questions (784), the "
+    "conversation meant to be fully read by the platform, the one exception the owner approved to §2.8's statement "
+    "beside the report listener's. ")
+_S782 = "and the build's later answers, owner decisions 779 to 782. "
+assert STATUS.count(_S782) == 1, 'status moved'
+STATUS = STATUS.replace(_S782, "and the build's later answers, owner decisions 779 to 782, and DESIGN-COMPUTE.md's "
+                        "support skill, 783 and 784. ")

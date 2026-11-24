@@ -392,6 +392,8 @@ evs:<repo_id>      §11              the repo's push sequence, which every commi
                                     to the window (§11.10)
 ```
 
+DESIGN-COMPUTE.md §28.9 adds a topic, `support`, which joins the registry with its code (owner decision 783): a clock topic the feedback service hints through `Push.HintSidecars` for each sidecar of a member whose support conversation gained an event, and for a tagged sender's own, its hint `{product, entry, seq}`, never content, waking the apps as `mail` does (§18.7), whose notification the app composes itself with no reply's text.
+
 **Security.**
 - **Exposure.** ControlId pushes need no contract (server/controller/connect_controller.go:609-628), skip Required by construction (`ReceiveNoSession`, §6.3) and ride wss TLS (sdk/network_space.go:686); they carry topics, versions and server-held ids, never content.
 - **Guard (D-PROTO-8).** Push types are accepted only when `source.IsControlSource()` and `peer.TransportType` is h1, h3, h3dns or h3dnspump (connect/transfer_route_manager.go:153-157), and nothing else from ControlId. P2P receive checks no source (connect/transport_p2p.go:1927-1990), but `TransportType` comes from the carrier (:2317-2318), so the guard holds until C3 lands.

@@ -1,4 +1,4 @@
-# metadata_list.yml v69; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
+# metadata_list.yml v70; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
 # §7.9, §10, §11). v6 adds to v5 (2026-11-04) connect-1's ShareCert, api-6's push-token slot sentinels, api-7's
 # {acl_}q, cascade signers, recovery bindings, restored bindings' recovery windows and orphaned networks, api-13's
 # per-eraser closure counters, evs-1's secret kind and orphans, evs-3's creation block, fence time, deleted flag
@@ -257,6 +257,12 @@
 # compute-4 the label and price per hour kind 19's create action shows the broker, the catalog's own values for
 # its shape and provider, which the broker holds already and compares with what the person approved; no column,
 # Redis family or proto field changes.
+# v70, updated 2026-11-24 for DESIGN-COMPUTE.md §28.15 (owner decisions 783 and 784, CO-45 and CO-46), adds
+# support-1 to support-3, what URnetwork's feedback service, FB's, holds of the sidecar's support client: the
+# support conversation, which the owner chose to have fully read by the platform, every message, file, log
+# bundle and reply in plaintext beside each item's and event's fields; the support push hints; and a rate
+# counter per salted bucket of source addresses. They stand under FB's G4, which may narrow them, and no
+# column, Redis family or proto field of this design's servers changes.
 # Each row gives service, store (tables, Redis families, object families, logs or memory),
 # sees, why, ttl, and owner: the section that designs the value and states its ttl. Withdrawn rows keep
 # their ids so citations resolve. Public: this list ships in DESIGN.md on the public sidecar repo (owner
@@ -1050,3 +1056,24 @@ compute-11:
   why: Parallel's failure rate, which pages and which CO-30 asks the owner to watch (DESIGN-COMPUTE §21.8)
   ttl: the hourly counts 400 days; no report kept
   owner: DESIGN-COMPUTE §14.6 (§21.8)
+support-1:
+  service: the feedback service and the triage workspace, FB's (sidecar/FEEDBACK-SYSTEM.md, FB's G1), under FB's G4, which may narrow this row
+  store: FB's entries, their events and attachments (FB section 10.4)
+  sees: "per item and event: network, submitter (the member, or an agent's registered name and where it runs), product, surface, tier, kind hint, the client's version, OS and harness from enumerated fields, times, the support:urnetwork version, the client_ref, status, fixed_in, board links; every body, file, bundle and reply in plaintext, the support conversation being meant to be fully read by the platform (owner decision 784); never a secret, which the device's scan refuses, or content in a log, which the support log cannot hold"
+  why: the support conversation, which a person or their agents choose to send to URnetwork's support and which its support team and tools read and answer (DESIGN-COMPUTE §28.5, §28.10)
+  ttl: "FB section 10.4: bodies and files 180 days after the item is final, bundles 7 days, a client_ref 7 days; a subprocessor support:urnetwork names keeps what triage gives it within the retention that version states"
+  owner: DESIGN-COMPUTE §28.15 (§28.10, §28.13)
+support-2:
+  service: the feedback service, hinting through Push.HintSidecars (§6.8)
+  store: the support push topic's hints, as any topic's (§6.8)
+  sees: "per sidecar: the support push hints, {product, entry, seq}, never content, for each sidecar of a member whose support conversation gained an event and for a tagged sender's own"
+  why: waking the member's devices, and the apps as mail does, for an event of the conversation (DESIGN-COMPUTE §28.9)
+  ttl: as any hint (§6.8)
+  owner: DESIGN-COMPUTE §28.15 (§28.9)
+support-3:
+  service: the feedback service
+  store: a rate counter per salted bucket of source addresses
+  sees: "per salted bucket of source addresses: a rate counter, never on an item"
+  why: FB section 11's limits on submissions (DESIGN-COMPUTE §28.14)
+  ttl: 24 hours
+  owner: DESIGN-COMPUTE §28.15 (§28.14)

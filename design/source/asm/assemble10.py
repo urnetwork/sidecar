@@ -19,7 +19,7 @@ design = pathlib.Path(sys.argv[1])
 asm = pathlib.Path(sys.argv[2])
 out_path = pathlib.Path(sys.argv[3])
 research_rel = sys.argv[4].rstrip('/')
-MAXD = 782
+MAXD = 784
 VDIR = asm / 'v7'
 
 
@@ -535,7 +535,8 @@ _census = (f"The list has {len(_rows)} rows, {len(_wd)} of them withdrawn: " + '
            + ', '.join(_wd[:-1]) + f" and {_wd[-1]} are withdrawn and keep their ids, so citations resolve.")
 _gtext = (f"§2.8 holds `metadata_list.yml` ({_ver.group(1)}, updated {_ver.group(2)} for {_ver.group(3)}), the list the "
           "product promises: URnetwork's servers never receive plaintext content or keys, in any mode, and see only the "
-          "values it names (D-TRUST-4), with one bounded exception, the platform report listener (§2.8). This appendix no "
+          "values it names (D-TRUST-4), with two bounded exceptions, the platform report listener and the support "
+          "conversation (§2.8). This appendix no "
           "longer copies it, so the two cannot drift. " + _census)
 if 'APPX_G' in A:
     assert A['APPX_G']['text'] == _gtext, "data_appx7.py's APPX_G differs from the census computed here"
