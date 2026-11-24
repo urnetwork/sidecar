@@ -163,7 +163,7 @@ Q['Q-EVS-8'] = (Q['Q-EVS-8'][0], "Git requires its tip; file mode admits disjoin
 
 # Owner decision 778 (2026-11-24): service discovery across hosts, §17.7.1 and §12.9.1, its three questions decided as
 # recommended under the owner's standing acceptance.
-for _k in ('D-BRIDGE-22', 'D-BRIDGE-23', 'D-BRIDGE-24', 'D-BRIDGE-25', 'D-BRIDGE-26', 'D-DNS-12'):
+for _k in ('D-BRIDGE-22', 'D-BRIDGE-23', 'D-BRIDGE-24', 'D-BRIDGE-25', 'D-BRIDGE-26', 'D-BRIDGE-27', 'D-DNS-12'):
     assert _k not in D, (_k, 'row exists')
 for _k in ('Q-BRIDGE-9', 'Q-BRIDGE-10', 'Q-BRIDGE-11'):
     assert _k not in Q, (_k, 'row exists')
@@ -173,6 +173,8 @@ D['D-BRIDGE-24'] = "Sharing a LAN device files its /32 route under an exposed /3
 D['D-BRIDGE-25'] = ("The advertising proxy registers instances on the viewer's machine alone, never a LAN; nothing a watch "
                     "brought is republished.")
 D['D-BRIDGE-26'] = "`ur tun` translates an IPv6 address per proxied instance to its IPv4 one at the sender (RFC 7915)."
+D['D-BRIDGE-27'] = ("Listed entries of a known type become own DNS-SD instances per viewer; one hide set; LISTENERS "
+                    "stays apart.")
 D['D-DNS-12'] = ("Devices answer the zone's DNS-SD names from their discovery view, 10 s TTLs, forwarding none; no automatic "
                  "browse domain.")
 Q['Q-BRIDGE-9'] = ("Is discovery on by default for a host's own services, its LAN's devices and the advertising proxy, each "

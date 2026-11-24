@@ -117,7 +117,7 @@ An active or compelled operator keeps:
 - Burner linkability (§15.9).
 - No fork detection without a shared pin.
 - I-10's no-policy allow-all, in product copy too (owner decision 120).
-- Service discovery across hosts (§17.7.1; owner decision 778): a host's own services, and the LAN devices its person shares, show their names, models, types and ports to the network's devices that the policy lets reach them; servers see only each watch's ciphertext between two sidecars, as connect-1 and connect-2 list, and no row is added.
+- Service discovery across hosts (§17.7.1; owner decision 778): a host's own services, those it announces by mDNS, which discovery's own-services notice discloses, and its listed entries' Bonjour names, which `listeners:publish` discloses with the list, and the LAN devices its person shares, show their names, models, types and ports to the network's devices that the policy lets reach them; servers see only each watch's ciphertext between two sidecars, as connect-1 and connect-2 list, and no row is added.
 - §2.18's unaudited cryptography.
 - A head reader's trust in evs for which writer-signed version, or a refused push's writer-signed entry that was never a version, is current at its first pin, for a path it never read or no longer remembers (its sealed read record evicted, or its pin past the budget; owner decision 209) and, after a re-pin past §11.9's 4 MiB catch-up budget (shown as `verified since <time>`), for every path, HeadCheck confirming the pin, not those versions (§11.9).
 - A shredded repo's statements and ciphertext in shared batches up to 26 h past key destruction (§11.12).

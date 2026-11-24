@@ -2826,6 +2826,8 @@ INDEX += [
 ]
 for _n, _note in [
         (85, ' Extended by @@OD:778@@: the private zone also answers DNS-SD names on the device.'),
+        (770, ' Extended by @@OD:778@@: listed entries also take Bonjour names per viewer, and one hide set '
+              'serves both views.'),
 ]:
     _i = [r[0] for r in INDEX].index(_n)
     assert _note not in INDEX[_i][2], _n
@@ -2838,7 +2840,8 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     _D777, _D777 + "On 2026-11-24 the owner asked whether mDNS forwards between hosts that run the sidecar, and had the "
     "design recommended in answer folded in: services found on one host's link discoverable as DNS-SD over unicast "
     "records on the network's hosts that may reach them, with an advertising proxy on each device's own machine, so "
-    "that Xcode on one host finds and reaches an iPhone on another's (778), extending @@OD:85@@. ")
+    "that Xcode on one host finds and reaches an iPhone on another's (778), extending @@OD:85@@, its listed services "
+    "taking Bonjour names per viewer beside @@OD:770@@'s listeners. ")
 _S197 = "as the design-records tracks fold them. "
 assert STATUS.count(_S197) == 1, 'status moved'
 STATUS = STATUS.replace(_S197, "as the design-records tracks fold them, and on 2026-11-24 with owner decision 778, "

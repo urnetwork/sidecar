@@ -231,13 +231,15 @@ func (self *Sidecar) GetApprovals() *SidecarApprovals
 func (self *Sidecar) GetSearch() *SidecarSearch // nil unless evs is registered; 18.4's search policy
 func (self *Sidecar) GetDirectory() *SidecarDirectory // nil outside a team network (§16.11)
 func (self *Sidecar) GetDiscovery() *SidecarDiscovery // a desktop app's, through ur daemon; nil elsewhere (§17.7.1; v1, M6)
+	// the DNS-SD view, beside Listeners(), the listeners list (§17.7.1's Listeners and discovery)
 func (self *SidecarDiscovery) List(callback SidecarBytesCallback) // as ur bridge devices --json: this host's LAN devices,
 	// shared or not, and the instances this device sees, by host, each with its address and why any is withheld
 func (self *SidecarDiscovery) Share(device string, share bool, callback SidecarResultCallback) // §5.8's Confirm method
 	// bridge.share, sent with confirmed set, the bound call being the person's act in the app's UI after the disclosure;
 	// a share's /32 route may then wait for §16.6's approval
 func (self *SidecarDiscovery) Set(setting string, value string, callback SidecarResultCallback) // ur bridge discovery's
-	// switches: "own" on|off, "hide" or "unhide" an instance, "proxy" on|off
+	// switches: "own" on|off, "hide" or "unhide" an instance in the hide set Listeners() shares, an unhide going
+	// as a §5.8 Confirm method sent with confirmed set, "proxy" on|off
 func (self *Sidecar) Close()
 func (self *SidecarEvs) CreateRepo(kind string, displayName string, private bool, callback SidecarResultCallback) // §11.12;
 	// the result names its repo_id; in a team network a general or record repo is announced at creation unless
@@ -575,7 +577,7 @@ re-enrollment (EnrollWithDevice,  -> offline, binding generation n+1 under the s
 generations every event names its generation; one of an older generation is dropped
 ```
 
-**Compute** (owner decisions 733, 751, 770; DESIGN-COMPUTE.md §15.3). `Sidecar` also exposes DESIGN-COMPUTE.md's API: `NewHarness` and its `SidecarHarness`, `Models()` for the catalog and model settings, `Compute()` for the balance, its packs, charges and spend, `Enclaves()`, `Agents()`, `Disclosures()` with `AckDisclosure` and `AckNetworkDisclosure`, `AutoApprovals()`, `Calendar()`, `Connections()`, `OpenSsh` and `Listeners()`, which backs the apps' Listeners section; their UI stays outside this design (owner rule 6).
+**Compute** (owner decisions 733, 751, 770; DESIGN-COMPUTE.md §15.3). `Sidecar` also exposes DESIGN-COMPUTE.md's API: `NewHarness` and its `SidecarHarness`, `Models()` for the catalog and model settings, `Compute()` for the balance, its packs, charges and spend, `Enclaves()`, `Agents()`, `Disclosures()` with `AckDisclosure` and `AckNetworkDisclosure`, `AutoApprovals()`, `Calendar()`, `Connections()`, `OpenSsh` and `Listeners()`, which backs the apps' Listeners section, the listeners list beside `GetDiscovery`'s DNS-SD view (§17.7.1); their UI stays outside this design (owner rule 6).
 
 ### 18.6 Device abstractions and the DeviceRemote mirror
 

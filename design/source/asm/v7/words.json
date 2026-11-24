@@ -11,11 +11,11 @@
  {
   "num": 2,
   "code": "TRUST",
-  "words": 10139,
+  "words": 10161,
   "code_words": 23949,
   "ceiling": 3000,
-  "over": 7139,
-  "over_pct": 238.0
+  "over": 7161,
+  "over_pct": 238.7
  },
  {
   "num": 3,
@@ -29,11 +29,11 @@
  {
   "num": 4,
   "code": "REPO",
-  "words": 9460,
+  "words": 9480,
   "code_words": 2314,
   "ceiling": 2800,
-  "over": 6660,
-  "over_pct": 237.9
+  "over": 6680,
+  "over_pct": 238.6
  },
  {
   "num": 5,
@@ -47,29 +47,29 @@
  {
   "num": 6,
   "code": "PROTO",
-  "words": 10031,
+  "words": 10105,
   "code_words": 4279,
   "ceiling": 3800,
-  "over": 6231,
-  "over_pct": 164.0
+  "over": 6305,
+  "over_pct": 165.9
  },
  {
   "num": 7,
   "code": "TEAM",
-  "words": 14933,
+  "words": 14971,
   "code_words": 15545,
   "ceiling": 3500,
-  "over": 11433,
-  "over_pct": 326.7
+  "over": 11471,
+  "over_pct": 327.7
  },
  {
   "num": 8,
   "code": "ACL",
-  "words": 14099,
+  "words": 14116,
   "code_words": 5514,
   "ceiling": 3800,
-  "over": 10299,
-  "over_pct": 271.0
+  "over": 10316,
+  "over_pct": 271.5
  },
  {
   "num": 9,
@@ -146,20 +146,20 @@
  {
   "num": 17,
   "code": "BRIDGE",
-  "words": 13731,
-  "code_words": 8104,
+  "words": 15118,
+  "code_words": 8417,
   "ceiling": 3800,
-  "over": 9931,
-  "over_pct": 261.3
+  "over": 11318,
+  "over_pct": 297.8
  },
  {
   "num": 18,
   "code": "SDK",
-  "words": 10741,
-  "code_words": 11727,
+  "words": 10749,
+  "code_words": 11759,
   "ceiling": 3000,
-  "over": 7741,
-  "over_pct": 258.0
+  "over": 7749,
+  "over_pct": 258.3
  },
  {
   "num": 19,
@@ -192,7 +192,7 @@
   "num": 22,
   "code": "TEST",
   "words": 8081,
-  "code_words": 42089,
+  "code_words": 42152,
   "ceiling": 2500,
   "over": 5581,
   "over_pct": 223.2

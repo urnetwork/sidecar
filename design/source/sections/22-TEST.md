@@ -251,7 +251,11 @@ Parentheses hold T1 tests; the rest run in T2 and T3. Inline server paths (contr
       local instance holds taking its host's suffix and giving the name back when one appears, the same device
       seen on the LAN never registered twice; a record a watch brought never republished, so two hosts that watch
       each other on one LAN publish no loop; the translator's RFC 7915 cases, checksums and MTU, and every other
-      IPv6 packet still rejected; the Linux proxy answering on ur tun's link alone and off under Avahi's reflector
+      IPv6 packet still rejected; the Linux proxy answering on ur tun's link alone and off under Avahi's reflector;
+      from M13a, with DESIGN-COMPUTE.md §18's Listeners row, a listed entry of a known type answered as an own
+      instance to exactly the viewers its hook passes, reached by Deliver and never at 127.0.0.1, none where the
+      host's mDNS holds its port, one hide by either command taking both views, and a flow from <block>.0.46
+      delivered from <block>.0.1 and a port of its own
 §18   (SidecarKeyStore statuses through the generated Swift, Kotlin, C-ABI and js adapters: one terminal result, no
       panic) LOCKED then unlock keeps the identity, and nothing is created while LOCKED; Absent with a recorded id
       makes no new root; corrupt bytes are Failed; a child token expired on a fake clock, a re-pair under the same
