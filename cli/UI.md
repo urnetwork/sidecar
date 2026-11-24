@@ -188,7 +188,8 @@ ur id rm <name> [--network=<net>]
 
 ```text
 ur mail enable [--network=<net>]    turns mail on: mailcfg, this member's mailbox, then POST /mail/enable
-ur mail status [--network=<net>]    the network's mail status, this device's receiver, and the indexer prompt
+ur mail status [--network=<net>]    the network's mail status, this device's receiver and sender, and the indexer
+                                    prompt
 ur mail recipients rm <alias> <recipient> [--network=<net>]
                                     removes an approved recipient of a sending alias (§15.10)
 ```
@@ -197,6 +198,9 @@ ur mail recipients rm <alias> <recipient> [--network=<net>]
 - Until a mail indexer stands, both print §15.6's prompt: a phone alone cannot reliably receive mail, and a desktop
   `ur daemon`, a NAS or a VPS is needed.
 - A receiver whose listen waits on a person shows `ur approve <id>` for another approval-capable device.
+- The sender line says whether this device sends the member's internet mail (§14), and where it does not, why: a gate
+  it does not pass, such as being no prover host or mail enabled on another device alone, or the error its
+  composition answered. A daemon from before the line prints none.
 - `recipients rm` asks on /dev/tty first, never through MCP: mail from `<alias>` to `<recipient>` then waits on a
   person again. The design names the command and no arguments, so the pair is this file's.
 
