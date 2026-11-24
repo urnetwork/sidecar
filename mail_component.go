@@ -250,7 +250,7 @@ func (self *MailClient) stopRun(run *mailComponentRun) {
 	if receiverClose != nil {
 		receiverClose()
 	}
-	self.setReceiverStatus(MailClientReceiverStatus{})
+	self.setReceiverStatus(run, MailClientReceiverStatus{})
 	self.setSenderStatus(run, MailClientSenderStatus{})
 }
 
@@ -261,7 +261,7 @@ func (self *MailClient) pass(run *mailComponentRun) bool {
 	binding, _, err := self.bound()
 	if err != nil {
 		self.replaceSmtp(run, nil)
-		self.setReceiverStatus(MailClientReceiverStatus{Problem: "mail has nothing to work on yet"})
+		self.setReceiverStatus(run, MailClientReceiverStatus{Problem: "mail has nothing to work on yet"})
 		self.setSenderStatus(run, MailClientSenderStatus{Problem: "mail has nothing to work on yet"})
 		return false
 	}
@@ -602,19 +602,19 @@ func (self *MailClient) passReceive(run *mailComponentRun, binding *MailBinding)
 		if receiver != nil {
 			self.stopReceiver(run)
 		}
-		self.setReceiverStatus(MailClientReceiverStatus{Problem: why})
+		self.setReceiverStatus(run, MailClientReceiverStatus{Problem: why})
 		return
 	}
 	if receiver == nil {
 		var err error
 		receiver, err = self.startReceiver(run, binding)
 		if err != nil {
-			self.setReceiverStatus(MailClientReceiverStatus{Problem: err.Error()})
+			self.setReceiverStatus(run, MailClientReceiverStatus{Problem: err.Error()})
 			return
 		}
 	}
 	status := receiver.Status()
-	self.setReceiverStatus(MailClientReceiverStatus{
+	self.setReceiverStatus(run, MailClientReceiverStatus{
 		Running:    true,
 		Listening:  status.Listening,
 		Serving:    status.Serving,

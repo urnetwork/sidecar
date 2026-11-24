@@ -930,11 +930,13 @@ func (self *MailClient) setNetworkRow(row NetworkLabelRow) {
 	self.zoneRow = row
 }
 
-// Takes what the component last saw of this device's receiver.
-func (self *MailClient) setReceiverStatus(status MailClientReceiverStatus) {
+// Takes what generation run last saw of this device's receiver, where run's word stands (runReportsWithLock).
+func (self *MailClient) setReceiverStatus(run any, status MailClientReceiverStatus) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
-	self.receiverStatus = status
+	if self.runReportsWithLock(run) {
+		self.receiverStatus = status
+	}
 }
 
 // Takes what generation run last saw of this device's sender, where run's word stands (runReportsWithLock).
