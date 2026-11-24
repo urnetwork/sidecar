@@ -1,0 +1,25 @@
+{
+  "about": "engy's models as its catalog gave them on 2026-11-23, labeled none: deepseek-v4.1-flash-1017 is an id of its own, whose last part is no effort, and engy/glm-5.2 differs from glm-5.2 only by its leading vendor segment, so both keep it.",
+  "provider": "engy",
+  "ids": [
+    {"id": "deepseek-v4.1-flash", "label": "none", "model": "deepseek-v4.1-flash"},
+    {"id": "deepseek-v4.1-flash-1017", "label": "none", "model": "deepseek-v4.1-flash-1017"},
+    {"id": "deepseek-v4-flash-0731", "label": "none", "model": "deepseek-v4-flash-0731"},
+    {"id": "glm-5.2", "label": "none", "model": "glm-5.2"},
+    {"id": "engy/glm-5.2", "label": "none", "model": "engy-glm-5.2"},
+    {"id": "glm-5.3", "label": "none", "model": "glm-5.3"},
+    {"id": "glm-5.3-flash", "label": "none", "model": "glm-5.3-flash"},
+    {"id": "kimi-k3", "label": "none", "model": "kimi-k3"},
+    {"id": "kimi-k3.1-pro", "label": "none", "model": "kimi-k3.1-pro"},
+    {"id": "qwen3.6-35b-a3b", "label": "none", "model": "qwen3.6-35b-a3b"},
+    {"id": "qwen3.8-27b", "label": "none", "model": "qwen3.8-27b"}
+  ],
+  "names": [
+    {"name": "engy-deepseek-v4.1-flash-1017", "provider": "engy", "model": "deepseek-v4.1-flash-1017"},
+    {"name": "engy-deepseek-v4.1-flash-1017-high", "provider": "engy", "model": "deepseek-v4.1-flash-1017", "effort": "high"},
+    {"name": "engy-deepseek-v4.1-flash-xhigh", "provider": "engy", "model": "deepseek-v4.1-flash", "effort": "xhigh"},
+    {"name": "engy-kimi-k3.1-pro-max", "provider": "engy", "model": "kimi-k3.1-pro", "effort": "max"},
+    {"name": "engy-kimi-k3.1-pro", "provider": "engy", "model": "kimi-k3.1-pro"},
+    {"name": "engy-glm-5.3-flash-minimal", "provider": "engy", "model": "glm-5.3-flash", "effort": "minimal"}
+  ]
+}
