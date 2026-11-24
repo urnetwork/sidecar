@@ -11,9 +11,11 @@
 //	          shred at once, under a once key of the repo and deletion (shred.go)
 //	restore   (admin): the projection's newest RepoDelete with a projected RepoRestore of it, else 409
 //	          STATEMENT_MISSING; deleted under that deletion -> active; a repo past deleted 409 SHREDDING; P0 lifecycle
-//	activate  (admin), no body: keying -> active once gkm/repo/<id>/'s newest GroupForm names a group whose
-//	          gkm/<group_id>/gen/1 exists, else 409 GROUP_NOT_READY; active answers 200, so a retry is harmless, and a
-//	          later state its refusal; the CAS is P1 for the creating network, paid before it is issued. evs cannot see
+//	activate  (admin), no body: on repo/ read from the cluster, never from this process's cache, whose entry a
+//	          transition on another process may have moved past (§11.12's activate row): keying -> active once
+//	          gkm/repo/<id>/'s newest GroupForm names a group whose gkm/<group_id>/gen/1 exists, else 409
+//	          GROUP_NOT_READY; active answers 200, so a retry is harmless, and a later state its refusal; the CAS is P1
+//	          for the creating network, paid before it is issued, and decides again on its own read. evs cannot see
 //	          whether wraps are complete, so KF1's order on the creator stays the guarantee
 //
 // Not built: the hint §11.12's delete and start rows send members, which no hint shape names (EvsHeadChanged names a
@@ -137,7 +139,10 @@ func (self *EvsEngine) serveRestoreRepo(request *EvsRequest) {
 
 // POST .../activate: see the file header.
 func (self *EvsEngine) serveActivateRepo(request *EvsRequest) {
-	read, err := self.repos.Read(request.Ctx, request.Cluster, request.RepoId)
+	// from the cluster: an active or later state cached RepoCacheTtl, or a keying one or a 404 RepoKeyingCacheTtl, may
+	// be one another process's DELETE, restore or activation has moved on from, and answering it would answer a state
+	// the cluster no longer holds, or pay P1 for a CAS the cluster's state never issues
+	read, err := self.repos.ReadFresh(request.Ctx, request.Cluster, request.RepoId)
 	if !self.answerTransition(request, err) {
 		return
 	}
