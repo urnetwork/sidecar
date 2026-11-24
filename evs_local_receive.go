@@ -7,7 +7,8 @@
 //	pre-receive    refuses the whole push, printing why, for an update of a ref outside refs/heads/ and refs/tags/;
 //	               one bringing a new commit (8.2.3's C) whose committer is no client of this sidecar, printing
 //	               both config values and naming `ur evs import`; and a new commit or tree that is not canonical, a
-//	               tree the reader refuses or a blob over 2 GiB. It reads the quarantined objects.
+//	               tree the reader refuses or a blob past ReceiveBlobMaxByteCount, §11.19's 2 GiB. It reads the
+//	               quarantined objects.
 //	proc-receive   git's protocol, version 1 and no atomic, each update answered on its own, ReceiveRefCount at once
 //
 //	a shared ref   refused before any evs write as `ng <r> <reason>`: a name only branches and tags reach, a reserved
@@ -21,8 +22,9 @@
 //	               ReceivePublishTimeout, and `<CODE>` otherwise
 //	an owned ref   ur/<this sidecar>/...: accepted at once: the journal's RECEIVED, git update-ref new old, LOCAL, ok;
 //	               then the queue, QueueFirstDelay after and once per QueueInterval, one push for everything queued;
-//	               a final refusal holds the queue until the local ref moves or `ur evs retry`. A ref under
-//	               ur/<this sidecar>/import/ takes only its deletion, refused before the journal as `import helper`
+//	               a final refusal, evs's or the token exchange's refusal of the push's scope for good, holds the
+//	               queue until the local ref moves or `ur evs retry`. A ref under ur/<this sidecar>/import/ takes only
+//	               its deletion, refused before the journal as `import helper`
 //	restart        stale git lock files removed; journals read; RECEIVED settled (shared deleted; owned moved when its
 //	               local ref is still old, then LOCAL); settle where applied_tip is not the tip; resolve for each SENT
 //	               (evs_local_journal.go); a conflict branch with no journal queued; then listeners open
@@ -60,9 +62,6 @@ import (
 
 	"github.com/urnetwork/sidecar/protocol"
 )
-
-// The largest blob a new commit may bring (DESIGN-DETAILS 8.2.8's pre-receive row): §11.19's file bound.
-const evsLocalReceiveBlobMaxByteCount = 2 * 1024 * 1024 * 1024
 
 // The refs only the local tier names, never a client (plan-EVS1-ref-name-bytes#3(2)).
 var evsLocalReservedBranchNames = [][]byte{[]byte("erasure"), []byte("ur/index"), []byte("ur/lfs")}
@@ -188,8 +187,9 @@ func (self *EvsGitReceiver) preReceive(ctx context.Context, session *EvsGitRecei
 				if err != nil {
 					return refuse("%s: commit %s names a blob it does not bring", gitRef, oid)
 				}
-				if evsLocalReceiveBlobMaxByteCount < size {
-					return refuse("%s: commit %s brings a blob of %d bytes, past 2 GiB", gitRef, oid, size)
+				if self.settings.ReceiveBlobMaxByteCount < size {
+					return refuse("%s: commit %s brings a blob of %d bytes, past the %d a file may hold", gitRef, oid, size,
+						self.settings.ReceiveBlobMaxByteCount)
 				}
 			}
 		}
@@ -832,6 +832,32 @@ var evsLocalQueueHoldCodes = []protocol.EvsRefusalCode{
 	protocol.EvsRefusalCode_EVS_REFUSAL_VERSIONING, protocol.EvsRefusalCode_EVS_REFUSAL_FORMAT_UNSUPPORTED,
 }
 
+// The hold of an owned ref's queue whose push the token exchange refused for good (sidecarServiceTokenRefusalOf's final
+// refusals of the exchange's), as 8.2.8's queue row holds it on evs's SCOPE: "token exchange" and the exchange's code,
+// its status where it named none, as `ur status` shows it, nothing of api's text. invalid_scope arrives here only once
+// retryRefusingNothing has ridden out ExchangeScopeWaitTimeout. No enrolled client is the sidecar's own state, not the
+// exchange's answer: the queue goes again at QueueInterval as it waits for the connection (8.2.8's offline row), and so
+// does every failure that may change. false for those, and for any error of another kind.
+func evsLocalExchangeHoldCode(err error) (string, bool) {
+	if !errors.Is(err, errEvsNoServiceToken) {
+		return "", false
+	}
+	refusal := sidecarServiceTokenRefusalOf(err)
+	if !refusal.final || !refusal.exchange {
+		return "", false
+	}
+	var apiErr *SidecarApiError
+	switch {
+	case errors.As(err, &apiErr) && apiErr.Code != "":
+		return "token exchange " + apiErr.Code, true
+	case apiErr != nil:
+		return fmt.Sprintf("token exchange %d", apiErr.Status), true
+	case errors.Is(err, ErrSidecarApiArgs):
+		return "token exchange: invalid arguments", true
+	}
+	return "token exchange: malformed reply", true
+}
+
 // One push of an owned ref's queue (8.2.8's queue row): everything queued in one push from evs's tip to the local ref,
 // FORCE when it does not descend.
 func (self *EvsGitReceiver) publishQueued(ctx context.Context, refId Id) error {
@@ -925,6 +951,10 @@ func (self *EvsGitReceiver) publishQueued(ctx context.Context, refId Id) error {
 	}
 	if evsError, ok := EvsErrorOf(err); ok && slices.Contains(evsLocalQueueHoldCodes, evsError.Code) {
 		return self.hold(ctx, refId, strings.TrimPrefix(evsError.Code.String(), "EVS_REFUSAL_"), local)
+	}
+	if code, ok := evsLocalExchangeHoldCode(err); ok {
+		// the token exchange refused the push's scope for good, as evs's 403 SCOPE refuses its right: held the same way
+		return self.hold(ctx, refId, code, local)
 	}
 	if errors.Is(err, ErrEvsDirectoryFull) || errors.Is(err, ErrEvsGitUpdateInvalid) || errors.Is(err, ErrEvsGitTaintedPath) {
 		// refused for good on these inputs: held until the local ref moves or `ur evs retry`

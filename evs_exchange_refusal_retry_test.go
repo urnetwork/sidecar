@@ -1,9 +1,10 @@
 // A service token the exchange refused for good ends an evs push or upload at once, with the exchange's answer
-// (§7.8's exchange answers; §11.8's retry id row): its 400 invalid_scope, invalid_grant and every other answer but a
-// 429 or a 5xx are answered after one exchange, with no wait, where evs's client asked again every ReadRetryWait up to
-// PushRetryCount times. Its 429 waits its retry-after, its 5xx goes again within PushRetryCount, and no answer from api
-// goes again as evs's no answer does. Over SidecarApi's own exchange against a scripted api, and the stand-in evs of
-// the write tests (evs_plan_test.go).
+// (§7.8's exchange answers; §11.8's retry id row): its 400 invalid_grant and every other answer but a 429, a 5xx or
+// invalid_scope are answered after one exchange, with no wait, where evs's client asked again every ReadRetryWait up
+// to PushRetryCount times. Its 429 waits its retry-after, its 5xx goes again within PushRetryCount, and no answer from
+// api goes again as evs's no answer does. invalid_scope goes again within ExchangeScopeWaitTimeout, a grant's way to
+// api's gate, which evs_refusal_window_test.go tests. Over SidecarApi's own exchange against a scripted api, and the
+// stand-in evs of the write tests (evs_plan_test.go).
 
 package sidecar
 
@@ -137,8 +138,9 @@ func evsTestWriterSentNothing(t *testing.T, writer *evsTestWriter) bool {
 }
 
 // The brief's first case: an upload, and a push with no segment, whose write scope the exchange refuses 400
-// invalid_scope or invalid_grant end at once with that answer, after one exchange of the scope, with nothing waited
-// and nothing sent to evs under it. evs's client asked again every ReadRetryWait, PushRetryCount times, before.
+// invalid_grant end at once with that answer, after one exchange of the scope, with nothing waited and nothing sent
+// to evs under it. evs's client asked again every ReadRetryWait, PushRetryCount times, before. invalid_scope's window
+// is evs_refusal_window_test.go's.
 func TestEvsWriteAnswersAnExchangeRefusalAfterOneExchange(t *testing.T) {
 	contents := []struct {
 		name    string
@@ -147,7 +149,7 @@ func TestEvsWriteAnswersAnExchangeRefusalAfterOneExchange(t *testing.T) {
 		{name: "upload", content: evsTestContent("refused upload", 64*1024)},
 		{name: "push", content: []byte("refused push")},
 	}
-	for _, code := range []string{"invalid_scope", "invalid_grant"} {
+	for _, code := range []string{"invalid_grant"} {
 		for _, c := range contents {
 			writer := newEvsTestWriter(t)
 			exchange := newEvsTestExchange(t, writer.test.client, evsTestWriteScope(writer), evsTestExchangeRefusedForGood(http.StatusBadRequest, code))
@@ -177,9 +179,9 @@ func TestEvsWriteAnswersAnExchangeRefusalAfterOneExchange(t *testing.T) {
 	}
 }
 
-// Every answer of the exchange's but a 429 or a 5xx refuses the same request whatever the wait (§7.8), and so does a
-// request SidecarApi cannot ask as given or a 2xx that is not the exchange's: each ends a push's post after at most
-// one exchange, sending nothing to evs and waiting nothing, with its own reason.
+// Every answer of the exchange's but a 429, a 5xx or invalid_scope refuses the same request whatever the wait (§7.8),
+// and so does a request SidecarApi cannot ask as given or a 2xx that is not the exchange's: each ends a push's post
+// after at most one exchange, sending nothing to evs and waiting nothing, with its own reason.
 func TestEvsRetryAnswersEveryDefinitiveExchangeRefusalAtOnce(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -190,7 +192,6 @@ func TestEvsRetryAnswersEveryDefinitiveExchangeRefusalAtOnce(t *testing.T) {
 		exchanges int
 		check     func(err error) bool
 	}{
-		{name: "invalid_scope", answer: evsTestExchangeRefusedForGood(400, "invalid_scope"), exchanges: 1},
 		{name: "invalid_grant", answer: evsTestExchangeRefusedForGood(400, "invalid_grant"), exchanges: 1},
 		{name: "invalid_request", answer: evsTestExchangeRefusedForGood(400, "invalid_request"), exchanges: 1},
 		{name: "invalid_target", answer: evsTestExchangeRefusedForGood(400, "invalid_target"), exchanges: 1},

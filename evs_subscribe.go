@@ -6,7 +6,9 @@
 //	           store, and POSTs /evs/v1/subscriptions until 200, any answer that refuses nothing tried again; a kill
 //	           before the 200 leaves the record, which the next start leases again. 5 s after each 200 it rereads the
 //	           head fresh, which covers a commit whose evs process read the leases before this lease's write
-//	           (§11.10's match row)
+//	           (§11.10's match row). A refusal that settles, as retryRefusingNothing reads one (evsLeaseRefusalOf),
+//	           ends Subscribe with it, and in the rounds waits the hourly resync's SubscribeResyncInterval; the token
+//	           exchange's invalid_scope is tried again for ExchangeScopeWaitTimeout first, a grant's way to api's gate
 //	renew      a lease over 24 h old is renewed at a random time within the next hour, never because of a reconnect
 //	hints      (evs_hint.go) a hint one past the repo's push sequence names the only commit between, and only its ref
 //	           is read; a skip, or a sequence that fell, reads every subscribed ref of the repo, a gap and never an
@@ -34,7 +36,8 @@
 //	           change at the pin names every subscribed path; a gap head a raise re-pinned at raises its own gap change
 //	           at its version; and a pin a verified reseed lowered below the mark (§11.13) takes the mark down to it
 //	           with a gap change. A delivery whose log does not answer is owed again after ReadRetryWait, the mark
-//	           kept where it got to
+//	           kept where it got to; one whose log evs or the token exchange refuses for good raises the gap at once,
+//	           the exchange's invalid_scope after ExchangeScopeWaitTimeout of tries (evsDeliveryRetries)
 //	pin waits  (evs_subscribe_pin_wait.go) a read or delivery that meets a statement pinned above this device's config
 //	           state never waits for the log on the round: its ref is held, the rounds skipping just that ref while
 //	           the subscriber's pin waiter waits for the pin within AuthPinWaitTimeout (QD-1202), and the ref is
@@ -131,6 +134,9 @@ type evsSubscriptionState struct {
 	// when an owed lease may be tried next, and how many tries in a row failed
 	leaseDueAt        time.Time
 	leaseFailureCount int
+	// the first of the token exchange's invalid_scope answers to its lease since its last 200 or final refusal, zero
+	// for none: the lease is tried again within ExchangeScopeWaitTimeout of it (lease)
+	scopeRefusedAt time.Time
 	// a previous epoch's prefixes to delete once the new epoch's lease lands
 	staleEpoch    uint64
 	stalePrefixes []EvsTokenPath
@@ -159,6 +165,10 @@ type evsRefMark struct {
 	// a delivery is owed, not before deliverAt, zero for now
 	owed      bool
 	deliverAt time.Time
+	// the first of the token exchange's invalid_scope answers to its deliveries' log reads since one last went through,
+	// zero for none: the delivery is owed again within ExchangeScopeWaitTimeout of it, and raises a gap after
+	// (raiseOwed)
+	scopeRefusedAt time.Time
 }
 
 // A client's subscriptions and catch-up. See the file header.
@@ -587,11 +597,11 @@ func (self *evsSubscriber) subscribe(ctx context.Context, repo *EvsRepo, args *E
 	}
 	subscription := &EvsSubscription{cancel: func() { self.unsubscribe(state.id) }}
 	for attempt := 0; ; attempt += 1 {
-		err := self.lease(ctx, state.id)
+		final, err := self.lease(ctx, state.id)
 		if err == nil {
 			return subscription, nil
 		}
-		if !evsLeaseRetries(err) {
+		if final {
 			self.drop(state.id)
 			self.persist(repo.repoId)
 			return nil, err
@@ -615,13 +625,28 @@ func (self *evsSubscriber) subscribe(ctx context.Context, repo *EvsRepo, args *E
 	}
 }
 
-// Whether a lease's error is one to try again: an answer that refuses nothing, no answer at all, or a lost token. A
-// refusal that settles (a scope, a cap, an invalid request) is final.
-func evsLeaseRetries(err error) bool {
-	if evsError, ok := EvsErrorOf(err); ok {
-		return evsError.RefusesNothing()
+// How a lease's failed POST is taken, as retryRefusingNothing takes a push's (§11.10's lease row: the sidecar retries
+// until 200): whether it is final, a refusal that settles, and whether it is the token exchange's invalid_scope, final
+// only once ExchangeScopeWaitTimeout has passed since the subscription's first (lease). Final are evs's refusals that
+// refuse something (a scope, a cap, an invalid request), its 401 twice (ErrEvsUnauthorized), an answer not of §11.20's
+// form (ErrEvsReplyInvalid), a subscription Subscribe refuses, a cancel, and a service token the exchange refused for
+// good or that no enrolled client can have (sidecarServiceTokenRefusalOf). Everything else goes again: evs's 429 and
+// 503 that refuse nothing, the lb's 502 and 504, which are no answer at all (QD-758), no answer, the exchange's 429 and
+// 5xx, a keychain still locked and no api yet.
+func evsLeaseRefusalOf(err error) (final bool, scopeRefused bool) {
+	switch {
+	case errors.Is(err, ErrEvsSubscriptionInvalid), errors.Is(err, context.Canceled), errors.Is(err, ErrEvsUnauthorized),
+		errors.Is(err, ErrEvsReplyInvalid):
+		return true, false
 	}
-	return !errors.Is(err, ErrEvsSubscriptionInvalid) && !errors.Is(err, context.Canceled)
+	if evsError, ok := EvsErrorOf(err); ok {
+		return !evsError.RefusesNothing() && !evsError.OutcomeUnknown, false
+	}
+	if errors.Is(err, errEvsNoServiceToken) {
+		refusal := sidecarServiceTokenRefusalOf(err)
+		return refusal.final, refusal.scopeRefused
+	}
+	return false, false
 }
 
 // The ref's current path epoch: from the last verified head, else one head read, which verifies and pins.
@@ -822,8 +847,13 @@ func evsSameRef(a *Id, b *Id) bool {
 }
 
 // One POST /evs/v1/subscriptions of a subscription's lease. On 200 the lease's time is kept, its reread queued for
-// SubscribeRereadDelay on, and an older epoch's leases deleted; on any other answer the next try waits, doubling.
-func (self *evsSubscriber) lease(ctx context.Context, id Id) error {
+// SubscribeRereadDelay on, and an older epoch's leases deleted. On any other answer the next try waits, doubling from
+// SubscribeRetryMinWait to SubscribeRetryMaxWait, or, after a final refusal (evsLeaseRefusalOf), the hourly resync's
+// SubscribeResyncInterval, which that cap does not shorten (§11.10's gap and loss rows: a lease is re-created at the
+// next hourly resync). The exchange's invalid_scope is tried again within ExchangeScopeWaitTimeout of the
+// subscription's first, its last try at the window's end, and is final after it. Answers whether the refusal was
+// final, and the error: nil once the lease answered 200, or where the subscription has ended.
+func (self *evsSubscriber) lease(ctx context.Context, id Id) (bool, error) {
 	request, repoId, refId, ok := func() (*protocol.EvsSubscriptionRequest, Id, *Id, bool) {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
@@ -834,7 +864,7 @@ func (self *evsSubscriber) lease(ctx context.Context, id Id) error {
 		return evsSubscriptionRequestOf(state.repoId, state.refId, state.pathEpoch, state.prefixes), state.repoId, state.refId, true
 	}()
 	if !ok {
-		return nil
+		return false, nil
 	}
 	err := self.client.http.callMessage(ctx, &evsCall{
 		route:  "POST /evs/v1/subscriptions",
@@ -845,7 +875,9 @@ func (self *evsSubscriber) lease(ctx context.Context, id Id) error {
 		body:   request,
 	}, nil)
 	now := self.client.clock.Now()
+	settings := self.client.settings
 	var stale *evsSubscriptionState
+	final := false
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
@@ -855,35 +887,47 @@ func (self *evsSubscriber) lease(ctx context.Context, id Id) error {
 		}
 		if err != nil {
 			state.leaseFailureCount += 1
-			wait := self.client.settings.SubscribeRetryMinWait << min(16, state.leaseFailureCount-1)
-			if !evsLeaseRetries(err) {
-				// final for now: asked again at the hourly resync's pace
-				wait = self.client.settings.SubscribeResyncInterval
+			wait := min(settings.SubscribeRetryMinWait<<min(16, state.leaseFailureCount-1), settings.SubscribeRetryMaxWait)
+			var scopeRefused bool
+			final, scopeRefused = evsLeaseRefusalOf(err)
+			if scopeRefused {
+				if state.scopeRefusedAt.IsZero() {
+					state.scopeRefusedAt = now
+				}
+				left := state.scopeRefusedAt.Add(settings.ExchangeScopeWaitTimeout).Sub(now)
+				final = left <= 0
+				wait = min(wait, left)
 			}
-			state.leaseDueAt = now.Add(min(wait, self.client.settings.SubscribeRetryMaxWait))
+			if final {
+				// final for now: asked again at the hourly resync's pace, and a new window for a grant then
+				wait = settings.SubscribeResyncInterval
+				state.scopeRefusedAt = time.Time{}
+			}
+			state.leaseDueAt = now.Add(wait)
 			return
 		}
 		state.leasedAt = now
 		state.renewAt = time.Time{}
 		state.leaseDueAt = time.Time{}
 		state.leaseFailureCount = 0
+		state.scopeRefusedAt = time.Time{}
 		if 0 < state.staleEpoch {
 			stale = &evsSubscriptionState{id: state.id, repoId: state.repoId, refId: state.refId, pathEpoch: state.staleEpoch, prefixes: state.stalePrefixes}
 			state.staleEpoch = 0
 			state.stalePrefixes = nil
 		}
-		self.queueSyncWithLock(state.repoId, state.refId, true, now.Add(self.client.settings.SubscribeRereadDelay))
+		self.queueSyncWithLock(state.repoId, state.refId, true, now.Add(settings.SubscribeRereadDelay))
 	}()
 	if err != nil {
-		return err
+		return final, err
 	}
 	if perr := self.persist(repoId); perr != nil {
-		return perr
+		return false, perr
 	}
 	if stale != nil {
 		self.deleteLeases(ctx, stale.repoId, refId, stale.pathEpoch, stale.prefixes)
 	}
-	return nil
+	return false, nil
 }
 
 // A lease request's body: no prefix for a subscription of the whole ref, else its prefixes, an empty one standing
@@ -1391,8 +1435,11 @@ func (self *evsSubscriber) raiseOwed(ctx context.Context, key evsRefKey) {
 		}()
 		return
 	}
+	settings := self.client.settings
+	// the exchange's invalid_scope is owed again only within ExchangeScopeWaitTimeout of the mark's first
+	scopeWaitOpen := mark.scopeRefusedAt.IsZero() || self.client.clock.Now().Before(mark.scopeRefusedAt.Add(settings.ExchangeScopeWaitTimeout))
 	deferral := &evsPinWaitDeferral{}
-	raised, version, chain, retryErr := self.owedChanges(withEvsPinWaitDeferral(ctx, deferral), key, mark, pin)
+	raised, version, chain, retryErr := self.owedChanges(withEvsPinWaitDeferral(ctx, deferral), key, mark, pin, scopeWaitOpen)
 	heldPosition := deferral.heldPosition(retryErr)
 	fell := version < mark.version || (version == mark.version && chain != mark.chain)
 	startHold := func() func() {
@@ -1419,8 +1466,20 @@ func (self *evsSubscriber) raiseOwed(ctx context.Context, key evsRefKey) {
 			held.deliverAt = time.Time{}
 			return self.holdForPinWithLock(ctx, key, heldPosition, false, false)
 		case retryErr != nil:
+			now := self.client.clock.Now()
+			wait := settings.ReadRetryWait
+			if evsScopeRefused(retryErr) {
+				if held.scopeRefusedAt.IsZero() {
+					held.scopeRefusedAt = now
+				}
+				// the last try at the window's end, after which the refusal raises a gap
+				wait = min(wait, max(0, held.scopeRefusedAt.Add(settings.ExchangeScopeWaitTimeout).Sub(now)))
+			}
 			held.owed = true
-			held.deliverAt = self.client.clock.Now().Add(self.client.settings.ReadRetryWait)
+			held.deliverAt = now.Add(wait)
+		default:
+			// the log went through, or a gap stood for it: a later invalid_scope starts a new window
+			held.scopeRefusedAt = time.Time{}
 		}
 		return nil
 	}()
@@ -1444,8 +1503,8 @@ func (self *evsSubscriber) oweAgain(key evsRefKey) {
 
 // What a delivery from mark to pin raises, in version order, and the version and chain it reaches; the error to retry
 // on where the log did not answer, or held what this device cannot judge yet, short of the pin, what was raised before
-// standing, nil for none.
-func (self *evsSubscriber) owedChanges(ctx context.Context, key evsRefKey, mark *evsRefMark, pin *EvsPin) ([]*evsRaised, uint64, [sha256.Size]byte, error) {
+// standing, nil for none. scopeWaitOpen: the exchange's invalid_scope is one to retry (evsDeliveryRetries).
+func (self *evsSubscriber) owedChanges(ctx context.Context, key evsRefKey, mark *evsRefMark, pin *EvsPin, scopeWaitOpen bool) ([]*evsRaised, uint64, [sha256.Size]byte, error) {
 	pinGap := func() ([]*evsRaised, uint64, [sha256.Size]byte, error) {
 		return []*evsRaised{{version: pin.Version, gap: true}}, pin.Version, pin.Chain, nil
 	}
@@ -1470,7 +1529,7 @@ func (self *evsSubscriber) owedChanges(ctx context.Context, key evsRefKey, mark 
 			continue
 		}
 		walked, gap, err := self.walkLog(ctx, key, version, chain, pin.Version)
-		if err != nil && evsDeliveryRetries(err) {
+		if err != nil && evsDeliveryRetries(err, scopeWaitOpen) {
 			return raised, version, chain, err
 		}
 		reached := chain
@@ -1551,18 +1610,37 @@ func (self *evsSubscriber) walkLog(ctx context.Context, key evsRefKey, version u
 	return walked, false, err
 }
 
-// Whether a delivery's log read or walk failed for now, to be tried again: no answer or one that refuses nothing, or
-// a statement this device's state cannot judge yet. A refusal that settles, and statements or a log that fail their
-// checks, are no retry: the delivery raises a gap.
-func evsDeliveryRetries(err error) bool {
+// Whether a delivery's log read or walk failed for now, to be tried again, as retryRefusingNothing takes a push's: no
+// answer, one that refuses nothing, or the lb's 502 or 504, which is no answer at all (QD-758); a service token that
+// may still come, the exchange's 429 or 5xx, a keychain still locked or no api yet, and the exchange's invalid_scope
+// while scopeWaitOpen, the mark's first such answer under ExchangeScopeWaitTimeout old; or a statement this device's
+// state cannot judge yet. A refusal that settles, evs's own, its 401 twice (ErrEvsUnauthorized) and a service token the
+// exchange refused for good or that no enrolled client can have among them, and statements or a log that fail their
+// checks, are no retry: the delivery raises a gap, which no wait would have changed.
+func evsDeliveryRetries(err error, scopeWaitOpen bool) bool {
 	if errors.Is(err, ErrEvsNoConfig) || errors.Is(err, ErrGkmAuthAhead) || errors.Is(err, ErrGkmAuthNotRetained) {
 		return true
 	}
 	if evsError, ok := EvsErrorOf(err); ok {
-		return evsError.RefusesNothing()
+		return evsError.RefusesNothing() || evsError.OutcomeUnknown
+	}
+	if errors.Is(err, ErrEvsUnauthorized) {
+		return false
+	}
+	if errors.Is(err, errEvsNoServiceToken) {
+		refusal := sidecarServiceTokenRefusalOf(err)
+		if refusal.scopeRefused {
+			return scopeWaitOpen
+		}
+		return !refusal.final
 	}
 	return !errors.Is(err, ErrEvsChainBroken) && !errors.Is(err, ErrEvsStatementRefused) && !errors.Is(err, ErrEvsVersionRule) &&
 		!errors.Is(err, ErrEvsFormatUnsupported) && !errors.Is(err, ErrEvsReplyInvalid)
+}
+
+// Whether err is the token exchange's invalid_scope to an evs call's service token, and nothing evs answered after it.
+func evsScopeRefused(err error) bool {
+	return errors.Is(err, errEvsNoServiceToken) && !errors.Is(err, ErrEvsUnauthorized) && sidecarServiceTokenRefusalOf(err).scopeRefused
 }
 
 // The changes of raised on refId, in order, against each subscription of the ref: a statement's to each subscription
