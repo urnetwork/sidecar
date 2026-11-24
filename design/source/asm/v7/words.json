@@ -47,20 +47,20 @@
  {
   "num": 6,
   "code": "PROTO",
-  "words": 10105,
-  "code_words": 4287,
+  "words": 10095,
+  "code_words": 4307,
   "ceiling": 3800,
-  "over": 6305,
-  "over_pct": 165.9
+  "over": 6295,
+  "over_pct": 165.7
  },
  {
   "num": 7,
   "code": "TEAM",
-  "words": 14971,
-  "code_words": 15545,
+  "words": 14986,
+  "code_words": 15578,
   "ceiling": 3500,
-  "over": 11471,
-  "over_pct": 327.7
+  "over": 11486,
+  "over_pct": 328.2
  },
  {
   "num": 8,
@@ -101,11 +101,11 @@
  {
   "num": 12,
   "code": "DNS",
-  "words": 7681,
+  "words": 7676,
   "code_words": 2514,
   "ceiling": 3000,
-  "over": 4681,
-  "over_pct": 156.0
+  "over": 4676,
+  "over_pct": 155.9
  },
  {
   "num": 13,

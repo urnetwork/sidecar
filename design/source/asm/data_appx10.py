@@ -133,6 +133,11 @@ MESSAGES = _insert_after(MESSAGES, '`SmtpProof`, `SmtpProofResult`',
 MESSAGES = _insert_after(MESSAGES, '(service 0x19)',
     ('`LISTENERS`, `LISTENERS_RESULT`', '0x1901, 0x1902', 'peer ↔ peer (RPC), on the control class too',
      "A host's listeners, asked live (DESIGN-COMPUTE.md §26.8; owner decision 770)", '§6.11'))
+# Service discovery's watch, which §6.11's fence took with types.proto's declaration (owner decision 778).
+MESSAGES = _insert_after(MESSAGES, '`DnsZoneChanged`',
+    ('`DnsSdWatch`, `DnsSdWatchResult`', '0x1B02, 0x1B03', 'peer ↔ peer (RPC), on data-class contracts only',
+     "A viewer's watch of a host for the DNS-SD instances the host would let it reach (§17.7.1; owner decision 778)",
+     '§12.9.1'))
 
 # ------------------------------------------------------------------ Appendix D: carried messages
 # The carried-in cell names a SignedType range only where §6.11's registry comment names the statement itself:

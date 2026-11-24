@@ -98,7 +98,17 @@ func newUrBridgeFilingNetwork(wire *urBridgeWire, running *sidecar.Sidecar, foll
 	if gate != nil {
 		go gate.Inbox().Run(wire.host.ctx)
 	}
+	// §17.7.1's discovery beside the bridge, its shares filing through this network's filer (owner decision 778); a
+	// network whose discovery does not build keeps its bridge, and discovery's methods answer that none runs
+	discovery, err := newUrBridgeDiscovery(wire, running, follower.AclLocal, filer)
+	if err != nil && wire.args.Log != nil {
+		wire.args.Log.Warningf("[discovery]%s discovery did not start: %v", wire.args.NetworkId, err)
+	}
+	network.discovery = discovery
 	network.close = func() {
+		if discovery != nil {
+			discovery.close()
+		}
 		if removeGate != nil {
 			removeGate()
 		}
