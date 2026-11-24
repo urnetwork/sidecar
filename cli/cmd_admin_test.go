@@ -194,7 +194,8 @@ func TestAdminMembersRemoveDeniesThenSigns(t *testing.T) {
 	if len(*runs) != 1 || (*runs)[0].command.Path != "/network/member-remove" || len(target.signs) != 1 || target.signs[0] != memberId {
 		t.Fatalf("a yes: %d runs, signs %v", len(*runs), target.signs)
 	}
-	if !strings.Contains(stdout.String(), "landed at 42") || !strings.Contains(stdout.String(), "1 client(s) deactivated, 0 auth key(s) revoked") {
+	if !strings.Contains(stdout.String(), "landed at 42") ||
+		!strings.Contains(stdout.String(), "1 client(s) deactivated, 0 auth key(s) revoked, 0 API key(s) deleted") {
 		t.Errorf("the output: %s", stdout.String())
 	}
 	if strings.Contains(stdout.String(), urAdminMemberRemoveBundleNote) {
@@ -202,14 +203,15 @@ func TestAdminMembersRemoveDeniesThenSigns(t *testing.T) {
 	}
 
 	// a removal that revoked a pre-approved key says that its bundle still admits, in ur's own words, never the
-	// server's note
-	answer = `{"member_id":"x","signature_owed":true,"revoked_auth_key_count":2,"bundle_still_admits":true,"note":"synthetic server note"}`
+	// server's note, and counts the API keys it deleted beside the auth keys (owner decision 717)
+	answer = `{"member_id":"x","signature_owed":true,"revoked_auth_key_count":2,"deleted_api_key_count":1,"bundle_still_admits":true,"note":"synthetic server note"}`
 	stdout.Reset()
 	tty = &testTty{lines: []string{"yes"}}
 	if code := cli.main(context.Background(), []string{"ur", "admin", "members", "remove", memberId.String()}); code != urExitOk {
 		t.Fatalf("a yes revoking a pre-approved key: exit %d: %s", code, stdout.String())
 	}
-	if !strings.Contains(stdout.String(), "2 auth key(s) revoked") || !strings.Contains(stdout.String(), urAdminMemberRemoveBundleNote) ||
+	if !strings.Contains(stdout.String(), "2 auth key(s) revoked, 1 API key(s) deleted") ||
+		!strings.Contains(stdout.String(), urAdminMemberRemoveBundleNote) ||
 		strings.Contains(stdout.String(), "synthetic server note") {
 		t.Errorf("the output of a removal revoking a pre-approved key: %s", stdout.String())
 	}
