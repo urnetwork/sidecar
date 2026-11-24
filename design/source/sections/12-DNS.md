@@ -2,7 +2,7 @@
 
 ### 12.1 Purpose and scope
 
-This section owns public naming: the user root (X4), the network label (X5) and X17; the `dns` engine and dns edge; DNSSEC; zone content and reverse zones; the record API; DNS-01; custom domains; private names (with §17); takedown hooks (§21). §13 owns certificates and CAA, §14 and §15 mail record content, §19 the dns edge hosts, §20 quotas. Notation follows D-ARCH-1.
+This section owns public naming: the user root (X4), the network label (X5) and X17; the `dns` engine and dns edge; DNSSEC; zone content and reverse zones; the record API; DNS-01; custom domains; private names, and the DNS-SD names devices answer for service discovery across hosts (12.9.1; with §17.7.1; owner decision 778); takedown hooks (§21). §13 owns certificates and CAA, §14 and §15 mail record content, §19 the dns edge hosts, §20 quotas. Notation follows D-ARCH-1.
 
 ### 12.2 Requirements
 
@@ -18,6 +18,7 @@ This section owns public naming: the user root (X4), the network label (X5) and 
 | R-DNS-8 | Nothing collides with WhoDis on public UDP 53 | vault/main/services.yml:345-347 |
 | R-DNS-9 | Mail policy records per network; the sending addresses' PTRs under bringyour.com | RFC 8461 §3.4; owner decision 124 |
 | R-DNS-10 | Self-hosted DNS, signed online from the first deploy, on two NS at the one site | owner decisions 69, 71, 109, 123 |
+| R-DNS-11 | DNS-SD names in a network's zone are answered on the device, from what the policy lets it reach, and never leave it | owner decision 778; R-DNS-4 |
 
 ### 12.3 What exists today
 
@@ -258,7 +259,7 @@ User records:
 | Wildcard (proposed) | `*.<host>` for A, AAAA, never CNAME | `*` itself is system-owned |
 | Refused | NS, DS, DNAME, PTR, CAA, HTTPS/SVCB (no ECH or h3, §13) | |
 
-- **Refused owners** (network and alias zones): `b`, `mx`, `mail`, `mta-sts`, system `_` owners, scope labels and word-number labels (`^[a-z]+-[0-9]{4}$`, kept for burners; owner decision 32).
+- **Refused owners** (network and alias zones): `b`, `mx`, `mail`, `mta-sts`, system `_` owners, scope labels and word-number labels (`^[a-z]+-[0-9]{4}$`, kept for burners; owner decision 32); and the DNS-SD names devices answer themselves (12.9.1; owner decision 778): `_dns-sd._udp` and every owner below it, and a `_<service>._tcp` or `_<service>._udp` pair directly under `@` with every owner below it, so no public record hides behind a private answer.
 - **Lint.** No journal row commits a CNAME beside other data at one owner, system records included (RFC 2181 §10.1).
 - **Entries.** One user RRset is one `dns_entries` unit (§20.4); system, DKIM, challenge, alias and edge records are free; `tls_endpoints` bounds edge names.
 - **Abuse caps** (pro.yml `sidecar_abuse:`; §21 tightens them): `dns_changes_per_hour` 60, `dns_challenges_per_name_hour` 10, `dns_dkim_selectors` 64 device selectors under `_domainkey.<net>.<root>`, burners' excluded (§14.6).
@@ -318,7 +319,7 @@ CAs ignore unknown non-critical tags (RFC 8659 §3, §4.1), so the canary admits
 
 ### 12.9 Private names, visibility, capabilities, abuse hooks
 
-**Private names (owner decision 85).** `<client-name>.<net>.<root>` maps §7.7's client names to §17's overlay addresses (X18), which lie in 100.64/10 or RFC 1918 (owner decision 132), so 12.7 refuses them in public records. C14's `UpgradeMux.SetLocalZone` answers them on app paths, fed in each app's VPN component by the names its forwarding role compiles into §17.8's `BridgeState` (§18.6; owner decision 197); §17's per-link resolver answers them under `ur tun`. A name in the table gets an answer for every qtype, A or NODATA (the overlay has no IPv6; browsers also ask HTTPS), so no query for it leaves the device; other names pass through. The table omits a client name equal to a live published host or record owner, which §7.7's signers also refuse.
+**Private names (owner decision 85).** `<client-name>.<net>.<root>` maps §7.7's client names to §17's overlay addresses (X18), which lie in 100.64/10 or RFC 1918 (owner decision 132), so 12.7 refuses them in public records. C14's `UpgradeMux.SetLocalZone` answers them on app paths, fed in each app's VPN component by the names its forwarding role compiles into §17.8's `BridgeState` (§18.6; owner decision 197); §17's per-link resolver answers them under `ur tun`. A name in the table gets an answer for every qtype, A or NODATA (the overlay has no IPv6; browsers also ask HTTPS), so no query for it leaves the device; other names pass through, but for 12.9.1's DNS-SD names, which the device answers too. The table omits a client name equal to a live published host or record owner, which §7.7's signers also refuse.
 
 ```go
 type LocalZone interface { // nil keeps today's behavior
@@ -330,9 +331,53 @@ func (self *UpgradeMux) SetLocalZone(localZone LocalZone)
 
 **Enumeration.** CT shows labels, aliases and scope labels, never hosts (§13.8); under compact denial, hosts and replying burners' labels (owner decision 79) can only be guessed, which RRL slows.
 
-**Visibility and capabilities:** §2.8's dns-1, dns-2, EX1 and EX2. No third party serves the zone, edges log no query (I-13), and the zone and CT watches detect forgery (D-TRUST-9, D-TLS-8).
+**Visibility and capabilities:** §2.8's dns-1, dns-2, EX1 and EX2. No third party serves the zone, edges log no query (I-13), and the zone and CT watches detect forgery (D-TRUST-9, D-TLS-8). DNS-SD answers come from each device's own discovery view (12.9.1), so no dns server, edge or upstream resolver sees one.
 
 **Abuse (§21).** `SuspendZone(networkId, reason, until)`, `SuspendHost(networkId, host)` withhold records, MX included, and `Restore` returns them, within one write plus the TTL (≤ 3600 s), or, before 12.6's restore transaction, through rows its snapshot carries; tlsedge and mxedge read the same rows. A zone's suspension is its `network_dns_zone` row's reason and until. A host's is no flag on its records but a `network_dns_host_suspension(network_id, host, create_time)` row, carried in the journal and every snapshot as a withheld owner that dnsedge answers NODATA for every qtype, so `*` no longer covers the host. A suspension withholds a record by its `withheld_time`, keeping the row for `Restore`; each record also keeps its `create_time` and, for a challenge or canary, its `expire_time`.
+
+#### 12.9.1 Service discovery names (DNS-SD)
+
+A device answers DNS-SD (RFC 6763) in each zone of its `BridgeState.name_zones` itself, from the instances its discovery view holds, which §17.7.1's watches fill with what the policy lets it reach (owner decision 778), and never forwards a query for one of these names, so no browse or resolve reaches an upstream resolver or the dns edge:
+
+```text
+name (under <net>.<root>, or the alias zone)        answer
+b._dns-sd._udp, db._dns-sd._udp                     PTR the zone: the browse domain RFC 6763 §11 enumerates
+lb._dns-sd._udp, r._dns-sd._udp, dr._dns-sd._udp    NODATA: no automatic browse domain, so a default browse
+                                                    stays in local., where §17.7.1's advertising proxy puts
+                                                    the same instances, and no registration
+_services._dns-sd._udp                              PTR each service type in the view (RFC 6763 §9)
+_<service>._tcp, _<service>._udp, <sub>._sub.<type> PTR each instance of the type or subtype
+<instance>.<type>                                   SRV 0 0 <port> <target>; TXT the instance's
+<label>.<client-name>                               A the address the view holds; NODATA for AAAA and the rest
+another name of these forms                         NXDOMAIN, or NODATA where the name exists
+every answer and denial                             TTL 10 s, RFC 8766 §5.5.1's cap for clients without push
+```
+
+The reverse zone of the overlay block answers on the device too: `b._dns-sd._udp` and `db._dns-sd._udp` under the name RFC 6763 §11 derives from the tun's address and mask point at the zone, an assigned address's PTR names its private name, and every other name there is NXDOMAIN, so no reverse query for an overlay address leaves the device. `ur tun` sends the zones and the block's reverse zone to its resolver at `<block>.0.53` by the platform's split DNS: systemd-resolved's route-only domains (`~<net>.<root>`), a supplemental resolver per domain on macOS, NRPT rules on Windows. It never adds the zone to the search list, from which mDNSResponder learns its automatic browse domains (mDNSResponder's mDNSCore/uDNS.c), so a default browse never shows an instance twice. A client that names the zone browses it: `dns-sd -B _ipp._tcp <net>.<root>` on macOS, `avahi-browse -d <net>.<root>` where Avahi's wide-area browsing is on (avahi-daemon.conf's `enable-wide-area`), or `resolvectl query --type=PTR` on systemd-resolved.
+
+A viewer's discovery view comes from §17.7.1's watches, whose messages are `DNS_SD_WATCH` (0x1B02) and `DNS_SD_WATCH_RESULT` (0x1B03) in §6.11's catalog, `sidecar/protocol/dns.proto` taking them with their code track (owner decision 273):
+
+```text
+DnsSdWatch        since uint64 = 1      the host's view version the viewer holds; 0 for none
+                  hold_ms uint32 = 2    at most WatchHoldTimeout (§17.7.1)
+DnsSdWatchResult  version uint64 = 1
+                  serving bool = 2      false where the host publishes nothing
+                  instances = 3         repeated DnsSdInstance
+                  truncated bool = 4    past InstanceCount or AnswerByteCount
+DnsSdInstance     name string = 1       one label, at most 63 octets
+                  service string = 2    _<service>._tcp or _udp
+                  subtypes = 3          repeated string
+                  port uint32 = 4
+                  txt bytes = 5         at most TxtByteCount
+                  host_label string = 6 the target's own label, as an LDH label (<label> above)
+                  ipv4 fixed32 = 7      where this viewer reaches the instance
+                  own bool = 8          the host's own service
+                  ttl uint32 = 9        seconds left
+```
+
+Between hosts the watch delivers each change within a round trip; on the device the advertising proxy's registrations change at once, and unicast clients ask again within 10 s. [DNS Push](DESIGN-DEFER.md#dns-push-notifications) (RFC 8765) is Later: it runs only over TLS whose server the client authenticates under DNS over TLS's Strict Privacy profile, by DANE where it can (RFC 8765 §7), and a resolver answering a private zone on the device has no identity a client can check that way; mDNSResponder, which without push polls a long-lived unicast browse every 15 minutes (mDNSResponder's mDNSCore/uDNS.h), sets up its push TLS in a library Apple does not publish.
+
+On app paths C14's `LocalZone` owns the same names and answers each NODATA, since it carries addresses alone, so no DNS-SD query leaves an app's tunnel either; [answering them there](DESIGN-DEFER.md#dns-service-discovery-app-paths) waits for a `LocalZone` that carries records. What that loses differs by platform. A VPN's match domains join the search list unless `matchDomainsNoSearch` is set (developer.apple.com's NEDNSSettings), so Bonjour on iOS asks `lb._dns-sd._udp` in the zone, and a positive answer there would bring the network's instances into iOS apps' default browses, AirPrint's among them; Android's NsdManager browses `local.` alone (developer.android.com's NsdManager reference), so only an app that queries DNS itself, by `DnsResolver.rawQuery`, would find them.
 
 ### 12.10 Alternatives considered
 
@@ -343,6 +388,9 @@ func (self *UpgradeMux) SetLocalZone(localZone LocalZone)
 | A ZSK in a KMS or HSM | no key in host memory | a round trip per random-name query, which a flood exhausts | rejected |
 | `*` CNAME to a shared edge name | one record | excludes the wildcard MX (RFC 2181 §10.1) | rejected |
 | A CNAME from each custom host into `<root>` | one record; follows 12.6's health drops | CAA discovery follows it to a target URnetwork writes (RFC 8659 §3) | weak mode only, disclosed (D-DNS-9) |
+| DNS-SD records in the public zone, or answered by the dns edges | every resolver finds them | overlay addresses and device names published; 12.7 refuses non-public addresses | rejected: devices answer them (12.9.1; owner decision 778) |
+| DNS Push (RFC 8765) from the device's resolver now | a change reaches a unicast client at once | needs a TLS server identity the client verifies under Strict Privacy, by DANE where it can (RFC 8765 §7), which a resolver for a private zone on the device lacks | Later (12.9.1) |
+| Answering `lb._dns-sd._udp`, so default browses take the zone | every app's default browse finds the network | on macOS and Linux it shows each instance twice, beside the advertising proxy's in `local.` | rejected: `b` and `db` only (12.9.1) |
 
 ### 12.11 Decisions proposed
 
@@ -367,6 +415,8 @@ func (self *UpgradeMux) SetLocalZone(localZone LocalZone)
 **D-DNS-10 (proposed).** Labels and aliases are tombstoned forever; a changed alias retires over 90 days. *Why:* old certificates and mail retries cannot enable a takeover.
 
 **D-DNS-11 (proposed).** A `<blabel>` with any child owner carries an explicit copy of the wildcard's MX, A and AAAA, written and removed atomically with its selectors; dnsedge answers the copy from `*`'s current records, health drops included (12.6, 12.7). *Why:* an empty non-terminal blocks the wildcard (RFC 4592 §2.2), so a replying burner's first selector would otherwise end its inbound mail, and copied addresses would keep serving a dropped interface.
+
+**D-DNS-12 (proposed).** A device answers the DNS-SD names of each network zone, and of its block's reverse zone, from its own discovery view, with 10 s TTLs, and never forwards one; `b` and `db` name the zone as a browse domain, and `lb`, `r` and `dr` are empty; 12.7 refuses public owners at those names (12.9.1; owner decision 778). *Why:* a browse reveals what its device looks for (RFC 8882), the view holds only what the policy lets the device reach, and default browses stay in `local.` beside the advertising proxy.
 
 ### 12.12 Open questions
 
@@ -393,9 +443,9 @@ func (self *UpgradeMux) SetLocalZone(localZone LocalZone)
 
 ### 12.14 Interfaces
 
-- **Provides:** `ResolveNetworkLabel(root, text, interactive) (networkId, kind)` (§8, §9, §13, §15); api's `GET /sidecar/label` and a sidecar's own zone view and reclaim, `GET /dns/zone` and `POST /dns/label-reclaim` (12.5, 12.8); certs' DNS-01, canary-CAA and ready routes, ready answering `stale`, `ready` or `canary_failing`, and the canary's routes and verdicts (12.6); each NS's running state; §13-§15's records and reverse zones, direct MX and the custom-host map with each host's state and CAA mode (§13.4, §13.8); label reclaim and the restore step, with its edges' diffs and abuse flags (§19.10, §21); suspension (§21); `LocalZone` (§17, §18); entry counts (§20); `model.DnsSyncEdgeRecords`, which api calls after each accepted delta or projection, and taskworker's hourly reconcile of edge address records (12.7).
-- **Consumes:** §7's DNS permission, `network_domain`, `RenameNetwork`, admin events, client names; §8 grants, owner consent, scope labels, §8.10's gate; §13 certs and its CAA walk; §14, §15 record content, the direct-MX check; §16 decisions, the spend check and `approval_use` (D-MCP-11, D-MCP-12); §6 topic `dns`; §4 C14; §19 dns edge hosts, router interfaces, W1's reload and drain, the restore (§19.10), the rota (owner decision 143); §20 quotas; §21 `ScreenName`, `network_verified`, probation caps, open cases.
-- **Subprotocol messages:** `DnsZoneChanged` (0x1B01, §6.11) on push topic `dns` (§6.8), versioned by the zone serial.
+- **Provides:** `ResolveNetworkLabel(root, text, interactive) (networkId, kind)` (§8, §9, §13, §15); api's `GET /sidecar/label` and a sidecar's own zone view and reclaim, `GET /dns/zone` and `POST /dns/label-reclaim` (12.5, 12.8); certs' DNS-01, canary-CAA and ready routes, ready answering `stale`, `ready` or `canary_failing`, and the canary's routes and verdicts (12.6); each NS's running state; §13-§15's records and reverse zones, direct MX and the custom-host map with each host's state and CAA mode (§13.4, §13.8); label reclaim and the restore step, with its edges' diffs and abuse flags (§19.10, §21); suspension (§21); `LocalZone` (§17, §18); entry counts (§20); `model.DnsSyncEdgeRecords`, which api calls after each accepted delta or projection, and taskworker's hourly reconcile of edge address records (12.7); the DNS-SD names devices answer, in `ur tun`'s resolver and, as NODATA, in `LocalZone`, with their watch messages (12.9.1).
+- **Consumes:** §17.7.1's discovery view; §7's DNS permission, `network_domain`, `RenameNetwork`, admin events, client names; §8 grants, owner consent, scope labels, §8.10's gate; §13 certs and its CAA walk; §14, §15 record content, the direct-MX check; §16 decisions, the spend check and `approval_use` (D-MCP-11, D-MCP-12); §6 topic `dns`; §4 C14; §19 dns edge hosts, router interfaces, W1's reload and drain, the restore (§19.10), the rota (owner decision 143); §20 quotas; §21 `ScreenName`, `network_verified`, probation caps, open cases.
+- **Subprotocol messages:** `DnsZoneChanged` (0x1B01, §6.11) on push topic `dns` (§6.8), versioned by the zone serial; `DnsSdWatch` and `DnsSdWatchResult` (`DNS_SD_WATCH` 0x1B02, `DNS_SD_WATCH_RESULT` 0x1B03; 12.9.1), peer RPC between sidecars on data-class contracts for §17.7.1's watches.
 - **API routes:** §12.8.
 - **Tables** (migrations 926+; `dns_label` in MG2, the rest in MG5, §19.7): `dns_root` (root, serial, restore_serial, restoring, custom_host_map_version bigint, restore_incident_id), `dns_label` (primary key (root, label); network_id, kind, state; never deleted; a restore's CT rows start without a network), `network_dns_zone` (with a zone suspension's reason and until, and its `report_token`, unique, §14.6), `network_dns_record` (with `create_time`, `expire_time` and `withheld_time`), `network_dns_host_suspension` (network_id, host, create_time; 12.9), `dns_zone_journal` (diffs, 7 d), `dns_canary_verdict` (root, source, serial, ok, report_time; primary key (root, source); 12.6), `dns_ns` (root, ns, `state enum{running,stopped}`, stopped_time, reason; seeded from dns.yml; owner decision 418), `network_dns_custom_host` (with `state enum{pending,active,withheld}`, `withheld` a web host a downgrade keeps out of the map (owner decision 420), `caa_mode enum{strong,weak}`, `effective_caa_chain_ok bool`, `map_version` and `ready_time`), `dns_custom_host_map` (version, digest, create time; 7 d) and `dns_custom_host_map_applied` (interface, reported version, digest, nginx master, poll time, the last passing route probe's version and time, and the latest probe result of each added host probed for the reported version; while the interface is in the lb inventory); Redis `{dns}serial:<root>`, the last committed serial.
 - **Services and config:** `dns` (server/cli/dns; `sidecar/dnsservice`): API blocks on `dns.bringyour.com`, `dnsedge` on the dns edge hosts (UDP and TCP 53); `config/<env>/dns.yml`; vault (ZSKs, DNSKEY windows, each internal caller class's bearer, and their SHA-256 in `internal-verify.yml`, 12.8); two offline KSK HSMs; taskworker (challenge and canary-CAA expiry, the restore's CT replay); `monitor` (canary); `sidecarctl dns ns stop|start` (12.6; owner decision 274).
@@ -411,12 +461,13 @@ func (self *UpgradeMux) SetLocalZone(localZone LocalZone)
 | A weak-mode custom host, or an ALIAS that also flattens CAA, lets URnetwork publish the CAA that governs it; the canary probe is URnetwork's own, so a compelled operator can pass such an ALIAS at setup or renewal, leaving it as exposed as weak mode (§2.8 EX1) | Low | High | strong mode by default and for every apex; the probe refuses CAA flattening unless the operator is compelled (12.8); setup discloses §2.8 EX1; zone watches (D-TRUST-9) and the CT watch (D-TLS-8), the only control against a compelled operator |
 | Safe Browsing flags, or a registrar holds, the whole root | Medium | Critical | takedown hooks; §19.8's pager carries registrar and registry notices from M5 (owner decisions 134, 143); PSL; nothing critical on the apex |
 | The PSL declines or lags; Talos keeps "Personal VPN" | High | Medium | §12.4's interim rules; recategorization; custom domains |
+| A unicast DNS-SD client keeps a withdrawn instance until its TTL runs out, or longer where its resolver raises short TTLs (RFC 8766 §5.5.1 warns of 30 s floors) | Medium | Low | 10 s TTLs; macOS and Linux apps that browse `local.` take the advertising proxy's registrations, which change at once (§17.7.1); DNS Push Later (12.9.1) |
 
 ### 12.16 Phasing
 
 Milestones and the v0 and v1 sets are §23.4's.
 - **v0:** renewal and census (M0); labels, `dns_label` and api's `GET /sidecar/label` (M2); `ur tun`'s resolver (M4) and C14's seam, dark on app paths until §18's app hosts (M8; owner decision 85); the moved root signed without a DS, labels, edge, challenge, SPF, DMARC, null MX and user records, routes, gates, quotas, suspension, label reclaim and the restore step, the canary and its pages (M5); mail records, `b`, `mx`, TLSA and the DS (M7); replying burners' selectors and label copies, the reverse zones' PTRs (M9).
-- **v1:** aliases, custom domains in both CAA modes, Team scopes (M6); direct MX and strict-mode MX hosts (M7); scope mail hosts with §15 (M8).
-- **Later:** [the PSL application](DESIGN-DEFER.md#dns-psl-listing) once eligible, then §14.6's cut-over; [bring-your-own NS](DESIGN-DEFER.md#dns-bring-your-own-ns); [HTTPS/SVCB](DESIGN-DEFER.md#dns-https-svcb-records); [a Team scope's MTA-STS publish](DESIGN-DEFER.md#dns-scope-mta-sts) (owner decision 715).
+- **v1:** aliases, custom domains in both CAA modes, Team scopes, 12.9.1's DNS-SD names in `ur tun`'s resolver with §17.7.1's discovery (M6; owner decision 778); `LocalZone` owning those names on app paths (M8); direct MX and strict-mode MX hosts (M7); scope mail hosts with §15 (M8).
+- **Later:** [the PSL application](DESIGN-DEFER.md#dns-psl-listing) once eligible, then §14.6's cut-over; [bring-your-own NS](DESIGN-DEFER.md#dns-bring-your-own-ns); [HTTPS/SVCB](DESIGN-DEFER.md#dns-https-svcb-records); [a Team scope's MTA-STS publish](DESIGN-DEFER.md#dns-scope-mta-sts) (owner decision 715); [DNS Push for DNS-SD](DESIGN-DEFER.md#dns-push-notifications) and [DNS-SD answers on app paths](DESIGN-DEFER.md#dns-service-discovery-app-paths) (owner decision 778).
 - **Deferred:** DESIGN-DEFER.md holds an entry for each Later item, linked above, and for [this section's v1 set](DESIGN-DEFER.md#dns-v1) (owner decision 587).
 - **Blocking:** §19's dns edge hosts block M5; the soak blocks the DS and M7's DANE; §13.4's generated split map blocks M6's custom hosts; HE's reverse delegation blocks M9's PTRs.

@@ -179,7 +179,11 @@ Parentheses hold T1 tests; the rest run in T2 and T3. Inline server paths (contr
        remote search's serving side: FS-83
 §12   (validator; labels; compact denial; CNAME lint) both NS alike at one serial, a drained or failed interface
       dropped from *, @, every copy of *'s records and each mx on both; a key set failing self-check never serves;
-      §12.5's label uniqueness; §12.8's verification gate
+      §12.5's label uniqueness; §12.8's verification gate; from M6, 12.9.1's DNS-SD names (owner decision 778):
+      each of its forms, in the zone and the block's reverse zone, answered on the device per qtype with 10 s
+      TTLs, b and db naming the zone and lb, r and dr empty, and not one query reaching the fake upstream
+      resolver or a dns edge; 12.7 refusing user records at those names; from M8, an app's LocalZone answering
+      each NODATA
 §13   (ClientHello parser; 421) §13.9's kill switch and ValidateListen refusals, network_verified, the time box, a
       screened host and an unread fact among them; mta-sts served only as a receiver's system publish; §13.4's bench;
       tlsedge on 443, 8443, 8883 and 5671 only (owner decision 121); CAA, audiences and custom hosts: FS-32, FS-34,
@@ -235,6 +239,23 @@ Parentheses hold T1 tests; the rest run in T2 and T3. Inline server paths (contr
       it, as on a network over the memory cap, which never goes pending (owner decisions 216, 487;
       DESIGN-DETAILS.md section 4); a forward_only client gets only the config's r scope and no
       other route; after a 7-day lapse forwarding stays pending until the app's next run mints its client anew
+      From M6, 17.7.1's discovery (owner decision 778): a gatherer that skips loopback, point-to-point and
+      tun links, LocalOnly answers and overlay, exposed and alias addresses; a host's answer to each viewer equal to
+      its hook's verdicts for that viewer, so a viewer with no route to a shared device, or no dial on a port, gets
+      none of it, and a share's source watches nothing; an exposed /32 keeping host bits, never a link-local or
+      IPv6 address published, and an untagged source with no document mapped back at an exposed address, never
+      dialing it; a viewer dropping an address its host does not serve and one its own LAN holds; a /32 share
+      withdrawn when its device moves, a share kept after 7 d unseen; a watch's answer at a change within a round
+      trip, a host lost after 90 s and a narrowing compile each withdrawing at once; caps truncating; the macOS
+      proxy's LocalOnly records never on a LAN (a packet capture on every other interface), a remote name that a
+      local instance holds taking its host's suffix and giving the name back when one appears, the same device
+      seen on the LAN never registered twice; a record a watch brought never republished, so two hosts that watch
+      each other on one LAN publish no loop; the translator's RFC 7915 cases, checksums and MTU, and every other
+      IPv6 packet still rejected; the Linux proxy answering on ur tun's link alone and off under Avahi's reflector;
+      from M13a, with DESIGN-COMPUTE.md §18's Listeners row, a listed entry of a known type answered as an own
+      instance to exactly the viewers its hook passes, reached by Deliver and never at 127.0.0.1, none where the
+      host's mDNS holds its port, one hide by either command taking both views, and a flow from <block>.0.46
+      delivered from <block>.0.1 and a port of its own
 §18   (SidecarKeyStore statuses through the generated Swift, Kotlin, C-ABI and js adapters: one terminal result, no
       panic) LOCKED then unlock keeps the identity, and nothing is created while LOCKED; Absent with a recorded id
       makes no new root; corrupt bytes are Failed; a child token expired on a fake clock, a re-pair under the same
@@ -303,7 +324,7 @@ Scenarios mirror §3.7's flows (D-ARCH-3) on T2 fakes, then T3 (S1 only T3), wit
 - **S5** (F4, publish HTTPS): key only on device; each §13.7 audience, login-less visitors reaching only edge login; Community publishes verified, ≤ 7 days.
 - **S6** (F5, send mail, M9): no record forwarded before its proof verifies; no unauthenticated MX; §15.10's forwarding rules; a message over the DATA cap is `too_large` for the non-CHUNKING recipient domain alone (FS-123).
 - **S7** (F6, receive mail): 530 to plaintext; unroutable gets a temporary failure, the edge holding nothing; abuse@`<root>` without SNI reaches the platform listener; DNS changed between reception and ingest leaves the reception-time result, and tampered evidence fails; a message whose checks a bound cut is deposited and labeled from what was verified (FS-121).
-- **S8** (F7, subnets, port maps): rules only from the config repo; LAN by rule once a document exists, else open to untagged sources (owner decision 120) but never to the provider's own `127.0.0.1` daemon ports, while an unrelated loopback service passes; revoke resets.
+- **S8** (F7, subnets, port maps): rules only from the config repo; LAN by rule once a document exists, else open to untagged sources (owner decision 120) but never to the provider's own `127.0.0.1` daemon ports, while an unrelated loopback service passes; revoke resets. From M6, discovery across hosts (§17.7.1; owner decision 778), the owner's use case end to end: host A, with an iPhone on its LAN or a test advertiser of `_remotepairing._tcp` whose responder answers a tunnel request on a port it picks per connection, shares the device, filing its /32 under approval; on macOS host B under `ur tun`, `dns-sd -B _remotepairing._tcp local.` lists it within a watch's round trip and `dns-sd -L` resolves it to the exposed address and its translated IPv6 one; a client completes the tunnel's TCP and QUIC connections to the picked ports over each address; a third host the policy lets reach nothing on A lists nothing; unsharing, a narrowing save and A's loss each withdraw the listing; and once, before M6's exit, a real Xcode on B lists the iPhone, paired with B's Mac by cable beforehand, and runs an app on it over the overlay, which also settles whether Xcode takes the translator's ULA address (§17.17).
 - **S9** (F8, MCP work): vault only; redaction; gaps; evidence labels.
 - **S10** (F10, burner lifecycle): a burned label gets 550 with no DNS change; a replying burner's first selector keeps its `<blabel>` MX and A, its last restores the wildcard-only state, and a receive-only burner creates no child.
 - **S11** (F11, search and agents; FS-77 and FS-80, from M10): a claim filed on one device is in another's next search after its index entry lands: in a team network with the card push that carries it, in a vault after the writer's next companion push, at most a minute later on 1 KiB blocks, else five minutes (owner decision 172); hits are grouped by agent, active first; an untrusted hit returns as a stub with the run untainted, and `untrusted: include` taints first; a parked device's search omits its member's vault and lists it as consent pending; an EvsShare reader's receipt precedes each index decrypt; an erasure ends open cursors and empties the caches of its postings; two searches with different queries over one state send evs identical request sequences.
@@ -317,7 +338,8 @@ canaries (32 random bytes) in contents, paths, names, commit messages, search qu
   application socket names, mail bodies (one reported through a fixture FBL, one to abuse@),
   subjects, local parts, HTTPS bodies, both Delegation seeds of an auth-key bundle (CLI, SDK
   and QR enrollment), from M6 run titles, repo display names and announced runs' prompts past
-  the first line, tool inputs and outputs, touched paths and diffs, and from M10 index
+  the first line, tool inputs and outputs, touched paths and diffs, from M6 the instance
+  names, TXT values and host names discovery gathers (§17.7.1), and from M10 index
   display fields and git-lfs objects
 CC1 every engine Handler, both directions, but mx-4's listener input (§2.8's exception)
 CC2 every TransferFrame: sealed unless ControlId, handshake or ack

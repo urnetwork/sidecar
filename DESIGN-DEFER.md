@@ -33,7 +33,7 @@ A design-records pass that folds a deferral adds its entry here in the same chan
 
 ## Index
 
-104 entries, grouped by the DESIGN.md section that owns the deferred thing. "Described in" lists the subsections of DESIGN.md that point at the entry.
+107 entries, grouped by the DESIGN.md section that owns the deferred thing. "Described in" lists the subsections of DESIGN.md that point at the entry.
 
 | Section | Entry | Stage | Described in |
 |---|---|---|---|
@@ -90,6 +90,8 @@ A design-records pass that folds a deferral adds its entry here in the same chan
 |  | [HTTPS and SVCB records](#dns-https-svcb-records) | Later | §12.16 |
 |  | [`_mta-sts` waiting for every receiver's certificate](#dns-mta-sts-certificate-gate) | Review phase, once §13's issuance for receivers settles | §12.7, §15.5 |
 |  | [A Team scope's MTA-STS publish](#dns-scope-mta-sts) | Later, at the owner's call | §12.7, §12.16, §15.5 |
+|  | [DNS Push for DNS-SD on the device](#dns-push-notifications) | Later | §12.9, §12.16 |
+|  | [DNS-SD answers on app paths](#dns-service-discovery-app-paths) | Later | §12.9, §12.16 |
 |  | [§12's v1 set](#dns-v1) | v1 (M6, M7, M8) | §12.16 |
 | [§13 The TLS edge and certificates](#s13) | [ECH in split mode](#tls-ech-split-mode) | Later | §2.19, §13.17 |
 |  | [HTTP/3 on the edge's UDP 443](#tls-h3-edge) | Later | §13.17 |
@@ -117,7 +119,8 @@ A design-records pass that folds a deferral adds its entry here in the same chan
 |  | [§16's v1 set](#mcp-v1) | v1 (M6, M10) | §16.18 |
 | [§17 IP addresses, subnet routing, and port forwarding](#s17) | [L3 delivery](#bridge-l3-delivery) | Later | §17.18 |
 |  | [Multi-hop maps](#bridge-multi-hop-maps) | Later | §17.18 |
-|  | [IPv6 subnet routes](#bridge-ipv6-subnet-routes) | Later | §17.18, §23.4 |
+|  | [IPv6 subnet routes](#bridge-ipv6-subnet-routes) | Later | §17.7, §17.18, §23.4 |
+|  | [The advertising proxy on Windows, and discovery in the apps](#bridge-discovery-other-platforms) | Later | §17.7, §17.18 |
 |  | [§17's v1 set](#bridge-v1) | v1 (M6) | §17.18 |
 | [§18 SDK, apps, and extension integration](#s18) | [The extension's own Worker](#sdk-extension-worker) | Later | §5.17, §18.17, §22.17, §23.4 |
 |  | [Firefox session mode](#sdk-firefox-session-mode) | Later | §18.17 |
@@ -861,15 +864,41 @@ A design-records pass that folds a deferral adds its entry here in the same chan
 - **Held.** Nothing: no task or track waits on it.
 - **To bring back.** The scope system publish above, across the sidecar's access control, sockets and mail and the server's edge records sync; then the scope set publishes `_mta-sts` as the network's does, under the same verification and certificate conditions, and a test shows a scope receiver serving its policy.
 
+<a id="dns-push-notifications"></a>
+### DNS Push for DNS-SD on the device
+
+*Later. DESIGN.md: §12.9, §12.16.*
+
+- **Deferred.** DNS Push Notifications (RFC 8765) from a device's own resolver for §12.9.1's DNS-SD names, which owner decision 778's design named to keep clients current, named in §12.16's Later row and §12.9.1. It has no D- item, task or FS row.
+- **Why.** RFC 8765 runs only over DNS Stateful Operations on TLS whose server the client authenticates under DNS over TLS's Strict Privacy profile, by DANE where it can (RFC 8765 §7), and a resolver answering a private zone on the device has no identity a client can check that way; mDNSResponder sets up its push TLS in a library Apple does not publish, so what it would accept cannot be known.
+- **Launch instead.** Between hosts, §17.7.1's watch delivers each change within a round trip; on the device, the advertising proxy's registrations change at once, and unicast answers carry RFC 8766 §5.5.1's 10 s TTL (§12.9.1).
+- **Lost.** A unicast DNS-SD client sees a change only when it asks again, up to 10 s later, or later where its resolver raises short TTLs, and mDNSResponder polls a long-lived unicast browse every 15 minutes.
+- **Dark in code.** Nothing is built.
+- **Held.** Nothing: no task or track waits on it.
+- **To bring back.** A server identity a push client verifies: a certificate for a name in the zone that the client's validation accepts, or DANE under a signed answer for the device's resolver, and a check of what mDNSResponder, Avahi and systemd-resolved require.
+
+<a id="dns-service-discovery-app-paths"></a>
+### DNS-SD answers on app paths
+
+*Later. DESIGN.md: §12.9, §12.16.*
+
+- **Deferred.** Answering §12.9.1's DNS-SD names with records, not NODATA, in an app's VPN component through C14's `LocalZone`, named in §12.16's Later row and §12.9.1.
+- **Why.** `LocalZone.Answer` carries addresses alone (§12.9), so PTR, SRV and TXT answers need a change to C14's interface in connect, and an app's discovery view would come from its sidecar role, which on Android runs only while the app is open (owner decision 197).
+- **Launch instead.** The VPN component owns the names and answers each NODATA, so no browse leaves its tunnel; desktops answer them under `ur tun` (§12.9.1) and run the advertising proxy (§17.7.1).
+- **Lost.** On iOS, Bonjour's default browses, AirPrint's among them, do not find the network's instances; on Android only an app that queries DNS itself could have found them.
+- **Dark in code.** The NODATA ownership is built; no record answer is.
+- **Held.** Nothing: no task or track waits on it.
+- **To bring back.** A `LocalZone` method that returns RRsets (a C14 amendment, §4.6), the sidecar role handing its view to the VPN component over the device RPC with each record's expiry, and `lb._dns-sd._udp` answered positively where no advertising proxy runs.
+
 <a id="dns-v1"></a>
 ### §12's v1 set
 
 *v1 (M6, M7, M8). DESIGN.md: §12.16.*
 
-- **Deferred.** §12.16's v1 row: aliases, custom domains in both CAA modes and Team scopes at M6; direct MX and strict-mode MX hosts at M7; scope mail hosts with §15 at M8.
-- **Why.** They are Team items (owner decisions 33, 55, 58).
+- **Deferred.** §12.16's v1 row: aliases, custom domains in both CAA modes, Team scopes and §12.9.1's DNS-SD names in `ur tun`'s resolver at M6 (owner decision 778); `LocalZone` owning those names on app paths, scope mail hosts with §15 at M8; direct MX and strict-mode MX hosts at M7.
+- **Why.** They are Team items (owner decisions 33, 55, 58); the DNS-SD names come with §17.7.1's discovery and `ur tun` on macOS and Windows at M6.
 - **Launch instead.** v0's zone: labels, edge, challenge, SPF, DMARC, null MX and user records at M5; mail records, TLSA and the DS at M7; replying burners' selectors and the reverse zones' PTRs at M9.
-- **Lost.** Until those milestones: a Team's own domain, aliases and scope hosts.
+- **Lost.** Until those milestones: a Team's own domain, aliases and scope hosts, and DNS-SD across hosts.
 - **Dark in code.** Built in the same run on the `sidecar` branches. §13.4's generated split map blocks M6's custom hosts.
 - **Held.** Nothing.
 - **To bring back.** Nothing to bring back: each ships when its milestone's gate passes (§23.6).
@@ -1230,7 +1259,7 @@ A design-records pass that folds a deferral adds its entry here in the same chan
 <a id="bridge-ipv6-subnet-routes"></a>
 ### IPv6 subnet routes
 
-*Later. DESIGN.md: §17.18, §23.4.*
+*Later. DESIGN.md: §17.7, §17.18, §23.4.*
 
 - **Deferred.** Advertising and routing IPv6 subnets (§17.18; §23.4).
 - **Why.** The overlay is IPv4 only: one IPv4 /16 per network and no IPv6 overlay (§17.4; owner decision 28).
@@ -1240,15 +1269,28 @@ A design-records pass that folds a deferral adds its entry here in the same chan
 - **Held.** Nothing: no task or track waits on it.
 - **To bring back.** An address plan for IPv6 in the overlay, new statement fields, and the conflict and HA rules of §17.7 for them.
 
+<a id="bridge-discovery-other-platforms"></a>
+### The advertising proxy on Windows, and discovery in the apps
+
+*Later. DESIGN.md: §17.7, §17.18.*
+
+- **Deferred.** §17.7.1's advertising proxy on Windows, and gathering, sharing, watching and the advertising proxy in the apps, named in §17.18's Later row and §17.7.1 (owner decision 778).
+- **Why.** Windows' DNS-SD API browses `.local` names alone and documents no registration scoped to the machine (learn.microsoft.com's `DNS_SERVICE_BROWSE_REQUEST` and `DnsServiceRegister`). Android's NsdManager browses `local.` alone and runs no mDNS on a VPN service's tun, which Android brings up without the multicast flag (AOSP's MdnsSocketProvider.java and com_android_server_connectivity_Vpn.cpp). On iOS, raw multicast needs Apple's `com.apple.developer.networking.multicast` entitlement, and Bonjour browsing needs local network access, which a packet tunnel provider has but its container app may not (Apple's TN3179). App devices host only after C16, and Android's sidecar role runs only while the app is open (owner decision 197).
+- **Launch instead.** `ur daemon` gathers, shares and watches on Linux, macOS and Windows, and runs the advertising proxy on macOS and Linux; a Windows desktop answers §12.9.1's names under `ur tun`; an app's VPN component owns those names and answers each NODATA (§12.9.1).
+- **Lost.** On Windows, apps that browse only multicast do not see the network's instances; a phone neither publishes the devices on its own LAN nor shows the network's.
+- **Dark in code.** Nothing is built for these platforms.
+- **Held.** Nothing: no task or track waits on it.
+- **To bring back.** For Windows, a registration the DNS Client keeps on the machine, or a responder on `ur tun`'s adapter if the system's mDNS uses it, each measured; for iOS, a LocalOnly registration from the app process or the entitlement; for Android, a path NsdManager uses, which a VPN service's tun does not give; and for the apps, the sidecar role's view handed to the VPN component (DESIGN-DEFER.md's dns-service-discovery-app-paths entry).
+
 <a id="bridge-v1"></a>
 ### §17's v1 set
 
 *v1 (M6). DESIGN.md: §17.18.*
 
-- **Deferred.** §17.18's v1 row: cross-network shares through C18, with ShareKeys, per-generation ShareSigners and the preflight; `ur tun` on macOS and Windows; P2P, built at M6 behind `EnablePeerP2p` and off until an owner call (owner decision 296).
+- **Deferred.** §17.18's v1 row: cross-network shares through C18, with ShareKeys, per-generation ShareSigners and the preflight; `ur tun` on macOS and Windows; service discovery across hosts, with sharing, watches, the advertising proxy on macOS and Linux and its IPv6 translator (§17.7.1; owner decision 778); P2P, built at M6 behind `EnablePeerP2p` and off until an owner call (owner decision 296).
 - **Why.** Shares and the other platforms' tun belong to M6 (owner decision 86).
 - **Launch instead.** v0 at M4, same network, Linux and WSL2 first; at M8, forwarding in every app's VPN component (owner decision 197).
-- **Lost.** Until M6: sharing across networks, and `ur tun` on macOS and Windows.
+- **Lost.** Until M6: sharing across networks, `ur tun` on macOS and Windows, and finding a device on another host's LAN.
 - **Dark in code.** Built in the same run on the `sidecar` branches. P2P's switch has its own entry under §6.
 - **Held.** Nothing.
 - **To bring back.** Nothing to bring back: it ships when M6's gate passes (§23.6).
@@ -1300,7 +1342,7 @@ A design-records pass that folds a deferral adds its entry here in the same chan
 
 *v1 (M6, M10). DESIGN.md: §18.17.*
 
-- **Deferred.** §18.17's v1 rows. At M6 (RS2): the team console on the page Worker, with the directory's read-only views; the `sdk.Sidecar` shell with `SignEdgeLogin`; the directory's seams. At M10 (owner decision 169): the search policy and targets, `SidecarSearch`, windows on app hosts and remote search's requester side; the page Worker's search; `Write`'s versioning argument, the drop calls and `History`'s states (owner decisions 173, 183).
+- **Deferred.** §18.17's v1 rows. At M6 (RS2): `GetDiscovery` in the desktop apps beside `ur daemon` (owner decision 778); the team console on the page Worker, with the directory's read-only views; the `sdk.Sidecar` shell with `SignEdgeLogin`; the directory's seams. At M10 (owner decision 169): the search policy and targets, `SidecarSearch`, windows on app hosts and remote search's requester side; the page Worker's search; `Write`'s versioning argument, the drop calls and `History`'s states (owner decisions 173, 183).
 - **Why.** Team ships at M6 and format 2 with search at M10.
 - **Launch instead.** v0: CLI hosts through M1-M4, the ur.io/recurd page at M4 (RS1), app hosts at M8 (BS1).
 - **Lost.** Until M6: the team console. Until M10: search and drops in the SDK.
