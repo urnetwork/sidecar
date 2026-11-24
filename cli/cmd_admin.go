@@ -12,10 +12,11 @@
 //	                                            client-only fragment, which the inviting device appends, is not yet
 //	ur admin members remove <member_id>         the MemberRevoke's plan from the verified log, confirmed on
 //	                                            /dev/tty; then POST /network/member-remove, the server's denial at
-//	                                            once, the member's auth keys among what it ends, with the server's
-//	                                            note when a pre-approved key's bundle still admits (QD-1211); then
-//	                                            the MemberRevoke the daemon signs, which is the removal (§7.10): an
-//	                                            AdminSet member's as a proposal its cosigns complete
+//	                                            once, the member's auth keys and API keys among what it ends and
+//	                                            counts, with the server's note when a pre-approved key's bundle
+//	                                            still admits (QD-1211, QD-1214); then the MemberRevoke the daemon
+//	                                            signs, which is the removal (§7.10): an AdminSet member's as a
+//	                                            proposal its cosigns complete
 //	ur admin oauth-clients [list]               GET /network/oauth-clients
 //	ur admin oauth-clients create --scopes=...  POST /network/oauth-clients, its secret printed once
 //	ur admin oauth-clients revoke <id>          POST /network/oauth-client-revoke
@@ -499,6 +500,8 @@ func runUrAdminMemberRemove(ctx context.Context, cli *urCli, options docopt.Opts
 	denied := &struct {
 		DeactivatedClientCount int64 `json:"deactivated_client_count"`
 		RevokedAuthKeyCount    int64 `json:"revoked_auth_key_count"`
+		// the API keys the member's user made in the team, deleted in the same write (owner decision 717)
+		DeletedApiKeyCount int64 `json:"deleted_api_key_count"`
 		// a revoked key was pre-approved: a copy of its bundle still admits until its Delegation ends (D-TEAM-31),
 		// which ur says in its own words rather than printing the server's note
 		BundleStillAdmits bool `json:"bundle_still_admits"`
@@ -513,10 +516,11 @@ func runUrAdminMemberRemove(ctx context.Context, cli *urCli, options docopt.Opts
 		return err
 	default:
 		cli.printf(
-			"the server denied member %s, %d client(s) deactivated, %d auth key(s) revoked\n",
+			"the server denied member %s, %d client(s) deactivated, %d auth key(s) revoked, %d API key(s) deleted\n",
 			memberId,
 			denied.DeactivatedClientCount,
 			denied.RevokedAuthKeyCount,
+			denied.DeletedApiKeyCount,
 		)
 		if denied.BundleStillAdmits {
 			cli.printf("%s\n", urAdminMemberRemoveBundleNote)
