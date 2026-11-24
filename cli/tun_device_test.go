@@ -576,7 +576,8 @@ func TestTunSyncsAddressesRoutesAndNames(t *testing.T) {
 	if !slices.Equal(routes, tunBridge.Routes()) {
 		t.Fatalf("routes %v", routes)
 	}
-	if resolver != netip.MustParseAddr("100.70.0.53") || !slices.Equal(zones, []string{"net.example"}) {
+	// the name zones and, since owner decision 778, the block's reverse zone (§12.9.1)
+	if resolver != netip.MustParseAddr("100.70.0.53") || !slices.Equal(zones, []string{"net.example", "70.100.in-addr.arpa"}) {
 		t.Fatalf("resolver %v for %v", resolver, zones)
 	}
 	moved := []netip.Prefix{netip.MustParsePrefix("100.70.0.53/32"), netip.MustParsePrefix("10.20.0.0/16")}

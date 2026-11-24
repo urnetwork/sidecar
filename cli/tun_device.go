@@ -77,6 +77,8 @@ import (
 	"fmt"
 	"net/netip"
 	"slices"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -601,6 +603,17 @@ func (self *urTun) wantLocal() {
 	}
 }
 
+// A block's reverse zone, the in-addr.arpa name of its significant whole octets, reversed: 80.100.in-addr.arpa for
+// 100.80.0.0/16.
+func urTunReverseZone(block netip.Prefix) string {
+	octets := block.Masked().Addr().As4()
+	labels := []string{}
+	for i := max(1, min(3, block.Bits()/8)) - 1; 0 <= i; i -= 1 {
+		labels = append(labels, strconv.Itoa(int(octets[i])))
+	}
+	return strings.Join(append(labels, "in-addr", "arpa"), ".")
+}
+
 // Reads the device until it closes, routing each batch through the bridge. A read that fails ends the tun.
 func (self *urTun) runRead() {
 	defer close(self.readDone)
@@ -838,6 +851,10 @@ func (self *urTun) sync() error {
 	}
 	if !resolver.IsValid() {
 		zones = nil
+	} else if 0 < len(zones) {
+		// the block's reverse zone answers on the device too, so no reverse query for an overlay address leaves it
+		// (§12.9.1; owner decision 778)
+		zones = append(zones, urTunReverseZone(status.Block))
 	}
 
 	var syncErr error
