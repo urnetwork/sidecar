@@ -47,8 +47,6 @@ const (
 	FakeApiExchangeSubjectTokenType = "urn:ur:params:oauth:token-type:client-jwt"
 	// RFC 8693 §3's type of what the exchange issues.
 	fakeApiExchangeIssuedTokenType = "urn:ietf:params:oauth:token-type:access_token"
-	// §7.8: at most 64 repo: scopes in one token, keeping the bearer under the lb's 8 KiB header line.
-	fakeApiExchangeMaxRepoScopeCount = 64
 	// An evs or gkm capability scope, repo:<id>:<role>.
 	fakeApiExchangeRepoScopePrefix = "repo:"
 	// route_authz's refusal of a strict_exp bearer off its allowlist, which POST /oauth/token is.
@@ -267,9 +265,9 @@ func fakeApiRepoScopeCount(scopes []string) int {
 	return count
 }
 
-// The scopes a form asks for, each once in the order first asked, and at most 64 repo: scopes: a 65th is refused, not
-// dropped.
-func fakeApiExchangeScopes(scope string) ([]string, error) {
+// The scopes a form asks for, each once in the order first asked, and at most maxRepoScopeCount repo: scopes, §7.8's
+// 64: a 65th is refused, not dropped.
+func fakeApiExchangeScopes(scope string, maxRepoScopeCount int) ([]string, error) {
 	scopes := []string{}
 	seen := map[string]bool{}
 	for _, s := range strings.Fields(scope) {
@@ -281,8 +279,8 @@ func fakeApiExchangeScopes(scope string) ([]string, error) {
 			scopes = append(scopes, s)
 		}
 	}
-	if fakeApiExchangeMaxRepoScopeCount < fakeApiRepoScopeCount(scopes) {
-		return nil, fmt.Errorf("%w: more than %d repo: scopes", ErrFakeApiInvalidScope, fakeApiExchangeMaxRepoScopeCount)
+	if maxRepoScopeCount < fakeApiRepoScopeCount(scopes) {
+		return nil, fmt.Errorf("%w: more than %d repo: scopes", ErrFakeApiInvalidScope, maxRepoScopeCount)
 	}
 	return scopes, nil
 }
@@ -300,7 +298,7 @@ func (self *FakeApi) exchangeToken(ctx context.Context, args *fakeApiExchangeArg
 	if err != nil {
 		return nil, err
 	}
-	scopes, err := fakeApiExchangeScopes(args.scope)
+	scopes, err := fakeApiExchangeScopes(args.scope, self.settings.ServiceTokenMaxRepoScopeCount)
 	if err != nil {
 		return nil, err
 	}
@@ -378,8 +376,8 @@ func (self *FakeApi) exchangeToken(ctx context.Context, args *fakeApiExchangeArg
 			return nil, errors.New("the scope source granted a scope the request did not ask for")
 		}
 	}
-	if fakeApiExchangeMaxRepoScopeCount < fakeApiRepoScopeCount(grant.Scopes) {
-		return nil, fmt.Errorf("the scope source granted more than %d repo: scopes", fakeApiExchangeMaxRepoScopeCount)
+	if self.settings.ServiceTokenMaxRepoScopeCount < fakeApiRepoScopeCount(grant.Scopes) {
+		return nil, fmt.Errorf("the scope source granted more than %d repo: scopes", self.settings.ServiceTokenMaxRepoScopeCount)
 	}
 
 	principal := &sidecar.Principal{

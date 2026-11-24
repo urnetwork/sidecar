@@ -34,7 +34,7 @@ type ComputeEngineSettings struct {
 	// The body a route reads at most, by route name, for the routes the default does not fit. A route the map does not
 	// name reads at most RequestBodyMaxByteCount.
 	RouteBodyMaxByteCounts map[string]int64
-	// The body any other route reads at most: 64 KiB, enough for every small JSON-free protobuf body §14.3 lists.
+	// The body any other route reads at most: 64 KiB, enough for every other protobuf body §14.3 lists.
 	RequestBodyMaxByteCount int64
 	// The rev/ reader's settings, which the host builds the RevocationChecker from: each answer cached at most 5 s
 	// (§7.8's check row). nil: sidecar.DefaultRevocationSettings.
