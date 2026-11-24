@@ -121,7 +121,7 @@ var failsOnRows = []failsOnRow{
 		},
 	},
 	{
-		row: "layering", item: "a client package importing a <svc>service, or the search signer, an engine by name (DESIGN-COMPUTE §14.2)",
+		row: "layering", item: "a client package importing a <svc>service",
 		rule: (*repository).clientEngineImportFindings,
 		plantedTests: []string{
 			"TestLayeringFailsOnTheRootImportingAnEngine", "TestLayeringFailsOnANewPackageImportingAnEngine",
