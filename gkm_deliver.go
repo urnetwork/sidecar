@@ -798,8 +798,8 @@ func (self *gkmGroupManager) answerLateInFlow(ctx context.Context) error {
 		}
 		if err != nil {
 			errs = append(errs, err)
-			if gkmUnreachable(ctx, err) {
-				// the rest wait for the next sync
+			if gkmUnreachable(ctx, err) || gkmTokenRefused(err) {
+				// the rest wait for the next sync: each would meet gkm's absence, or its token's refusal, again
 				break
 			}
 			continue

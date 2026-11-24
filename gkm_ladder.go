@@ -41,9 +41,13 @@ var errGkmGroupUnformed = fmt.Errorf("%w: gkm holds no group for the repo", ErrG
 // Whether an error says gkm could not be reached or would not answer now, a 429 or 503 among them, rather than
 // that it refused: KF7's case, in which cached keys serve reads and deposits and everything else waits. The lb's
 // 502 or 504 is such an error (QD-876): ErrGkmNoAnswer is no *GkmError and none of the errors below, so it reads
-// as a transport error does, gkm having answered nothing.
+// as a transport error does, gkm having answered nothing. So does a service token the call could not have for now,
+// which sent nothing to gkm: no answer from api, its 429 or 5xx, a keychain still locked or no api yet, once GkmApi
+// has asked again what it may. A token refused for good does not (gkmTokenRefused): gkm, or api's exchange for it,
+// answered, so the flow ends with that refusal, and a write never seals from the keychain on a token its device may
+// no longer present, a revoked device's among them.
 func gkmUnreachable(ctx context.Context, err error) bool {
-	if err == nil || ctx.Err() != nil {
+	if err == nil || ctx.Err() != nil || gkmTokenRefused(err) {
 		return false
 	}
 	if gkmError, refused := GkmErrorOf(err); refused {
@@ -60,6 +64,20 @@ func gkmUnreachable(ctx context.Context, err error) bool {
 		}
 	}
 	return true
+}
+
+// Whether an error holds a refusal of this device's token for gkm that no wait within a flow mends, so every call
+// the flow, or a pass over many, would make under it meets the same answer: a token the call could not have, which
+// sidecarServiceTokenRefusalOf calls final (the exchange's invalid_grant, its invalid_scope once GkmApi has ridden
+// out QD-1230's window, any other refusal of api's but a 429 or 5xx, a request SidecarApi would not send as given, a
+// 2xx that was not the exchange's, no enrolled client), or gkm's 401 to the token the call presented, one that does
+// not authenticate or whose subject rev/ voids (§10.6's guard). Nothing reached gkm in the first case; gkm refused
+// in the second. Neither is KF7's unreachability (gkmUnreachable).
+func gkmTokenRefused(err error) bool {
+	if errors.Is(err, ErrGkmTokenRefused) {
+		return true
+	}
+	return errors.Is(err, errGkmNoServiceToken) && sidecarServiceTokenRefusalOf(err).final
 }
 
 // The newest generation of the repo this device holds a key of, or ErrGkmKeyMissing.
