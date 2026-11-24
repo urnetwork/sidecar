@@ -477,8 +477,8 @@ Each migration group is named for the milestone whose code first reads it ungate
 group   tables, by owning section
 MG0     §7's P0: network_client_owner; altered account_api_key and auth_code; the competition's
         competition_v2_source_graph_valid and competition_v2_source_authorized, replaced to pass a source
-        graph of ten keys or of eleven with sidecar (owner decisions 267, 503), a cleanup migration later
-        requiring eleven
+        graph of ten keys or of twelve with sidecar and operator-core (owner decisions 267, 503, 779), a
+        cleanup migration later requiring twelve
 MG1     §5: sidecar_identity, sidecar_identity_binding; §7: network_auth_key, network_admin_event,
         admin_token_use (ur-cli's admin tokens), network_client_owner.client_public_key (nullable, §7.7);
         §18: network_client_lease; §20: network_sidecar_limit

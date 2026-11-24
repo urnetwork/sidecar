@@ -7,7 +7,7 @@
 | Path | What it is |
 |---|---|
 | `sections/01-CTX.md` … `sections/23-PHASE.md` | DESIGN.md §1-§23, one file per section. The build copies them verbatim, adding only links. |
-| `owner/DECISIONS.md` | The owner's record, entries 1-778. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
+| `owner/DECISIONS.md` | The owner's record, entries 1-784. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
 | `owner/APPLY.md` | The rules for applying the owner's decisions: precedence (§1), supersession, where two decisions disagree (§2), notation (§3), editing rules (§4), and the follow-up decisions 112-136 with the sections each binds (§6-§8). |
 | `CONVENTIONS.md` | The writing conventions every section follows: the owner directive (§0), the owner rules (§1), the section template (§2) and the X registry (§7), which DESIGN.md's X1-X20 table replaced. |
 | `OUTLINE.md` | The original outline: section codes, scope boundaries, and the word budgets that G0's density rule replaced on 2026-11-04. |
@@ -44,7 +44,7 @@ It needs only `python3`; it was built and checked with Python 3.13. The steps, a
 
 The data files are layered. Each `data_*N.py` loads its predecessor with `runpy` and patches it: `data_front10.py` loads `data_front9.py`, back to `data_front3.py`, and the registers, glossary and appendices go the same way. Change the top layer (the `*10` files), or add an `*11` layer that loads them. Comments in the scripts cite working files from the design sessions (the reconcilers' orders, `peer/`, `review/`, `snap/`), which were not imported; they are history.
 
-## Adding owner decision N (779 onward)
+## Adding owner decision N (785 onward)
 
 1. Add entry N to `owner/DECISIONS.md`: the question, the answer, its cost, the options not taken, and what raised it.
 2. In `asm/data_front10.py`, append `(N, "<what it settles>", "<one line>")` to `INDEX`, add `DATES[N]`, and raise the `assert` to `list(range(1, N + 1))`. Update `STATUS` and `DECISIONS_INTRO` where they name a range. `@@OD:k@@` writes a link to decision k.
@@ -1368,3 +1368,86 @@ The design-records track dr18-compute-fences (lane slot data, wave f46e) writes 
 - **Superseded options.** 320 grep hits, none on a changed line unread, none live.
 - **Text.** No bare placeholders or HTML tags; the one research-sheet id stands; 12,728 section references with the owner's fold, with the one unresolved as before. `v7/words.json` was regenerated, and `v7/text_checks.json` regenerated unchanged.
 - **DESIGN-DEFER.md.** 107 entries and 175 pointers, as the owner's fold left them.
+
+## Validation after the eleventh fold: the support skill, the answers since the eighth late fold, and the tenth fold's leftovers (2026-11-24)
+
+The design-records track dr19-support-fold (lane slot ops, wave f47c) folds DESIGN-COMPUTE.md's support skill (its §28, the owner's statements CO-45 and CO-46 of 2026-11-24, added in b3f4e99d and merged into sidecar as cca2a415), the owner's answers recorded since the eighth late fold that are not the compute planner's own, and what the tenth fold left to join its fences with its code. It lands in pieces, each a commit of its own, recorded below as each lands.
+
+### The tenth fold's leftovers join their fences
+
+- **§7.9's fences** take `ServiceSettings.auth_features` (11), `ProjectionSettings.auth_features` (3) and `SidecarCapability`'s `SIDECAR_CAPABILITY_ENCLAVE` = 8, bit 3, which config.proto and auth.proto declare (CACL-M11-02, sidecar 4d224194); the Authorization features paragraph names the bits as the code numbers them, `agent_repos` 1, `compute_policy` 2, `listeners` 4 and `enclaves` 8, and the Enclave admissions paragraph bit 3's value, neither saying it waits.
+- **§6.11's MessageType fence** takes `DNS_SD_WATCH` 0x1B02 and `DNS_SD_WATCH_RESULT` 0x1B03, which types.proto declares beside dns.proto's bodies (sidecar 93784039); §6.11's paragraph and §12.9.1's lead no longer say they wait, and Appendix D's table lists the pair (`data_appx10.py`). §12.9.1's text block stays the watch's form, dns.proto's fields being its fields one for one.
+- **The lists.** protocol/design_unfenced_test.go's `testFenceAdditions` loses its two field lines and `testFenceValueAdditions` its three, with the source constant only they read; each list stays, empty, for the next addition.
+
+`build.sh` on this folder reproduces DESIGN.md (SHA-256 `b1d63507b55375d64765e139b7ac29cc0895645d06962d7fdea76f27213ab6e2`) and DESIGN-DEFER.md (SHA-256 `749042be18fd33e2a87c087fe0824b4224b52f37cc5def707e0de03854ac07a3`, unchanged), and the validation shows:
+
+- **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item and no §2.8 row, so no guard line.
+- **Owner decisions.** All 778 rows are present and cited; APPLY.md's section pairs hold. One open owner question, Q-REPO-6.
+- **Superseded options.** 320 grep hits, none on a changed line unread, none live.
+- **Text.** No bare placeholders or HTML tags; the one research-sheet id stands; 12,730 section references, with the one unresolved as before. `v7/words.json` was regenerated, and `v7/text_checks.json` regenerated unchanged.
+- **DESIGN-DEFER.md.** 107 entries and 175 pointers, unchanged.
+
+### The build's compute answers: §2.8's compute-4, and DESIGN-COMPUTE-AMENDMENTS.md
+
+- **§2.8's compute-4** takes the owner's answer QD-1388 (cacl-m11-04-compute4-create-label-price): beside its create's approval id and use, it sees the label and price per hour kind 19's create action shows the broker, the catalog's own values for its shape and provider. The list moves to v69, `make metadata` copies the block, and testdata/approval_compute/metadata_rows.yml's `EnclaveFields.label` and `EnclaveFields.price_per_hour` quote the row's words where their pending lines stood, which would have failed at M14's exit.
+- **DESIGN-COMPUTE-AMENDMENTS.md** files QD-1388 to QD-1392, the compute answers the build raised (CACL-M11-01, CACL-M11-04, CACL-M11-05, CACL-M12-01) and the owner answered on 2026-11-24, under its §14 and §16 as dr17-compute-answers filed the compute plan's, marked "the build's" in the index as QD-1386 is. What they change in this design it already carries: QD-1388's words here, and QD-1389's `buy`, QD-1390's field 38 on kinds 19 and 21 alone and QD-1391's 4 `direct` at version 5 in §8.4 and §16.8 since the tenth fold; QD-1392, a harness config version's writer judged at the newest verified state, amends DESIGN-COMPUTE.md alone. None takes a number, as QD-1386 took none.
+
+`build.sh` on this folder reproduces DESIGN.md (SHA-256 `cab9a24a801d9a7f3b17cad4ada9bdb13b3c881406219cffc4ac8c4e07db99a7`) and DESIGN-DEFER.md (SHA-256 `749042be18fd33e2a87c087fe0824b4224b52f37cc5def707e0de03854ac07a3`, unchanged), and the validation shows:
+
+- **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item and no new §2.8 row, so no guard line.
+- **Owner decisions.** All 778 rows are present and cited; APPLY.md's section pairs hold. One open owner question, Q-REPO-6.
+- **Superseded options.** 320 grep hits, none on a changed line unread, none live.
+- **Text.** No bare placeholders or HTML tags; the one research-sheet id stands; 12,729 section references, with the one unresolved as before. `v7/words.json` was regenerated, and `v7/text_checks.json` regenerated unchanged.
+- **The metadata list** is v69, compute-4 with QD-1388's words; check's `metadataListAdditions` stays empty.
+
+### Owner decisions 779 to 782: the build's answers since the eighth late fold
+
+The answers to the questions the build raised after the eighth late fold numbered owner decision 778, QD-1393 to QD-1397, which the owner answered on 2026-11-24, one at a time, accepting each recommendation under the owner's standing acceptance of recommended options, take numbers here, before the support skill's statements, as the eighth late fold numbered its answers before DESIGN-COMPUTE.md's; answers of one topic share an entry numbered by its first ledger id:
+
+| Ledger id | Owner decision | What it settles |
+|---|---|---|
+| QD-1393 | 779 | The competition evaluator's `sidecar/1` takes operator-core as its twelfth repository before it is qualified, on golang:1.27.4, no submission changing operator-core. |
+| QD-1394 | 780 | evs bounds the store reads one push's step 4, and one read's round 1, has in flight (`EvsSettings.EntryReadConcurrency`, 64), and the file clusters the connections they open to a host (`FileClusterSettings.MaxConnsPerHost`). |
+| QD-1395 | 781 | A T3 Net's setup retries a transport failure of MakeBucket and the first admin read, and its stores reread admin info only once its clock has moved past a threshold, 30 s by default. |
+| QD-1396, QD-1397 | 782 | A coalesced hint is superseded only by a later repeat in its batch, and goes as its `seq` alone; a topic's distinct hints keep their bytes up to `TopicHintBodyCount` (64). |
+
+- **The evaluator's twelve repositories (779).** §4.8's closed source graphs and §19.7's MG0, as sim-latency-operator-core built it (server a4dbb4b02, 97b41b80b, 4501dee0f).
+- **evs's fan-out (780).** §11.8's step 4, §11.9's read request and a Fan-out paragraph in §11.15, stated as decided ahead of its code, which fix track evs-read-fanout-bounds builds in evsservice and server's file clusters.
+- **T3's setup and reread (781).** §22.4's real row, stated as decided ahead of its landing: fix track t3-setup-retries builds it in server's sidecart3. It amends owner decision 646, whose entry's reread now waits for a move past the threshold.
+- **Coalesced hints (782).** §6.8's Hints sentence, `PushHint.hint`'s fence comment and §6.6's `SidecarPublisherSettings.TopicHintBodyCount`, as push-hint-coalescing built the narrowed rule and its bound (sidecar 4dda8fed) and gkm-hint-intake-bodyless read a group topic's bodyless notice (sidecar 113f6d76); the superseded hint's seq-alone shape is stated as decided ahead of its code, which fix track push-superseded-seq-only builds in pushservice's publisher, with protocol/push.proto's own comment on `PushHint.hint`, which still reads "dropped when coalesced". No field, number or §2.8 row changes, so no fence moves.
+- **Index rows.** Owner decisions 267 and 646 note the decisions that extend or amend them.
+- **Asked of the compute document.** QD-1388 to QD-1392 among the answers recorded since are the compute planner's tracks' and take no number (above).
+
+`build.sh` on this folder reproduces DESIGN.md (SHA-256 `c67b90dfc42a2cdedba77da54b91dc2c209af4714c56c803b8a158121fb25298`) and DESIGN-DEFER.md (SHA-256 `749042be18fd33e2a87c087fe0824b4224b52f37cc5def707e0de03854ac07a3`, unchanged), and the validation shows:
+
+- **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item and no §2.8 row, so no guard line.
+- **Owner decisions.** All 782 rows are present and cited; APPLY.md's section pairs hold. `MAXD`, the two range checks and `LATE_DATES` take 782, each of 779 to 782 dated 2026-11-24. One open owner question, Q-REPO-6.
+- **Superseded options.** 320 grep hits, none on a changed line unread, none live.
+- **Text.** No bare placeholders or HTML tags; the one research-sheet id stands; 12,734 section references, with the one unresolved as before. `v7/words.json` was regenerated, and `v7/text_checks.json` regenerated unchanged.
+- **DESIGN-DEFER.md.** 107 entries and 175 pointers, unchanged: none of the four defers anything.
+
+### Owner decisions 783 and 784: the support skill
+
+On 2026-11-24 the owner added the support skill to DESIGN-COMPUTE.md, its §28, with two statements: CO-45, that the built-in tools and skills include the support skill, the app's support conversation, in which agents submit feedback with logs, are notified of responses and read them, a continuous chat with the operator; and CO-46, the owner's answers to its eight owner questions, one at a time, among them "The support conversation is meant to be fully read by the platform" (b3f4e99d, merged into sidecar as cca2a415b). The fold enters them as owner decisions 783 and 784, after the build's answers, and carries what §28, its new and changed Appendix D rows and its Appendix H moves change in this design:
+
+- **The owner's record.** Entries 783 (CO-45) and 784 (CO-46), each with its statement verbatim, the questions named by topic and never by DESIGN-COMPUTE.md's ids. Entry 784 states the exception as the owner's one approved exception to the directive's rule that no server component sees plaintext content, beside the report listener's bounded intake, and the support conversation's alone, never a rule for any other service. Entries 142 and 772, which Appendix H's classifier row moves, take a bullet naming 783, and their index rows note it.
+- **The exception, stated once in each place that states the rule** (§2.8's statement, R-TRUST-2, I-2, §2.9's IC-24, Appendix G's lead): what a person or their agents choose to send to URnetwork's support, and support's replies, read in full by its feedback service and triage workspace and by the subprocessors `support:urnetwork` names, in Appendix D's words. §2.8 takes a Support bullet beside the compute one, `support:urnetwork` asking before the first message and the device keeping secrets, private data and log content out, and its "Feedback is out of scope" sentence names the exception; Appendix G's lead (`assemble10.py`, `data_appx10.py`) says two bounded exceptions. R-ARCH-3's storage, TLS edge and mail keep their wording, since the conversation reaches none of them.
+- **The metadata list** moves to v70: support-1 to support-3 (DESIGN-COMPUTE.md §28.15), what the feedback service holds of the sidecar's support client, under FB's G4, each with its `planned: M13` line in testdata/metadata/fields.yml in the same commit, as owner decision 252 has a new row's guard land.
+- **Scope** (§1.4, §1.7, D-CTX-4): the app and terminal consumers take the support conversation and `ur support`, the compute paragraph maps 783 and 784, and the non-goal and D-CTX-4 narrow to FB's own service and triage workspace, the sidecar's agent surface onto them in scope, with D-CTX-4's register summary (`data_registers10.py`).
+- **Approvals** (§2.9's I-9, §5.4, §16.8, Q-MCP-6): kind 27 `support_send` joins the classifier's tainted cases; the record primitives paragraph states kind 27's fields (3, 48, 70 and 80, 81-89 reserved) and §27.7's `private_data` and `attachment`, appended after `inputs_unknown` so the numbers before them stand; §5.4's comment, §16.8's `CanonicalAction` and `SidecarActionKind` fences and the what-freezes values row name kind 27 and field 80 in comments and prose; Q-MCP-6 takes an "Amended by owner 2026-11-24" clause and `v10/qstatus_final.json` its cell.
+- **Surfaces** (§4.5, §6.8, §7.9, §16.5 to §16.7, §18.5): the `support_` root family with the support log's registry and `skill/support/SKILL.md`; the `support` push topic, stated after §6.8's registry, which it joins with its code; the compute block's `support`; the MCP tools and resource; the `support` component, whose Lookup reads the `client_ref` the stored action carries, as DESIGN-COMPUTE-AMENDMENTS.md's QD-1398 has it; the replies' taint trigger; the harness config's `support` key and its Confirm method `support.settings`; and `Support()`.
+- **Elsewhere** (§21.1, §22.1, §23.4): the support conversation's legal process, its tests and its phasing, the support log at M11, local only, and the skill at M13b, reaching people once G-SUP-service passes.
+- **RECORD.md.** Section 21 takes kind 30 `support_message`, with field 17 `disclosure_version` and a team projection that holds no text, and section 6.2's paragraph kind 27; sections 6.2, 6.3, 6.4 and 8 keep their tables, which record_kind_test.go holds to record.proto, where kind 30 is still an unassigned number.
+- **DESIGN-COMPUTE-AMENDMENTS.md** files QD-1398, the support skill's kind-27 `client_ref` (support-skill), recorded while the fold ran, under a new §28.
+- **Fences hold the wire.** No fence changes but by a comment: kind 27, field 80, kind 30 and the `support` topic join their fences, tables and registry with the support-skill track's code. DESIGN-COMPUTE.md's Appendix J amends FEEDBACK-SYSTEM.md, not this design, and Appendix C takes no new term, DESIGN-COMPUTE.md's own glossary carrying the support terms.
+
+`build.sh` on this folder reproduces DESIGN.md (SHA-256 `d093eec4be2a6d959473bce350808d4fac793a29b639d7abb51282f86e45320e`) and DESIGN-DEFER.md (SHA-256 `749042be18fd33e2a87c087fe0824b4224b52f37cc5def707e0de03854ac07a3`, unchanged), and the validation shows:
+
+- **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item, and DESIGN-COMPUTE.md's own ids, R-SUP-, D-SUP- and Q-SUP-, in no section or entry. §2.8 takes three rows, whose guard lines testdata/metadata/fields.yml takes in the same commit.
+- **Owner decisions.** All 784 rows are present and cited; APPLY.md's section pairs hold. `MAXD`, the two range checks and `LATE_DATES` take 784, 783 and 784 dated 2026-11-24. One open owner question, Q-REPO-6.
+- **Superseded options.** 320 grep hits, none on a changed line unread, none live.
+- **Text.** No bare placeholders or HTML tags; the one research-sheet id stands; 12,784 section references, with the one unresolved as before, those on lines naming DESIGN-COMPUTE.md counted as its. `v7/words.json` was regenerated, and `v7/text_checks.json` regenerated unchanged.
+- **DESIGN-DEFER.md.** 107 entries and 175 pointers, unchanged: DESIGN-COMPUTE.md defers none of this design's.
+- **The metadata list** is v70, 116 rows; check's `metadataListAdditions` stays empty.
+
+Outside this folder the fold touched DESIGN.md and DESIGN-DEFER.md (rebuilt), RECORD.md (section 21's kind 30 and section 6.2's paragraph), DESIGN-AMENDMENTS.md's lead, DESIGN-COMPUTE-AMENDMENTS.md (QD-1388 to QD-1392 and QD-1398), metadata_list.yml (v69 and v70), testdata/metadata/fields.yml (the support rows' lines), testdata/approval_compute/metadata_rows.yml (QD-1388's two lines) and protocol/design_unfenced_test.go (the tenth fold's five lines). Left for the tracks that own them: the support skill's wire, kind 27, `CanonicalAction` field 80, record kind 30 and the `support` push topic, which join their fences, RECORD.md's tables and §6.8's registry with the support-skill track's code; push.proto's comment on `PushHint.hint` and the publisher's seq-alone superseded hint (push-superseded-seq-only); evs's and the file clusters' bounds (evs-read-fanout-bounds); T3's setup retries and reread threshold (t3-setup-retries, built on its track); and the owner's qualification of the twelve-repository `sidecar/1` release with the go1.27.4 re-qualification.

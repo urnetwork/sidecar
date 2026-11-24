@@ -13,7 +13,11 @@
 // session with the listener, and the listener's writes of what it holds to the id. Since QD-1232 (owner decision 730,
 // connect 0c25db80 and 7cc26e9a) the listener takes the restarted client's first Packs while the worker of its old
 // sequence exits, and the restarted client says it has delivered nothing of the listener's sequence, so the listener
-// writes what it lacks at once, rather than at resends backed off from its rtt toward MaxResendInterval (8 s). So the
+// writes what it lacks at once, rather than at resends backed off from its rtt toward MaxResendInterval (8 s). Since
+// connect 634825b4, 1c3ee536 and c9105b02 the encryption layer on that path waits for no resend either: the listener
+// opens the restarted client's first sealed Pack as soon as it holds the client's identity proof, a new session seals
+// nothing before the peer can open it, and what the listener sealed under the old session is sealed again under the
+// new one as soon as the restarted client seals under it. So the
 // edge's dispatcher reads the Net's clock, as the listener's does, and nothing here moves it: no deadline of a
 // dispatcher's, its DefaultCallTimeout, a read's or its keepalive's, ends a wait that connect has yet to answer, as the
 // edge's 15 s DefaultCallTimeout did in listen-expires' landcheck (2026-11-23). Each wait ends on its event, the open's
@@ -41,8 +45,12 @@ type edgeRestartNetSettings struct {
 	// visitor stream a production edge would have sent elsewhere, the failure QD-1232 fixed. Connect's restart path took
 	// 2.4, 4.8, 10.6 or 18.6 s before that fix, as one or another of the listener's resends reached the restarted client,
 	// in 190 runs at load 37 to 84. Since, over 18,360 runs at load 12 to 37 and 12,800 beside 28 CPU burners, it took
-	// 22 ms at the median, under 0.1 s at the 99th percentile and never more than 0.68 s, one resend timer, nor did it in
-	// 320 runs under the race detector (2026-11-24). Each pool keeps the edge's own DefaultCallTimeout, 15 s, past this
+	// 22 ms at the median and under 0.1 s at the 99th percentile, but one resend timer, up to 0.68 s, in about one run in
+	// a hundred, from races in connect's encryption layer. Since connect c9105b02 it took 15 ms at the median and 0.11 s
+	// at the 99th percentile, and past 0.5 s in none of 6,400 runs at load 37 to 40, one of 6,399 beside 28 CPU burners
+	// and none of 320 under the race detector, where the build before took it in 45, 86 and, earlier, 6 of 320
+	// (2026-11-24). In about one run in 6,400, with those fixes and without, the restarted open had no answer at the
+	// edge's DefaultCallTimeout: open, not yet traced. Each pool keeps the edge's own DefaultCallTimeout, 15 s, past this
 	// bound: an open hands connect what its own deadline leaves, which on a clock nothing moves is all of it, and connect
 	// holds the open's send that long, in real time, for the restarted client's session, so only this bound ends a
 	// broken run.
