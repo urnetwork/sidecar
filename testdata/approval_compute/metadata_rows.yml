@@ -5,7 +5,8 @@
 # version-5 action whole (DESIGN-COMPUTE §16.3; CheckCanonicalActionForServer). So kind 19's fields 38, 39 and 42 and
 # kind 21's 38 and 43 are here; the rest of version 5's fields, and ApprovalDecision's selected, auto and auto_verdict,
 # which no server gate takes, are testdata/metadata/fields.yml's unset lines. A field the row does not name yet sits
-# under `pending` with the question that asks for its words.
+# under `pending` with the question that asks for its words; the label and price per hour took compute-4's words
+# from the owner's answer QD-1388 in metadata_list.yml v69.
 
 # kind 19's create: its mode at create and its enclave (field 38, sealed, keeps fields.yml's line)
 CanonicalAction.egress_mode: {number: 39, type: uint32, row: compute-4, sees: "egress mode (already api-7's)"}
@@ -13,8 +14,8 @@ CanonicalAction.enclave: {number: 42, type: EnclaveFields, row: compute-4, sees:
 EnclaveFields.enclave_id: {number: 1, type: bytes, row: compute-4, sees: "per enclave: id"}
 EnclaveFields.shape: {number: 3, type: string, row: compute-4, sees: "shape"}
 EnclaveFields.provider: {number: 4, type: string, row: compute-4, sees: "provider"}
-EnclaveFields.label: {number: 5, type: string, row: compute-4, until: M14, pending: "QD-1388 (cacl-m11-04-compute4-create-label-price): compute-4 gains the label and price per hour its create's action shows, the catalog's own values, when design-records folds the answer"}
-EnclaveFields.price_per_hour: {number: 6, type: uint64, row: compute-4, until: M14, pending: "QD-1388 (cacl-m11-04-compute4-create-label-price): compute-4 gains the label and price per hour its create's action shows, the catalog's own values, when design-records folds the answer"}
+EnclaveFields.label: {number: 5, type: string, row: compute-4, sees: "the label and price per hour its create's action shows"}
+EnclaveFields.price_per_hour: {number: 6, type: uint64, row: compute-4, sees: "price per hour its create's action shows"}
 EnclaveFields.incarnation: {number: 7, type: uint64, row: compute-4, sees: "incarnations"}
 
 # kind 21's raise: the budget it passes (field 38, sealed, keeps fields.yml's line)
