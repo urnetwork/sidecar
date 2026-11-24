@@ -717,6 +717,11 @@ func (self *gkmGroupManager) uploadCommitInFlow(ctx context.Context, state GkmAu
 			return 0, err
 		case ctx.Err() != nil:
 			return 0, err
+		case errors.Is(err, errGkmNoServiceToken):
+			// no token could be had, after the call rode out api's gate lag and retried what may change (QD-1230):
+			// nothing reached gkm, so the outcome is known, and the same bytes would meet the same refusal; an owed
+			// Welcome the commit kept is dropped by the next writeOwedWelcomes, which finds no such epoch standing
+			return 0, err
 		default:
 			// unknown: what stands at epoch/<n> says what happened
 			standing, readErr := client.args.Api.Epochs(ctx, self.repoId, groupId, epoch-1)

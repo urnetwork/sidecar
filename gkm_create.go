@@ -383,6 +383,10 @@ func (self *gkmGroupManager) postCreate(ctx context.Context, draft *gkmCreateDra
 			return false, err
 		case ctx.Err() != nil:
 			return false, err
+		case errors.Is(err, errGkmNoServiceToken):
+			// no token could be had, after the call rode out api's gate lag and retried what may change (QD-1230):
+			// nothing reached gkm, and the same bytes would meet the same refusal
+			return false, err
 		}
 		// unknown: every write of the request is an If-None-Match create that equal bytes resume, so it goes again
 	}

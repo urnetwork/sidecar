@@ -16,7 +16,11 @@
 //	              it covers every shrink and expiry this state shows, else the rotation starts over at g*+2; one
 //	              that fails is held as poisoned, alarmed and never sealed to, and the rotation starts over at g*+2
 //	              with cause REMOVE
-//	         403  gkm's state is ahead of this one: ErrGkmWait, to try again once the log advances
+//	         403  gkm's state is ahead of this one: ErrGkmWait, to try again once the log advances. gkm's client asks
+//	              again under the repo's rw scope alone first where the exchange left it out of the batch's token,
+//	              riding out api's gate lag on a new writer's grant for ExchangeScopeWaitTimeout (QD-1230)
+//	         no token  the exchange's refusal, once the call has ridden it out: nothing reached gkm, so the claim ends
+//	              with it
 //	         unknown  GET gen/<g*+1>: this device's commitment is 201, another's is 412, none repeats the same bytes
 //
 // MLS commits never raise the generation: a Remove is a commit plus this separate claim (D-KEYS-15). A read_only
@@ -401,6 +405,10 @@ func (self *gkmGroupManager) claim(ctx context.Context, groupId Id, draft *gkmRo
 		case refused:
 			return nil, nil, err
 		case ctx.Err() != nil:
+			return nil, nil, err
+		case errors.Is(err, errGkmNoServiceToken):
+			// no token could be had, after the call rode out api's gate lag and retried what may change (QD-1230):
+			// nothing reached gkm, so the outcome is known, and the same bytes would meet the same refusal
 			return nil, nil, err
 		}
 		// unknown: what stands at gen/<g+1> says what happened

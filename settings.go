@@ -641,6 +641,19 @@ type GkmSettings struct {
 	ReadRetryMaxWait time.Duration
 	// The wait before a retry when gkm names none: 1 s.
 	ReadRetryWait time.Duration
+	// How long a call rides out the token exchange's invalid_scope to the call's own repo scope at the role it needs,
+	// which the client's verified state gives it, from the call's first such answer, before it ends with it: 5 s,
+	// §8.9's target for an entry to reach server gates, which a grant this device already acts on may not have reached
+	// at api (QD-1230, as QD-1226 has evs's client ride it out). The call asks again ReadRetryWait apart, its last try
+	// at the window's end, so a scope never granted, or taken away, costs api an exchange and gkm a call about once a
+	// second for this long. Non-positive rides out nothing: the first such answer ends the call.
+	ExchangeScopeWaitTimeout time.Duration
+	// How many times one call asks the token exchange again after a failure that may change, as
+	// sidecarServiceTokenRefusalOf reads §7.8's answers: no answer from api, its 429 or 5xx, a keychain still locked,
+	// no api yet. Each waits the exchange's retry_after, else ReadRetryWait, and one asking past ReadRetryMaxWait ends
+	// the call: 3. Nothing reached gkm, so a write goes again as a read does. A refusal for good, as invalid_grant or
+	// no enrolled client, ends the call at once. Non-positive asks once.
+	ExchangeRetryCount int
 	// The most one answer may hold: 16 MiB, past an epochs page carrying a 1,000-leaf group's sealed GroupInfo of
 	// about 2.8 MB (§10.6's sizes).
 	ReplyMaxByteCount int64
@@ -670,6 +683,9 @@ type GkmSettings struct {
 	// How often a sidecar reads its own ReaderKey back from gkm to compare it with those it signed: 24 h
 	// (g0-recheck-0-readerkey-forgery #2).
 	ReaderKeySelfCheckInterval time.Duration
+	// The most bytes the Signed ReaderKey in one of upkeep's keychain records may take: 4 KiB, past its key's 1,216 B,
+	// its fields and a signature. A record holding more is malformed.
+	ReaderKeySignedMaxByteCount int
 	// A ReaderKey upload that failed is tried again this long after, between passes, so a device whose upload went
 	// before its state gave it a scope to present, or while the token exchange or gkm was still loading its network's
 	// state, publishes its key within seconds and not at the next pass an hour on: no holder seals a delivery to a
@@ -812,6 +828,8 @@ func DefaultGkmSettings() *GkmSettings {
 		ReadRetryCount:               3,
 		ReadRetryMaxWait:             30 * time.Second,
 		ReadRetryWait:                1 * time.Second,
+		ExchangeScopeWaitTimeout:     5 * time.Second,
+		ExchangeRetryCount:           3,
 		ReplyMaxByteCount:            16 * 1024 * 1024,
 		ResyncInterval:               1 * time.Hour,
 		HintPendingCount:             4096,
@@ -821,6 +839,7 @@ func DefaultGkmSettings() *GkmSettings {
 		ReaderKeyLifetime:            7 * 24 * time.Hour,
 		ReaderKeyKeepAfterNotAfter:   30 * 24 * time.Hour,
 		ReaderKeySelfCheckInterval:   24 * time.Hour,
+		ReaderKeySignedMaxByteCount:  4 * 1024,
 		ReaderKeyRetryWait:           1 * time.Second,
 		ReaderKeyRetryFactor:         2,
 		ReaderKeyRetryMaxWait:        1 * time.Minute,

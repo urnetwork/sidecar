@@ -839,6 +839,10 @@ func (self *gkmGroupManager) postReform(ctx context.Context, api GkmReformApi, r
 			return gkmReformPosted, 0, err
 		case ctx.Err() != nil:
 			return gkmReformPosted, 0, err
+		case errors.Is(err, errGkmNoServiceToken):
+			// no token could be had, after the call rode out api's gate lag and retried what may change (QD-1230):
+			// nothing reached gkm, and the same bytes would meet the same refusal
+			return gkmReformPosted, 0, err
 		}
 		// unknown: every write of the request is an If-None-Match create that equal bytes resume, so it goes again
 	}
@@ -945,6 +949,10 @@ func (self *gkmGroupManager) uploadLadder(ctx context.Context, api GkmReformApi,
 			case refused:
 				return err
 			case ctx.Err() != nil:
+				return err
+			case errors.Is(err, errGkmNoServiceToken):
+				// no token could be had, after the call rode out api's gate lag and retried what may change (QD-1230):
+				// nothing reached gkm, and the same bytes would meet the same refusal
 				return err
 			}
 		}
