@@ -30,7 +30,8 @@
 //	          and every sidecar but read_only ones in the directory, so HonorScope's gkm audience decides; HEAD
 //	          welcome/<n> too, a read under the same right (QD-747)
 //	admin     POST /gkm/groups, POST repos/<id>/forms, POST ladder: admin
-//	deposit   GET repos/<id>/drop-key: deposit, r, rw or admin
+//	deposit   GET repos/<id>/drop-key: deposit, r, rw or admin; and api's own deposit token, which names no sidecar
+//	          or member and which §14.8's report intake reads under, on a repo that takes deposits (QD-1229)
 //	recovery  GET recovery/<member_id>/wraps: a device of that member, or its unadmitted client under
 //	          recovery:<member_id>; POST (a rebind's re-wrap) and DELETE: that member's own device, not read_only
 

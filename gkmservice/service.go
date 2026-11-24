@@ -11,10 +11,12 @@
 //     Retry-After, and the engine stays ready;
 //  3. ids in the path: 32 lowercase hex characters, else 400;
 //  4. the token's reach (auth.go): a sidecar's token holding r, rw or admin on some repo, or for drop-key any repo
-//     scope, or for a member's recovery read its recovery:<member_id>: 403;
+//     scope, or for drop-key api's own deposit token, which names no sidecar or member and holds deposit scopes
+//     alone (§7.8, §10.14; QD-1229), or for a member's recovery read its recovery:<member_id>: 403;
 //  5. the sidecar's standing in gkm's newest verified state: admitted and not revoked, and for a write not parked
 //     or suspended, and the row's own needs, a member device for a leaf's commit, not read_only for wraps, claims,
-//     Welcomes and GroupInfo (D-KEYS-26): 403, or 503 while the state is not loaded;
+//     Welcomes and GroupInfo (D-KEYS-26): 403, or 503 while the state is not loaded; a recovery scope's client and
+//     api's deposit token hold no standing, and skip it;
 //  6. a recovery row's member: the token's sidecar a device of the path's member, unless its recovery scope names
 //     that member: 403;
 //  7. the route's repo, from the path, from the group (store.go), or from the body by the handler: the strongest
@@ -400,7 +402,7 @@ type GkmRequest struct {
 	Ctx context.Context
 	// The verified token.
 	Principal *sidecar.Principal
-	// Its ur_sidecar_id; zero for a recovery read by an unadmitted client.
+	// Its ur_sidecar_id; zero for a recovery read by an unadmitted client, and for api's deposit token's drop-key read.
 	SidecarId sidecar.Id
 	// What the newest verified state holds of that sidecar, once the guard read it.
 	Sidecar *GkmSidecarFacts
@@ -419,7 +421,9 @@ type GkmRequest struct {
 	pathGroupId      sidecar.Id
 	pathMemberId     sidecar.Id
 	viaRecoveryScope bool
-	authorized       bool
+	// api's own deposit token at the drop-key route (admitToken), which holds no standing
+	viaApiDeposit bool
+	authorized    bool
 
 	started          time.Time
 	answered         bool
@@ -468,6 +472,12 @@ func (self *GkmRequest) parsePath() bool {
 // Step 4: the token's reach. A token whose only repo scopes are deposit reaches drop-key alone, a recovery scope its
 // member's recovery read alone, and every other route needs a sidecar's token holding r, rw or admin on some repo
 // (QD-177).
+//
+// A token that names no sidecar reaches drop-key only as api's own deposit token, the one §14.8's report intake reads
+// a network mail repo's drop key under (§7.8, §10.14; QD-1229): it names no member either, and holds repo deposit
+// scopes and nothing else, no r, rw, admin or recovery scope. Only the issuer mints one, which no exchange path does;
+// a token naming a member and no sidecar is an unadmitted client's, whose whole reach is its recovery read (§7.8).
+// What it reaches there is the state's to say (AuthorizeRepo, AclGkmAuthState.HonorScope).
 func (self *GkmRequest) admitToken() bool {
 	switch self.route.Scope {
 	case gkmScopeRecoveryRead:
@@ -477,6 +487,16 @@ func (self *GkmRequest) admitToken() bool {
 		}
 	case gkmScopeDeposit:
 		if self.Principal.SidecarId != nil && self.scopes.holdsRepoScope() {
+			return true
+		}
+		depositAlone := self.scopes.holdsRepoScope() && len(self.scopes.recoveryMemberIds) == 0
+		for _, rights := range self.scopes.repoIdRights {
+			if rights != sidecar.AclEvsDeposit {
+				depositAlone = false
+			}
+		}
+		if self.Principal.SidecarId == nil && self.Principal.MemberId == nil && depositAlone {
+			self.viaApiDeposit = true
 			return true
 		}
 		self.Forbidden()
@@ -491,8 +511,9 @@ func (self *GkmRequest) admitToken() bool {
 
 // Step 5: the sidecar's standing, and what its row asks of it (§10.6's scopes).
 func (self *GkmRequest) checkStanding() bool {
-	if self.viaRecoveryScope {
-		// an unadmitted client holds no standing: its scope is its whole reach
+	if self.viaRecoveryScope || self.viaApiDeposit {
+		// an unadmitted client holds no standing, and api's deposit token names no sidecar: the scope is the whole
+		// reach, a deposit token's honored by the state at its repo alone
 		return true
 	}
 	facts, answer := self.engine.deps.AuthState.Sidecar(self.Principal, self.SidecarId)
