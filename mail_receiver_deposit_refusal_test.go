@@ -235,7 +235,7 @@ func TestMailReceiverRefusesARepoThatTakesNoMailBeforeGkmIsAsked(t *testing.T) {
 // try, that recipient alone: a recipient whose group repo is an inbox in the same transaction is taken, its message
 // lands there with a trailer naming it alone, and the refused recipient's answer stays the same in a later
 // transaction, nothing of it reaching a repo. The old rule took the recipient at RCPT, and its deposit, its deposit
-// grant honored, waited on gkm for a drop key that never comes and answered 451 4.3.0 on every retry.
+// grant honored, failed at gkm, which serves such a repo no drop key, and answered 451 4.3.0 on every retry.
 func TestMailSessionAnswers550AtRcptForARepoThatTakesNoMail(t *testing.T) {
 	net := newAclExchangeNet(t)
 	unmarkedId, inboxId := mailReceiverRefusalTestGroups(net)

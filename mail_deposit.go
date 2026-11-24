@@ -31,14 +31,14 @@
 //	           ingest takes as no mail. A repo whose client holds no ACL state to judge by is left to the exchange and
 //	           evs, which judge every deposit whatever this says
 //	never      a repo that state holds as taking no mail, by its kind or its RepoCreate's marker, takes no deposit in
-//	           any later state either, since only RepoCreate sets them. gkm serves it no drop key, so a deposit there
-//	           waited out ErrGkmWait and answered 451 4.3.0 on every retry, and the sender retried for days. The
+//	           any later state either, since only RepoCreate sets them. gkm serves it no drop key (D-KEYS-17), so a
+//	           deposit there failed at gkm and answered 451 4.3.0 on every retry, and the sender retried for days. The
 //	           session answers such a recipient 550 5.1.1 at RCPT instead (takesNoMail), §15.5's permanent answer for
 //	           a recipient no mail reaches, so the sender gives up on that recipient alone at its first try, before
-//	           gkm is asked. Deposit refuses a target there at once as well, ErrMailDepositRefused, which a session
-//	           answers 451 4.3.0 at DATA, like any failure there: only a state that came to hold the repo after RCPT
-//	           took the recipient reaches it, and the sender's retry is then answered 550 5.1.1 at RCPT for that
-//	           recipient alone, rather than every recipient of the message bounced
+//	           gkm is asked. A session meets such a repo at DATA only where its state came to hold the repo after RCPT
+//	           took the recipient, and answers 451 4.3.0 there, as for any refusal at DATA, so the sender's retry is
+//	           answered 550 5.1.1 at RCPT for that recipient alone rather than every recipient of the message bounced.
+//	           Deposit refuses such a target at once too, as ErrMailDepositRefused
 //	bound      the deposits take at most DepositTimeout, past which every one still open is cancelled and the message
 //	           answers 451 4.3.0 inside the sender's wait
 //
