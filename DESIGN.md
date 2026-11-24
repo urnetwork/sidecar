@@ -1303,7 +1303,7 @@ Feedback (sidecar/FEEDBACK-SYSTEM.md:11) is out of scope.
 **The list** (the only TTL table; I-18):
 
 ```yaml
-# metadata_list.yml v68; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
+# metadata_list.yml v69; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
 # §7.9, §10, §11). v6 adds to v5 (2026-11-04) connect-1's ShareCert, api-6's push-token slot sentinels, api-7's
 # {acl_}q, cascade signers, recovery bindings, restored bindings' recovery windows and orphaned networks, api-13's
 # per-eraser closure counters, evs-1's secret kind and orphans, evs-3's creation block, fence time, deleted flag
@@ -1558,6 +1558,10 @@ Feedback (sidecar/FEEDBACK-SYSTEM.md:11) is out of scope.
 # compute-3, the provider tables under compute-7, the terms kept for the network's life, and the budget counters,
 # capacities and search counts kept as long as the period they count. compute-5 also lists what the broker carries to
 # an enclave's VM, never stored (compute-plan-enc-readings, QD-1243).
+# v69, updated 2026-11-24 for the owner's answer QD-1388 (cacl-m11-04-compute4-create-label-price), adds to
+# compute-4 the label and price per hour kind 19's create action shows the broker, the catalog's own values for
+# its shape and provider, which the broker holds already and compares with what the person approved; no column,
+# Redis family or proto field changes.
 # Each row gives service, store (tables, Redis families, object families, logs or memory),
 # sees, why, ttl, and owner: the section that designs the value and states its ttl. Withdrawn rows keep
 # their ids so citations resolve. Public: this list ships in DESIGN.md on the public sidecar repo (owner
@@ -2298,7 +2302,7 @@ compute-3:
 compute-4:
   service: compute (the orchestrator) and taskworker (compute_enclave_meter, compute_suspend)
   store: compute_enclave and compute_enclave_event (MG-C3); Redis {cmpe_<enclave_id>} (the orchestrator's lease and the nonces in flight)
-  sees: "per enclave: id, network, sponsor sidecar, shape, provider, the provider's VM id, states and times, incarnations, the bootstrap hash, egress mode (already api-7's), its create's approval id and use (DESIGN-COMPUTE §16.3); whether it is the network's indexer, for its reserve and grace (§9.9)"
+  sees: "per enclave: id, network, sponsor sidecar, shape, provider, the provider's VM id, states and times, incarnations, the bootstrap hash, egress mode (already api-7's), its create's approval id and use, and the label and price per hour its create's action shows, the catalog's own values for its shape and provider (DESIGN-COMPUTE §16.3); whether it is the network's indexer, for its reserve and grace (§9.9)"
   why: enclave lifecycles, one owner per enclave, the meter and its holds (DESIGN-COMPUTE §11.6, §9.6, §14.2)
   ttl: "life + 90 days; the lease while its orchestrator renews it"
   owner: DESIGN-COMPUTE §14.6 (§11.6)
@@ -27913,7 +27917,7 @@ Every statement in sidecar/design/PLAN.md (381 lines), traced to the sections th
 
 ## Appendix G. Server-visible metadata list
 
-§2.8 holds `metadata_list.yml` (v68, updated 2026-11-24 for DESIGN-COMPUTE.md §14.6), the list the product promises: URnetwork's servers never receive plaintext content or keys, in any mode, and see only the values it names (D-TRUST-4), with one bounded exception, the platform report listener (§2.8). This appendix no longer copies it, so the two cannot drift. The list has 113 rows, 5 of them withdrawn: connect-1 to connect-5, api-1 to api-15, sock-1 to sock-5, evs-1 to evs-30, gkm-1 to gkm-10, tls-1 to tls-4, cert-1 and cert-2, dns-1 and dns-2, smtp-1 to smtp-7, mx-1 to mx-4, ops-1 to ops-3, ext-1 to ext-15 and compute-1 to compute-11; api-12, evs-20, gkm-3, ext-2 and ext-9 are withdrawn and keep their ids, so citations resolve.
+§2.8 holds `metadata_list.yml` (v69, updated 2026-11-24 for the owner's answer QD-1388), the list the product promises: URnetwork's servers never receive plaintext content or keys, in any mode, and see only the values it names (D-TRUST-4), with one bounded exception, the platform report listener (§2.8). This appendix no longer copies it, so the two cannot drift. The list has 113 rows, 5 of them withdrawn: connect-1 to connect-5, api-1 to api-15, sock-1 to sock-5, evs-1 to evs-30, gkm-1 to gkm-10, tls-1 to tls-4, cert-1 and cert-2, dns-1 and dns-2, smtp-1 to smtp-7, mx-1 to mx-4, ops-1 to ops-3, ext-1 to ext-15 and compute-1 to compute-11; api-12, evs-20, gkm-3, ext-2 and ext-9 are withdrawn and keep their ids, so citations resolve.
 
 ## Appendix H. Research sources
 

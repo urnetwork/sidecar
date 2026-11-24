@@ -1386,3 +1386,16 @@ The design-records track dr19-support-fold (lane slot ops, wave f47c) folds DESI
 - **Superseded options.** 320 grep hits, none on a changed line unread, none live.
 - **Text.** No bare placeholders or HTML tags; the one research-sheet id stands; 12,730 section references, with the one unresolved as before. `v7/words.json` was regenerated, and `v7/text_checks.json` regenerated unchanged.
 - **DESIGN-DEFER.md.** 107 entries and 175 pointers, unchanged.
+
+### The build's compute answers: §2.8's compute-4, and DESIGN-COMPUTE-AMENDMENTS.md
+
+- **§2.8's compute-4** takes the owner's answer QD-1388 (cacl-m11-04-compute4-create-label-price): beside its create's approval id and use, it sees the label and price per hour kind 19's create action shows the broker, the catalog's own values for its shape and provider. The list moves to v69, `make metadata` copies the block, and testdata/approval_compute/metadata_rows.yml's `EnclaveFields.label` and `EnclaveFields.price_per_hour` quote the row's words where their pending lines stood, which would have failed at M14's exit.
+- **DESIGN-COMPUTE-AMENDMENTS.md** files QD-1388 to QD-1392, the compute answers the build raised (CACL-M11-01, CACL-M11-04, CACL-M11-05, CACL-M12-01) and the owner answered on 2026-11-24, under its §14 and §16 as dr17-compute-answers filed the compute plan's, marked "the build's" in the index as QD-1386 is. What they change in this design it already carries: QD-1388's words here, and QD-1389's `buy`, QD-1390's field 38 on kinds 19 and 21 alone and QD-1391's 4 `direct` at version 5 in §8.4 and §16.8 since the tenth fold; QD-1392, a harness config version's writer judged at the newest verified state, amends DESIGN-COMPUTE.md alone. None takes a number, as QD-1386 took none.
+
+`build.sh` on this folder reproduces DESIGN.md (SHA-256 `cab9a24a801d9a7f3b17cad4ada9bdb13b3c881406219cffc4ac8c4e07db99a7`) and DESIGN-DEFER.md (SHA-256 `749042be18fd33e2a87c087fe0824b4224b52f37cc5def707e0de03854ac07a3`, unchanged), and the validation shows:
+
+- **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item and no new §2.8 row, so no guard line.
+- **Owner decisions.** All 778 rows are present and cited; APPLY.md's section pairs hold. One open owner question, Q-REPO-6.
+- **Superseded options.** 320 grep hits, none on a changed line unread, none live.
+- **Text.** No bare placeholders or HTML tags; the one research-sheet id stands; 12,729 section references, with the one unresolved as before. `v7/words.json` was regenerated, and `v7/text_checks.json` regenerated unchanged.
+- **The metadata list** is v69, compute-4 with QD-1388's words; check's `metadataListAdditions` stays empty.

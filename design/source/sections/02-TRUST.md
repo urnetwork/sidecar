@@ -137,7 +137,7 @@ Feedback (sidecar/FEEDBACK-SYSTEM.md:11) is out of scope.
 **The list** (the only TTL table; I-18):
 
 ```yaml
-# metadata_list.yml v68; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
+# metadata_list.yml v69; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
 # §7.9, §10, §11). v6 adds to v5 (2026-11-04) connect-1's ShareCert, api-6's push-token slot sentinels, api-7's
 # {acl_}q, cascade signers, recovery bindings, restored bindings' recovery windows and orphaned networks, api-13's
 # per-eraser closure counters, evs-1's secret kind and orphans, evs-3's creation block, fence time, deleted flag
@@ -392,6 +392,10 @@ Feedback (sidecar/FEEDBACK-SYSTEM.md:11) is out of scope.
 # compute-3, the provider tables under compute-7, the terms kept for the network's life, and the budget counters,
 # capacities and search counts kept as long as the period they count. compute-5 also lists what the broker carries to
 # an enclave's VM, never stored (compute-plan-enc-readings, QD-1243).
+# v69, updated 2026-11-24 for the owner's answer QD-1388 (cacl-m11-04-compute4-create-label-price), adds to
+# compute-4 the label and price per hour kind 19's create action shows the broker, the catalog's own values for
+# its shape and provider, which the broker holds already and compares with what the person approved; no column,
+# Redis family or proto field changes.
 # Each row gives service, store (tables, Redis families, object families, logs or memory),
 # sees, why, ttl, and owner: the section that designs the value and states its ttl. Withdrawn rows keep
 # their ids so citations resolve. Public: this list ships in DESIGN.md on the public sidecar repo (owner
@@ -1132,7 +1136,7 @@ compute-3:
 compute-4:
   service: compute (the orchestrator) and taskworker (compute_enclave_meter, compute_suspend)
   store: compute_enclave and compute_enclave_event (MG-C3); Redis {cmpe_<enclave_id>} (the orchestrator's lease and the nonces in flight)
-  sees: "per enclave: id, network, sponsor sidecar, shape, provider, the provider's VM id, states and times, incarnations, the bootstrap hash, egress mode (already api-7's), its create's approval id and use (DESIGN-COMPUTE §16.3); whether it is the network's indexer, for its reserve and grace (§9.9)"
+  sees: "per enclave: id, network, sponsor sidecar, shape, provider, the provider's VM id, states and times, incarnations, the bootstrap hash, egress mode (already api-7's), its create's approval id and use, and the label and price per hour its create's action shows, the catalog's own values for its shape and provider (DESIGN-COMPUTE §16.3); whether it is the network's indexer, for its reserve and grace (§9.9)"
   why: enclave lifecycles, one owner per enclave, the meter and its holds (DESIGN-COMPUTE §11.6, §9.6, §14.2)
   ttl: "life + 90 days; the lease while its orchestrator renews it"
   owner: DESIGN-COMPUTE §14.6 (§11.6)

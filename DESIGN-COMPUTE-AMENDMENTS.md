@@ -2,7 +2,7 @@
 
 This file holds the answers DESIGN-COMPUTE.md does not yet carry, for the owner to fold when they revise it.
 
-The compute planner raised 151 questions about DESIGN-COMPUTE.md on 2026-11-24 (`.stack/questions/compute-plan-*.md`, listed in `.stack/plan/COMPUTE-PLAN.md`), and the owner answered all of them the same day, QD-1233 to QD-1383, each with the recommended option, under the owner's standing acceptance of recommended options (2026-11-16, restated 2026-11-19). The run's question ledger (`.stack/decisions/LEDGER.json`), `.stack/decisions/RESOLUTIONS.md` and `.stack/decisions/later-pending.md` record them outside git; this file is their durable copy in the sidecar repo, each answer stated as the rule it makes. Track dr17-compute-answers wrote it on 2026-11-24. One answer recorded after them that amends DESIGN-COMPUTE.md alone, QD-1386, the catalog's tie rule, which the build raised while implementing §6.3 (INFER-M11-01) and the owner answered the same day, is filed under §6 by track dr17-late-fold, which folded the rest of that day's later answers into DESIGN.md. The owner folded four of the plan's readings into DESIGN-COMPUTE.md §26 on 2026-11-24, aligning its listeners with DESIGN.md's service discovery (owner decision 778; commit e9478d45): QD-1248 (`Deliver` on app hosts), QD-1249 (the listeners file's `desc_by` and `v4_uncertain` and the `LISTENERS` bodies), QD-1250 (`BridgeListenerReach` in `device/`) and QD-1251 (a labeled UDP socket above the ephemeral threshold), so they left this file, as its folding rule has a folded item do; track dr18-compute-fences took them out.
+The compute planner raised 151 questions about DESIGN-COMPUTE.md on 2026-11-24 (`.stack/questions/compute-plan-*.md`, listed in `.stack/plan/COMPUTE-PLAN.md`), and the owner answered all of them the same day, QD-1233 to QD-1383, each with the recommended option, under the owner's standing acceptance of recommended options (2026-11-16, restated 2026-11-19). The run's question ledger (`.stack/decisions/LEDGER.json`), `.stack/decisions/RESOLUTIONS.md` and `.stack/decisions/later-pending.md` record them outside git; this file is their durable copy in the sidecar repo, each answer stated as the rule it makes. Track dr17-compute-answers wrote it on 2026-11-24. One answer recorded after them that amends DESIGN-COMPUTE.md alone, QD-1386, the catalog's tie rule, which the build raised while implementing §6.3 (INFER-M11-01) and the owner answered the same day, is filed under §6 by track dr17-late-fold, which folded the rest of that day's later answers into DESIGN.md. Five more the build raised while implementing the compute policy (CACL-M11-01, CACL-M11-04, CACL-M11-05 and CACL-M12-01), QD-1388 to QD-1392, which the owner answered the same day, each with the recommended option, are filed under §14 and §16 by track dr19-support-fold; what they change in DESIGN.md it already carries, QD-1388's words in §2.8's compute-4 since metadata_list.yml v69, and QD-1389's to QD-1391's in §8.4 and §16.8 since the tenth fold. The owner folded four of the plan's readings into DESIGN-COMPUTE.md §26 on 2026-11-24, aligning its listeners with DESIGN.md's service discovery (owner decision 778; commit e9478d45): QD-1248 (`Deliver` on app hosts), QD-1249 (the listeners file's `desc_by` and `v4_uncertain` and the `LISTENERS` bodies), QD-1250 (`BridgeListenerReach` in `device/`) and QD-1251 (a labeled UDP socket above the ephemeral threshold), so they left this file, as its folding rule has a folded item do; track dr18-compute-fences took them out.
 
 The answers are of two kinds:
 
@@ -34,9 +34,9 @@ A reading appears in every row whose section it amends, and is written once, bel
 | §11 Secure enclaves | QD-1289 to QD-1298 | QD-1243, QD-1254, QD-1255 |
 | §12 The bundled SSH | QD-1364, QD-1365 | QD-1243 |
 | §13 The bundled git | QD-1304, QD-1305 | |
-| §14 Server services, routes, tables and metadata | | QD-1237, QD-1239, QD-1241, QD-1243, QD-1245, QD-1246, QD-1252, QD-1367, QD-1374, QD-1375, QD-1377 |
+| §14 Server services, routes, tables and metadata | QD-1388, the build's | QD-1237, QD-1239, QD-1241, QD-1243, QD-1245, QD-1246, QD-1252, QD-1367, QD-1374, QD-1375, QD-1377 |
 | §15 CLI, MCP, sdk and app surfaces | | QD-1247, QD-1253, QD-1380, QD-1381, QD-1382 |
-| §16 Policy, budgets and approvals | QD-1263, QD-1264 | |
+| §16 Policy, budgets and approvals | QD-1263, QD-1264; QD-1389 to QD-1392, the build's | |
 | §17 Abuse, safety and legal process | | QD-1382 |
 | §19 Phasing and milestones | QD-1274, QD-1275 | QD-1233, QD-1255 |
 | §20 The recURd skill | QD-1351 to QD-1355 | QD-1378, QD-1380 |
@@ -48,7 +48,7 @@ A reading appears in every row whose section it amends, and is written once, bel
 | §26 Listeners | QD-1327 to QD-1334 | |
 | §27 Automatic approvals and the safety classifier | QD-1345 to QD-1350 | QD-1366, QD-1368 to QD-1373 |
 | Appendix B, question register; Appendix G, open decisions | every appendix answer | |
-| Appendix D, amendments to DESIGN.md | | QD-1234, QD-1237, QD-1238, QD-1240, QD-1243, QD-1252, QD-1254, QD-1255, QD-1366, QD-1367, QD-1374, QD-1378 |
+| Appendix D, amendments to DESIGN.md | QD-1388 and QD-1390, the build's, which DESIGN.md already carries | QD-1234, QD-1237, QD-1238, QD-1240, QD-1243, QD-1252, QD-1254, QD-1255, QD-1366, QD-1367, QD-1374, QD-1378 |
 | Appendix F, use-case coverage | | QD-1382 |
 
 ## §2 Trust model and invariants
@@ -377,6 +377,15 @@ No: CO-6 gives the local Harness EVS for storage, and a GitHub remote would be n
 
 Builds: GIT-M13-02. Question: `compute-plan-q-git-2-other-remotes-github-local-harness.md`.
 
+## §14 Server services, routes, tables and metadata
+
+### QD-1388: Should §2.8's compute-4 name the provider's label and the price per hour that kind 19's action shows the broker?
+*§14.6's compute-4, and through Appendix D's row for DESIGN §2.8's list. A question the build raised (CACL-M11-04), answered by the owner on 2026-11-24, one at a time. Option 1, the recommendation.*
+
+compute-4's sees gains "and the label and price per hour its create's action shows, the catalog's own values for its shape and provider", and kind 19's action stays as §16.3 writes it, field 42's `EnclaveFields` carrying both to the broker. Why: the values add nothing a server does not hold, and the broker comparing the approved price with its catalog's is worth keeping. DESIGN.md's §2.8 carries the words since metadata_list.yml v69 (track dr19-support-fold), so only §14.6's row waits for the owner's revision.
+
+Builds: CACL-M11-04 (testdata/approval_compute/metadata_rows.yml's `EnclaveFields.label` and `EnclaveFields.price_per_hour`, which quote compute-4 since v69), already built. Question: `cacl-m11-04-compute4-create-label-price.md`.
+
 ## §16 Policy, budgets and approvals
 
 ### QD-1263 (Q-CACL-1): Is each remote inference call an outward action?
@@ -392,6 +401,34 @@ Builds: INFER-M11-03, CACL-M12-05. Question: `compute-plan-q-cacl-1-remote-infer
 Every provider and label, with TEE-only one setting away, as CO-18 says. Every model carries its label in the catalog and on every message, and the apps put the TEE-only switch beside the model picker.
 
 Builds: CACL-M11-01, INFER-M11-03, CACL-M12-03. Question: `compute-plan-q-cacl-3-new-network-use.md`.
+
+### QD-1389: What action word does a rule on `compute:buy` take, which §16.2 names none for?
+*§16.2, and §16.5's defaults for `compute:buy`. A question the build raised (CACL-M11-05), answered by the owner on 2026-11-24, one at a time. Option 1, the recommendation.*
+
+`buy`, as acl.proto declares it (`ACL_ACTION_BUY` = 12): `{"src": [...], "dst": ["compute:buy"], "allow": ["buy"]}`, one word for buying credits, redeeming a code and setting auto-renew. Why: one word covers §16.2's one row, and the value is already numbered in its place. DESIGN.md's §8.4 names it since the tenth fold (track dr18-compute-fences).
+
+Builds: CACL-M11-05 (the value, declared), CACL-M12-04 (the parse). Question: `cacl-m11-05-compute-buy-action-word.md`.
+
+### QD-1390: Does version 5's sealed detail ride kinds 19 and 21 alone, as field 38's row says, or kinds 19 to 24, as §16.3's prose and Appendix D say?
+*§16.3 (field 38's row and its prose), §16.7's D-CACL-5 and Appendix D's §16.8 row. A question the build raised (CACL-M12-01), answered by the owner on 2026-11-24, one at a time. Option 1, the recommendation.*
+
+Kinds 19 and 21 alone, as field 38's row says; §16.3's prose and Appendix D's "19-24" read as "the kinds 19-24 that a gate sees". No change to the code. Why: the detail exists to keep a name and a grant from the broker's gates, and only kinds 19 and 21 reach one. DESIGN.md's §16.8 names kinds 19 and 21 since the tenth fold (track dr18-compute-fences).
+
+Builds: CACL-M11-04, CACL-M12-01 (built for 19 and 21; a kind that seals is a row change). Question: `cacl-m12-01-sealed-detail-kinds.md`.
+
+### QD-1391: How does a version-5 action's field 39 name an enclave whose default egress is off (§11.8's `direct`), which `BridgeEgressMode` has no value for?
+*§16.3 (field 39 on kinds 19 and 24) and §11.8. A question the build raised (CACL-M12-01), answered by the owner on 2026-11-24, one at a time. Option 1, the recommendation.*
+
+Field 39 at version 5 alone takes a fourth value, 4 `direct`, documented in record.proto's comment and read only by version 5's rules and render, `BridgeEgressMode` unchanged, so no wire changes outside version 5: the rules accept 1 to 4 at version 5 and the render names 4 `direct`. Why: it keeps the forwarding role's enum as it is, binds the mode in the action the approval signs, and touches only version 5's rules and render. DESIGN.md's §16.8 carries it since the tenth fold (track dr18-compute-fences), as CACL-M12-01 built it, 4 on kind 24.
+
+Builds: CACL-M12-01 (the rules and render); kind 24's card into a direct-egress enclave naming its mode (HARN, SKILL and SSH). Question: `cacl-m12-01-version5-direct-egress-mode.md`.
+
+### QD-1392: Is a harness config version's writer judged at the newest verified state or at its push's own pin?
+*§16.6 (the reading row), §16.4 and IC-23. A question the build raised (CACL-M11-01), answered by the owner on 2026-11-24, one at a time. Option 1, the recommendation, as built.*
+
+At the newest verified state, not at its push's own pin: a stolen device's last change to `tee_only`, `allow` or `approvals` is dropped the moment the device is revoked, with no compromise cascade, and IC-23's enclave rule still holds, bit 3 refused whatever the time. Cost: a lost device's legitimate last change is dropped too, the file reading as the version before it, which can be wider (`tee_only` back off, say) until the person sets it again with `ur models set`, each such version raising one `record_alarm` `path_rule`. Why: it is the closed reading and needs nothing of evs, where judging at the push's pin would need the push's authorization pin on `EvsHistoryVersion`, the state at that pin and a compromise cascade that voids the versions it parks.
+
+Builds: CACL-M11-01 (models_member_config.go), already built. Question: `cacl-m11-01-harness-config-writer-when.md`.
 
 ## §19 Phasing and milestones
 
