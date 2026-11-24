@@ -6,8 +6,9 @@
 //	typed      Sidecar.ServiceToken's own refusals are typed: no enrolled client ends a call at once, a keychain still
 //	           locked and no api yet go again within the call's bound
 //	leases     a lease classifies as retryRefusingNothing does: a refusal for good ends Subscribe at once, the lb's 502
-//	           and 504 go again, and a final refusal in the rounds waits SubscribeResyncInterval, which
-//	           SubscribeRetryMaxWait no longer caps (§11.10's lease, gap and loss rows)
+//	           and 504 and a request past its RequestTimeout go again, the caller's own cancel ending it, and a final
+//	           refusal in the rounds waits SubscribeResyncInterval, which SubscribeRetryMaxWait no longer caps
+//	           (§11.10's lease, gap and loss rows)
 //	deliveries a delivery's log read refused for good, by the exchange or by evs's 401 twice, raises its gap at once
 //	           rather than being owed again every ReadRetryWait, and the lb's lost answer is owed again, not a gap
 //
@@ -478,6 +479,53 @@ func TestEvsSubscribeTriesAgainAfterTheLbsLostAnswer(t *testing.T) {
 		if lost != 0 || len(leases.fields()) != 2 || evsTestSubscriptionCount(test) != 2 {
 			t.Errorf("%d: leases %q, %d subscriptions", status, leases.fields(), evsTestSubscriptionCount(test))
 		}
+	}
+}
+
+// A transport that answers each request through answer.
+type evsTestRoundTripFunc func(request *http.Request) (*http.Response, error)
+
+func (self evsTestRoundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return self(request)
+}
+
+// A lease whose request passed evs's RequestTimeout is no answer, as retryRefusingNothing takes one: net/http answers
+// such a request with its own context's cancel, which the lease read as the caller's and took as final, dropping the
+// subscription. Subscribe now tries again after SubscribeRetryMinWait and holds its lease; a Subscribe whose own
+// context is cancelled still ends with that cancel, the subscription dropped.
+func TestEvsSubscribeTriesAgainAfterARequestTimeout(t *testing.T) {
+	world, leases, test := newEvsTestLeasedSubscriber(t)
+	timedOut := 1
+	inner := &evsTestTransport{handler: leases}
+	test.client.http.transport = wrapSidecarApiTransport(evsTestRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if err := request.Context().Err(); err != nil {
+			return nil, err
+		}
+		if request.Method == http.MethodPost && request.URL.Path == "/evs/v1/subscriptions" && 0 < timedOut {
+			timedOut -= 1
+			// what net/http answers once evsHttp's RequestTimeout cancels the request's own context
+			return nil, fmt.Errorf("synthetic transport: %w", context.Canceled)
+		}
+		return inner.RoundTrip(request)
+	}))
+	waits := len(test.clock.waited())
+	repo := test.client.Repo(world.repoId)
+	if _, err := repo.Subscribe(context.Background(), &EvsSubscribeArgs{RefName: EvsMainRefName, Paths: []string{"src"}}); err != nil {
+		t.Fatalf("a lease past its request timeout: %v", err)
+	}
+	if got := evsTestWaitsSince(test.clock, waits); !slices.Equal(got, []time.Duration{test.client.settings.SubscribeRetryMinWait}) {
+		t.Errorf("waits %v", got)
+	}
+	if timedOut != 0 || len(leases.fields()) != 2 || evsTestSubscriptionCount(test) != 2 {
+		t.Errorf("leases %q, %d subscriptions", leases.fields(), evsTestSubscriptionCount(test))
+	}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := repo.Subscribe(cancelled, &EvsSubscribeArgs{RefName: EvsMainRefName, Paths: []string{"lib"}}); !errors.Is(err, context.Canceled) {
+		t.Errorf("a cancelled Subscribe answered %v", err)
+	}
+	if count := evsTestSubscriptionCount(test); count != 2 {
+		t.Errorf("%d subscriptions after a cancelled Subscribe", count)
 	}
 }
 
