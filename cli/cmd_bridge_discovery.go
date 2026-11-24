@@ -142,6 +142,15 @@ func printUrBridgeDevices(cli *urCli, reply *sidecar.DaemonBridgeDevicesReply) {
 		if share == "moved" || share == "absent" {
 			cli.printf("           its route was withdrawn: run ur bridge share %s to share it again\n", device.HostLabel)
 		}
+		switch {
+		case device.RouteClosed:
+			cli.printf("           at %s: no route rule reaches it on any port\n", device.SharedAddress)
+		case 0 < len(device.RoutePorts):
+			cli.printf("           at %s: an admin narrowed its route to %s, so a client whose tunnel picks other ports "+
+				"cannot reach it\n", device.SharedAddress, strings.Join(device.RoutePorts, ", "))
+		case device.SharedAddress != "":
+			cli.printf("           at %s, every port\n", device.SharedAddress)
+		}
 		for _, service := range device.Services {
 			withheld := ""
 			if service.Withheld != "" {

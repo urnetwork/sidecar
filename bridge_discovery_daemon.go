@@ -82,6 +82,13 @@ type DaemonBridgeLanDevice struct {
 	// The /32 route its share filed, hex; the approval it waits on.
 	RuleId     string `json:"rule_id,omitempty"`
 	ApprovalId string `json:"approval_id,omitempty"`
+	// Where the network reaches it while shared, and, where an admin's route rows narrow what reaches it there, the
+	// protocols and ports they leave, "tcp:62078" and the like; empty where every port and protocol reaches it, as a
+	// device whose tunnel picks its ports per connection needs (§17.7.1's Xcode case).
+	SharedAddress string   `json:"shared_address,omitempty"`
+	RoutePorts    []string `json:"route_ports,omitempty"`
+	// Its route reaches it on no port at all: no row of any subject covers its address.
+	RouteClosed bool `json:"route_closed,omitempty"`
 	// What it announces of the effective list.
 	Services []*DaemonBridgeInstance `json:"services,omitempty"`
 }
@@ -371,6 +378,15 @@ func (self *BridgeDiscoveryComponent) Set(setting string, value string, unhide b
 	if editErr != nil {
 		return editErr
 	}
+	if err == nil && setting == DaemonBridgeDiscoveryProxy {
+		// the platform's proxy reads the switch at each view: the viewer hands the view out again
+		func() {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			self.redeliverView = true
+		}()
+		self.viewWake.NotifyAll()
+	}
 	return err
 }
 
@@ -456,6 +472,18 @@ func (self *BridgeDiscoveryComponent) Devices() *DaemonBridgeDevicesReply {
 			}
 			if share := input.state.share(label); share != nil {
 				device.Share, device.RuleId, device.ApprovalId = share.State, share.RuleId, share.ApprovalId
+			}
+			// a share's address, and what of it the route rows leave reachable
+			if lanAddress := bridgeDiscoveryDeviceAddress(gathered); device.Share == bridgeDiscoveryShareActive && lanAddress.IsValid() {
+				if shared := input.routes.servedAddress(lanAddress); shared.IsValid() {
+					device.SharedAddress = shared.String()
+					if self.args.RoutePorts != nil {
+						if all, ports := self.args.RoutePorts(shared); !all {
+							device.RoutePorts = ports
+							device.RouteClosed = len(ports) == 0
+						}
+					}
+				}
 			}
 			devices[label] = device
 			labels = append(labels, label)

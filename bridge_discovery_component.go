@@ -11,7 +11,8 @@
 //	          viewer asks only a host §8.10's reach(viewer, host) admits; the answer holds while the view equals since,
 //	          up to the asked hold and WatchHoldTimeout, and carries what the hook passes for the viewer
 //	viewer    while this device runs ur tun or the advertising proxy (Viewing), each generation watches the hosts its
-//	          own rules reach, its own member's first, at most WatchHostCount, calling again at once after each answer;
+//	          own rules reach, its own member's first, at most WatchHostCount, calling again at once after each answer,
+//	          but no sooner than WatchMinInterval after the last call to that host began;
 //	          it keeps an instance only at an address its host serves by the config, a /32 of the host or a prefix or
 //	          exposed prefix it advertises, and only where its own router sends that address to the host, a LAN prefix
 //	          of its own winning; it withdraws a host's instances once its watch has failed for HostLossTimeout, at
@@ -108,8 +109,11 @@ type BridgeDiscoveryArgs struct {
 	Filer BridgeDiscoveryFiler
 	// What the platform's advertising proxy holds, for ur bridge devices; nil shows none.
 	ProxyStatus func() *BridgeDiscoveryProxyStatus
-	Clock       Clock
-	Log         Logger
+	// What the route rows let reach an address through this host (device.Bridge.DiscoveryRoutePorts): every port, or
+	// the ports an admin narrowed its route to, which ur bridge devices names on a shared device's line. Nil names none.
+	RoutePorts func(address netip.Addr) (all bool, ports []string)
+	Clock      Clock
+	Log        Logger
 	// Nil is DefaultBridgeDiscoverySettings.
 	Settings *BridgeDiscoverySettings
 }
@@ -153,8 +157,10 @@ type BridgeDiscoveryComponent struct {
 	// each host's last answer, and how many of its instances the checks dropped
 	answers      map[Id]*bridgeDiscoveryHostAnswer
 	droppedCount map[Id]int
-	// the view last handed out
-	view []*BridgeDiscoveryViewInstance
+	// the view last handed out, and whether the next rebuild hands it out again unchanged: a proxy switch, which the
+	// platform's proxy reads at each view
+	view          []*BridgeDiscoveryViewInstance
+	redeliverView bool
 	// the instances the advertising proxy holds now, which keeps the gatherer running for the names rule
 	closed bool
 }
@@ -615,11 +621,13 @@ func (self *BridgeDiscoveryComponent) watchHosts() []BridgeDiscoveryHost {
 	return hosts
 }
 
-// One host's watch (the file's viewer row): calls again at once after each answer, backs off after a failure,
-// withdraws its instances once it has failed for HostLossTimeout, and waits NotServingRetryInterval after serving false.
+// One host's watch (the file's viewer row): calls again at once after each answer, though no sooner than
+// WatchMinInterval after the last call began, backs off after a failure, withdraws its instances once it has failed for
+// HostLossTimeout, and waits NotServingRetryInterval after serving false.
 func (self *BridgeDiscoveryComponent) watch(ctx context.Context, dispatcher bridgeDiscoveryDispatcher, host BridgeDiscoveryHost) {
 	since := uint64(0)
 	lastAnswer := self.clock.Now()
+	var lastCall time.Time
 	retry := self.settings.WatchRetryInterval
 	wait := func(timeout time.Duration) bool {
 		select {
@@ -630,6 +638,13 @@ func (self *BridgeDiscoveryComponent) watch(ctx context.Context, dispatcher brid
 		}
 	}
 	for ctx.Err() == nil {
+		// a host that answers at once is asked again no sooner than this
+		if !lastCall.IsZero() {
+			if remaining := self.settings.WatchMinInterval - self.clock.Now().Sub(lastCall); 0 < remaining && !wait(remaining) {
+				return
+			}
+		}
+		lastCall = self.clock.Now()
 		result, err := self.callWatch(ctx, dispatcher, host, since)
 		if ctx.Err() != nil {
 			return
@@ -777,7 +792,9 @@ func (self *BridgeDiscoveryComponent) rebuildView() time.Time {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		self.droppedCount = dropped
-		if bridgeDiscoveryViewEqual(self.view, view) {
+		redeliver := self.redeliverView
+		self.redeliverView = false
+		if !redeliver && bridgeDiscoveryViewEqual(self.view, view) {
 			return false
 		}
 		self.view = view
