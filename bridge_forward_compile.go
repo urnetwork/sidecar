@@ -3,9 +3,15 @@
 //
 //	0 admission  the estimate against the cap and the heap ceiling; refused or deferred raises its alarm and keeps the
 //	             state
-//	1 judge      a rows-only ConfigLog restored from the store at its newest base, its tail re-applied by the base's
-//	             tail_verdicts, then the entries after the base through ApplyRun, CompileApplyRunCount at a time: the
-//	             code api and the gates judge by, with a BridgeBodyJudge over the generations the store holds
+//	1 judge      a rows-only ConfigLog restored from the store at the base before its newest, its tail re-applied by
+//	             that base's tail_verdicts, then the entries after it through ApplyRun, CompileApplyRunCount at a time,
+//	             the newest base among them: the code api and the gates judge by, with a BridgeBodyJudge over the
+//	             generations the store holds. Its window then reaches back to that previous base, as a long-running
+//	             member's does (config_state_at.go), so a GroupForm, a GenRotate or a delivery pinned between the two
+//	             bases is judged here as it is there (§10.9's judged rows). Where the store lacks that base's rows or
+//	             its tail, where the estimate with its rows is not admitted and the newest base's alone is, or where it
+//	             does not restore, the log is restored at the newest base, as a new device's is, judging nothing
+//	             pinned before it
 //	2 keys       the generations a sealed body names and the store lacks, by DelegationWrap (bridge_forward_keys.go)
 //	3 head       the head the base names, from the store or its reader, held to the base: the anchored genesis, the
 //	             rows' settings equal to its ServiceSettings, and the rows' has_document equal to whether it holds a
@@ -16,8 +22,9 @@
 //	             Forwarder does not re-compile rows from it: a full reader's check, the app's sidecar role's
 //	4 compile    NewAclState and CompileBridgeState for its sidecar, over the bindings it holds
 //	5 hand       the sink's SetState with the log run from the base through the captured pin
-//	6 release    the compile's record kept, the store trimmed to the base's retention point, every reference
-//	             dropped, and on the mobile classes the memory returned to the OS
+//	6 release    the compile's record kept, the store trimmed to the base's retention point or the previous base's
+//	             tail, whichever is first, and to both bases' rows, so the next compile restores at the previous base,
+//	             every reference dropped, and on the mobile classes the memory returned to the OS
 //
 // An error at any step changes nothing: the sink is called only with a whole state, and a compile refused, deferred or
 // failed leaves the state in force and nothing pending (QD-621). A failed or deferred compile is wanted again after
@@ -153,9 +160,9 @@ func (self *Forwarder) compile() (forwarderCompileOutcome, bool) {
 		return self.compileFailed(through, err), false
 	}
 
-	// the newest base among the stored entries, and what the admission rule reads of it
-	baseIndex := -1
-	var baseHeader *bridge.ProjectionHeader
+	// the newest base among the stored entries and the one before it, and what the admission rule reads of them
+	baseIndex, previousIndex := -1, -1
+	var baseHeader, previousHeader *bridge.ProjectionHeader
 	size := ForwarderCompileSize{}
 	for i, entryBytes := range stored {
 		size.TailByteCount += int64(len(entryBytes))
@@ -164,6 +171,7 @@ func (self *Forwarder) compile() (forwarderCompileOutcome, bool) {
 			continue
 		}
 		if _, header, err := configParseBase(entry); err == nil {
+			previousIndex, previousHeader = baseIndex, baseHeader
 			baseIndex, baseHeader = i, header
 		}
 	}
@@ -178,9 +186,24 @@ func (self *Forwarder) compile() (forwarderCompileOutcome, bool) {
 			size.StateByteCount = self.compiled.StateByteCount
 		}
 	}()
-	if outcome, admitted := self.admit(through, size); !admitted {
+	// the judge restores at the previous base where the store holds what that takes and the estimate with its rows is
+	// admitted, else at the newest (step 1)
+	sizes := []ForwarderCompileSize{size}
+	if previousHeader != nil && self.records.restorableAt(from, from+uint64(previousIndex), previousHeader) {
+		deep := size
+		deep.RowsByteCount += int64(previousHeader.GetRowsByteCount())
+		sizes = []ForwarderCompileSize{deep, size}
+	} else {
+		previousIndex = -1
+	}
+	chosen, outcome := self.admit(through, sizes...)
+	if chosen < 0 {
 		return outcome, false
 	}
+	if chosen != 0 {
+		previousIndex = -1
+	}
+	size = sizes[chosen]
 
 	// 1 judge
 	signedGenesis, err := self.records.read(forwarderGenesisName)
@@ -220,7 +243,7 @@ func (self *Forwarder) compile() (forwarderCompileOutcome, bool) {
 		return io.ReadAll(reader)
 	})
 	testHookBarrier("bridge_forward.compile.judge", self.args.NetworkId.String())
-	log, anchor, err := self.judge(logSettings, signedGenesis, stored, baseIndex, rowsSource, decision.Pin)
+	log, anchor, err := self.judge(logSettings, signedGenesis, stored, baseIndex, previousIndex, rowsSource, decision.Pin)
 	if err != nil {
 		var runError *ConfigRunError
 		if errors.Is(err, ErrConfigFork) || errors.Is(err, ErrConfigEntryMalformed) || errors.Is(err, ErrConfigRowsUnavailable) || errors.As(err, &runError) {
@@ -272,7 +295,7 @@ func (self *Forwarder) compile() (forwarderCompileOutcome, bool) {
 			for _, file := range head.Files() {
 				size.HeadByteCount += int64(len(file))
 			}
-			if outcome, admitted := self.admit(through, size); !admitted {
+			if chosen, outcome := self.admit(through, size); chosen < 0 {
 				return outcome, false
 			}
 		}
@@ -415,10 +438,19 @@ func (self *Forwarder) compile() (forwarderCompileOutcome, bool) {
 	return forwarderCompileHanded, again
 }
 
-// The admission rule for a compile of size (DESIGN-DETAILS 4.2.4): whether it may run, and the outcome when it may
-// not, with its alarm. Either way the state in force stands.
-func (self *Forwarder) admit(through uint64, size ForwarderCompileSize) (forwarderCompileOutcome, bool) {
-	admission := self.settings.CompileAdmission(size, self.heapInUse())
+// The admission rule for a compile (DESIGN-DETAILS 4.2.4) of the first of sizes it admits, read against one reading of
+// the heap: that size's index, or -1 and the outcome the last size, the least, meets, with its alarm. Either way the
+// state in force stands.
+func (self *Forwarder) admit(through uint64, sizes ...ForwarderCompileSize) (int, forwarderCompileOutcome) {
+	heapInUse := self.heapInUse()
+	chosen, size, admission := -1, ForwarderCompileSize{}, ForwarderCompileAdmission(0)
+	for index, candidate := range sizes {
+		size, admission = candidate, self.settings.CompileAdmission(candidate, heapInUse)
+		if admission == ForwarderCompileAdmitted {
+			chosen = index
+			break
+		}
+	}
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
@@ -433,7 +465,7 @@ func (self *Forwarder) admit(through uint64, size ForwarderCompileSize) (forward
 		self.deferredSince = time.Time{}
 		self.clearAlarm(SidecarBridgeAlarm(ForwarderAlarmCompileOverBudget))
 		self.clearAlarm(SidecarBridgeAlarm(ForwarderAlarmCompileDeferred))
-		return 0, true
+		return chosen, 0
 	case ForwarderCompileOverBudget:
 		self.deferredSince = time.Time{}
 		self.raiseAlarm(BridgeAlarm{
@@ -441,7 +473,7 @@ func (self *Forwarder) admit(through uint64, size ForwarderCompileSize) (forward
 			N:      through,
 			Detail: fmt.Sprintf("a compile estimated at %d bytes is past this device's %d: the state in force stands", self.settings.CompileEstimate(size), self.settings.CompileMemoryMaxByteCount),
 		})
-		return forwarderCompileRefused, false
+		return -1, forwarderCompileRefused
 	default:
 		if self.deferredSince.IsZero() {
 			self.deferredSince = now
@@ -453,36 +485,65 @@ func (self *Forwarder) admit(through uint64, size ForwarderCompileSize) (forward
 				Detail: fmt.Sprintf("the heap ceiling has deferred a compile for %s: the state in force stands", now.Sub(self.deferredSince)),
 			})
 		}
-		return forwarderCompileRetry, false
+		return -1, forwarderCompileRetry
 	}
 }
 
-// Step 1: the rows-only log at the newest base among the stored entries, baseIndex, with every entry after it applied
-// in runs, held to floor, the sink's pin, and the state at that base, the anchor its head is read at; nil with no base
-// stored, when the log starts at the genesis, which the entries must reach back to. The log's history keeps the
-// anchor's state as the start of its window, so holding it costs nothing more.
-func (self *Forwarder) judge(settings *ConfigLogSettings, signedGenesis []byte, stored [][]byte, baseIndex int, rowsSource ConfigRowsSource, floor *bridge.AuthPin) (*ConfigLog, *ConfigState, error) {
+// Step 1: the rows-only log at the base before the newest among the stored entries, previousIndex, with every entry
+// after it applied in runs, the newest base, baseIndex, among them, so the log's window reaches back to the previous
+// base as a long-running member's does; or at the newest base where previousIndex is -1 or the log does not restore
+// there, with every entry after it applied. Held to floor, the sink's pin, with the state at the newest base, the
+// anchor its head is read at; nil with no base stored, when the log starts at the genesis, which the entries must reach
+// back to. The log's history keeps the anchor's state within its window, so holding it costs nothing more.
+func (self *Forwarder) judge(settings *ConfigLogSettings, signedGenesis []byte, stored [][]byte, baseIndex int, previousIndex int, rowsSource ConfigRowsSource, floor *bridge.AuthPin) (*ConfigLog, *ConfigState, error) {
+	apply := func(log *ConfigLog, entries [][]byte) error {
+		for 0 < len(entries) {
+			run := entries[:min(len(entries), self.settings.CompileApplyRunCount)]
+			if _, err := log.ApplyRun(run, rowsSource); err != nil {
+				return err
+			}
+			entries = entries[len(run):]
+		}
+		return nil
+	}
 	var log *ConfigLog
 	var anchor *ConfigState
 	var err error
-	if baseIndex < 0 {
+	if 0 <= previousIndex && previousIndex < baseIndex {
+		// the previous base, then on through the newest, which moves the window's start to the previous base
+		retained := &ConfigRetained{SignedGenesis: signedGenesis, Entries: stored[:previousIndex+1]}
+		log, err = RestoreConfigLogRowsOnly(settings, retained, rowsSource, nil)
+		if err == nil {
+			err = apply(log, stored[previousIndex+1:baseIndex+1])
+		}
+		if err == nil {
+			if fork := log.Fork(); fork != nil {
+				err = fork
+			}
+		}
+		if err != nil {
+			// a store whose previous base does not restore is judged from its newest, as a new device judges it
+			self.log.Warningf("[forward]%s the log did not restore at its previous base, so the compile judges from its newest: %v", self.args.NetworkId, err)
+			log = nil
+		} else {
+			anchor = log.State()
+		}
+	}
+	switch {
+	case log != nil:
+	case baseIndex < 0:
 		if log, err = NewConfigLogRowsOnly(settings, signedGenesis); err != nil {
 			return nil, nil, err
 		}
-	} else {
+	default:
 		retained := &ConfigRetained{SignedGenesis: signedGenesis, Entries: stored[:baseIndex+1]}
 		if log, err = RestoreConfigLogRowsOnly(settings, retained, rowsSource, nil); err != nil {
 			return nil, nil, err
 		}
 		anchor = log.State()
 	}
-	rest := stored[baseIndex+1:]
-	for 0 < len(rest) {
-		run := rest[:min(len(rest), self.settings.CompileApplyRunCount)]
-		if _, err := log.ApplyRun(run, rowsSource); err != nil {
-			return nil, nil, err
-		}
-		rest = rest[len(run):]
+	if err := apply(log, stored[baseIndex+1:]); err != nil {
+		return nil, nil, err
 	}
 	if fork := log.Fork(); fork != nil {
 		return nil, nil, fork
@@ -627,18 +688,25 @@ func (self *Forwarder) raiseCompileAlarms(alarms []BridgeAlarm) {
 	self.raisedCompileAlarms = slices.Clone(alarms)
 }
 
-// After a compile the sink took: drops the entries before the judged state's retention point, the rows of every base
-// before its newest, which later stored bases still name theirs, and nothing a later compile restores from.
+// After a compile the sink took: drops the entries before the judged state's retention point or before the previous
+// base's tail, whichever is first, and the rows of every base before the previous one, which later stored bases still
+// name theirs; so nothing a later compile restores from, at the newest base or at the one before it (step 1).
 func (self *Forwarder) trimStore(state *ConfigState, baseHeader *bridge.ProjectionHeader) {
 	if baseHeader == nil || state.Base() == nil {
 		return
 	}
-	if point := state.RetentionPoint(); 0 < point {
+	point := state.RetentionPoint()
+	keptRows := [][]byte{state.Base().GetRowsSha256()}
+	if previous := state.previousBase; previous != nil {
+		point = min(point, forwarderTailFrom(previous.n, previous.header))
+		keptRows = append(keptRows, previous.header.GetRowsSha256())
+	}
+	if 0 < point {
 		if err := self.records.dropEntriesBefore(point); err != nil {
 			self.log.Warningf("[forward]%s entries before %d were not dropped: %v", self.args.NetworkId, point, err)
 		}
 	}
-	if err := self.records.keepRows([][]byte{state.Base().GetRowsSha256()}); err != nil {
+	if err := self.records.keepRows(keptRows); err != nil {
 		self.log.Warningf("[forward]%s older rows were not dropped: %v", self.args.NetworkId, err)
 	}
 }

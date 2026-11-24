@@ -9,7 +9,9 @@
 //	follow    the Forwarder reads api's projection as F's token reads it; a team hint, which F's long-poll brings, is
 //	          Hint here, which each wait for the host at the tip sends
 //	gkm       the config group as F's exchange reads it: generation 1's Signed GenRotate, signed by the owner's
-//	          device, and a DelegationWrap of it to each forwarding Delegation's reader key, which setup's step 4 files
+//	          device with the key holders' digest at its pin, and a LATE DelegationWrap of it to each forwarding
+//	          Delegation's reader key at the state the Delegation landed at, which setup's step 4 files: each passes
+//	          §10.9's checks, which the Forwarder runs at its own pin
 //	heads     the network's config heads; bindings, each device's signed binding as GET /sidecar/identity answers it
 //	sink      the device role's posture, read at the clock's now (device.Bridge.DecisionNow) as sdk's sink reads it,
 //	          its overdue alarm reported raised once a raise
@@ -102,14 +104,17 @@ func bridgeNetGkmSign(device *AdmissionDevice) sidecar.GkmSignFunction {
 }
 
 // A DelegationWrap of generation 1 to a forwarding Delegation's reader key, signed by the holder (DESIGN-DETAILS 4.2.6's
-// step 4: the late wrap of the config's current generation).
-func (self *bridgeNetGkm) wrap(delegationId []byte, readerKey hpke.PrivateKey) error {
+// step 4: the late wrap of the config's current generation): LATE at auth, a state where the Delegation is live, and at,
+// the holder's clock, as §10.9's late row has it, since the Delegation was filed after generation 1's claim.
+func (self *bridgeNetGkm) wrap(delegationId []byte, readerKey hpke.PrivateKey, auth *bridge.AuthPin, at time.Time) error {
 	delivery, err := sidecar.SealGkmDelivery(self.key, &sidecar.GkmDeliveryArgs{
 		GroupId:            self.groupId,
 		Type:               sidecar.GkmWrapTypeDelegation,
 		Recipient:          delegationId,
 		RecipientPublicKey: readerKey.PublicKey().Bytes(),
-		Kind:               sidecar.GkmDeliveryStaged,
+		Kind:               sidecar.GkmDeliveryLate,
+		Auth:               auth,
+		Time:               at,
 	})
 	if err != nil {
 		return err
