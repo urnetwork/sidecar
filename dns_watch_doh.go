@@ -4,6 +4,12 @@
 // resolver, each with remote DoH alone and one url, so no lookup falls back to the host's resolver or reaches a
 // URnetwork proxy, and each answer is that resolver's own. Off sidecar_http and js, since it links connect.
 //
+// DnsWatchDohSettings' ForwarderFactory stands in for the urls: it builds the resolvers' forwarders, which the resolver
+// owns and releases at its Close, so a test or the e2e world asks a DNS of its own through the same parsing. A nil
+// ForwarderFactory, the default and every host's, builds a cache over each url, the public ones by default, as
+// production asks. A test sends nothing off the machine, so in a test binary that default is refused with
+// ErrDnsWatchPublicResolver before any cache is built: testing.Testing reads true only in a binary go test linked.
+//
 // An answer is parsed with dnsmessage into DnsWatchAnswer's canonical form: addresses as netip writes them, TXT
 // strings joined, MX names lowercase with their final dot, TLSA and CAA from their RDATA's bytes. Safe for concurrent
 // use.
@@ -19,46 +25,103 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
+	"testing"
 
 	"golang.org/x/net/dns/dnsmessage"
 
 	"github.com/urnetwork/connect"
 )
 
-// connect's cache is what each resolver forwards through.
-var _ dnsWatchForwarder = (*connect.DohCache)(nil)
+// connect's cache is what each resolver forwards through by default.
+var _ DnsWatchForwarder = (*connect.DohCache)(nil)
 
-// One resolver's raw RFC 8484 answers.
-type dnsWatchForwarder interface {
+// One resolver's raw RFC 8484 answers, as connect's DohCache.Forward gives them: the response to qType for a domain
+// given without its final dot, and whether a usable one came. Safe for concurrent use.
+type DnsWatchForwarder interface {
 	Forward(ctx context.Context, qType dnsmessage.Type, domain string) (response []byte, usable bool)
+}
+
+// A zone watch's resolver in a test binary over urls, the public ones by default: refused, so no test sends a query
+// off the machine.
+var ErrDnsWatchPublicResolver = errors.New("dns watch: a zone watch in a test asks no DoH resolver by url; set DnsWatchDohSettings.ForwarderFactory to the test's own DNS")
+
+// The resolvers' forwarders as a ForwarderFactory gives them, which one DnsWatchDohResolver alone asks.
+type DnsWatchForwarders struct {
+	// One a resolver, in the order Lookup numbers them: the settings' ResolverCount, none nil.
+	Forwarders []DnsWatchForwarder
+	// Releases the forwarders once the resolver has closed; nil releases nothing.
+	Close func()
 }
 
 // Tunables of the DoH resolvers.
 type DnsWatchDohSettings struct {
-	// The two resolvers' RFC 8484 urls. Empty takes the first two of connect's default remote DoH servers, each a
-	// different operator.
+	// How many resolvers the watch asks, each a different operator's: D-TRUST-9's two, the pair whose answers
+	// DnsWatch.Pass compares for a split, which compares no third. Must be positive.
+	ResolverCount int
+	// The resolvers' RFC 8484 urls, ResolverCount of them: by default the first ResolverCount of connect's default
+	// remote DoH servers, each a different operator. Unread where ForwarderFactory is set.
 	ResolverUrls []string
+	// Builds the resolvers' forwarders, which the resolver owns and releases at its Close. Nil, the default and every
+	// host's: a DohCache of the resolver's own over each url. A resolver in a test binary refuses that default, so a
+	// test names a DNS of its own here. An error, or forwarders other than ResolverCount or one nil, leaves the
+	// resolver unbuilt.
+	ForwarderFactory func() (*DnsWatchForwarders, error)
 }
 
 // Two of connect's default remote DoH servers, each a different operator.
 func DefaultDnsWatchDohSettings() *DnsWatchDohSettings {
+	resolverCount := 2
 	urls := connect.DefaultDnsResolverSettings().RemoteDohUrlsIpv4
-	return &DnsWatchDohSettings{ResolverUrls: slices.Clone(urls[:min(2, len(urls))])}
+	return &DnsWatchDohSettings{
+		ResolverCount: resolverCount,
+		ResolverUrls:  slices.Clone(urls[:min(resolverCount, len(urls))]),
+	}
 }
 
-// The watch's resolvers over DoH. Close releases their connections.
+// The watch's resolvers over DoH. Close releases them.
 type DnsWatchDohResolver struct {
-	forwarders []dnsWatchForwarder
+	forwarders []DnsWatchForwarder
 	caches     []*connect.DohCache
+	// a ForwarderFactory's release, nil for none
+	release   func()
+	closeOnce sync.Once
 }
 
-// Two resolvers, one a url of settings. nil takes the defaults.
+// The resolvers settings name, nil taking the defaults: its ForwarderFactory's forwarders, else a DohCache of the
+// resolver's own over each url, which in a test binary are refused with ErrDnsWatchPublicResolver before any cache is
+// built. A factory's error comes back as it was given, and forwarders other than ResolverCount, or one nil, are
+// refused, released first.
 func NewDnsWatchDohResolver(settings *DnsWatchDohSettings) (*DnsWatchDohResolver, error) {
+	return newDnsWatchDohResolver(settings, testing.Testing())
+}
+
+// NewDnsWatchDohResolver, inTest, a test binary's, refusing the urls.
+func newDnsWatchDohResolver(settings *DnsWatchDohSettings, inTest bool) (*DnsWatchDohResolver, error) {
 	if settings == nil {
 		settings = DefaultDnsWatchDohSettings()
 	}
-	if len(settings.ResolverUrls) != 2 {
-		return nil, fmt.Errorf("%w: the zone watch asks two resolvers", errInvalidSettings)
+	if settings.ResolverCount <= 0 {
+		return nil, fmt.Errorf("%w: the zone watch asks at least one resolver", errInvalidSettings)
+	}
+	if settings.ForwarderFactory != nil {
+		forwarders, err := settings.ForwarderFactory()
+		if err != nil {
+			return nil, err
+		}
+		if forwarders == nil || len(forwarders.Forwarders) != settings.ResolverCount || slices.Contains(forwarders.Forwarders, nil) {
+			if forwarders != nil && forwarders.Close != nil {
+				forwarders.Close()
+			}
+			return nil, fmt.Errorf("%w: the zone watch asks %d resolvers", errInvalidSettings, settings.ResolverCount)
+		}
+		return &DnsWatchDohResolver{forwarders: slices.Clone(forwarders.Forwarders), release: forwarders.Close}, nil
+	}
+	if inTest {
+		return nil, ErrDnsWatchPublicResolver
+	}
+	if len(settings.ResolverUrls) != settings.ResolverCount {
+		return nil, fmt.Errorf("%w: the zone watch asks %d resolvers", errInvalidSettings, settings.ResolverCount)
 	}
 	self := &DnsWatchDohResolver{}
 	for _, resolverUrl := range settings.ResolverUrls {
@@ -76,18 +139,23 @@ func NewDnsWatchDohResolver(settings *DnsWatchDohSettings) (*DnsWatchDohResolver
 }
 
 // A resolver over forwarders, for a test's fake forwarders.
-func newDnsWatchForwarderResolver(forwarders ...dnsWatchForwarder) *DnsWatchDohResolver {
+func newDnsWatchForwarderResolver(forwarders ...DnsWatchForwarder) *DnsWatchDohResolver {
 	return &DnsWatchDohResolver{forwarders: forwarders}
 }
 
-// Releases the caches' connections.
+// Releases the caches' connections, or the factory's forwarders, once.
 func (self *DnsWatchDohResolver) Close() {
-	for _, cache := range self.caches {
-		cache.Close()
-	}
+	self.closeOnce.Do(func() {
+		for _, cache := range self.caches {
+			cache.Close()
+		}
+		if self.release != nil {
+			self.release()
+		}
+	})
 }
 
-// The resolvers' count: one a url.
+// The resolvers' count: one a url or a factory's forwarder.
 func (self *DnsWatchDohResolver) ResolverCount() int {
 	return len(self.forwarders)
 }
