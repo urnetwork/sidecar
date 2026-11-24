@@ -524,6 +524,19 @@ type SidecarTlsSettings struct {
 	// with no path. No default, since no hostname sits in code; empty orders nothing, and EnsureTlsCertificate
 	// answers ErrTlsCertsUnconfigured. The routes themselves are api's, at ApiUrl.
 	CertsResource string
+	// How many times one call of the manager's, or of an ordering desktop's custom routes, asks for its service token
+	// for aud certs again after a failure that may change, as sidecarServiceTokenRefusalOf reads §7.8's answers: no
+	// answer from api, its 429 or 5xx, a keychain still locked, no api yet (Sidecar.certsServiceToken). 3, as gkm's
+	// client asks (GkmSettings.ExchangeRetryCount). Each waits the exchange's retry_after, else CertsExchangeRetryWait. A
+	// refusal for good, as invalid_grant or no enrolled client, ends the call at once, nothing having reached api's
+	// certs routes. Non-positive asks once.
+	CertsExchangeRetryCount int
+	// The wait before asking again when the exchange named none: 1 s.
+	CertsExchangeRetryWait time.Duration
+	// The longest retry_after a call waits out before it ends with the exchange's answer: 10 s, well inside an
+	// ordering desktop's claim renewal every LockLease / 3, 40 s (DESIGN-DETAILS 17.2.6), and short of the pass lock a
+	// person's EnsureTlsCertificate waits on.
+	CertsExchangeRetryMaxWait time.Duration
 	// How long the manager goes without reading GET /tls/certs when no hint asks: 1 h, §6.8's resync, which covers a
 	// lost TlsHint.
 	CertResyncInterval time.Duration
@@ -606,6 +619,9 @@ func DefaultSidecarTlsSettings() *SidecarTlsSettings {
 		SelfSignedLifetime:  30 * 24 * time.Hour,
 		SelfSignedBackdate:  1 * time.Hour,
 
+		CertsExchangeRetryCount:        3,
+		CertsExchangeRetryWait:         time.Second,
+		CertsExchangeRetryMaxWait:      10 * time.Second,
 		CertResyncInterval:             time.Hour,
 		CertHintMinInterval:            time.Second,
 		CertOrderPollInterval:          5 * time.Second,

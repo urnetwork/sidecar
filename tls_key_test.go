@@ -76,6 +76,10 @@ func TestDefaultSidecarTlsSettingsMatchDesign(t *testing.T) {
 		KeyRotationInterval: 180 * 24 * time.Hour,
 		SelfSignedLifetime:  30 * 24 * time.Hour,
 		SelfSignedBackdate:  1 * time.Hour,
+		// certs' token asked again as gkm's client asks its own (GkmSettings.ExchangeRetryCount; QD-1226's reading)
+		CertsExchangeRetryCount:   3,
+		CertsExchangeRetryWait:    time.Second,
+		CertsExchangeRetryMaxWait: 10 * time.Second,
 		// §6.8's hourly resync, and DESIGN-DETAILS 17.2.15's chain bound
 		CertResyncInterval:             time.Hour,
 		CertHintMinInterval:            time.Second,
