@@ -4,9 +4,10 @@
 // sender runs on this device where none does, as it keeps the receiver's Problem, so a sender the test binary's guard
 // refuses, or whose composition fails for any other reason, shows in Status, and through it in `ur mail status`,
 // `ur status` and the e2e world's status, where it showed only in a V(1) log. A running sender says nothing is wrong;
-// each gate a device does not pass says which; a refusal clears at the pass that composes the sender; and a generation
-// another has replaced says nothing over the one that runs, while one Close ended has the last word, its stop's. The
-// senders here ask resolvers the tests name (mail_sender_doh_seam_test.go's), and nothing dials.
+// each gate a device does not pass says which, a pass with nothing bound among them; a refusal clears at the pass that
+// composes the sender; and a generation another has replaced says nothing over the one that runs, while one Close
+// ended has the last word, its stop's. The senders here ask resolvers the tests name (mail_sender_doh_seam_test.go's),
+// and nothing dials.
 
 package sidecar
 
@@ -188,5 +189,76 @@ func TestMailSenderStatusAfterCloseSaysNoSenderRuns(t *testing.T) {
 	client.stopRun(run)
 	if status := testMailSenderStatus(t, client); run.smtp != nil || status != (MailClientSenderStatus{}) {
 		t.Fatalf("after Close, a sender %t and the status %+v", run.smtp != nil, status)
+	}
+}
+
+// Each gate on whom this device sends for says which, and none composes a sender: a host that composes none, as one
+// bound with no Sidecar; a device the verified state does not admit, which sends for no member; a device of the member
+// that no clause of §8.5 consented, admitted on a signature no consented device made; and a consented device of a
+// member with no mailbox, whose status carries the mailbox lookup's error.
+func TestMailSenderStatusNamesTheMemberGates(t *testing.T) {
+	prover := &mailComponentIdleProver{entered: make(chan struct{}, 1)}
+	resolvers := &testMailSenderResolvers{}
+	sender := newTestMailSenderRun(t, prover, resolvers.factory)
+	world := sender.world
+	unconsented := world.repos.fixture.device(world.member, NewId().Bytes())
+	world.repos.rebuild()
+	for _, device := range []struct {
+		name      string
+		sidecarId Id
+		composes  bool
+		problem   string
+	}{
+		{name: "a host that composes no sender", sidecarId: world.device, problem: "this host composes no sender"},
+		{
+			name: "a device the verified state does not admit", sidecarId: NewId(), composes: true,
+			problem: "this device sends for no member: it is tagged, or the verified state does not admit it",
+		},
+		{
+			name: "a device of the member no one consented", sidecarId: unconsented, composes: true,
+			problem: "this device is not a consented device of its member",
+		},
+		{
+			name: "a consented device of a member with no mailbox", sidecarId: world.stranger, composes: true,
+			problem: ErrMailNoMailbox.Error(),
+		},
+	} {
+		client := world.deviceClient(device.sidecarId)
+		if device.composes {
+			client.sidecar = sender.client.sidecar
+		}
+		client.enabledLocally = true
+		binding, _, err := client.bound()
+		if err != nil {
+			t.Fatal(err)
+		}
+		run := &mailComponentRun{ctx: sender.run.ctx, env: sender.run.env}
+		client.passSmtp(run, binding)
+		if status := testMailSenderStatus(t, client); run.smtp != nil || status.Running || status.Problem != device.problem {
+			t.Errorf("%s: a sender %t and the status %+v", device.name, run.smtp != nil, status)
+		}
+	}
+	if built, _ := resolvers.snapshot(); len(built) != 0 {
+		t.Errorf("devices that pass no gate built %d resolvers", len(built))
+	}
+}
+
+// A pass with nothing bound yet says so of the sender, as it does of the receiver.
+func TestMailSenderStatusOfAnUnboundPass(t *testing.T) {
+	client, err := NewMailClient(&MailClientArgs{NetworkId: testNetworkId, SidecarId: NewId(), Store: newTestMemoryStore()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(client.Close)
+	if client.pass(&mailComponentRun{ctx: t.Context()}) {
+		t.Fatal("a pass with nothing bound had work")
+	}
+	status, err := client.Status(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	unbound := "mail has nothing to work on yet"
+	if status.Sender != (MailClientSenderStatus{Problem: unbound}) || status.Receiver.Running || status.Receiver.Problem != unbound {
+		t.Fatalf("after an unbound pass, the sender %+v and the receiver %+v", status.Sender, status.Receiver)
 	}
 }
