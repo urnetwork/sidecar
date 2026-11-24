@@ -517,7 +517,8 @@ func (self *Forwarder) keepGroups(groups *forwarderGroups, chain []*GkmGroupForm
 // whose window each is judged in at its own pin. A read of gkm that fails is an error, which the compile retries; a
 // generation with no wrap, or one the checks refuse, is not. Each generation wanted that does not open, each listed one
 // no wrap opened and each refused one nothing past has opened waits with its cause, whether or not gkm lists it, and
-// config_key_waiting is raised for it once it has waited KeyWaitAlarmInterval (QD-1210; owner decision 716).
+// config_key_waiting is raised for it once it has waited KeyWaitAlarmInterval (QD-1210; owner decision 716). A gkm that
+// takes the judged state (forwarderGkmJudged) is handed it before the first read.
 func (self *Forwarder) openGenerations(ctx context.Context, state *ConfigState, held map[uint64]*forwarderGeneration, wanted []uint64) (int, error) {
 	if self.args.Gkm == nil {
 		return 0, nil
@@ -527,6 +528,11 @@ func (self *Forwarder) openGenerations(ctx context.Context, state *ConfigState, 
 		return 0, nil
 	}
 	now := self.clock.Now()
+	// the forwarding client's reads present the scope this state gives F as a verified state's, so one the exchange
+	// refuses while api's gate lags the state is ridden out (bridge_forward_client.go; QD-1230)
+	if judged, ok := self.args.Gkm.(forwarderGkmJudged); ok {
+		judged.judgedState(state, self.args.SidecarId, now)
+	}
 	// a step that failed leaves every wait standing, and each wanted generation not held waiting on that failure
 	failed := func(opened int, err error) (int, error) {
 		for _, generation := range wanted {
