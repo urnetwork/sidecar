@@ -349,7 +349,8 @@ func (self *memberReplicaKeys) AuthUnconfirmed(view GkmAuthView, repoId Id) {
 	self.replica.hints.Resync()
 }
 
-// Derives the requested scopes from the latest state the group accepted.
+// Derives the requested scopes from the latest state the group accepted. An unconfirmed state's, the config repo's
+// alone (QD-817), are handed as unconfirmed, so no call of them waits on the exchange (SetUnconfirmedRepoScopes).
 func (self *memberReplicaKeys) setScopes() {
 	view, configId, confirmed, err := self.joiningState()
 	if err != nil {
@@ -385,6 +386,10 @@ func (self *memberReplicaKeys) setScopes() {
 			continue
 		}
 		scopes = append(scopes, GkmRepoScope{RepoId: repoId, Role: role})
+	}
+	if !confirmed {
+		self.api.SetUnconfirmedRepoScopes(scopes)
+		return
 	}
 	self.api.SetRepoScopes(scopes)
 }

@@ -23,10 +23,12 @@
 //	          (MailSmtpBarePostmaster), is postmaster at the domain the session serves before mailcfg's rules (owner
 //	          decision 446): the domain of the MX host the sender reached, its SNI less the host's first label, or with
 //	          no SNI the receiver's own zone (PostmasterDomain). Every answer below is then the full address's
-//	rcpt      §15.8's grammar and the signed mailcfg (MailConfig.Resolve): unknown, burned or paused 550 5.1.1; GET
-//	          /mail/status's storage_full, read at most each StatusInterval, 452 4.2.2; past mail_inbound_recipients
-//	          452 4.5.3; a repo past mail_inbound_repos_per_message 452 4.5.3 (QD-208), a group counting once;
-//	          mailcfg not synced, or a lookup that failed, 451 4.3.0, never 550
+//	rcpt      §15.8's grammar and the signed mailcfg (MailConfig.Resolve): unknown, burned or paused 550 5.1.1, and so
+//	          is an address whose repo this receiver's own verified state holds as taking no mail, by a kind or an
+//	          inbox marker no later state changes (MailDepositor.takesNoMail), since no deposit could ever land there
+//	          and a 451 would be retried for days; GET /mail/status's storage_full, read at most each StatusInterval,
+//	          452 4.2.2; past mail_inbound_recipients 452 4.5.3; a repo past mail_inbound_repos_per_message 452 4.5.3
+//	          (QD-208), a group counting once; mailcfg not synced, or a lookup that failed, 451 4.3.0, never 550
 //	data      DATA and BDAT stream into the spool (mail_spool.go) ChunkByteCount at a time, hashed as they arrive. At
 //	          the last byte one of the receiver's check slots takes the message (MailAuthSlots), whose 30 s start then,
 //	          and the evidence is sealed (MailEvidenceBuilder); then one deposit a repo (mail_deposit.go)
@@ -493,6 +495,11 @@ func (self *MailSession) Rcpt(to string, options *smtp.RcptOptions) error {
 		return mailSessionReplyTryLater
 	}
 	if recipient == nil || !recipient.Known {
+		return mailSessionReplyUnknown
+	}
+	if self.server.args.Depositor.takesNoMail(recipient.RepoId) {
+		// a repo no deposit can ever reach (the file header's rcpt row): refused for good, this recipient alone, before
+		// gkm is asked
 		return mailSessionReplyUnknown
 	}
 	if self.server.storageFull(self.ctx) {
