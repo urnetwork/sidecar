@@ -1,8 +1,9 @@
-// The GkmHint intake's notices without their bytes (§6.8): a resident's publisher sends a hint that a later one of
-// its batch repeats with its seq, topic, version and kind but not its bytes, and so a hint past its topic's
-// TopicHintBodyCount. A gkm:<group_id> notice without them is still its group's commit wake and asks no resync, so a
-// group's commits coalesced in one window cost one sync rather than a resync of everything; a per-client gkm one,
-// whose kind, group and recipient went with the bytes, still asks for a resync. Each batch is handed to the intake
+// The GkmHint intake's notices without their bytes (§6.8): a resident's publisher sends a hint past its topic's
+// TopicHintBodyCount with its seq, topic, version and kind but not its bytes, as a publisher before QD-1397 sent a
+// hint that a later one of its batch repeats, which one now sends as its seq alone. A gkm:<group_id> notice without
+// them is still its group's commit wake and asks no resync, so a group's commits coalesced in one window cost one
+// sync rather than a resync of everything; a per-client gkm one, whose kind, group and recipient went with the
+// bytes, still asks for a resync. Each batch is handed to the intake
 // while it is held inside another wake, so it takes the batch in one pass, as it would a batch the push delivers at
 // once, on a clock the test never moves and handlers it holds, so nothing here sleeps.
 
@@ -52,9 +53,9 @@ func newGkmTestBodylessHints(t *testing.T) (*GkmHints, chan struct{}) {
 	return hints, resyncs
 }
 
-// A group's two commits in one window, as the publisher sends them: the earlier goes without its bytes, which the
-// later one repeats. The batch takes no resync and wakes the group's commit handler once, at the later generation.
-// Before, the earlier notice failed the group topic's form and resynced every repo the device holds.
+// A group's two commits in one window, as a publisher before QD-1397 sent them: the earlier goes without its bytes,
+// which the later one repeats. The batch takes no resync and wakes the group's commit handler once, at the later
+// generation. Before, the earlier notice failed the group topic's form and resynced every repo the device holds.
 func TestGkmHintsBodylessGroupRepeatAsksNoResync(t *testing.T) {
 	hints, resyncs := newGkmTestBodylessHints(t)
 	commits := newGkmTestHandler(false)
@@ -106,9 +107,9 @@ func TestGkmHintsBodylessGroupHintWakesItsGroup(t *testing.T) {
 }
 
 // A per-client work hint without its bytes asks for a resync, whatever dropped them: past TopicHintBodyCount, its
-// kind, group and recipient are lost but for the resync, and a repeat superseded by a copy later in its batch sends
-// the same notice, which nothing the client receives tells apart (question gkm-hint-intake-bodyless-superseded-mark).
-// The batch's hints with their bytes still wake their handlers, and the batch costs one resync.
+// kind, group and recipient are lost but for the resync, and a publisher before QD-1397 sent a repeat superseded by
+// a copy later in its batch as the same notice, which nothing the client receives tells apart. The batch's hints
+// with their bytes still wake their handlers, and the batch costs one resync.
 func TestGkmHintsBodylessWorkHintResyncs(t *testing.T) {
 	hints, resyncs := newGkmTestBodylessHints(t)
 	works := newGkmTestHandler(false)

@@ -637,9 +637,9 @@ func TestPublisherHintBetweenTailAndVersionsArrives(t *testing.T) {
 	}
 }
 
-// A hint of a topic that a later one of the batch repeats keeps its seq and loses its bytes, so seqs run
-// on with no gap and the later one carries them; distinct hints of the topic and other topics keep
-// theirs; only the batch's last frame carries an ack.
+// A hint of a topic that a later one of the batch repeats goes as its seq alone (QD-1397), so seqs run on
+// with no gap and the later one carries the topic, its version and the bytes; distinct hints of the topic
+// and other topics keep theirs; only the batch's last frame carries an ack.
 func TestPublisherCoalescesATopicKeepingSeq(t *testing.T) {
 	env := newTestPublisherEnv(t, nil)
 	env.startIdle(nil)
@@ -653,9 +653,9 @@ func TestPublisherCoalescesATopicKeepingSeq(t *testing.T) {
 	env.awaitCall("xrange")
 	messages := env.awaitHints(5)
 	want := []*protocol.PushHint{
-		{Seq: 1, Topic: sidecar.PushTopicTeam, Version: 1, Kind: 0x0A01},
+		{Seq: 1},
 		{Seq: 2, Topic: sidecar.PushTopicDns, Version: 5, Kind: 0x0A01, Hint: []byte("d")},
-		{Seq: 3, Topic: sidecar.PushTopicTeam, Version: 2, Kind: 0x0A01},
+		{Seq: 3},
 		{Seq: 4, Topic: sidecar.PushTopicTeam, Version: 3, Kind: 0x0A01, Hint: []byte("a")},
 		{Seq: 5, Topic: sidecar.PushTopicTeam, Version: 4, Kind: 0x0A01, Hint: []byte("c")},
 	}

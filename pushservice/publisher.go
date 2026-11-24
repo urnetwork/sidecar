@@ -10,12 +10,18 @@
 // unique to the run, the last complete (D-PROTO-20). Then each event on the client's n, which reaches it
 // as a Kick, has it wait HintCoalesceTimeout, read the stream past the last entry it sent, and send the
 // entries in seq order as PushHints, a topic's superseded hints coalesced (§6.8): a hint that a later one
-// of its topic in the batch repeats, the same kind and the same bytes, keeps its seq and loses its
-// bytes, so the client sees no gap and takes the later one. A hint is superseded only by one that says
-// what it says, so distinct hints of a topic each keep their bytes, as a client's per-client gkm work
-// hints for two groups or two late asks must: the newest TopicHintBodyCount of a topic, past which the
-// older ones lose their bytes as well, their owners' recovery covering them. A topic Topics leaves out
-// goes as its seq alone, which a client counts and applies nothing from.
+// of its topic in the batch repeats, the same kind and the same bytes, goes as its seq alone (QD-1397),
+// which a client counts, so it sees no gap, and applies nothing from, so no subscriber hears of it; the
+// later one carries the topic, its version and the bytes. A repeat so costs a subscriber nothing, where
+// a notice without bytes would have it recover whatever the bytes named, a per-client gkm work hint's
+// holder by a full gkm resync. The client applies the topic at the later one's version, which is never
+// below the superseded one's: the hint script writes each entry at what ver holds once it has written,
+// a durable topic's writer below it included, and ver falls only with the keys' hourly restart, whose
+// seq restart sends the client to versions. A hint is superseded only by one that says what it says,
+// so distinct hints of a topic each keep their bytes, as a client's per-client gkm work hints for two
+// groups or two late asks must: the newest TopicHintBodyCount of a topic, past which the older ones
+// lose their bytes and keep their topic, version and kind, so a client applies them and their owners'
+// recovery covers what the bytes named. A topic Topics leaves out goes as its seq alone too.
 //
 // Whatever shows the stream moved on without it sends a reset instead of the batch: a first entry whose
 // seq does not follow the last one sent, which a trim or the keys' hourly restart leaves (reading 5), an
@@ -98,8 +104,8 @@ type SidecarPublisherStats struct {
 	// resets sent whole, and their parts
 	ResetCount     uint64
 	ResetPartCount uint64
-	// hints sent, those of them sent without their bytes, and of those the ones no later hint of their
-	// batch repeated, past their topic's TopicHintBodyCount
+	// hints sent; those of them sent without their bytes, a superseded one as its seq alone; and of those
+	// the ones no later hint of their batch repeated, past their topic's TopicHintBodyCount
 	HintCount      uint64
 	CoalescedCount uint64
 	BodyBoundCount uint64
@@ -595,9 +601,9 @@ func (self *publisherRun) sendHints() error {
 	}
 
 	// §6.8's coalescing, from the batch's end so the newest of each hint is the one kept: a hint a later
-	// one repeats is superseded and loses its bytes; a distinct one keeps them, up to its topic's newest
-	// TopicHintBodyCount, and loses them past it or past the format's bytes. A topic the client is not
-	// told goes as its seq alone
+	// one repeats is superseded and goes as its seq alone; a distinct one keeps its bytes, up to its
+	// topic's newest TopicHintBodyCount, and past it or past the format's bytes loses them and keeps its
+	// topic, version and kind. A topic the client is not told goes as its seq alone
 	settings := self.publisher.settings
 	topicBodyCounts := map[string]int{}
 	keptHintKeys := map[publisherHintKey]bool{}
@@ -616,7 +622,9 @@ func (self *publisherRun) sendHints() error {
 			key := publisherHintKey{topic: item.hint.Topic, kind: item.hint.Kind, hint: string(item.hint.Hint)}
 			switch {
 			case keptHintKeys[key]:
-				// superseded: a later hint of the batch says the same
+				// superseded: a later hint of the batch says the same, and its topic, version and bytes
+				// stand for this one's (QD-1397)
+				item.hint = &protocol.PushHint{Seq: item.hint.Seq}
 			case topicBodyCounts[item.hint.Topic] < settings.TopicHintBodyCount:
 				keptHintKeys[key] = true
 				topicBodyCounts[item.hint.Topic] += 1

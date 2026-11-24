@@ -1200,7 +1200,8 @@ evs    4  the head first: its verified cache entry (11.9) when that version is a
           versions older than the window, the log pages that settle them
           (cached); the authorization state and the generation record from evs's caches (§10), the gate view read
           again at every run of step 4, the first and each rerun after step 7's 5 s window passes or a 412 (owner
-          decision 377)
+          decision 377); the round's store reads at most EvsSettings.EntryReadConcurrency (64) in flight, a read
+          past it waiting for a slot under the attempt's ctx (11.15's fan-out; owner decision 780)
        5  checks:
           a  retry: P already committed (the head window, or the log pages of (b, b+64]) -> 200 {its version}; a
              committed P with another statement hash -> 409 PUSH_ID_REUSED; P in the head's refusal records ->
@@ -1577,7 +1578,9 @@ request   POST /evs/v1/repos/<repo_id>/read (r): {ref_id, pin_version (0 if none
           pages, push records and parts by push id, and the DROP pushes whose body the reader already holds and has
           checked, by ref version, at most 64 (held_drops)}; this, the refs and log routes and 11.10's subscription
           routes answer a deleted repo 409 REPO_DELETED and a shredding or shredded one 409 SHREDDING, from the 5 s
-          repo/ cache the upload route uses (11.12's refused row; owner decision 379)
+          repo/ cache the upload route uses (11.12's refused row; owner decision 379); its first round reads the
+          named paths' entries at most EvsSettings.EntryReadConcurrency (64) at once, as step 4 does (11.15's
+          fan-out; owner decision 780)
 exact     An authenticated fresh single-ref read of a file-mode or uncreated ref reports whether this host enforces
           EXACT_HEAD in 11.8 (EvsHeadSummary.supports_exact_head, bool field 18). Listings, streams and cached
           reads omit it. Missing or false leaves the native ACL client at its preview (§7.9). Older hosts reject
@@ -3958,6 +3961,8 @@ never     a query, which documents match it, or which trigrams documents share: 
 | A drop | nothing deleted before `not_before_ms` + 25 min, nor before evacuation's horizon passes by 12 min the time evs saw the drop committed, 25 h 12 min to 26 h 12 min after a `now` drop (owner decisions 204, 397); a job's two passes read ≤ 32 MB/s; 10,000 segments deleted in about 17 min; ≤ ~0.3 MB written a metadata drive for a drop whose job runs 10 min |
 
 **Concurrency.** Pushes to one ref meet only at its head's If-Match: a file-mode loser with disjoint paths retries inside evs, so one ref sustains roughly 20-50 pushes/s; a git-mode loser gets a stock non-fast-forward and merges. Distinct refs never contend. In the twenty-agent test (§22), agents write their own refs in real time, and a merge into main every 60 s meets another in its ~60 ms window about 2% of the time, then merges again.
+
+**Fan-out** (owner decision 780). A part carries up to 1,024 entry writes and a client posts up to four parts at once, so step 4's reads, one per changed entry, window place and reuse, and a read's first round, one per named path, could put thousands of GETs in flight at one block, each dialing its own connection, and a store that resets them under load turns each part into a 503 whose retry repeats the burst. evs therefore bounds the store reads one push's step 4, and one read's first round, has in flight at `EvsSettings.EntryReadConcurrency` (64), a read past it waiting for a slot under the attempt's ctx; and the file clusters cap the connections each `FileClusters` instance opens to one host on its transport at `FileClusterSettings.MaxConnsPerHost`, `MaxIdleConnsPerHost` raised to match, as each block's backstop against any engine's burst. On a quiet store a part's step 4 then takes about 16 round trips instead of 1, as does a read naming 1,024 paths, and one push's burst can queue other requests' reads behind the transport cap.
 
 ### 11.16 Alternatives considered
 

@@ -2,14 +2,16 @@ package pushservice_test
 
 // Distinct hints of one topic each reaching the client (§6.8). Most rows run on publisher_test.go's
 // FakeRedis, fake clock and fake resident send: in one publisher batch, a hint that a later one of its
-// topic repeats, the same kind and the same bytes, is superseded, keeping its seq and losing its bytes,
-// while distinct hints of a topic each keep theirs, up to the topic's newest TopicHintBodyCount.
+// topic repeats, the same kind and the same bytes, is superseded and goes as its seq alone (QD-1397),
+// while distinct hints of a topic each keep their bytes, up to the topic's newest TopicHintBodyCount,
+// past which the older ones go without them, keeping their topic, version and kind.
 // gkm-reader-key-upload-retry found the publisher keeping only a topic's last body a batch, so of two
 // late asks reaching a holder at once on its per-client gkm topic, one ask's wrap-pending hint arrived
-// without its group and recipient, and only the asker's next ask delivered. Two rows run end to end on
-// T2's Net: those late asks reaching a real GkmHints intake, and two sock hints of one millisecond both
-// reaching the client now that sock is a raised clock (QD-1212), where the second used to carry the
-// first's version and be passed over as stale.
+// without its group and recipient, and only the asker's next ask delivered. Three rows run end to end on
+// T2's Net: those late asks reaching a real GkmHints intake, one late ask's hint repeated in a batch
+// reaching it once and asking no resync, and two sock hints of one millisecond both reaching the client
+// now that sock is a raised clock (QD-1212), where the second used to carry the first's version and be
+// passed over as stale.
 
 import (
 	"context"
@@ -398,6 +400,43 @@ func TestPublisherDistinctGkmWorkHintsReachTheClientsIntake(t *testing.T) {
 	})
 }
 
+// One late ask's hint repeated in a batch end to end on T2's Net, another ask's between the copies: the
+// publisher sends the earlier copy as its seq alone, which the client's push machine counts and hands no
+// subscriber, so the GkmHints intake wakes each ask's delivery once, the repeated one's at the later copy,
+// and asks no resync. While the publisher sent the earlier copy without its bytes, keeping its topic,
+// version and kind, the intake could not tell it from a hint past TopicHintBodyCount and resynced the
+// holder's whole gkm state for it (question gkm-hint-intake-bodyless-superseded-mark). The machine's
+// count with no gap is the root's push_seq_alone_test.go's to prove: a versions refetch here runs apart
+// from the frames, so no wait in this test could show one never came.
+func TestPublisherGkmWorkHintRepeatReachesTheClientsIntakeOnce(t *testing.T) {
+	var intake *testGkmIntake
+	env := newTestPublisherNet(t, func(laptop *sidecartest.SubprotocolSidecar) {
+		intake = newTestGkmIntake(t, laptop.Subprotocol().Subscribe)
+	})
+	groupId, otherGroupId := sidecar.NewId(), sidecar.NewId()
+	recipient := testGkmRecipient(sidecar.NewId())
+	repeated := testGkmHintBody(t, protocol.GkmHintKind_GKM_HINT_WRAP_PENDING, &groupId, recipient)
+	for _, body := range [][]byte{
+		repeated,
+		testGkmHintBody(t, protocol.GkmHintKind_GKM_HINT_WRAP_PENDING, &otherGroupId, recipient),
+		repeated,
+		testGkmHintBody(t, protocol.GkmHintKind_GKM_HINT_KEY_PACKAGES_LOW, nil, ""),
+	} {
+		env.hint(t, &sidecar.ClientHint{Topic: sidecar.PushTopicGkm, Version: uint64(env.publisherClock.Now().UnixMicro()), Kind: uint32(protocol.MessageType_GKM_HINT), Body: body})
+	}
+	env.passWindow(t)
+
+	wakes, resyncCount := intake.settle(t, testPublisherNetTimeout)
+	if resyncCount != 0 {
+		t.Errorf("the intake resynced %d times", resyncCount)
+	}
+	expectGkmWakes(t, wakes, []testGkmWakeKey{
+		{kind: protocol.GkmHintKind_GKM_HINT_WRAP_PENDING, groupId: otherGroupId, recipient: recipient},
+		{kind: protocol.GkmHintKind_GKM_HINT_WRAP_PENDING, groupId: groupId, recipient: recipient},
+		{kind: protocol.GkmHintKind_GKM_HINT_KEY_PACKAGES_LOW},
+	})
+}
+
 // Two sock hints for one listener client in one millisecond, as sockets hints two listens revoked at
 // once, end to end on T2's Net: sock is a raised clock (QD-1212), so the second carries the stored
 // version plus one, and both reach the client's sock subscriber with their bytes. While sock was no
@@ -445,8 +484,9 @@ func TestSockHintsOfOneMillisecondBothReachTheClient(t *testing.T) {
 }
 
 // One late ask's hint repeated in a batch, as gkm sends it again to a holder its first reached, is one
-// hint: the earlier goes with its seq and without its bytes, and the later one carries them; another
-// ask's hint between them keeps its own.
+// hint: the earlier goes as its seq alone (QD-1397), and the later one carries the topic, its version and
+// the bytes; another ask's hint between them keeps its own. gkm's clock is raised, so the later copy's
+// version is above the one the earlier copy was written at, and a client applying it loses nothing.
 func TestPublisherCoalescesRepeatsOfOneGkmHint(t *testing.T) {
 	env := newTestPublisherEnv(t, nil)
 	env.startIdle(nil)
@@ -454,43 +494,99 @@ func TestPublisherCoalescesRepeatsOfOneGkmHint(t *testing.T) {
 	recipient := testGkmRecipient(sidecar.NewId())
 	repeated := testGkmHintBody(t, protocol.GkmHintKind_GKM_HINT_WRAP_PENDING, &groupId, recipient)
 	other := testGkmHintBody(t, protocol.GkmHintKind_GKM_HINT_WRAP_PENDING, &otherGroupId, recipient)
-	env.gkmHint(repeated)
-	env.gkmHint(other)
-	env.gkmHint(repeated)
+	results := []*pushservice.PushHintResult{env.gkmHint(repeated), env.gkmHint(other), env.gkmHint(repeated)}
 	hints := env.awaitBatch(1, 3)
-	for index, want := range [][]byte{nil, other, repeated} {
-		if hints[index].Topic != sidecar.PushTopicGkm || hints[index].Kind != uint32(protocol.MessageType_GKM_HINT) || !slices.Equal(hints[index].Hint, want) {
-			t.Errorf("hint %d is %v, want its bytes %x", index, hints[index], want)
+	want := []*protocol.PushHint{
+		{Seq: 1},
+		{Seq: 2, Topic: sidecar.PushTopicGkm, Version: results[1].Version, Kind: uint32(protocol.MessageType_GKM_HINT), Hint: other},
+		{Seq: 3, Topic: sidecar.PushTopicGkm, Version: results[2].Version, Kind: uint32(protocol.MessageType_GKM_HINT), Hint: repeated},
+	}
+	for index, hint := range hints {
+		if !proto.Equal(hint, want[index]) {
+			t.Errorf("hint %d is %v, want %v", index, hint, want[index])
 		}
 	}
-	if !(hints[0].Version < hints[1].Version && hints[1].Version < hints[2].Version) {
-		t.Errorf("the versions do not rise: %d, %d, %d", hints[0].Version, hints[1].Version, hints[2].Version)
+	if !(results[0].Version < results[1].Version && results[1].Version < results[2].Version) {
+		t.Errorf("the versions do not rise: %d, %d, %d", results[0].Version, results[1].Version, results[2].Version)
 	}
 	if stats := env.closedStats(); stats.HintCount != 3 || stats.CoalescedCount != 1 || stats.BodyBoundCount != 0 {
 		t.Errorf("stats %+v", stats)
 	}
 }
 
+// A repeat whose later copy is past TopicHintBodyCount is no superseded hint, since no copy in the batch
+// carries the bytes: both copies go without them, keeping their topic, version and kind, for their
+// owner's recovery, and neither goes as its seq alone, which would leave the client nothing to apply.
+func TestPublisherRepeatPastTheBoundKeepsItsTopic(t *testing.T) {
+	settings := pushservice.DefaultSidecarPublisherSettings()
+	settings.TopicHintBodyCount = 1
+	env := newTestPublisherEnv(t, settings)
+	env.startIdle(nil)
+	groupId, otherGroupId := sidecar.NewId(), sidecar.NewId()
+	recipient := testGkmRecipient(sidecar.NewId())
+	repeated := testGkmHintBody(t, protocol.GkmHintKind_GKM_HINT_WRAP_PENDING, &groupId, recipient)
+	newest := testGkmHintBody(t, protocol.GkmHintKind_GKM_HINT_WRAP_PENDING, &otherGroupId, recipient)
+	results := []*pushservice.PushHintResult{env.gkmHint(repeated), env.gkmHint(repeated), env.gkmHint(newest)}
+	hints := env.awaitBatch(1, 3)
+	want := []*protocol.PushHint{
+		{Seq: 1, Topic: sidecar.PushTopicGkm, Version: results[0].Version, Kind: uint32(protocol.MessageType_GKM_HINT)},
+		{Seq: 2, Topic: sidecar.PushTopicGkm, Version: results[1].Version, Kind: uint32(protocol.MessageType_GKM_HINT)},
+		{Seq: 3, Topic: sidecar.PushTopicGkm, Version: results[2].Version, Kind: uint32(protocol.MessageType_GKM_HINT), Hint: newest},
+	}
+	for index, hint := range hints {
+		if !proto.Equal(hint, want[index]) {
+			t.Errorf("hint %d is %v, want %v", index, hint, want[index])
+		}
+	}
+	if stats := env.closedStats(); stats.HintCount != 3 || stats.CoalescedCount != 2 || stats.BodyBoundCount != 2 {
+		t.Errorf("stats %+v", stats)
+	}
+}
+
+// A durable topic's repeat written below the version of the hint it supersedes, as two writers that raced
+// write it: the hint script writes the later copy at what ver holds, so the copy the client applies
+// carries the superseded hint's version and loses the client nothing, and the earlier goes as its seq
+// alone.
+func TestPublisherSupersededDurableHintsCopyKeepsItsVersion(t *testing.T) {
+	env := newTestPublisherEnv(t, nil)
+	env.startIdle(nil)
+	first := env.hint(sidecar.PushTopicTeam, 5, []byte("t"))
+	repeat := env.hint(sidecar.PushTopicTeam, 4, []byte("t"))
+	if first.Version != 5 || repeat.Version != 5 {
+		t.Fatalf("the hints written at 5 and 4 carry %d and %d, want 5 and 5", first.Version, repeat.Version)
+	}
+	hints := env.awaitBatch(1, 2)
+	want := []*protocol.PushHint{
+		{Seq: 1},
+		{Seq: 2, Topic: sidecar.PushTopicTeam, Version: 5, Kind: 0x0A01, Hint: []byte("t")},
+	}
+	for index, hint := range hints {
+		if !proto.Equal(hint, want[index]) {
+			t.Errorf("hint %d is %v, want %v", index, hint, want[index])
+		}
+	}
+}
+
 // Hints of one topic with the same bytes and different kinds, the owner's MessageType, are distinct; a
-// repeat of one kind supersedes only its own.
+// repeat of one kind supersedes only its own, which goes as its seq alone.
 func TestPublisherKeepsHintsOfOneBytesAndTwoKinds(t *testing.T) {
 	env := newTestPublisherEnv(t, nil)
 	env.startIdle(nil)
 	body := []byte{0x08, 0x01}
-	env.hintOfKind(sidecar.PushTopicMail, 1, uint32(protocol.MessageType_MAIL_HINT), body)
-	env.hintOfKind(sidecar.PushTopicMail, 2, uint32(protocol.MessageType_SMTP_STATUS), body)
-	env.hintOfKind(sidecar.PushTopicMail, 3, uint32(protocol.MessageType_MAIL_HINT), body)
+	results := []*pushservice.PushHintResult{
+		env.hintOfKind(sidecar.PushTopicMail, 1, uint32(protocol.MessageType_MAIL_HINT), body),
+		env.hintOfKind(sidecar.PushTopicMail, 2, uint32(protocol.MessageType_SMTP_STATUS), body),
+		env.hintOfKind(sidecar.PushTopicMail, 3, uint32(protocol.MessageType_MAIL_HINT), body),
+	}
 	hints := env.awaitBatch(1, 3)
-	for index, want := range []struct {
-		kind protocol.MessageType
-		hint []byte
-	}{
-		{kind: protocol.MessageType_MAIL_HINT},
-		{kind: protocol.MessageType_SMTP_STATUS, hint: body},
-		{kind: protocol.MessageType_MAIL_HINT, hint: body},
-	} {
-		if hints[index].Kind != uint32(want.kind) || !slices.Equal(hints[index].Hint, want.hint) {
-			t.Errorf("hint %d is %v, want kind %s with bytes %x", index, hints[index], want.kind, want.hint)
+	want := []*protocol.PushHint{
+		{Seq: 1},
+		{Seq: 2, Topic: sidecar.PushTopicMail, Version: results[1].Version, Kind: uint32(protocol.MessageType_SMTP_STATUS), Hint: body},
+		{Seq: 3, Topic: sidecar.PushTopicMail, Version: results[2].Version, Kind: uint32(protocol.MessageType_MAIL_HINT), Hint: body},
+	}
+	for index, hint := range hints {
+		if !proto.Equal(hint, want[index]) {
+			t.Errorf("hint %d is %v, want %v", index, hint, want[index])
 		}
 	}
 	if stats := env.publisher.Stats(); stats.CoalescedCount != 1 || stats.BodyBoundCount != 0 {
@@ -499,8 +595,9 @@ func TestPublisherKeepsHintsOfOneBytesAndTwoKinds(t *testing.T) {
 }
 
 // TopicHintBodyCount holds: of eight distinct hints of one topic and a repeat of one of them in a batch,
-// only the topic's newest three go with their bytes, the repeat's earlier copy taking no place among
-// them; another topic keeps its own beside them; every seq still goes.
+// only the topic's newest three go with their bytes, the repeat's earlier copy going as its seq alone and
+// taking no place among them, and the five older ones going without their bytes and keeping their topic,
+// version and kind; another topic keeps its own beside them; every seq still goes.
 func TestPublisherHoldsATopicToItsHintBodyCount(t *testing.T) {
 	settings := pushservice.DefaultSidecarPublisherSettings()
 	settings.TopicHintBodyCount = 3
@@ -513,8 +610,9 @@ func TestPublisherHoldsATopicToItsHintBodyCount(t *testing.T) {
 		bodies = append(bodies, testGkmHintBody(t, protocol.GkmHintKind_GKM_HINT_WRAP_PENDING, &groupId, recipient))
 	}
 	// in seq order: the eight, a team hint, then the sixth again
+	results := []*pushservice.PushHintResult{}
 	for _, body := range bodies {
-		env.gkmHint(body)
+		results = append(results, env.gkmHint(body))
 	}
 	env.hint(sidecar.PushTopicTeam, 1, []byte("team"))
 	env.gkmHint(bodies[5])
@@ -533,25 +631,37 @@ func TestPublisherHoldsATopicToItsHintBodyCount(t *testing.T) {
 	if gkmBodyCount != settings.TopicHintBodyCount {
 		t.Errorf("%d gkm hints carry their bytes, want %d", gkmBodyCount, settings.TopicHintBodyCount)
 	}
+	for index := range 5 {
+		want := &protocol.PushHint{Seq: results[index].Seq, Topic: sidecar.PushTopicGkm, Version: results[index].Version, Kind: uint32(protocol.MessageType_GKM_HINT)}
+		if !proto.Equal(hints[index], want) {
+			t.Errorf("hint %d, past the bound, is %v, want %v", index, hints[index], want)
+		}
+	}
+	if want := (&protocol.PushHint{Seq: results[5].Seq}); !proto.Equal(hints[5], want) {
+		t.Errorf("the sixth's earlier copy is %v, want %v", hints[5], want)
+	}
 	// six without their bytes: the sixth's earlier copy superseded, and five past the bound
 	if stats := env.closedStats(); stats.HintCount != 10 || stats.CoalescedCount != 6 || stats.BodyBoundCount != 5 {
 		t.Errorf("stats %+v", stats)
 	}
 }
 
-// A hint past the format's bytes goes without them and takes no place under TopicHintBodyCount, so the
-// distinct hint before it keeps its own at a bound of one.
+// A hint past the format's bytes goes without them, keeping its topic, version and kind, and takes no
+// place under TopicHintBodyCount, so the distinct hint before it keeps its own at a bound of one.
 func TestPublisherOversizeHintTakesNoPlaceUnderTheBound(t *testing.T) {
 	settings := pushservice.DefaultSidecarPublisherSettings()
 	settings.TopicHintBodyCount = 1
 	settings.Format.MaxHintByteCount = 8
 	env := newTestPublisherEnv(t, settings)
 	env.startIdle(nil)
-	env.hint(sidecar.PushTopicTeam, 1, []byte("small"))
-	env.hint(sidecar.PushTopicTeam, 2, []byte("past eight bytes"))
+	small := env.hint(sidecar.PushTopicTeam, 1, []byte("small"))
+	oversize := env.hint(sidecar.PushTopicTeam, 2, []byte("past eight bytes"))
 	hints := env.awaitBatch(1, 2)
-	if !slices.Equal(hints[0].Hint, []byte("small")) || len(hints[1].Hint) != 0 {
-		t.Errorf("hints %v and %v", hints[0], hints[1])
+	if !slices.Equal(hints[0].Hint, []byte("small")) || hints[0].Version != small.Version {
+		t.Errorf("hint %v, want its bytes", hints[0])
+	}
+	if want := (&protocol.PushHint{Seq: oversize.Seq, Topic: sidecar.PushTopicTeam, Version: oversize.Version, Kind: 0x0A01}); !proto.Equal(hints[1], want) {
+		t.Errorf("hint %v, want %v", hints[1], want)
 	}
 	if stats := env.publisher.Stats(); stats.CoalescedCount != 1 || stats.BodyBoundCount != 0 {
 		t.Errorf("stats %+v", stats)

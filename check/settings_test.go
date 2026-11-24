@@ -235,6 +235,9 @@ func defaultCheckSettings() *checkSettings {
 			"evs_index_extract_entities.go": "TestIndexReferenceTableIsCurrent",
 			// SearchOracle's own copy of the same table, written apart from the index's (DESIGN-DETAILS 11.7; SEARCH-M10-43)
 			"sidecartest/search_oracle_entities.go": "TestSearchOracleReferenceTableIsCurrent",
+			// DESIGN-COMPUTE §28.7's support log registry as Go, from support/registry.yml, which check/support_log_test.go
+			// generates
+			"support_log_registry.go": "TestSupportLogRegistryMatchesItsSource",
 		},
 		wallClockExceptions: map[string]wallClockException{
 			"id.go time.Now": {

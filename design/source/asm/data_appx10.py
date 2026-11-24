@@ -523,7 +523,8 @@ def appendix_g(t2):
               "citations resolve.")
     text = (f"§2.8 holds `metadata_list.yml` ({ver.group(1)}, updated {ver.group(2)} for {ver.group(3)}), the list the "
             "product promises: URnetwork's servers never receive plaintext content or keys, in any mode, and see only "
-            "the values it names (D-TRUST-4), with one bounded exception, the platform report listener (§2.8). This "
+            "the values it names (D-TRUST-4), with two bounded exceptions, the platform report listener and the support "
+            "conversation (§2.8). This "
             "appendix no longer copies it, so the two cannot drift. " + census)
     return {'version': ver.group(1), 'date': ver.group(2), 'scope': ver.group(3), 'rows': len(rows),
             'withdrawn': wd, 'families': {p: len(ns) for p, ns in fam.items()}, 'spans': spans, 'census': census,
