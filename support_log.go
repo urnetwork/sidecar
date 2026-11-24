@@ -229,6 +229,7 @@ func (self SupportLogCode) Declares(fieldName string) bool {
 
 // The field constructors' common forms, which only the generated file calls.
 
+// An enum's value, which Event holds to its enum's values.
 func supportLogEnumField(number SupportLogFieldNumber, value uint32) SupportLogField {
 	return SupportLogField{number: number, fieldType: supportLogFieldTypeEnum, value: uint64(value)}
 }
@@ -248,10 +249,12 @@ func supportLogSizeField(number SupportLogFieldNumber, byteCount int64) SupportL
 	return SupportLogField{number: number, fieldType: supportLogFieldTypeSize, value: uint64(max(byteCount, 0))}
 }
 
+// A version, which Event holds to its format before the ring keeps it.
 func supportLogVersionField(number SupportLogFieldNumber, version string) SupportLogField {
 	return SupportLogField{number: number, fieldType: supportLogFieldTypeVersion, version: version}
 }
 
+// True or false, as 1 or 0.
 func supportLogBooleanField(number SupportLogFieldNumber, value bool) SupportLogField {
 	field := SupportLogField{number: number, fieldType: supportLogFieldTypeBoolean}
 	if value {
@@ -560,6 +563,7 @@ func (self *SupportLog) flush() {
 	self.flushWithFileLock()
 }
 
+// flush's work, its caller holding fileLock: a bundle flushes so it reads every event written before it.
 func (self *SupportLog) flushWithFileLock() {
 	now := self.clock.Now().Unix()
 	var pending []byte
