@@ -32,7 +32,7 @@ func (self *MailClient) registerOutboxLookup(gate MailConfigGate) {
 		return
 	}
 	if !self.outboxLookupLock.TryLock() {
-		// marks that this caller waits on a registration in flight
+		// marks that this caller waits on another holding the lock: a registration in flight, or a read of the mark
 		testHookBarrier("mail.outbox.lookup.wait", self.sidecarId.String())
 		self.outboxLookupLock.Lock()
 	}
