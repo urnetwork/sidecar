@@ -93,6 +93,8 @@ func newNetExchange(ctx context.Context, net *Net) *netExchange {
 	}
 }
 
+// Ends every client, resident and platform client, and returns once each has joined its workers, or its join has passed
+// NetSettings.ClientCloseTimeout and gone to the Net's report (Net.closeFailed).
 func (self *netExchange) close() {
 	var clients []*NetClient
 	var residents []*NetResident
@@ -111,12 +113,25 @@ func (self *netExchange) close() {
 	for _, resident := range residents {
 		resident.Close()
 	}
+	// each client's worker joins it once it has ended (attachClientWithProvideKeys)
 	for _, client := range clients {
-		client.Client.Cancel()
+		client.Client.Close()
 	}
 	self.closePlatform()
 	self.cancel()
 	self.workers.Wait()
+}
+
+// Joins a client of the exchange's that has ended or that the exchange's end ends. Until the exchange ends the join has
+// no bound, since a test may hold a callback of a client it ended past any bound the Net could set; from then on it has
+// NetSettings.ClientCloseTimeout, past which the client is reported (Net.closeFailed). Runs on the client's exchange
+// worker, never one of its callbacks.
+func (self *netExchange) joinClient(netClient *NetClient) {
+	// errs only once the exchange's context has ended, as every wait in it ends with its context
+	if err := netClient.Client.CloseAndWait(self.ctx); err == nil {
+		return
+	}
+	self.net.joinClient(fmt.Sprintf("%q (%s)", netClient.Name, netClient.ClientId), netClient.Client)
 }
 
 // A send gateway for every destination but ControlId, or for ControlId alone. No transport connect
@@ -398,6 +413,14 @@ func (self *netExchange) attachClientWithProvideKeys(ctx context.Context, name s
 	}()
 	go func() {
 		defer self.workers.Done()
+		// the client ends with ctx, with a Cancel or Close of whoever holds it, or at the exchange's end, and is joined
+		// then, so close's wait for this worker is a wait for the client's own workers
+		select {
+		case <-client.Done():
+		case <-self.ctx.Done():
+		}
+		self.joinClient(netClient)
+		// a client closed under a live ctx is still routed to until ctx or the exchange ends
 		select {
 		case <-ctx.Done():
 		case <-self.ctx.Done():
