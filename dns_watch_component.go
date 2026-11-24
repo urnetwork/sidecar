@@ -7,11 +7,11 @@
 // Who runs it. D-TRUST-9 has sidecars with a published name or a mail host watch their zone, a pass about every 6 h
 // like the CT watch (D-TLS-8), which runs only on a host that stays up (TLS-M8-01). ur daemon is that host: the
 // desktop's and the CLI's sidecar role (§18.4), where ur bridge public-tls publishes and the network's mail indexers
-// receive, so it adds this component beside the dns component for each network it hosts (cli's daemon_dns.go). An
-// app's sidecar role runs only while the app is open (owner decision 197), where a pass about every 6 h would seldom
-// come, so sdk's hosts add none and leave the watch to the network's daemons, as sdk's foreground classes leave the
-// CT watch; question dns-watch-followups-app-hosts asks whether that stands, and whether sdk's desktop class, which
-// runs the CT watch, should run this one too.
+// receive, so it adds this component beside the dns component for each network it hosts (cli's daemon_dns.go), and
+// sdk's desktop class adds it the same way, as it runs the CT watch (sdk's sidecar_dns_watch.go). An app's sidecar
+// role runs only while the app is open (owner decision 197), where a pass about every 6 h would seldom come, so sdk's
+// foreground-only classes, iOS and Android, add none and leave the watch to the network's daemons, as they leave the
+// CT watch (QD-1384).
 //
 // The component composes the watch at the first client generation that can: the network known, its DnsClient made
 // and the watch's file in the network's dns/ directory read, which a locked keychain refuses. A generation that
