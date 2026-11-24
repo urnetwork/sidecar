@@ -121,11 +121,21 @@ var failsOnRows = []failsOnRow{
 		},
 	},
 	{
-		row: "layering", item: "a client package importing a <svc>service",
+		row: "layering", item: "a client package importing a <svc>service, or the search signer, an engine by name (DESIGN-COMPUTE §14.2)",
 		rule: (*repository).clientEngineImportFindings,
 		plantedTests: []string{
 			"TestLayeringFailsOnTheRootImportingAnEngine", "TestLayeringFailsOnANewPackageImportingAnEngine",
-			"TestLayeringFailsOnCliImportingAnEngine",
+			"TestLayeringFailsOnCliImportingAnEngine", "TestLayeringFailsOnTheRootImportingTheSearchSigner",
+		},
+	},
+	{
+		row: "layering", item: "DESIGN-COMPUTE §3.3's placement: a root compute family importing first-party code beyond connect and the root, computeservice, searchsigner or owner decision 594's packages importing server or sdk, or searchsigner importing computeservice",
+		rule:         (*repository).computePlacementFindings,
+		checkoutTest: "TestComputePlacement",
+		plantedTests: []string{
+			"TestComputePlacementFailsOnAnInferFileImportingServer", "TestComputePlacementFailsOnAComputeFileImportingSdk",
+			"TestComputePlacementFailsOnAComputeFileImportingOperatorCore", "TestComputePlacementFailsOnSearchsignerImportingComputeservice",
+			"TestComputePlacementFailsOnTheBrokerImportingServer", "TestComputePlacementFailsOnAServerHostedPackageImportingServer",
 		},
 	},
 	{

@@ -330,7 +330,7 @@ func (self *repository) legPatterns(leg *buildLeg) ([]string, error) {
 				return nil, err
 			}
 			for _, entry := range entries {
-				if entry.IsDir() && strings.HasSuffix(entry.Name(), "service") {
+				if entry.IsDir() && isEngineDirectory(entry.Name()) {
 					patterns = append(patterns, "./"+entry.Name()+"/...")
 				}
 			}

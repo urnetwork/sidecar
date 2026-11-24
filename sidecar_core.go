@@ -23,7 +23,8 @@ import (
 var ErrSidecarClosed = errors.New("sidecar closed")
 
 // Starts the run loop on what the leg's NewSidecar built, until ctx ends or cancel. networkId is the host store's, nil
-// before enrollment.
+// before enrollment. The compute components construct first, after the host's components and before the loop, so the
+// loop's end cannot race them (compute_sidecar.go; none on the legs without compute).
 func (self *Sidecar) start(ctx context.Context, cancel context.CancelFunc, instance *SidecarInstance, networkId *Id, leg sidecarLeg) {
 	self.instance = instance
 	self.leg = leg
@@ -34,6 +35,7 @@ func (self *Sidecar) start(ctx context.Context, cancel context.CancelFunc, insta
 		id := *networkId
 		self.networkId = &id
 	}
+	self.startComputeComponents()
 	go self.run()
 }
 
@@ -45,7 +47,8 @@ func (self *Sidecar) wake() {
 }
 
 // The loop: subscribe to both sources of change, then act on what they show, until the Sidecar closes. On the way out
-// it ends the generation and closes every component, then closes done.
+// it ends the generation and closes every component, the compute components in reverse before the host's, then closes
+// done.
 func (self *Sidecar) run() {
 	defer close(self.done)
 	defer func() {
@@ -57,6 +60,7 @@ func (self *Sidecar) run() {
 		if replica != nil {
 			replica.Close()
 		}
+		self.closeComputeComponents()
 		if self.leg != nil {
 			self.leg.close()
 		}
