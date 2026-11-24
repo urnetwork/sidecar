@@ -12,6 +12,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/netip"
 	"slices"
 	"sync"
@@ -137,7 +138,7 @@ func TestDarwinDiscoveryProxyRegistersLocalOnly(t *testing.T) {
 	}
 }
 
-func TestDarwinDiscoveryProxyRefusesATakenNameOnce(t *testing.T) {
+func TestDarwinDiscoveryProxyLeavesATakenNameOut(t *testing.T) {
 	proxy, applied := testDarwinDiscoveryProxy(t)
 	service := "_urtest" + testDarwinDnsSdLabel(t, "")[:6] + "._tcp"
 	name := "Taken " + testDarwinDnsSdLabel(t, "")
@@ -159,32 +160,110 @@ func TestDarwinDiscoveryProxyRefusesATakenNameOnce(t *testing.T) {
 	proxy.Set(registrations, nil)
 	// the refusal arrives on the reader, which wakes one more apply that withdraws and counts it
 	testDarwinProxyApplied(t, applied, urDiscoveryProxyStatus{RefusedCount: 1})
-	// no apply follows on its own: the refused name waits for the set's next change
-	select {
-	case status := <-applied:
-		t.Fatalf("the proxy tried again on its own: %+v", status)
-	default:
-	}
+	// the name is free at the set's next change, which tries it again
 	holder.Cancel(blocker)
 	proxy.Set(slices.Clone(registrations), nil)
 	testDarwinProxyApplied(t, applied, urDiscoveryProxyStatus{RegisteredCount: 1})
 }
 
-// A connection that a test ends, recording what is registered on it.
+// A refused name is withdrawn and not tried again by its refusal's wake or any other under the same set, and is tried
+// again at the set's next change. The fake's registrations and withdrawals and the proxy's applies land on one channel
+// in the order the proxy's goroutine makes them.
+func TestDarwinDiscoveryProxyTriesARefusedNameOnlyAtTheNextSet(t *testing.T) {
+	events := make(chan string, 64)
+	connection := newTestDarwinProxyConnection()
+	connection.taken["Files"] = true
+	connection.events = events
+	proxy := newUrDarwinDiscoveryProxy(context.Background(), nil, defaultUrDiscoveryProxySettings(), func() (urDarwinDnsSdConnection, error) {
+		return connection, nil
+	}, func(status urDiscoveryProxyStatus) {
+		events <- fmt.Sprintf("apply %d %d", status.RegisteredCount, status.RefusedCount)
+	})
+	defer proxy.Close()
+	registrations := []*sidecar.BridgeDiscoveryRegistration{
+		testDarwinProxyRegistration("Files", "_smb._tcp", "nas", "host-a", "100.80.128.9", 445, ""),
+		testDarwinProxyRegistration("Screen", "_rfb._tcp", "nas", "host-a", "100.80.128.9", 5900, ""),
+	}
+	// reads events until want, failing on a second registration of Files before it
+	await := func(want string) {
+		t.Helper()
+		filesCount := 0
+		for {
+			event := testDarwinDnsSdNext(t, events, want)
+			if event == "register Files" {
+				filesCount += 1
+				if 1 < filesCount {
+					t.Fatalf("Files registered twice before %q", want)
+				}
+			}
+			if event == want {
+				return
+			}
+		}
+	}
+	proxy.Set(registrations, nil)
+	await("cancel Files")
+	// the apply that withdrew it registers nothing after
+	if event := testDarwinDnsSdNext(t, events, "apply"); event != "apply 1 1" {
+		t.Fatalf("after the withdrawal %q", event)
+	}
+	// another wake under the same set registers nothing
+	proxy.poke()
+	if event := testDarwinDnsSdNext(t, events, "apply"); event != "apply 1 1" {
+		t.Fatalf("a wake under the same set brought %q", event)
+	}
+	// the next set tries it again, once
+	proxy.Set(slices.Clone(registrations), nil)
+	await("cancel Files")
+	if count := connection.registerCount("Files"); count != 2 {
+		t.Fatalf("Files was tried %d times over two sets", count)
+	}
+	// freed, it registers at the set after
+	connection.free("Files")
+	proxy.Set(slices.Clone(registrations), nil)
+	await("apply 2 0")
+	if count := connection.registerCount("Screen"); count != 1 {
+		t.Fatalf("the name never refused was registered %d times", count)
+	}
+}
+
+// A connection that a test ends, recording what is registered on it, each name's registrations, and refusing the names
+// another registration holds, its refusal coming later on another goroutine as mDNSResponder's reader would bring it.
 type testDarwinProxyConnection struct {
 	stateLock sync.Mutex
 	done      chan struct{}
 	closed    bool
 	services  map[*darwinDnsSdOperation]string
 	records   map[*darwinDnsSdRecord]string
+	taken     map[string]bool
+	registers map[string]int
+	// hears each registration and withdrawal of a service by its name, "register <name>" and "cancel <name>"; nil hears
+	// none
+	events chan string
 }
 
 func newTestDarwinProxyConnection() *testDarwinProxyConnection {
 	return &testDarwinProxyConnection{
-		done:     make(chan struct{}),
-		services: map[*darwinDnsSdOperation]string{},
-		records:  map[*darwinDnsSdRecord]string{},
+		done:      make(chan struct{}),
+		services:  map[*darwinDnsSdOperation]string{},
+		records:   map[*darwinDnsSdRecord]string{},
+		taken:     map[string]bool{},
+		registers: map[string]int{},
 	}
+}
+
+// How many times name was registered.
+func (self *testDarwinProxyConnection) registerCount(name string) int {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.registers[name]
+}
+
+// Frees a taken name.
+func (self *testDarwinProxyConnection) free(name string) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	delete(self.taken, name)
 }
 
 func (self *testDarwinProxyConnection) Register(flags uint32, index uint32, name string, service string, domain string, host string,
@@ -199,6 +278,13 @@ func (self *testDarwinProxyConnection) Register(flags uint32, index uint32, name
 	}
 	operation := &darwinDnsSdOperation{}
 	self.services[operation] = name
+	self.registers[name] += 1
+	if self.events != nil {
+		self.events <- "register " + name
+	}
+	if self.taken[name] {
+		go handle(&darwinDnsSdRegisterReply{Err: darwinDnsSdError(darwinDnsSdErrNameConflict), Name: name})
+	}
 	return operation, nil
 }
 
@@ -226,6 +312,9 @@ func (self *testDarwinProxyConnection) RemoveRecord(record *darwinDnsSdRecord) {
 func (self *testDarwinProxyConnection) Cancel(operation *darwinDnsSdOperation) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
+	if name, held := self.services[operation]; held && self.events != nil {
+		self.events <- "cancel " + name
+	}
 	delete(self.services, operation)
 }
 
