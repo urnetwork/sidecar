@@ -272,7 +272,13 @@ func (self *Bridge) adoptWithLock(decision PostureDecision, force bool) ([]uint6
 	if decision.BridgeState != previous.BridgeState || decision.State != previous.State {
 		var zone *BridgeZone
 		if decision.State.Enforcing() && decision.BridgeState != nil {
-			zone = NewBridgeZone(decision.BridgeState.GetNames(), decision.BridgeState.GetNameZones(), self.settings)
+			blocks := []netip.Prefix{}
+			for _, prefix := range []*bridge.BridgeIpv4Prefix{rules.GetBlock(), rules.GetPreviousBlock()} {
+				if block, ok := bridgeRulePrefix(prefix); ok {
+					blocks = append(blocks, block)
+				}
+			}
+			zone = NewBridgeZone(decision.BridgeState.GetNames(), decision.BridgeState.GetNameZones(), self.settings).withBlocks(blocks)
 		}
 		zoneChanged = self.zone.Swap(zone) != zone
 	}

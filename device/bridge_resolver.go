@@ -2,6 +2,9 @@
 // TCP to a block's <block>.0.53 port 53, and it answers as a connect.UserNatClient, writing replies into the tun through
 // receive:
 //
+//	dns-sd     a DNS-SD name of a zone, or a name of the block's reverse zone, is answered from the discovery view by
+//	           bridge_discovery.go's table, every answer and denial at DiscoveryTtl, so none leaves the device either
+//	           (§12.9.1; owner decision 778); UDP answers fit the asker's EDNS0 size, else they set TC
 //	owned      a name of the zone gets its A record, and NODATA for every other query type and class, so no query
 //	           for a name of the table leaves the device
 //	pass       any other name goes to the host's system resolver (ResolverUpstream) off the packet path, through a
@@ -64,10 +67,6 @@ const (
 	bridgeTcpFlagRst         = 0x04
 	bridgeTcpFlagPsh         = 0x08
 	bridgeTcpFlagAck         = 0x10
-	bridgeTcpWindow          = 65535
-	// the most an answer's segment carries: the MSS a peer that names none takes (RFC 9293 §3.7.1), since a
-	// stateless resolver keeps no MSS the SYN named
-	bridgeTcpSegmentByteCount = 536
 )
 
 // One query read off its packet.
@@ -109,6 +108,8 @@ type BridgeResolverClient struct {
 	clock    Clock
 	// the zone of the state in force, nil for none
 	zone func() *BridgeZone
+	// the discovery view in force, nil for none (bridge_discovery.go); the bridge sets it before its first packet
+	discovery func() *BridgeDiscoveryView
 	// where replies enter the tun, which borrows each; nil sends none
 	receive atomic.Pointer[connect.ReceivePacketFunction]
 	queue   chan *bridgeResolverPass
@@ -309,6 +310,9 @@ func (self *BridgeResolverClient) receiveQuery(reply bridgeResolverReply, messag
 		zone = self.zone()
 	}
 	if zone != nil {
+		if self.answerDiscovery(reply, message, query, zone) {
+			return
+		}
 		addrs, ttl, owned := zone.Answer(query.name, query.qtype)
 		if owned {
 			if query.qclass != bridgeDnsClassIn || (query.qtype != bridgeDnsTypeA && query.qtype != bridgeDnsTypeAny) {
@@ -329,6 +333,45 @@ func (self *BridgeResolverClient) receiveQuery(reply bridgeResolverReply, messag
 	default:
 		self.droppedCount.Add(1)
 	}
+}
+
+// The file's dns-sd row: answers query, whose whole message is message, when its name is a DNS-SD name of one of zone's
+// zones or a name of the block's reverse zone, and says whether it did. Borrows message.
+func (self *BridgeResolverClient) answerDiscovery(reply bridgeResolverReply, message []byte, query bridgeDnsQuery, zone *BridgeZone) bool {
+	labels := bridgeDnsQueryLabels(query)
+	if len(labels) == 0 {
+		return false
+	}
+	var view *BridgeDiscoveryView
+	if self.discovery != nil {
+		view = self.discovery()
+	}
+	answer := bridgeDnsSdAnswer{}
+	for _, zoneLabels := range zone.zoneLabels {
+		if relative, found := bridgeDnsRelative(labels, zoneLabels); found {
+			if answer = view.answer(relative, zoneLabels, query.qtype, zone.clientName); answer.owned {
+				break
+			}
+		}
+	}
+	if !answer.owned {
+		answer = bridgeDnsReverseAnswer(labels, query.qtype, zone.blocks, zone.zoneLabels, zone.reverseNames)
+	}
+	if !answer.owned {
+		return false
+	}
+	if query.qclass != bridgeDnsClassIn && query.qclass != bridgeDnsTypeAny {
+		// the name is the device's in every class, and holds records only in IN's
+		answer.answers = nil
+		answer.additionals = nil
+	}
+	maxByteCount := bridgeDnsUdpMaxByteCount
+	if !reply.tcp {
+		maxByteCount = bridgeDnsUdpByteCount(message, query, self.settings)
+	}
+	self.answeredCount.Add(1)
+	self.answer(reply, buildBridgeDnsSdResponse(query, answer, bridgeDiscoveryTtl(self.settings), maxByteCount))
+	return true
 }
 
 // An upstream worker: passes each queued query on, and answers with what comes back or a server failure.
@@ -379,7 +422,7 @@ func (self *BridgeResolverClient) answer(reply bridgeResolverReply, message []by
 	binary.BigEndian.PutUint16(data[:bridgeDnsTcpPrefixByteCount], uint16(len(message)))
 	copy(data[bridgeDnsTcpPrefixByteCount:], message)
 	for 0 < len(data) {
-		segment := data[:min(len(data), bridgeTcpSegmentByteCount)]
+		segment := data[:min(len(data), self.settings.ResolverTcpSegmentByteCount)]
 		data = data[len(segment):]
 		flags := byte(bridgeTcpFlagAck | bridgeTcpFlagPsh)
 		if len(data) == 0 {
@@ -426,7 +469,7 @@ func (self *BridgeResolverClient) write(reply bridgeResolverReply, flags byte, p
 		}
 		transport[12] = (bridgeTcpHeaderByteCount / 4) << 4
 		transport[13] = flags
-		binary.BigEndian.PutUint16(transport[14:16], bridgeTcpWindow)
+		binary.BigEndian.PutUint16(transport[14:16], uint16(self.settings.ResolverTcpWindow))
 		copy(transport[bridgeTcpHeaderByteCount:], payload)
 		binary.BigEndian.PutUint16(transport[16:18], bridgeTransportChecksum(packet[12:20], bridgeProtocolTcp, transport))
 	} else {
