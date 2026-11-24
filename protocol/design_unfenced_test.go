@@ -15,26 +15,6 @@ package protocol
 // Each block names its file, as a fence does, and each declaration says where the design writes it. A declaration
 // that gains a real fence is then written twice, which says to take it out of here.
 const testUnfencedFence = `
-// sidecar/protocol/acl.proto
-// §8.8's RepoCreate row and QD-102 fix the values of the creation marker, and DESIGN-COMPUTE.md §20.4 adds the Team
-// inbox's, under agent_repos (§16.6), numbered after them (CACL-M11-05).
-enum RepoInbox { REPO_INBOX_NONE = 0; REPO_INBOX_GROUP = 1; REPO_INBOX_ADMIN = 2; REPO_INBOX_TEAM = 3; }
-// DESIGN-COMPUTE.md §16.4's compute block as the projection's rows carry it, and §16.2's compute: resources, which the
-// design gives as field and value lists without numbers; numbered in the order written (CACL-M11-05).
-message AclComputeRows {
-  ComputeAssurance assurance_floor = 1; ComputeAssurance enclave_assurance_floor = 2; repeated string providers = 3;
-  repeated string enclave_shapes = 4; bool search_enabled = 5; uint32 search_day_max = 6;
-  repeated AclComputeBudgetRow budgets = 7;
-}
-message AclComputeBudgetRow { bytes subject = 1; uint32 per = 2; uint64 day_nano_usd = 3; uint64 month_nano_usd = 4; }
-enum ComputeAssurance {
-  COMPUTE_ASSURANCE_UNSPECIFIED = 0; COMPUTE_ASSURANCE_NONE = 1; COMPUTE_ASSURANCE_AP = 2; COMPUTE_ASSURANCE_A1 = 3;
-  COMPUTE_ASSURANCE_A2 = 4;
-}
-enum AclComputeResource {
-  ACL_COMPUTE_RESOURCE_UNSPECIFIED = 0; ACL_COMPUTE_RESOURCE_ENCLAVE = 1; ACL_COMPUTE_RESOURCE_BUY = 2;
-  ACL_COMPUTE_RESOURCE_SEARCH = 3;
-}
 // sidecar/protocol/envelope.proto
 // §6.5: each result has its request's fields.
 message HelloResult {
@@ -650,62 +630,7 @@ message MailSpamModel { uint32 version = 1; repeated uint32 counts = 2; }
 // record-m2-01-canonical-action-detail's answer (QD-740): what CanonicalAction.sealed_detail opens to, a dial or
 // route grant's prefixes and ports and a version-3 access request's, with the numbers the answer gives.
 message CanonicalActionDetail { repeated string cidrs = 1; uint32 target_port = 2; repeated string grant_dst = 3; }
-// DESIGN-COMPUTE.md §16.3's version-5 messages, which its text fence gives with their numbers: what CanonicalAction's
-// fields 42 to 47, 60 and 70 hold, and what field 38 opens to at version 5; and §23.9's CalendarEventAction, whose
-// fields it names in an order the plan numbers (CACL-M11-04), a change's prior values in a CalendarEventFields so no
-// message holds itself.
-message EnclaveFields {
-  bytes enclave_id = 1; string name = 2; string shape = 3; string provider = 4; string label = 5;
-  uint64 price_per_hour = 6; uint64 incarnation = 7;
-}
-message BudgetFields { bytes agent_id = 1; uint32 period = 2; uint64 amount = 3; uint64 current = 4; }
-message SendFields {
-  string target_agent = 1; bytes target_agent_id = 2; bytes target_member_id = 3; uint32 mode = 4; string text = 5;
-  string stdin = 6; string cwd = 7; repeated RefFields refs = 8; string model = 9; repeated string tools = 10;
-  BudgetFields budget = 11;
-}
-message RefFields { bytes repo_id = 1; string path = 2; uint64 version = 3; }
-message ContextFields {
-  bytes run_id = 1; bytes entry_id = 2; uint32 nodes = 3; uint32 flagged = 4; uint32 untrusted = 5;
-  uint32 mail_messages = 6; uint32 calendar_events = 7; uint32 fetched_pages = 8; uint32 service_results = 9;
-  uint32 act = 10;
-}
-message CalendarEventAction {
-  uint32 operation = 1; string uid = 2; string occurrence = 3; string expected = 4; string title = 5;
-  string start = 6; string end = 7; string zone = 8; bool all_day = 9; string recurrence = 10; string location = 11;
-  repeated string reminders = 12; repeated string attendees = 13; repeated string mails = 14;
-  string description = 15; CalendarEventFields before = 16; string source = 17;
-}
-message CalendarEventFields {
-  string title = 1; string start = 2; string end = 3; string zone = 4; bool all_day = 5; string recurrence = 6;
-  string location = 7; repeated string reminders = 8; repeated string attendees = 9; string description = 10;
-}
-message ServiceCallFields {
-  bytes connection = 1; string label = 2; string service = 3; string account = 4; string method = 5;
-  string path = 6; string query = 7; string content_type = 8; string body = 9; uint32 class = 10;
-  string feature = 11;
-}
-message AutoFields { uint32 basis = 1; repeated uint32 rules = 2; }
-message CanonicalActionDetail5 { string name = 1; uint32 role = 2; string harness = 3; bytes grant_id = 4; }
 `
-
-// Where an acl.proto addition comes from: DESIGN-COMPUTE.md's section for it, which design-records folds into §8.8's
-// fence.
-const (
-	testAclComputeSource   = "DESIGN-COMPUTE.md §16.2's resources and actions (owner decisions 735, 737, 748, 750; CACL-M11-05)"
-	testAclRowsSource      = "DESIGN-COMPUTE.md §16.4's projected compute block, api-7 and compute-6 (CACL-M11-05)"
-	testAclListenersSource = "DESIGN-COMPUTE.md §16.2's listener: and §26.6's kind (owner decision 770; CACL-M11-05)"
-	testAclAgentsSource    = "DESIGN-COMPUTE.md §20.4's agent repos (owner decisions 744, 747; CACL-M11-05)"
-)
-
-// Where a version-5 CanonicalAction field comes from: DESIGN-COMPUTE.md's text fence for it, which design-records
-// folds into §16.8's fence.
-const (
-	testVersion5Source         = "DESIGN-COMPUTE.md §16.3's version-5 fields (owner decisions 737, 749; CACL-M11-04)"
-	testVersion5CalendarSource = "DESIGN-COMPUTE.md §23.9's kind-25 fields (owner decision 756; CACL-M11-04)"
-	testVersion5ServiceSource  = "DESIGN-COMPUTE.md §25.10's kind-26 field (owner decision 768; CACL-M11-04)"
-	testVersion5AutoSource     = "DESIGN-COMPUTE.md §27.9's field 70 (owner decision 772; CACL-M11-04)"
-)
 
 // Fields the owner's answers add to messages the design fences, ahead of design-records' fold, each with the question
 // that holds its answer. Each joins the fence it extends, so both directions stay exact, and one the design comes to
@@ -715,33 +640,6 @@ var testFenceAdditions = []struct {
 	field    testFenceField
 	question string
 }{
-	{message: "RepoCreate", field: testFenceField{name: "inbox", number: 4, typeName: "RepoInbox"}, question: "plan-MAIL-group-inbox (QD-102)"},
-	{message: "AclRepo", field: testFenceField{name: "inbox", number: 14, typeName: "RepoInbox"}, question: "plan-MAIL-group-inbox (QD-102)"},
-	// CanonicalAction's version 5, which §16.8's fence names only in prose until design-records folds the field list in
-	{message: "CanonicalAction", field: testFenceField{name: "enclave", number: 42, typeName: "EnclaveFields"}, question: testVersion5Source},
-	{message: "CanonicalAction", field: testFenceField{name: "budget", number: 43, typeName: "BudgetFields"}, question: testVersion5Source},
-	{message: "CanonicalAction", field: testFenceField{name: "url", number: 44, typeName: "string"}, question: testVersion5Source},
-	{message: "CanonicalAction", field: testFenceField{name: "tool", number: 45, typeName: "string"}, question: testVersion5Source},
-	{message: "CanonicalAction", field: testFenceField{name: "send", number: 46, typeName: "SendFields"}, question: testVersion5Source},
-	{message: "CanonicalAction", field: testFenceField{name: "context", number: 47, typeName: "ContextFields"}, question: testVersion5Source},
-	{message: "CanonicalAction", field: testFenceField{name: "taint_reasons", number: 48, typeName: "string", repeated: true}, question: testVersion5Source},
-	{message: "CanonicalAction", field: testFenceField{name: "took_tainted", number: 49, typeName: "bool"}, question: testVersion5Source},
-	{message: "CanonicalAction", field: testFenceField{name: "calendar_label", number: 50, typeName: "string"}, question: testVersion5CalendarSource},
-	{message: "CanonicalAction", field: testFenceField{name: "calendar_host", number: 51, typeName: "string"}, question: testVersion5CalendarSource},
-	{message: "CanonicalAction", field: testFenceField{name: "calendar_audience", number: 52, typeName: "string"}, question: testVersion5CalendarSource},
-	{message: "CanonicalAction", field: testFenceField{name: "calendar_events", number: 53, typeName: "CalendarEventAction", repeated: true}, question: testVersion5CalendarSource},
-	{message: "CanonicalAction", field: testFenceField{name: "calendar_link", number: 54, typeName: "bytes"}, question: testVersion5CalendarSource},
-	{message: "CanonicalAction", field: testFenceField{name: "calendar_target", number: 55, typeName: "bytes"}, question: testVersion5CalendarSource},
-	{message: "CanonicalAction", field: testFenceField{name: "calendar_name", number: 56, typeName: "string"}, question: testVersion5CalendarSource},
-	{message: "CanonicalAction", field: testFenceField{name: "service_call", number: 60, typeName: "ServiceCallFields"}, question: testVersion5ServiceSource},
-	{message: "CanonicalAction", field: testFenceField{name: "auto", number: 70, typeName: "AutoFields"}, question: testVersion5AutoSource},
-	// §23.9's selection, at decision version 2; §27.9's fence writes version 3's auto and auto_verdict
-	{message: "ApprovalDecision", field: testFenceField{name: "selected", number: 14, typeName: "uint32", repeated: true}, question: testVersion5CalendarSource},
-	// acl.proto's compute rows and §16.2's targets, which §8.8's fence names only in prose until design-records folds them
-	{message: "AclRows", field: testFenceField{name: "compute_rows", number: 11, typeName: "AclComputeRows"}, question: testAclRowsSource},
-	{message: "AclTarget", field: testFenceField{name: "model_glob", number: 11, typeName: "string"}, question: testAclComputeSource},
-	{message: "AclTarget", field: testFenceField{name: "compute_resource", number: 12, typeName: "AclComputeResource"}, question: testAclComputeSource},
-	{message: "AclTarget", field: testFenceField{name: "listener", number: 13, typeName: "bytes"}, question: testAclListenersSource},
 }
 
 // Numbers an owner's answer reserves in a message the design fences, ahead of design-records' fold, each with the
@@ -756,9 +654,6 @@ type testFenceReservedAddition struct {
 // reservations of the fence it extends, as testFenceAdditions' fields join its fields, and one the design comes to
 // write or reserve fails until its line here leaves.
 var testFenceReservedAdditions = []testFenceReservedAddition{
-	{message: "CanonicalAction", numbers: []int32{57, 58, 59}, question: testVersion5CalendarSource},
-	{message: "CanonicalAction", numbers: []int32{61, 62, 63, 64, 65, 66, 67, 68, 69}, question: testVersion5ServiceSource},
-	{message: "CanonicalAction", numbers: []int32{71, 72, 73, 74, 75, 76, 77, 78, 79}, question: testVersion5AutoSource},
 }
 
 // One field an owner's answer takes out of a message the design fences, its number reserved.
@@ -788,30 +683,6 @@ type testFenceValueAddition struct {
 // that holds its answer. Each joins the fence it extends, as testFenceAdditions' fields do, and one the design comes
 // to write fails until its line here leaves.
 var testFenceValueAdditions = []testFenceValueAddition{
-	// DESIGN-COMPUTE.md's MessageType values, reserved once by CARCH-M11-05 (CONTRACTS C-25) ahead of design-records' fold
-	// of its Appendix D rows: the indexer enclave's evidence beside SEARCH, and listeners' live ask in service 0x19
-	{enum: "MessageType", name: "EVIDENCE", number: 0x1406, question: "DESIGN-COMPUTE.md Appendix D's §6.6 row (CA-60), compute-plan-enc-readings (QD-1243)"},
-	{enum: "MessageType", name: "EVIDENCE_RESULT", number: 0x1407, question: "DESIGN-COMPUTE.md Appendix D's §6.6 row (CA-60), compute-plan-enc-readings (QD-1243)"},
-	{enum: "MessageType", name: "LISTENERS", number: 0x1901, question: "DESIGN-COMPUTE.md Appendix D's §6.11 MessageType 0x19 row (CA-61)"},
-	{enum: "MessageType", name: "LISTENERS_RESULT", number: 0x1902, question: "DESIGN-COMPUTE.md Appendix D's §6.11 MessageType 0x19 row (CA-61)"},
-	// DESIGN-COMPUTE.md §16.3's kinds, which §16.8's fence names only in a comment until design-records folds them in
-	{enum: "SidecarActionKind", name: "SIDECAR_ACTION_KIND_ENCLAVE_CREATE", number: 19, question: testVersion5Source},
-	{enum: "SidecarActionKind", name: "SIDECAR_ACTION_KIND_ENCLAVE_EGRESS_DIRECT", number: 20, question: testVersion5Source},
-	{enum: "SidecarActionKind", name: "SIDECAR_ACTION_KIND_COMPUTE_BUDGET_RAISE", number: 21, question: testVersion5Source},
-	{enum: "SidecarActionKind", name: "SIDECAR_ACTION_KIND_ENCLAVE_DELETE", number: 22, question: testVersion5Source},
-	{enum: "SidecarActionKind", name: "SIDECAR_ACTION_KIND_FETCH_UNLISTED_URL", number: 23, question: testVersion5Source},
-	{enum: "SidecarActionKind", name: "SIDECAR_ACTION_KIND_TAINTED_SEND", number: 24, question: testVersion5Source},
-	{enum: "SidecarActionKind", name: "SIDECAR_ACTION_KIND_CALENDAR_WRITE", number: 25, question: testVersion5CalendarSource},
-	{enum: "SidecarActionKind", name: "SIDECAR_ACTION_KIND_SERVICE_WRITE", number: 26, question: testVersion5ServiceSource},
-	// §16.2's actions and the repo kinds DESIGN-COMPUTE.md's features turn on, which §8.8's fence names only in prose
-	{enum: "AclAction", name: "ACL_ACTION_INFER", number: 10, question: testAclComputeSource},
-	{enum: "AclAction", name: "ACL_ACTION_CREATE", number: 11, question: testAclComputeSource},
-	{enum: "AclAction", name: "ACL_ACTION_BUY", number: 12, question: testAclComputeSource},
-	{enum: "AclAction", name: "ACL_ACTION_QUERY", number: 13, question: testAclComputeSource},
-	{enum: "AclAction", name: "ACL_ACTION_SSH", number: 14, question: testAclComputeSource},
-	{enum: "RepoKind", name: "REPO_KIND_AGENTS", number: 10, question: testAclAgentsSource},
-	{enum: "RepoKind", name: "REPO_KIND_AGENT", number: 11, question: testAclAgentsSource},
-	{enum: "RepoKind", name: "REPO_KIND_LISTENERS", number: 12, question: testAclListenersSource},
 }
 
 // One value an owner's answer takes out of an enum the design fences, its number reserved.

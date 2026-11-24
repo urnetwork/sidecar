@@ -48,7 +48,7 @@
   "num": 6,
   "code": "PROTO",
   "words": 9982,
-  "code_words": 4279,
+  "code_words": 4287,
   "ceiling": 3800,
   "over": 6182,
   "over_pct": 162.7
@@ -66,7 +66,7 @@
   "num": 8,
   "code": "ACL",
   "words": 14059,
-  "code_words": 5514,
+  "code_words": 5962,
   "ceiling": 3800,
   "over": 10259,
   "over_pct": 270.0
@@ -92,11 +92,11 @@
  {
   "num": 11,
   "code": "EVS",
-  "words": 23038,
+  "words": 23061,
   "code_words": 56826,
   "ceiling": 5000,
-  "over": 18038,
-  "over_pct": 360.8
+  "over": 18061,
+  "over_pct": 361.2
  },
  {
   "num": 12,
@@ -137,20 +137,20 @@
  {
   "num": 16,
   "code": "MCP",
-  "words": 16514,
-  "code_words": 22011,
+  "words": 16581,
+  "code_words": 23241,
   "ceiling": 3500,
-  "over": 13014,
-  "over_pct": 371.8
+  "over": 13081,
+  "over_pct": 373.7
  },
  {
   "num": 17,
   "code": "BRIDGE",
-  "words": 10512,
+  "words": 10525,
   "code_words": 6574,
   "ceiling": 3800,
-  "over": 6712,
-  "over_pct": 176.6
+  "over": 6725,
+  "over_pct": 177.0
  },
  {
   "num": 18,

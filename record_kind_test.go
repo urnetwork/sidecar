@@ -123,17 +123,7 @@ type testRecordEnumerationAddition struct {
 // The values the compute extension adds to section 6.2's rows, which RECORD.md section 21 leaves to the fold while
 // record.proto takes them with their code (QD-1366, compute-plan-record-registry-fold). A line whose value section 6.2
 // comes to give fails until it leaves.
-var testRecordEnumerationAdditions = []testRecordEnumerationAddition{
-	{key: "CanonicalAction.kind", number: 19, name: "enclave_create", source: "DESIGN-COMPUTE.md §16.3; CA-13"},
-	{key: "CanonicalAction.kind", number: 20, name: "enclave_egress_direct", source: "DESIGN-COMPUTE.md §16.3; CA-13"},
-	{key: "CanonicalAction.kind", number: 21, name: "compute_budget_raise", source: "DESIGN-COMPUTE.md §16.3; CA-13"},
-	{key: "CanonicalAction.kind", number: 22, name: "enclave_delete", source: "DESIGN-COMPUTE.md §16.3; CA-13"},
-	{key: "CanonicalAction.kind", number: 23, name: "fetch_unlisted_url", source: "DESIGN-COMPUTE.md §16.3; CA-13"},
-	{key: "CanonicalAction.kind", number: 24, name: "tainted_send", source: "DESIGN-COMPUTE.md §16.3; CA-13"},
-	{key: "CanonicalAction.kind", number: 25, name: "calendar_write", source: "DESIGN-COMPUTE.md §16.3, §23.9; CA-13"},
-	{key: "CanonicalAction.kind", number: 26, name: "service_write", source: "DESIGN-COMPUTE.md §16.3, §25.10; CA-13"},
-	{key: "ApprovalDecision.channel", number: 4, name: "auto", source: "DESIGN-COMPUTE.md §27.9; CA-30"},
-}
+var testRecordEnumerationAdditions = []testRecordEnumerationAddition{}
 
 // The value and name pairs of one of section 6.2's rows, cut before its parenthesis.
 func testRecordEnumerationRow(t *testing.T, doc *recordMd, key string) map[int]string {

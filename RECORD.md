@@ -499,18 +499,20 @@ RecordHeader.agent_source   0 no agent, 1 agent_asserted, 2 isolated (§5.5)
 CanonicalAction.kind        1 publish, 2 listen, 3 forward, 4 expose, 5 egress_change, 6 invite, 7 share,
                             8 alias_create, 9 alias_delete, 10 agent_config_write, 11 agent_config_delete, 12 dns_set,
                             13 dns_delete, 14 mail_send, 15 access_request, 16 payment, 17 restore,
-                            18 mail_tls_unauthenticated (SidecarActionKind, in §5.4's order; new kinds append)
+                            18 mail_tls_unauthenticated, 19 enclave_create, 20 enclave_egress_direct,
+                            21 compute_budget_raise, 22 enclave_delete, 23 fetch_unlisted_url, 24 tainted_send,
+                            25 calendar_write, 26 service_write (SidecarActionKind, in §5.4's order; new kinds append)
 ApprovalRequest.risk        1 normal, 2 high (SidecarRisk; numeric order is the max §5.4 takes)
 ApprovalDecision.decision   1 approve, 2 deny (ApprovalVerdict)
-ApprovalDecision.channel    1 device, 2 presence, 3 harness (ApprovalChannel, which AclRequestRule.evidence takes too;
-                            §16.6)
+ApprovalDecision.channel    1 device, 2 presence, 3 harness, 4 auto (ApprovalChannel, which AclRequestRule.evidence
+                            takes too; §16.6)
 ReachReceipt.kind           1 listen, 2 publish, 3 forward, 4 route, 5 send, 6 receive (§16.8's four endpoints)
 RetentionPolicy.class       section 8
 zero                        as §6.11's edge codes: no writer sets 0 where this table lists no 0, and a reader takes it
                             as unknown
 ```
 
-`CanonicalAction.kind`, `ApprovalRequest.risk` and `ApprovalDecision.decision` and `channel` stay uint32 on the wire, as §16.8 writes them, and `record.proto` declares the four enums whose values they carry, `SidecarActionKind`, `SidecarRisk`, `ApprovalVerdict` and `ApprovalChannel`, each 0 UNSPECIFIED, which no one writes (QD-429). `publish` and `listen` cover tls/ and smtp/ alike, `alias_create` covers burners too (§15.8), and kind 18 is §14.4's TL4 allowance (owner decision 436). §16.8's `values` row gives the rest: how `audience` and `app_mode` hold acl.proto's values, what an approver, spender or gate refuses, and which kinds `NewCanonicalAction` refuses until their owners name their fields.
+`CanonicalAction.kind`, `ApprovalRequest.risk` and `ApprovalDecision.decision` and `channel` stay uint32 on the wire, as §16.8 writes them, and `record.proto` declares the four enums whose values they carry, `SidecarActionKind`, `SidecarRisk`, `ApprovalVerdict` and `ApprovalChannel`, each 0 UNSPECIFIED, which no one writes (QD-429). `publish` and `listen` cover tls/ and smtp/ alike, `alias_create` covers burners too (§15.8), and kind 18 is §14.4's TL4 allowance (owner decision 436). Kinds 19 to 26 and channel 4 `auto` are DESIGN-COMPUTE.md's (section 21), the kinds at `CanonicalAction` version 5 alone and `auto` at `ApprovalDecision` version 3 alone (§16.8's Compute's record primitives). §16.8's `values` row gives the rest: how `audience` and `app_mode` hold acl.proto's values, what an approver, spender or gate refuses, and which kinds `NewCanonicalAction` refuses until their owners name their fields.
 
 ### 6.3 The registry
 
@@ -1677,7 +1679,7 @@ detail nonce v3    an access_request of kind 15, expires_millis 1762387200000, g
 
 ## 21. DESIGN-COMPUTE.md's additions
 
-DESIGN-COMPUTE.md, the owner's compute design of 2026-11-23 (DESIGN.md's owner decisions 733-776), amends this document as its Appendix D lists, and DESIGN.md's eighth late fold writes the amendments here. Each takes the registry rows, enumerations and fields it names with its code: until record.proto, record_kind.go and their tests take them, through an additions list as the owner's answer QD-1366 allows (DESIGN-COMPUTE-AMENDMENTS.md), sections 6.2, 6.3, 6.4 and 8 keep their v1 tables, and DESIGN-COMPUTE.md's fences hold the wire.
+DESIGN-COMPUTE.md, the owner's compute design of 2026-11-23 (DESIGN.md's owner decisions 733-776), amends this document as its Appendix D lists, and DESIGN.md's eighth late fold writes the amendments here. Each takes the registry rows, enumerations and fields it names with its code. Section 6.2 gives `CanonicalAction.kind` 19 to 26 and `ApprovalDecision.channel` 4 `auto`, which record.proto declares, and DESIGN.md §16.8's fence the fields and messages of `CanonicalAction` version 5 and `ApprovalDecision.selected`; until record.proto, record_kind.go and their tests take the rest, through an additions list as the owner's answer QD-1366 allows (DESIGN-COMPUTE-AMENDMENTS.md), sections 6.3, 6.4 and 8 keep their v1 tables, and DESIGN-COMPUTE.md's fences hold the wire.
 
 - **Bindings (section 4.3; DESIGN-COMPUTE.md 8.9; owner decision 736).** A gateway call under a run handle is an event of its token's harness process: it binds the session its headers name as a hook's first event would, and the router checks it against the union of the marks and taint of that process's runs and of any harness process above it before choosing a route. A call without a handle binds no process, is recorded by harness, agent and time as an inference, and is checked against the union of every run of the grant's live harness processes.
 - **Continuations (section 4.3; DESIGN-COMPUTE.md 24.7, 24.8; owner decisions 757, 775).** A Harness continuation or fork, and a gateway session its harness reports resumed, set `continues_run_id` and `continues_entry_id` too, naming the run and node they continue; such a run starts tainted if any node it takes into its context is flagged, or untrusted: written by a tagged sidecar other than the member's own enclave, or recorded under an inferred binding.
