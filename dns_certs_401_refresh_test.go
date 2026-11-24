@@ -107,8 +107,13 @@ func (self *dnsCertsRenewWorld) RoundTrip(request *http.Request) (*http.Response
 	case "dns.example":
 		return self.guarded(request, body, "https://dns.example", self.serveDns), nil
 	case "api.example":
-		if self.serveApi != nil {
-			return self.serveApi(request, body), nil
+		serveApi := func() func(request *http.Request, body []byte) *http.Response {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			return self.serveApi
+		}()
+		if serveApi != nil {
+			return serveApi(request, body), nil
 		}
 	}
 	self.t.Errorf("a request to %s", request.URL.Host)

@@ -31,7 +31,10 @@
 // A custom route whose service token could not be had sent nothing, and is read by why (sidecarServiceTokenRefusalOf):
 // one that may change, a keychain still locked or the exchange's 503 say, is no answer, tried again as one is; one for
 // good, invalid_grant or no enrolled client, lets no request of the row's go until it changes, so the holder's work on
-// the row ends with its hold lost and the claim left to lapse.
+// the row ends with its hold lost and the claim left to lapse. A custom route certs answered 401, its guard refusing
+// the token before the route did anything, goes once more at once with its same body under a token minted after the
+// answer, the refused one dropped through the keeper's ForgetServiceToken (tls_component.go's comment); a 401 to that
+// token is the route's answer, a refusal for good.
 
 package sidecar
 
@@ -1795,14 +1798,35 @@ var errTlsCustomNoServiceToken = errors.New("no service token")
 // TlsCustomApi on api's routes, each call under a service token for aud certs from token: Sidecar.certsServiceToken
 // for SidecarTlsSettings.CertsResource, which asks again within its bound what may change, through ServiceToken, which
 // caches it. A call whose token could not be had sends nothing and answers an error carrying errTlsCustomNoServiceToken.
+// A call certs answered 401 goes once more under the token asked after it (tlsCustomCall).
 type sidecarTlsCustomApi struct {
 	api   *SidecarApi
 	token func(ctx context.Context) (string, error)
+	// drops the token the token function keeps, which certs answered 401, so the call's one retry presents one minted
+	// after the answer: Sidecar.ForgetServiceToken for the audience. nil for a token function that keeps no token,
+	// whose retry mints a new one anyway; beside one that keeps a token, nil retries with the token refused.
+	forgetToken func()
 }
 
-// TlsCustomApi on api, each call under token's service token.
+// TlsCustomApi on api, each call under token's service token. A call certs answered 401 goes once more under token's
+// next answer, which nothing here drops first: a token function that keeps its token presents the refused one again,
+// where Sidecar.TlsCustomOrdererDeps' api drops it through the keeper (tlsCustomApi).
 func NewTlsCustomApi(api *SidecarApi, token func(ctx context.Context) (string, error)) TlsCustomApi {
 	return &sidecarTlsCustomApi{api: api, token: token}
+}
+
+// The custom routes on this Sidecar's api under its certs token for resource (certsServiceToken), dropping a token
+// certs answered 401 through the keeper (ForgetServiceToken), so a call's one retry presents one minted after it.
+func (self *Sidecar) tlsCustomApi(resource string) *sidecarTlsCustomApi {
+	return &sidecarTlsCustomApi{
+		api: self.sidecarApi,
+		token: func(ctx context.Context) (string, error) {
+			return self.certsServiceToken(ctx, resource, nil)
+		},
+		forgetToken: func() {
+			self.ForgetServiceToken(resource, nil)
+		},
+	}
 }
 
 // The call's service token, or the token keeper's error carrying errTlsCustomNoServiceToken.
@@ -1814,67 +1838,73 @@ func (self *sidecarTlsCustomApi) serviceToken(ctx context.Context) (string, erro
 	return serviceToken, nil
 }
 
+// send's answer under the call's service token, and where certs answered it 401, under a token asked after the answer,
+// the refused one dropped first (tlsCertsRenewingCall): the call's one retry, whose answer stands. A token that could
+// not be had, the retry's as the first's, sends nothing and answers the keeper's error carrying
+// errTlsCustomNoServiceToken.
+func tlsCustomCall[T any](ctx context.Context, api *sidecarTlsCustomApi, send func(serviceToken string) (T, error)) (T, error) {
+	serviceToken, err := api.serviceToken(ctx)
+	if err != nil {
+		var none T
+		return none, err
+	}
+	renew := func(ctx context.Context) (string, error) {
+		if api.forgetToken != nil {
+			api.forgetToken()
+		}
+		return api.serviceToken(ctx)
+	}
+	return tlsCertsRenewingCall(ctx, serviceToken, renew, send)
+}
+
 // See TlsCustomApi.
 func (self *sidecarTlsCustomApi) Work(ctx context.Context) (*TlsCertsResult, error) {
-	serviceToken, err := self.serviceToken(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return self.api.TlsCustomWork(ctx, serviceToken)
+	return tlsCustomCall(ctx, self, func(serviceToken string) (*TlsCertsResult, error) {
+		return self.api.TlsCustomWork(ctx, serviceToken)
+	})
 }
 
 // See TlsCustomApi.
 func (self *sidecarTlsCustomApi) Claim(ctx context.Context, args *TlsCustomClaimArgs) (*TlsCustomClaimResult, error) {
-	serviceToken, err := self.serviceToken(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return self.api.TlsCustomClaim(ctx, serviceToken, args)
+	return tlsCustomCall(ctx, self, func(serviceToken string) (*TlsCustomClaimResult, error) {
+		return self.api.TlsCustomClaim(ctx, serviceToken, args)
+	})
 }
 
 // See TlsCustomApi.
 func (self *sidecarTlsCustomApi) Progress(ctx context.Context, args *TlsCustomProgressArgs) (*TlsCustomClaimResult, error) {
-	serviceToken, err := self.serviceToken(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return self.api.TlsCustomProgress(ctx, serviceToken, args)
+	return tlsCustomCall(ctx, self, func(serviceToken string) (*TlsCustomClaimResult, error) {
+		return self.api.TlsCustomProgress(ctx, serviceToken, args)
+	})
 }
 
 // See TlsCustomApi.
 func (self *sidecarTlsCustomApi) Register(ctx context.Context, args *TlsCertRegisterArgs) error {
-	serviceToken, err := self.serviceToken(ctx)
-	if err != nil {
-		return err
-	}
-	return self.api.TlsCertRegister(ctx, serviceToken, args)
+	_, err := tlsCustomCall(ctx, self, func(serviceToken string) (struct{}, error) {
+		return struct{}{}, self.api.TlsCertRegister(ctx, serviceToken, args)
+	})
+	return err
 }
 
 // See TlsCustomApi.
 func (self *sidecarTlsCustomApi) Account(ctx context.Context, args *TlsCustomAccountArgs) (*TlsCustomAccount, error) {
-	serviceToken, err := self.serviceToken(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return self.api.TlsCustomAccount(ctx, serviceToken, args)
+	return tlsCustomCall(ctx, self, func(serviceToken string) (*TlsCustomAccount, error) {
+		return self.api.TlsCustomAccount(ctx, serviceToken, args)
+	})
 }
 
 // See TlsCustomApi.
 func (self *sidecarTlsCustomApi) Challenge(ctx context.Context, args *TlsCustomChallengeArgs) (*TlsCustomChallengeResult, error) {
-	serviceToken, err := self.serviceToken(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return self.api.TlsCustomChallenge(ctx, serviceToken, args)
+	return tlsCustomCall(ctx, self, func(serviceToken string) (*TlsCustomChallengeResult, error) {
+		return self.api.TlsCustomChallenge(ctx, serviceToken, args)
+	})
 }
 
 // See TlsCustomApi.
 func (self *sidecarTlsCustomApi) ChallengeStatus(ctx context.Context, challengeId uint64) (*TlsCustomChallengeResult, error) {
-	serviceToken, err := self.serviceToken(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return self.api.TlsCustomChallengeStatus(ctx, serviceToken, challengeId)
+	return tlsCustomCall(ctx, self, func(serviceToken string) (*TlsCustomChallengeResult, error) {
+		return self.api.TlsCustomChallengeStatus(ctx, serviceToken, challengeId)
+	})
 }
 
 // The name a key file's local copy has in the keychain's tls namespace, beside the device key (17.2.3).
@@ -2078,11 +2108,12 @@ func (self *sidecarTlsCustomDevices) secretRepo() *TlsCustomSecretRepo {
 
 // What an ordering desktop's orderer takes from this Sidecar (DESIGN-DETAILS 17.2.7): the custom routes under a
 // service token for aud certs (certsServiceToken, which asks again within its bound what may change and ends a call at
-// once on a refusal for good), its own verified view of the network's devices and grants, each key file's local copy
-// beside the device key, the network's root from its zone, its clock, and its local alarms, which it logs. The host
-// gives the CA (cli/'s acmez client), the resolver and the secret repos' key files (cli/'s evs), so no sdk leg links
-// them. The TLS-ALPN-01 path uses this device's active listener for the exact mapped owner. ErrTlsCertsUnconfigured with
-// no certs audience configured, as for the device's own orders.
+// once on a refusal for good), a call certs answered 401 going once more under a new one (tlsCustomApi), its own
+// verified view of the network's devices and grants, each key file's local copy beside the device key, the network's
+// root from its zone, its clock, and its local alarms, which it logs. The host gives the CA (cli/'s acmez client), the
+// resolver and the secret repos' key files (cli/'s evs), so no sdk leg links them. The TLS-ALPN-01 path uses this
+// device's active listener for the exact mapped owner. ErrTlsCertsUnconfigured with no certs audience configured, as
+// for the device's own orders.
 func (self *Sidecar) TlsCustomOrdererDeps(ctx context.Context, acme TlsAcmeClient, resolver TlsCustomResolver, files TlsCustomRepoFiles) (*TlsCustomDomainOrdererDeps, TlsCustomKeyRepos, error) {
 	if acme == nil || resolver == nil || files == nil {
 		return nil, nil, fmt.Errorf("%w: the orderer needs its CA, resolver and key files", errInvalidSettings)
@@ -2102,9 +2133,7 @@ func (self *Sidecar) TlsCustomOrdererDeps(ctx context.Context, acme TlsAcmeClien
 	}
 	devices := &sidecarTlsCustomDevices{sidecar: self, networkId: *networkId, sidecarId: identity.SidecarId}
 	deps := &TlsCustomDomainOrdererDeps{
-		Api: NewTlsCustomApi(self.sidecarApi, func(ctx context.Context) (string, error) {
-			return self.certsServiceToken(ctx, resource, nil)
-		}),
+		Api:      self.tlsCustomApi(resource),
 		Acme:     acme,
 		Resolver: resolver,
 		Alpn:     &sidecarTlsCustomAlpn{sidecar: self, claims: map[string]*tlsDesktopChallenge{}},
