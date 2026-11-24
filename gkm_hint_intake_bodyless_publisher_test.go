@@ -2,12 +2,15 @@
 
 // GkmHints taking the batches a resident's publisher sends (§6.8), the composed path of
 // gkm_hint_intake_bodyless_test.go's rows: hints written as gkm writes them, on T2's FakeRedis, are read and coalesced
-// by pushservice's own publisher, whose frames the test decodes as the client's dispatcher does and hands the intake
-// as the client's push machine hands its subscribers the hints above the versions it holds. A group's commit the
-// publisher superseded wakes the group with no resync. A per-client work hint it sent without its bytes costs a
-// resync whether the hint was past TopicHintBodyCount or a repeat whose copy follows, the two being one notice to the
-// client: the second resync is what question gkm-hint-intake-bodyless-superseded-mark asks to spare. Fake clocks
-// throughout; a real-time timer here only fails a test that would otherwise hang.
+// by pushservice's own publisher, whose frames the test decodes as the client's dispatcher does and hands the
+// client's push feed, which the intake subscribes to as it does a Subprotocol (push_state_export_test.go's bridge).
+// The publisher sends a hint a later one of its batch repeats as its seq alone (QD-1397), which the feed counts,
+// asking for no versions, and tells the intake nothing of, so a group's commit repeat and a per-client work hint's
+// repeat each wake their handler once, at the later copy, with no resync: before, the publisher sent such a hint
+// without its bytes, keeping its topic, version and kind, and a per-client one cost the holder a full gkm resync,
+// since nothing told it from a hint past TopicHintBodyCount (question gkm-hint-intake-bodyless-superseded-mark). A
+// work hint past the bound still goes without its bytes and still costs that resync, the one way left to recover
+// it. Fake clocks throughout; a real-time timer here only fails a test that would otherwise hang.
 
 package sidecar_test
 
@@ -204,8 +207,8 @@ func (self *testGkmBodylessPublisher) closedStats() pushservice.SidecarPublisher
 	return self.publisher.Stats()
 }
 
-// Fails unless hint went without its bytes and kept the rest: a per-client one's notice is then the same whatever
-// dropped its bytes.
+// Fails unless hint went without its bytes and kept the rest, as one past TopicHintBodyCount does: a per-client one's
+// notice then names nothing but its topic.
 func expectGkmBodylessHint(t *testing.T, hint *protocol.PushHint, topic string) {
 	t.Helper()
 	if hint.Topic != topic || hint.Version == 0 || hint.Kind != uint32(protocol.MessageType_GKM_HINT) || len(hint.Hint) != 0 {
@@ -213,10 +216,19 @@ func expectGkmBodylessHint(t *testing.T, hint *protocol.PushHint, topic string) 
 	}
 }
 
-// A GkmHints intake on a clock that never moves, so no hourly resync runs, whose handlers record the wakes they take
-// and whose resyncs it counts.
+// Fails unless hint went as its seq alone, as a superseded one does (QD-1397).
+func expectGkmSeqAloneHint(t *testing.T, hint *protocol.PushHint) {
+	t.Helper()
+	if want := (&protocol.PushHint{Seq: hint.Seq}); !proto.Equal(hint, want) {
+		t.Fatalf("the hint %v, want %v", hint, want)
+	}
+}
+
+// A GkmHints intake on a clock that never moves, so no hourly resync runs, subscribed to a client's push feed, whose
+// handlers record the wakes they take and whose resyncs it counts.
 type testGkmBodylessIntake struct {
 	hints *sidecar.GkmHints
+	feed  *sidecar.PushTestFeed
 
 	stateLock   sync.Mutex
 	wakes       []*sidecar.GkmHintWake
@@ -225,12 +237,13 @@ type testGkmBodylessIntake struct {
 
 func newTestGkmBodylessIntake(t *testing.T) *testGkmBodylessIntake {
 	t.Helper()
-	hints, err := sidecar.NewGkmHints(t.Context(), &sidecar.GkmHintsArgs{Clock: sidecartest.NewFakeClock(sidecartest.DefaultClockStart())})
+	feed := sidecar.NewPushTestFeed(t)
+	hints, err := sidecar.NewGkmHints(t.Context(), &sidecar.GkmHintsArgs{Subscribe: feed.Subscribe, Clock: sidecartest.NewFakeClock(sidecartest.DefaultClockStart())})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(hints.Close)
-	self := &testGkmBodylessIntake{hints: hints}
+	self := &testGkmBodylessIntake{hints: hints, feed: feed}
 	record := func(ctx context.Context, wake *sidecar.GkmHintWake) {
 		wakeCopy := *wake
 		self.stateLock.Lock()
@@ -248,10 +261,10 @@ func newTestGkmBodylessIntake(t *testing.T) *testGkmBodylessIntake {
 	return self
 }
 
-// Hands the intake a batch's hints as the client's push machine hands its subscribers a hint above the version it
-// holds, as each here is, while the intake is held inside a key-packages-low wake, so it takes the batch in one pass
-// as it would one the push delivers at once; then lets it go, waits for that pass and answers what it woke and how
-// often it resynced.
+// Hands a batch's hints to the client's push feed, which tells the intake of each hint that raises its topic, while
+// the intake is held inside a key-packages-low wake, so it takes the batch in one pass as it would one the push
+// delivers at once; fails if a hint sent the client to versions, as one whose seq did not follow would; then lets
+// the intake go, waits for that pass and answers what it woke and how often it resynced.
 func (self *testGkmBodylessIntake) take(t *testing.T, sent []*protocol.PushHint) (wakes []*sidecar.GkmHintWake, resyncCount int) {
 	t.Helper()
 	entered := make(chan int, 1)
@@ -277,7 +290,10 @@ func (self *testGkmBodylessIntake) take(t *testing.T, sent []*protocol.PushHint)
 		t.Fatal("the intake never took the holding wake")
 	}
 	for _, hint := range sent {
-		self.hints.Receive(sidecar.PushNotice{Topic: hint.Topic, Version: hint.Version, Kind: hint.Kind, Hint: slices.Clone(hint.Hint)})
+		self.feed.ApplyHint(hint)
+	}
+	if askCount := self.feed.RefetchAskCount(); askCount != 0 {
+		t.Errorf("the batch sent the client to versions %d times", askCount)
 	}
 	close(release)
 	guard := time.After(testGkmBodylessTimeout)
@@ -306,9 +322,10 @@ func expectGkmBodylessWake(t *testing.T, wake *sidecar.GkmHintWake, kind protoco
 }
 
 // A group's two commits in one window with another group's between them, each on its gkm:<group_id>: the publisher
-// supersedes the first, whose bytes the third repeats, and the intake takes the batch with no resync, waking each
-// group's commit handler once, the first group's at its later generation. Before, the superseded notice failed the
-// group topic's form and resynced every repo the device holds.
+// supersedes the first, whose bytes the third repeats, sending it as its seq alone, and the intake takes the batch
+// with no resync, waking each group's commit handler once, the first group's at its later generation. Before
+// gkm-hint-intake-bodyless, the superseded notice, then sent without its bytes, failed the group topic's form and
+// resynced every repo the device holds.
 func TestGkmHintsTakeAPublishersGroupRepeatWithNoResync(t *testing.T) {
 	publisher := newTestGkmBodylessPublisher(t, nil)
 	groupId, otherGroupId := sidecar.NewId(), sidecar.NewId()
@@ -317,7 +334,7 @@ func TestGkmHintsTakeAPublishersGroupRepeatWithNoResync(t *testing.T) {
 		testGkmBodylessCommit(t, otherGroupId, 3),
 		testGkmBodylessCommit(t, groupId, 6),
 	)
-	expectGkmBodylessHint(t, sent[0], sidecar.PushTopicGkmGroup(groupId))
+	expectGkmSeqAloneHint(t, sent[0])
 	if len(sent[1].Hint) == 0 || len(sent[2].Hint) == 0 {
 		t.Fatalf("hints %v and %v went without their bytes", sent[1], sent[2])
 	}
@@ -329,8 +346,8 @@ func TestGkmHintsTakeAPublishersGroupRepeatWithNoResync(t *testing.T) {
 	if len(wakes) != 2 {
 		t.Fatalf("%d wakes, want 2", len(wakes))
 	}
-	expectGkmBodylessWake(t, wakes[0], protocol.GkmHintKind_GKM_HINT_COMMIT, groupId, 6, "")
-	expectGkmBodylessWake(t, wakes[1], protocol.GkmHintKind_GKM_HINT_COMMIT, otherGroupId, 3, "")
+	expectGkmBodylessWake(t, wakes[0], protocol.GkmHintKind_GKM_HINT_COMMIT, otherGroupId, 3, "")
+	expectGkmBodylessWake(t, wakes[1], protocol.GkmHintKind_GKM_HINT_COMMIT, groupId, 6, "")
 	if stats := publisher.closedStats(); stats.HintCount != 3 || stats.CoalescedCount != 1 || stats.BodyBoundCount != 0 {
 		t.Errorf("stats %+v", stats)
 	}
@@ -370,10 +387,11 @@ func TestGkmHintsResyncForAPublishersWorkHintPastTheBound(t *testing.T) {
 }
 
 // A late ask's wrap-pending hint repeated in one window, another ask's between them: the publisher sends the first
-// copy without its bytes, which the third carries, and the intake resyncs all the same, since that notice is the one
-// a hint past the bound sends. The later copy wakes the ask's delivery; the resync is the cost question
-// gkm-hint-intake-bodyless-superseded-mark asks to spare, and this test changes with its answer.
-func TestGkmHintsResyncForAPublishersWorkHintRepeat(t *testing.T) {
+// copy as its seq alone (QD-1397), the third carrying the bytes, and the intake takes the batch with no resync, the
+// later copy waking the ask's delivery. While the publisher sent the first copy without its bytes, keeping its
+// topic, version and kind, the notice was the one a hint past the bound sends, and the holder resynced its whole gkm
+// state for a repeat (question gkm-hint-intake-bodyless-superseded-mark).
+func TestGkmHintsTakeAPublishersWorkHintRepeatWithNoResync(t *testing.T) {
 	publisher := newTestGkmBodylessPublisher(t, nil)
 	groupId, otherGroupId := sidecar.NewId(), sidecar.NewId()
 	recipient := testGkmBodylessRecipient()
@@ -382,14 +400,14 @@ func TestGkmHintsResyncForAPublishersWorkHintRepeat(t *testing.T) {
 		publisher.workHint(protocol.GkmHintKind_GKM_HINT_WRAP_PENDING, otherGroupId, recipient),
 		publisher.workHint(protocol.GkmHintKind_GKM_HINT_WRAP_PENDING, groupId, recipient),
 	)
-	expectGkmBodylessHint(t, sent[0], sidecar.PushTopicGkm)
+	expectGkmSeqAloneHint(t, sent[0])
 	if len(sent[1].Hint) == 0 || len(sent[2].Hint) == 0 {
 		t.Fatalf("hints %v and %v went without their bytes", sent[1], sent[2])
 	}
 
 	wakes, resyncCount := newTestGkmBodylessIntake(t).take(t, sent)
-	if resyncCount != 1 {
-		t.Errorf("the batch took %d resyncs, want 1", resyncCount)
+	if resyncCount != 0 {
+		t.Errorf("the batch took %d resyncs, want none", resyncCount)
 	}
 	if len(wakes) != 2 {
 		t.Fatalf("%d wakes, want 2", len(wakes))
