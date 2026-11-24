@@ -90,6 +90,10 @@ func TestSignedTypeNumbersStable(t *testing.T) {
 		{signedType: SignedType_SIGNED_RETENTION_POLICY, number: 0x1804},
 		{signedType: SignedType_SIGNED_DIRECTORY_CARD, number: 0x1805},
 		{signedType: SignedType_SIGNED_DIRECTORY_REPO, number: 0x1806},
+		// DESIGN-COMPUTE's Appendix D numbers, reserved by CARCH-M11-05 (CONTRACTS C-25), 0x1807 left untouched
+		{signedType: SignedType_SIGNED_ATTACH_ORIGIN, number: 0x1808},
+		{signedType: SignedType_SIGNED_DISCLOSURE_ACK, number: 0x1809},
+		{signedType: SignedType_SIGNED_ENCLAVE_SETUP, number: 0x180A},
 
 		{signedType: SignedType_SIGNED_BRIDGE_BLOCK, number: 0x1901},
 		{signedType: SignedType_SIGNED_BRIDGE_ADDRESS, number: 0x1902},
