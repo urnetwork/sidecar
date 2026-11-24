@@ -1,0 +1,110 @@
+//go:build !ios_extension && !sidecar_http
+
+// Attestation's compute component on a Sidecar (DESIGN-COMPUTE §3.3, §5; CARCH's registerComputeComponent): the
+// compute policy store over the Sidecar's own sealed attest directory and this build's verifier, which every reader of
+// the policy reaches through Sidecar.ComputePolicyStore. The directory is the enrolled network's, resolved at each
+// call, since a Sidecar constructs its components before it may have enrolled: until then the store serves the
+// release's copy alone and takes nothing new.
+
+package sidecar
+
+import (
+	"io"
+)
+
+// The name attestation registers its component under.
+const computeAttestComponentName = "attest"
+
+func init() {
+	registerComputeComponent(computeAttestComponentName, newComputeAttest, nil)
+}
+
+// Attestation's parts on one Sidecar.
+type ComputeAttest struct {
+	store *ComputePolicyStore
+}
+
+// The parts over sidecar's settings, clock, log and store. Reads nothing of the network: the store's file is read at
+// its first use that can.
+func newComputeAttest(sidecar *Sidecar) (*ComputeAttest, error) {
+	settings := sidecar.settings.Attest
+	if settings == nil {
+		settings = DefaultAttestSettings()
+	}
+	store, err := NewComputePolicyStore(&ComputePolicyStoreArgs{
+		Store:    &computeAttestSidecarStore{sidecar: sidecar},
+		Verifier: NewComputePolicyVerifier(settings),
+		Settings: settings,
+		Clock:    sidecar.clock,
+		Log:      sidecar.log,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &ComputeAttest{store: store}, nil
+}
+
+// This Sidecar's compute policy store, or an error wrapping ErrComputeComponentUnavailable that says why there is none.
+func (self *Sidecar) ComputePolicyStore() (*ComputePolicyStore, error) {
+	attest, err := sidecarComputeComponent[ComputeAttest](self, computeAttestComponentName)
+	if err != nil {
+		return nil, err
+	}
+	return attest.store, nil
+}
+
+// The Sidecar's attest directory, resolved at each call from the network it has enrolled in: before that, and while
+// its keychain is locked, every call answers ErrSidecarStoreLocked.
+type computeAttestSidecarStore struct {
+	sidecar *Sidecar
+}
+
+// The directory now.
+func (self *computeAttestSidecarStore) directory() (SidecarStore, error) {
+	return self.sidecar.LocalStore().Directory(computePolicyStoreDirectory, computePolicyStoreClass)
+}
+
+// See SidecarStore.
+func (self *computeAttestSidecarStore) Open(name string) (io.ReadCloser, error) {
+	directory, err := self.directory()
+	if err != nil {
+		return nil, err
+	}
+	return directory.Open(name)
+}
+
+// See SidecarStore.
+func (self *computeAttestSidecarStore) Create(name string) (SidecarStoreWriter, error) {
+	directory, err := self.directory()
+	if err != nil {
+		return nil, err
+	}
+	return directory.Create(name)
+}
+
+// See SidecarStore.
+func (self *computeAttestSidecarStore) Remove(name string) error {
+	directory, err := self.directory()
+	if err != nil {
+		return err
+	}
+	return directory.Remove(name)
+}
+
+// See SidecarStore.
+func (self *computeAttestSidecarStore) List(prefix string) ([]SidecarStoreEntry, error) {
+	directory, err := self.directory()
+	if err != nil {
+		return nil, err
+	}
+	return directory.List(prefix)
+}
+
+// See SidecarStore.
+func (self *computeAttestSidecarStore) Directory(name string, class string) (SidecarStore, error) {
+	directory, err := self.directory()
+	if err != nil {
+		return nil, err
+	}
+	return directory.Directory(name, class)
+}
