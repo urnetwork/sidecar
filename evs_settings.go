@@ -85,6 +85,10 @@ type EvsSettings struct {
 	// may spend waiting on evs to take what it refused for now (429, PATH_EPOCH_DUE, a lease), and on
 	// P_r, before git hears `ng <ref> busy` or `remote outcome pending`: 3 min, the hook's own bound.
 	ReceiveWaitTimeout time.Duration
+	// The largest blob a new commit a git push brings may hold, which pre-receive refuses past it (DESIGN-DETAILS
+	// 8.2.8's pre-receive row), and the largest content an evs_write at a git-mode tip takes (evs_local_write.go):
+	// EvsFileMaxByteCount, §11.19's file bound, 2 GiB. Positive.
+	ReceiveBlobMaxByteCount int64
 	// The time an update may spend building, uploading and posting before git hears `ng <ref> too slow`: 30 min, a
 	// statement's own bound for a push in parts.
 	ReceivePublishTimeout time.Duration
@@ -131,6 +135,13 @@ type EvsSettings struct {
 	PushRetryCount int
 	// The longest one wait between those attempts, whatever retry_after_ms says: 60 s.
 	PushRetryMaxWait time.Duration
+	// How long a call rides out the token exchange's invalid_scope, no scope it asked granted in the newest state api's
+	// gate holds, from the first such answer, before it ends with it: 5 s, §8.9's target for an entry to reach server
+	// gates, which a grant this device already acts on may not have reached at api (QD-1226, question
+	// evs-refusal-retry-followups-grant-gate-window). A write asks again ReadRetryWait apart (retryRefusingNothing), a
+	// lease at its doubling wait and a delivery ReadRetryWait apart (evs_subscribe.go), each at most this long after its
+	// first refusal. Positive.
+	ExchangeScopeWaitTimeout time.Duration
 	// How many times one write builds its push again, under a new push id, after a refusal that asks for it
 	// (SEGMENT_STALE, SEGMENT_GONE, SLOT_STALE, GATE_CLOSED, BASE_STALE, TIME_STALE), or re-tokenizes it after 412
 	// PATH_EPOCH, the two counted together: 8.
@@ -240,7 +251,8 @@ type EvsSettings struct {
 	// §11.10's gap row: after an incomplete reset a background daemon first waits a random time below this, 10 min.
 	SubscribeResetMaxWait time.Duration
 	// A lease that did not answer 200 is tried again after this, doubling to SubscribeRetryMaxWait: 1 s to 5 min. A
-	// final refusal waits SubscribeResyncInterval.
+	// final refusal waits SubscribeResyncInterval, the hourly resync's pace (§11.10's gap and loss rows), which
+	// SubscribeRetryMaxWait does not cap.
 	SubscribeRetryMinWait time.Duration
 	SubscribeRetryMaxWait time.Duration
 	// How many tries Subscribe makes itself before it answers with the lease still owed, which the rounds keep
@@ -370,6 +382,7 @@ func DefaultEvsSettings() *EvsSettings {
 		GitCommandTimeout:        5 * time.Minute,
 		RefLockTimeout:           3 * time.Minute,
 		ReceiveWaitTimeout:       3 * time.Minute,
+		ReceiveBlobMaxByteCount:  EvsFileMaxByteCount,
 		ReceivePublishTimeout:    30 * time.Minute,
 		ReceiveRefCount:          4,
 		QueueFirstDelay:          250 * time.Millisecond,
@@ -389,6 +402,7 @@ func DefaultEvsSettings() *EvsSettings {
 		PushSlotBodiesByteCount:  DefaultEvsFormatSettings().SealSlotBodiesMaxByteCount,
 		PushRetryCount:           40,
 		PushRetryMaxWait:         60 * time.Second,
+		ExchangeScopeWaitTimeout: 5 * time.Second,
 		PushRebuildCount:         8,
 		RetokenReceiptMaxAge:     22 * time.Hour,
 		PathEpochDueWait:         10 * time.Second,
