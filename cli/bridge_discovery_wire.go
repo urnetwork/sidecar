@@ -41,11 +41,16 @@ var urDiscoveryProxyOf func(ctx context.Context, log sidecar.Logger) urDiscovery
 // An advertising proxy: registers each instance the viewer keeps on this machine alone.
 type urDiscoveryProxy interface {
 	// Registers exactly registrations, withdrawing at once what is no longer among them; translated gives an IPv4
-	// address's IPv6 one through ur tun's translator, invalid for none (D-BRIDGE-26).
+	// address's IPv6 one through ur tun's translator, invalid for none (D-BRIDGE-26). Never waits on the platform.
 	Set(registrations []*sidecar.BridgeDiscoveryRegistration, translated func(address netip.Addr) netip.Addr)
+	// What it holds now, and why it registers nothing where it does not.
+	Status() urDiscoveryProxyStatus
 	// Withdraws everything and stops.
 	Close()
 }
+
+// What an advertising proxy holds, as ur bridge devices shows it.
+type urDiscoveryProxyStatus = sidecar.BridgeDiscoveryProxyStatus
 
 // One network's discovery.
 type urBridgeDiscovery struct {
@@ -113,13 +118,14 @@ func newUrBridgeDiscovery(wire *urBridgeWire, running *sidecar.Sidecar, aclLocal
 			}
 			return nil
 		},
-		HostLabel: func() string { return hostLabel },
-		Gatherer:  gatherer,
-		Viewing:   self.viewing.Load,
-		OnView:    self.onView,
-		Filer:     filer,
-		Log:       wire.args.Log,
-		Settings:  settings,
+		HostLabel:   func() string { return hostLabel },
+		Gatherer:    gatherer,
+		Viewing:     self.viewing.Load,
+		OnView:      self.onView,
+		Filer:       filer,
+		ProxyStatus: self.proxyStatus,
+		Log:         wire.args.Log,
+		Settings:    settings,
 	})
 	if err != nil {
 		cancel()
@@ -215,6 +221,27 @@ func (self *urBridgeDiscovery) refreshProxy(view []*sidecar.BridgeDiscoveryViewI
 	}
 	registrations := sidecar.BridgeDiscoveryRegistrations(view, self.component.Gathered(), sidecar.DefaultBridgeDiscoverySettings().Wire.NameByteCount)
 	self.proxy.Set(registrations, self.bridge.TranslatedAddress)
+}
+
+// What the advertising proxy holds, or why none runs: for ur bridge devices.
+func (self *urBridgeDiscovery) proxyStatus() *sidecar.BridgeDiscoveryProxyStatus {
+	proxy := func() urDiscoveryProxy {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		return self.proxy
+	}()
+	switch {
+	case proxy != nil:
+		status := proxy.Status()
+		return &status
+	case urDiscoveryProxyOf == nil:
+		return &sidecar.BridgeDiscoveryProxyStatus{Note: "no advertising proxy runs on this platform"}
+	case !self.component.ProxyOn():
+		return &sidecar.BridgeDiscoveryProxyStatus{Note: "off"}
+	case !self.viewing.Load():
+		return &sidecar.BridgeDiscoveryProxyStatus{Note: "ur tun does not carry this network, so this device watches no host"}
+	}
+	return &sidecar.BridgeDiscoveryProxyStatus{}
 }
 
 // ur tun started or stopped carrying the network.

@@ -110,6 +110,16 @@ func printUrBridgeDevices(cli *urCli, reply *sidecar.DaemonBridgeDevicesReply) {
 	}
 	cli.printf("own        %s\n", onOff(reply.Own))
 	cli.printf("proxy      %s\n", onOff(reply.Proxy))
+	if status := reply.ProxyStatus; status != nil && reply.Proxy {
+		switch {
+		case status.Note != "":
+			cli.printf("           %s\n", status.Note)
+		case 0 < status.RefusedCount:
+			cli.printf("           %d registered on this machine, %d refused\n", status.RegisteredCount, status.RefusedCount)
+		default:
+			cli.printf("           %d registered on this machine\n", status.RegisteredCount)
+		}
+	}
 	if reply.HiddenDevice {
 		cli.printf("hidden     this device, whole\n")
 	}

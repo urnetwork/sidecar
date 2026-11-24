@@ -19,8 +19,6 @@ package main
 import (
 	"context"
 	"net"
-	"net/netip"
-	"strings"
 	"sync"
 	"time"
 
@@ -155,34 +153,4 @@ func urMdnsQuery(serviceType string) ([]byte, error) {
 		return nil, err
 	}
 	return builder.Finish()
-}
-
-// Whether an interface is one the gatherer queries: up, multicast-capable, not loopback, not point-to-point, and none
-// of ur tun's or another tun's.
-func urMdnsEligible(iface net.Interface) bool {
-	flags := iface.Flags
-	if flags&net.FlagUp == 0 || flags&net.FlagMulticast == 0 || flags&net.FlagLoopback != 0 || flags&net.FlagPointToPoint != 0 {
-		return false
-	}
-	for _, prefix := range []string{"ur-", "tun", "utun", "wg", "tap"} {
-		if strings.HasPrefix(iface.Name, prefix) {
-			return false
-		}
-	}
-	return true
-}
-
-// This host's own IPv4 addresses, which name an instance its own.
-func urMdnsLocalAddresses() []netip.Addr {
-	addresses := []netip.Addr{}
-	interfaceAddresses, err := net.InterfaceAddrs()
-	if err != nil {
-		return addresses
-	}
-	for _, interfaceAddress := range interfaceAddresses {
-		if prefix, err := netip.ParsePrefix(interfaceAddress.String()); err == nil && prefix.Addr().Is4() {
-			addresses = append(addresses, prefix.Addr())
-		}
-	}
-	return addresses
 }

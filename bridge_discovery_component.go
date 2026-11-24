@@ -106,8 +106,10 @@ type BridgeDiscoveryArgs struct {
 	OnView func(view []*BridgeDiscoveryViewInstance)
 	// The filings a share makes (bridge_discovery_share.go): nil refuses every share.
 	Filer BridgeDiscoveryFiler
-	Clock Clock
-	Log   Logger
+	// What the platform's advertising proxy holds, for ur bridge devices; nil shows none.
+	ProxyStatus func() *BridgeDiscoveryProxyStatus
+	Clock       Clock
+	Log         Logger
 	// Nil is DefaultBridgeDiscoverySettings.
 	Settings *BridgeDiscoverySettings
 }

@@ -105,12 +105,25 @@ type DaemonBridgeDevicesReply struct {
 	Proxy        bool     `json:"proxy"`
 	HiddenDevice bool     `json:"hidden_device,omitempty"`
 	Hides        []string `json:"hides,omitempty"`
+	// What the advertising proxy holds on this machine, and why it registers nothing where it does not; nil where no
+	// proxy is wired.
+	ProxyStatus *BridgeDiscoveryProxyStatus `json:"proxy_status,omitempty"`
 	// The effective list of types.
 	Types []string `json:"types,omitempty"`
 	// This host's LAN devices and its own instances, what it publishes, and what this device sees.
 	Lan       []*DaemonBridgeLanDevice  `json:"lan,omitempty"`
 	Published []*DaemonBridgeInstance   `json:"published,omitempty"`
 	Remote    []*DaemonBridgeRemoteHost `json:"remote,omitempty"`
+}
+
+// What the platform's advertising proxy holds (cli's, §17.7.1's advertising proxy rows), as ur bridge devices shows it.
+type BridgeDiscoveryProxyStatus struct {
+	// The instances registered on this machine, and those refused, a name another registration on it holds among them.
+	RegisteredCount int `json:"registered_count"`
+	RefusedCount    int `json:"refused_count,omitempty"`
+	// Why the proxy registers nothing where it is on: none on this platform, ur tun not carrying the network, or
+	// Avahi's reflector on Linux, which would repeat its answers onto the LAN.
+	Note string `json:"note,omitempty"`
 }
 
 // bridge.devices' params.
@@ -402,6 +415,9 @@ func (self *BridgeDiscoveryComponent) Devices() *DaemonBridgeDevicesReply {
 		HiddenDevice: input.state.HiddenDevice,
 		Hides:        slices.Concat(input.state.HiddenPorts, input.state.HiddenInstances),
 		Types:        input.types,
+	}
+	if self.args.ProxyStatus != nil {
+		reply.ProxyStatus = self.args.ProxyStatus()
 	}
 	for i, hide := range reply.Hides {
 		// an instance's key holds its type, then its name
