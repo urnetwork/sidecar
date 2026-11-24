@@ -58,20 +58,27 @@ const (
 	MessageType_EVS_HEAD_CHANGED       MessageType = 5121 // §11; push evs:<repo_id>
 	MessageType_SEARCH                 MessageType = 5124
 	MessageType_SEARCH_RESULT          MessageType = 5125 // §11.14; peer RPC, remote search (owner decision 175)
-	MessageType_TLS_EDGE_OPEN          MessageType = 5377
-	MessageType_TLS_HINT               MessageType = 5378 // §13; StreamOpen metadata; push tls
-	MessageType_SMTP_PREAMBLE          MessageType = 5633
-	MessageType_SMTP_PREAMBLE_RESULT   MessageType = 5634
-	MessageType_SMTP_OUTCOME           MessageType = 5635 // §14; stream to smtpedge
-	MessageType_SMTP_STATUS            MessageType = 5636 // §14; push mail
-	MessageType_SMTP_PROOF             MessageType = 5637
-	MessageType_SMTP_PROOF_RESULT      MessageType = 5638 // §14; BDAT and DATA proofs, RPC to smtpedge, M9
-	MessageType_SMTP_HANDSHAKE         MessageType = 5639
-	MessageType_SMTP_HANDSHAKE_RESULT  MessageType = 5640 // §14; TLS 1.3's disclosed SHTS, RPC to smtpedge, M9
-	MessageType_MAIL_INGRESS           MessageType = 5889
-	MessageType_MAIL_HINT              MessageType = 5890 // §15; StreamOpen metadata; push mail
+	MessageType_EVIDENCE               MessageType = 5126
+	MessageType_EVIDENCE_RESULT        MessageType = 5127 // DESIGN-COMPUTE §11.6, §11.10; peer RPC, a member's device asking
+	// the indexer enclave for its evidence (Appendix D's §6.6 row);
+	// reserved for ENC by CARCH-M11-05 (CONTRACTS C-25)
+	MessageType_TLS_EDGE_OPEN         MessageType = 5377
+	MessageType_TLS_HINT              MessageType = 5378 // §13; StreamOpen metadata; push tls
+	MessageType_SMTP_PREAMBLE         MessageType = 5633
+	MessageType_SMTP_PREAMBLE_RESULT  MessageType = 5634
+	MessageType_SMTP_OUTCOME          MessageType = 5635 // §14; stream to smtpedge
+	MessageType_SMTP_STATUS           MessageType = 5636 // §14; push mail
+	MessageType_SMTP_PROOF            MessageType = 5637
+	MessageType_SMTP_PROOF_RESULT     MessageType = 5638 // §14; BDAT and DATA proofs, RPC to smtpedge, M9
+	MessageType_SMTP_HANDSHAKE        MessageType = 5639
+	MessageType_SMTP_HANDSHAKE_RESULT MessageType = 5640 // §14; TLS 1.3's disclosed SHTS, RPC to smtpedge, M9
+	MessageType_MAIL_INGRESS          MessageType = 5889
+	MessageType_MAIL_HINT             MessageType = 5890 // §15; StreamOpen metadata; push mail
 	// 0x18 §16 MCP: none in v0 or v1; the directory's notices ride §11's hints (§16.11)
-	// 0x19 §17: none; bridge rules ride the config repo (owner decision 5)
+	// 0x19 §17: bridge rules ride the config repo (owner decision 5); listeners' live ask is DESIGN-COMPUTE's
+	MessageType_LISTENERS        MessageType = 6401
+	MessageType_LISTENERS_RESULT MessageType = 6402 // DESIGN-COMPUTE §26.8; peer RPC on the control class too
+	// (Appendix D's §6.11 row); reserved for LSTN by CARCH-M11-05
 	MessageType_CORE_HINT        MessageType = 6657 // §5; push core
 	MessageType_DNS_ZONE_CHANGED MessageType = 6913 // §12; push dns
 )
@@ -107,6 +114,8 @@ var (
 		5121: "EVS_HEAD_CHANGED",
 		5124: "SEARCH",
 		5125: "SEARCH_RESULT",
+		5126: "EVIDENCE",
+		5127: "EVIDENCE_RESULT",
 		5377: "TLS_EDGE_OPEN",
 		5378: "TLS_HINT",
 		5633: "SMTP_PREAMBLE",
@@ -119,6 +128,8 @@ var (
 		5640: "SMTP_HANDSHAKE_RESULT",
 		5889: "MAIL_INGRESS",
 		5890: "MAIL_HINT",
+		6401: "LISTENERS",
+		6402: "LISTENERS_RESULT",
 		6657: "CORE_HINT",
 		6913: "DNS_ZONE_CHANGED",
 	}
@@ -151,6 +162,8 @@ var (
 		"EVS_HEAD_CHANGED":         5121,
 		"SEARCH":                   5124,
 		"SEARCH_RESULT":            5125,
+		"EVIDENCE":                 5126,
+		"EVIDENCE_RESULT":          5127,
 		"TLS_EDGE_OPEN":            5377,
 		"TLS_HINT":                 5378,
 		"SMTP_PREAMBLE":            5633,
@@ -163,6 +176,8 @@ var (
 		"SMTP_HANDSHAKE_RESULT":    5640,
 		"MAIL_INGRESS":             5889,
 		"MAIL_HINT":                5890,
+		"LISTENERS":                6401,
+		"LISTENERS_RESULT":         6402,
 		"CORE_HINT":                6657,
 		"DNS_ZONE_CHANGED":         6913,
 	}
@@ -199,7 +214,7 @@ var File_protocol_types_proto protoreflect.FileDescriptor
 
 const file_protocol_types_proto_rawDesc = "" +
 	"\n" +
-	"\x14protocol/types.proto\x12\x11urnetwork.sidecar*\xe0\x06\n" +
+	"\x14protocol/types.proto\x12\x11urnetwork.sidecar*\xac\a\n" +
 	"\vMessageType\x12\x15\n" +
 	"\x11MESSAGE_TYPE_NONE\x10\x00\x12\t\n" +
 	"\x05HELLO\x10\x01\x12\x10\n" +
@@ -232,7 +247,9 @@ const file_protocol_types_proto_rawDesc = "" +
 	"\bGKM_HINT\x10\x81&\x12\x15\n" +
 	"\x10EVS_HEAD_CHANGED\x10\x81(\x12\v\n" +
 	"\x06SEARCH\x10\x84(\x12\x12\n" +
-	"\rSEARCH_RESULT\x10\x85(\x12\x12\n" +
+	"\rSEARCH_RESULT\x10\x85(\x12\r\n" +
+	"\bEVIDENCE\x10\x86(\x12\x14\n" +
+	"\x0fEVIDENCE_RESULT\x10\x87(\x12\x12\n" +
 	"\rTLS_EDGE_OPEN\x10\x81*\x12\r\n" +
 	"\bTLS_HINT\x10\x82*\x12\x12\n" +
 	"\rSMTP_PREAMBLE\x10\x81,\x12\x19\n" +
@@ -246,6 +263,8 @@ const file_protocol_types_proto_rawDesc = "" +
 	"\x15SMTP_HANDSHAKE_RESULT\x10\x88,\x12\x11\n" +
 	"\fMAIL_INGRESS\x10\x81.\x12\x0e\n" +
 	"\tMAIL_HINT\x10\x82.\x12\x0e\n" +
+	"\tLISTENERS\x10\x812\x12\x15\n" +
+	"\x10LISTENERS_RESULT\x10\x822\x12\x0e\n" +
 	"\tCORE_HINT\x10\x814\x12\x15\n" +
 	"\x10DNS_ZONE_CHANGED\x10\x816\"\x06\b\x82(\x10\x83(*\x0eEVS_HEAD_CHECK*\x15EVS_HEAD_CHECK_RESULTB'Z%github.com/urnetwork/sidecar/protocolb\x06proto3"
 

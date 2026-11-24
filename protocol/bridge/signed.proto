@@ -132,6 +132,15 @@ enum SignedType {
   SIGNED_RETENTION_POLICY = 0x1804;
   SIGNED_DIRECTORY_CARD = 0x1805;
   SIGNED_DIRECTORY_REPO = 0x1806;  // its body RepoAnnouncement
+  // DESIGN-COMPUTE's three, as its Appendix D numbers them, 0x1807 left untouched, reserved once by CARCH-M11-05
+  // (CONTRACTS C-25): each owner builds its body and gives its purpose with its statement, and until then no
+  // signer takes the type and no reader knows it. An attach link's origin, purpose attach-origin (§7.10, §12.5;
+  // HARN); an Owner's or Admin's acknowledgment of a disclosure for the network, purpose disclosure-ack, by an
+  // approval-capable device's identity key (§2.8; CTRUST); an indexer incarnation's sponsor's statement of what
+  // its device installed over SSH, purpose enclave-setup (§11.7, §11.10; ENC).
+  SIGNED_ATTACH_ORIGIN = 0x1808;
+  SIGNED_DISCLOSURE_ACK = 0x1809;
+  SIGNED_ENCLAVE_SETUP = 0x180A;
 
   // 0x19xx §17: 17.8's statements in row order (purpose bridge), then WindowDelegation and ShareCert
   // (purpose window-delegation).

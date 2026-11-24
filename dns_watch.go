@@ -5,11 +5,12 @@
 // request. It is the only outside view of EX2, so it trusts no server: what it expects is what this device asked for
 // and what its local state says, kept in its own store (<state>/net/<id>/dns/), never the API's word.
 //
-// Each pass, about every Interval with Jitter, asks both resolvers for every watched name and type: the published
-// hosts and the apex @, A, AAAA and CAA at each, and from M7 the mail hosts and DKIM selectors the mail components
-// add (dns_watch_mail.go: mx's MX, addresses and TLSA). For each:
+// Each pass, about every Interval with Jitter, asks every resolver, D-TRUST-9's two by default, for every watched name
+// and type: the published hosts and the apex @, A, AAAA and CAA at each, and from M7 the mail hosts and DKIM selectors
+// the mail components add (dns_watch_mail.go: mx's MX, addresses and TLSA). For each:
 //
-//   - the two resolvers' answers must agree; a split is asked once more, and a split that stays alarms (split);
+//   - every resolver's answer must say what the others' do, however many the watch asks; a split is asked once more,
+//     and a split that stays alarms (split);
 //   - the agreed answer must hold exactly what the device expects where it expects anything, or, for a mail host's
 //     TLSA, hold the device's own record among others; CAA none unless it asked for one (unrequested);
 //   - and it must hold what GET /dns/zone shows the device where the zone holds values, and at an owner the edge or
@@ -18,10 +19,11 @@
 // StrictChain answers §15.5's strict_chain through the DnsWatchStrictValidator the args attach, which
 // dns_watch_mail.go builds on the legs that validate DNSSEC; with none it answers false.
 //
-// A resolver that fails marks the watch degraded, "zone watch degraded" in SidecarStatus, as the CT watch does, and
-// that pass judges the other resolver's answer alone, with no split to see; both failing judge nothing. A sidecar
-// with no published name, mail host or watched name watches nothing. Lookups go only through DoH (§2.8 ext-3),
-// never a URnetwork proxy: the resolver is DnsWatchResolver, whose connect-leg implementation is dns_watch_doh.go.
+// A resolver that fails, at the first asking or the once more, marks the watch degraded, "zone watch degraded" in
+// SidecarStatus, as the CT watch does, and that pass judges what the others agree on, a lone answer with no split to
+// see; all failing judge nothing. A sidecar with no published name, mail host or watched name watches nothing.
+// Lookups go only through DoH (§2.8 ext-3), never a URnetwork proxy: the resolver is DnsWatchResolver, whose
+// connect-leg implementation is dns_watch_doh.go, and a host that stays up runs the watch (dns_watch_component.go).
 //
 // Values compare in one canonical form a type (canonicalDnsWatchValue), which the resolver's parser and the zone's
 // presentation text both reach. Safe for concurrent use.
@@ -55,12 +57,15 @@ const (
 	DnsWatchTypeCaa   uint16 = 257
 )
 
-// Tunables of the watch.
+// Tunables of the watch. Every number must be positive, Jitter aside, which may be zero for none.
 type DnsWatchSettings struct {
 	// About how often a pass runs: D-TRUST-9's 6 hours, like the CT watch.
 	Interval time.Duration
 	// The most a pass is moved from Interval either way, so devices do not ask in step.
 	Jitter time.Duration
+	// The least the watch waits before a pass, whatever Interval and Jitter give: 1 s, so no pair of them makes the
+	// passes spin.
+	PassMinWait time.Duration
 	// One lookup's deadline.
 	LookupTimeout time.Duration
 	// The most names one pass watches, a bound on its work.
@@ -76,10 +81,16 @@ func DefaultDnsWatchSettings() *DnsWatchSettings {
 	return &DnsWatchSettings{
 		Interval:       6 * time.Hour,
 		Jitter:         30 * time.Minute,
+		PassMinWait:    time.Second,
 		LookupTimeout:  10 * time.Second,
 		NameMaxCount:   256,
 		UrnetworkZones: dnsWatchPlatformZones(),
 	}
+}
+
+// Whether every number is in range.
+func (self *DnsWatchSettings) valid() bool {
+	return 0 < self.Interval && 0 <= self.Jitter && 0 < self.PassMinWait && 0 < self.LookupTimeout && 0 < self.NameMaxCount
 }
 
 // The zones directly holding the host list's service hosts, canonical, each once: the platform's zone. None when the
@@ -120,9 +131,10 @@ func (self *DnsWatchAnswer) equal(other *DnsWatchAnswer) bool {
 	return self.NameError == other.NameError && self.Cname == other.Cname && slices.Equal(self.Values, other.Values)
 }
 
-// The two public resolvers the watch asks (§2.8 ext-3). Safe for concurrent use.
+// The public resolvers the watch asks (§2.8 ext-3), each a different operator's. Safe for concurrent use.
 type DnsWatchResolver interface {
-	// How many resolvers there are: two.
+	// How many resolvers there are: D-TRUST-9's two by default, and never fewer, since a split is answers that differ.
+	// Pass compares every one's answer, so a third adds a view.
 	ResolverCount() int
 	// resolver's answer for name, canonical with its final dot, and qType. An error is the resolver failing, never
 	// an answer.
@@ -208,7 +220,8 @@ type DnsWatchArgs struct {
 	// nil is real time.
 	Clock Clock
 	// StrictChain's validation: NewDnsWatchStrictValidator over C20's forwarder. nil answers every StrictChain false,
-	// as on a leg that validates no DNSSEC, or before connect has C20.
+	// as on a leg that validates no DNSSEC. The daemon's watch takes none (dns_watch_component.go): a receiver's own
+	// lookups hold mail.strict's chain where the watch holds none (mail_component_receive.go).
 	Strict DnsWatchStrictValidator
 }
 
@@ -236,7 +249,8 @@ type DnsWatch struct {
 	root string
 }
 
-// A watch over args, its expectations read from its store, its passes running under ctx until Close.
+// A watch over args, its expectations read from its store, its passes running under ctx until Close. Settings out of
+// range are refused, as is a resolver of fewer than two, whose answers no pass could compare (D-TRUST-9).
 func NewDnsWatch(ctx context.Context, args *DnsWatchArgs) (*DnsWatch, error) {
 	if args == nil || args.Resolver == nil || args.Store == nil || args.Zone == nil || args.PublishedHosts == nil {
 		return nil, fmt.Errorf("%w: a dns watch needs its resolver, store, zone and published hosts", errInvalidSettings)
@@ -244,6 +258,12 @@ func NewDnsWatch(ctx context.Context, args *DnsWatchArgs) (*DnsWatch, error) {
 	settings := args.Settings
 	if settings == nil {
 		settings = DefaultDnsWatchSettings()
+	}
+	if !settings.valid() {
+		return nil, fmt.Errorf("%w: the dns watch's settings", errInvalidSettings)
+	}
+	if args.Resolver.ResolverCount() < 2 {
+		return nil, fmt.Errorf("%w: a dns watch compares at least two resolvers' answers", errInvalidSettings)
 	}
 	file, err := readDnsWatchFile(args.Store)
 	if err != nil {
@@ -447,7 +467,7 @@ func (self *DnsWatch) run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-self.clock.After(max(wait, time.Second)):
+		case <-self.clock.After(max(wait, self.settings.PassMinWait)):
 		}
 		self.Pass(ctx)
 	}
@@ -470,6 +490,11 @@ type dnsWatchItem struct {
 const dnsWatchMailMxPreference = 10
 
 // Runs one pass now and answers whether it alarmed. A pass with nothing to watch asks nothing.
+//
+// Every answer a lookup gathered is compared, however many resolvers the watch asks: answers that do not all say the
+// same are a split, asked once more before it alarms, so a health drop between them does not. Whatever the once more
+// gathers stands in the first asking's place: a split again alarms; answers that agree are judged; none judge nothing,
+// since the split the first asking saw could not be told from a change in between.
 func (self *DnsWatch) Pass(ctx context.Context) bool {
 	self.passLock.Lock()
 	defer self.passLock.Unlock()
@@ -478,27 +503,32 @@ func (self *DnsWatch) Pass(ctx context.Context) bool {
 		// no zone, so no expectation the pass could hold the resolvers to: the next pass tries again
 		return false
 	}
+	resolverCount := self.resolver.ResolverCount()
+	// whether every answer says what the first does, as none and one do
+	agree := func(answers []*DnsWatchAnswer) bool {
+		for _, answer := range answers {
+			if !answers[0].equal(answer) {
+				return false
+			}
+		}
+		return true
+	}
 	degraded := false
 	alarmed := false
 	for _, item := range items {
 		answers := self.lookup(ctx, item)
-		if len(answers) < self.resolver.ResolverCount() {
-			degraded = true
-		}
-		if len(answers) == 0 {
-			continue
-		}
-		if 1 < len(answers) && !answers[0].equal(answers[1]) {
-			// a split is asked once more before it alarms, so a health drop between the two answers does not
-			again := self.lookup(ctx, item)
-			if len(again) == 2 && !again[0].equal(again[1]) {
+		degraded = degraded || len(answers) < resolverCount
+		if !agree(answers) {
+			answers = self.lookup(ctx, item)
+			degraded = degraded || len(answers) < resolverCount
+			if !agree(answers) {
 				self.alarm(SidecarDnsAlarmSplit)
 				alarmed = true
 				continue
 			}
-			if 0 < len(again) {
-				answers = again
-			}
+		}
+		if len(answers) == 0 {
+			continue
 		}
 		if alarm, ok := judgeDnsWatchAnswer(item, answers[0]); !ok {
 			self.alarm(alarm)

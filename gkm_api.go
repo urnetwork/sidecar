@@ -24,6 +24,17 @@
 // write never retries those here, since each flow resolves its own unknown outcome by rereading (§10.5's Rotate,
 // §10.6's late wraps).
 //
+// gkm's 401 refuses nothing by itself: its guard answers it at the token, one that does not authenticate there (past
+// its life by gkm's clock, which may run ahead of this device's, or signed under a key gkm no longer holds), or at
+// rev/, which voids its subject, each before anything is written. So the call drops the token it presented through
+// the keeper's ForgetServiceToken and goes once more at once, a write with its same bytes, under a token minted after
+// the answer, as the keeper's contract has a caller do and evs's client does on its 401 (owner decision 411). It drops
+// the narrowed retry's token too while the call may still go under it, so every token the call presents after a 401
+// is one minted after it, and only gkm's 401 to such a token is ErrGkmTokenRefused, a refusal for good
+// (gkmTokenRefused). A new token that cannot be had is read by why, as every other is (below), so a refusal for good
+// of the exchange's ends the call and a failure that may change goes again within its bound. A client whose
+// ServiceToken keeps no token needs no ForgetServiceToken: its retry mints a new one anyway.
+//
 // A 403 to a batch carrying a stronger role on the call's repo than the call needs goes once more, read or write,
 // under that repo's one scope at the role the call needs (QD-1179). gkm's guard asks its newest state for the
 // strongest right the token holds of those the route takes, with each weaker right of its role that the route takes,
@@ -106,7 +117,9 @@ const (
 const gkmRecoveryScopePrefix = "recovery:"
 
 var (
-	// gkm refused the call's token (401): its subject is revoked or voided by rev/, or the token is past its life.
+	// gkm refused the call's token (401), and again the token the call presented after dropping that one: the token
+	// does not authenticate at gkm, or rev/ voids its subject. Every call has already dropped the refused token and
+	// gone once more (the file's comment), so this is a refusal for good.
 	ErrGkmTokenRefused = errors.New("gkm: token refused")
 	// An answer that does not hold §10.14's form: a body that does not parse, or one past its bound. Never read as a
 	// refusal.
@@ -131,6 +144,10 @@ type GkmServiceTokenFunction func(ctx context.Context, resource string, scopes [
 // A service token for an audience url with scopes, and the scopes the exchange granted it, which may be fewer than
 // those asked (§7.8): Sidecar.GrantedServiceToken's shape, for an in-process caller only.
 type GkmGrantedServiceTokenFunction func(ctx context.Context, resource string, scopes []string) (token string, grantedScopes []string, err error)
+
+// Drops the token a GkmServiceTokenFunction or GkmGrantedServiceTokenFunction keeps for an audience url and scopes, so
+// its next call mints a new one: Sidecar.ForgetServiceToken's shape.
+type GkmForgetServiceTokenFunction func(resource string, scopes []string)
 
 // Every answer of gkm's but a success (§10.14). Its text names the status and never a path, an id or a token. The
 // lb's 502 or 504 is no answer of gkm's and never one of these (ErrGkmNoAnswer).
@@ -218,6 +235,10 @@ type GkmApiArgs struct {
 	// because the exchange left the call's repo scope out of a batch's token (QD-1230). nil takes ServiceToken, each of
 	// whose tokens is read as granting every scope asked, so no call takes that retry. One of the two is required.
 	GrantedServiceToken GkmGrantedServiceTokenFunction
+	// Sidecar.ForgetServiceToken: drops a token gkm answered 401, so the call's one retry presents a token minted after
+	// the answer (the file's comment). Nil for a token function that keeps no token, as one exchanging at each call
+	// does, whose retry mints a new one anyway; beside one that keeps a token, nil retries with the token refused.
+	ForgetServiceToken GkmForgetServiceTokenFunction
 	// nil takes the defaults.
 	Settings *GkmSettings
 	// nil is real time.
@@ -229,8 +250,10 @@ type GkmApi struct {
 	baseUrl      string
 	transport    http.RoundTripper
 	serviceToken GkmGrantedServiceTokenFunction
-	settings     *GkmSettings
-	clock        Clock
+	// nil for a serviceToken that keeps no token
+	forgetServiceToken GkmForgetServiceTokenFunction
+	settings           *GkmSettings
+	clock              Clock
 
 	stateLock sync.Mutex
 	// each token's scopes, sorted by repo, at most 64 a batch
@@ -270,14 +293,15 @@ func NewGkmApi(args *GkmApiArgs) (*GkmApi, error) {
 		}
 	}
 	return &GkmApi{
-		baseUrl:          args.GkmUrl,
-		transport:        args.Transport,
-		serviceToken:     serviceToken,
-		settings:         settings,
-		clock:            clockOrReal(args.Clock),
-		repoIdBatches:    map[Id]int{},
-		repoIdRoles:      map[Id]string{},
-		accessScopesHeld: NewMonitorValue(false),
+		baseUrl:            args.GkmUrl,
+		transport:          args.Transport,
+		serviceToken:       serviceToken,
+		forgetServiceToken: args.ForgetServiceToken,
+		settings:           settings,
+		clock:              clockOrReal(args.Clock),
+		repoIdBatches:      map[Id]int{},
+		repoIdRoles:        map[Id]string{},
+		accessScopesHeld:   NewMonitorValue(false),
 	}, nil
 }
 
@@ -442,10 +466,13 @@ func gkmBody(message proto.Message) ([]byte, error) {
 }
 
 // Sends call and answers a success's status and body, at most ReplyMaxByteCount, or an error for any other answer.
-// gkm's own 429 or 503 goes again as call.retry allows. Its 403 to a batch with narrowed scopes goes again once, at
-// once, under those scopes, which the rest of the call presents, where the batch carries a stronger role on the
-// call's repo (QD-1179) or the token's granted scopes left the batch's scope there out (QD-1230); ReadRetryCount does
-// not count that retry, and the batch's invalid_scope takes it too. A token that could not be had is read by why
+// gkm's own 429 or 503 goes again as call.retry allows. Its first 401 sends the call again once, at once, read or
+// write, the token it refused dropped with the narrowed retry's while the call may still take that
+// (ForgetServiceToken), so the call presents only tokens minted after it, and a 401 to one of those ends the call. Its
+// 403 to a batch with narrowed scopes goes again once, at once, under those scopes, which the rest of the call
+// presents, where the batch carries a stronger role on the call's repo (QD-1179) or the token's granted scopes left
+// the batch's scope there out (QD-1230); ReadRetryCount counts neither retry, and the batch's invalid_scope takes the
+// narrowed one too. A token that could not be had, the one asked after a 401 as any other, is read by why
 // (sidecarServiceTokenRefusalOf): the exchange's invalid_scope to the call's own scope, which the client's state
 // gives, goes again ReadRetryWait apart until ExchangeScopeWaitTimeout has passed since the call's first, the last try
 // at the window's end; another refusal for good ends the call at once; and a failure that may change goes again at
@@ -459,6 +486,9 @@ func (self *GkmApi) do(ctx context.Context, call *gkmCall) (int, []byte, error) 
 	exchangeRetryCount := 0
 	// the first of the exchange's invalid_scope answers to the call's own scope, zero while none came
 	var scopeRefusedAt time.Time
+	// whether gkm answered the call 401 and the call dropped the token, so each token it presents since is one minted
+	// after that answer
+	tokenRenewed := false
 	for {
 		status, body, grantedScopes, err := self.doOnce(ctx, call, scopes)
 		if err == nil {
@@ -468,7 +498,22 @@ func (self *GkmApi) do(ctx context.Context, call *gkmCall) (int, []byte, error) 
 			return 0, nil, err
 		}
 		var wait time.Duration
-		if errors.Is(err, errGkmNoServiceToken) {
+		if errors.Is(err, ErrGkmTokenRefused) {
+			if tokenRenewed {
+				// a token minted after gkm's last 401: it does not authenticate there either, or rev/ voids its subject
+				return 0, nil, err
+			}
+			// gkm refused the token before writing anything, which no wait mends and a new token may: drop it, and the
+			// narrowed retry's while the call may still go under it, and go again at once under tokens minted for it
+			tokenRenewed = true
+			if self.forgetServiceToken != nil {
+				self.forgetServiceToken(self.baseUrl, scopes)
+				if !narrowed {
+					self.forgetServiceToken(self.baseUrl, call.scopes.narrowedScopes)
+				}
+			}
+			continue
+		} else if errors.Is(err, errGkmNoServiceToken) {
 			refusal := sidecarServiceTokenRefusalOf(err)
 			switch {
 			case call.scopes.unverified:
