@@ -27,11 +27,11 @@ import (
 // The root's compute families by file prefix, §3.3's table: harness_, infer_, attest_, gateway_, compute_, enclave_,
 // ssh_, git_, websearch_ (the web search §3.3 writes as search_, whose prefix §16.10's index search already holds; C-37),
 // fetch_, calendar_, oauth_, listeners_, safety_, skill_, and the families the plan adds for the components' settings
-// and their files: session_ (§24), disclosure_ (§2.8), budget_ and models_ (§16.4). CSURF's page Worker rule reads the
-// same list.
+// and their files: session_ (§24), disclosure_ (§2.8), budget_ and models_ (§16.4); and support_, §28's support skill and
+// its support log. CSURF's page Worker rule reads the same list.
 var computeRootFamilyPrefixes = []string{
 	"attest_", "budget_", "calendar_", "compute_", "disclosure_", "enclave_", "fetch_", "gateway_", "git_", "harness_",
-	"infer_", "listeners_", "models_", "oauth_", "safety_", "session_", "skill_", "ssh_", "websearch_",
+	"infer_", "listeners_", "models_", "oauth_", "safety_", "session_", "skill_", "ssh_", "support_", "websearch_",
 }
 
 // Compute's root files no family prefix names: the compute policy's settings, in the acl_ family (§16; CACL).
