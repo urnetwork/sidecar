@@ -328,7 +328,8 @@ func (self *urNetworkClients) intake() (*sidecar.GkmApi, *sidecar.GkmHints, erro
 // strongest role by §8's table (AclState.EvsAccess for gkm's audience, as the exchange grants them), so its tokens
 // carry them in batches; nothing before the api or a state. A role the state no longer grants leaves the batches, and
 // a call presents its own scope where its repo is in none. A joining device's unconfirmed state asks for the config
-// repo's alone (QD-817) so it can take its first wrap. The exchange judges those scopes on its own log.
+// repo's alone (QD-817) so it can take its first wrap, handed as unconfirmed, so no call of it waits on the exchange
+// (GkmApi.SetUnconfirmedRepoScopes). The exchange judges those scopes on its own log.
 func (self *urNetworkClients) setRepoScopes() {
 	self.scopesLock.Lock()
 	defer self.scopesLock.Unlock()
@@ -372,6 +373,10 @@ func (self *urNetworkClients) setRepoScopes() {
 			continue
 		}
 		scopes = append(scopes, sidecar.GkmRepoScope{RepoId: repoId, Role: role})
+	}
+	if !confirmed {
+		api.SetUnconfirmedRepoScopes(scopes)
+		return
 	}
 	api.SetRepoScopes(scopes)
 }
