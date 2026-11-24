@@ -23,38 +23,13 @@ func (self *mailComponentIdleProver) PrepareKeys(ctx context.Context) (*SmtpProv
 	return &SmtpProverReadiness{Done: true}, nil
 }
 
-// Exercise the stock sender's lifecycle with an enrolled memory instance and the member's verified state.
+// Exercise the stock sender's lifecycle with an enrolled memory instance and the member's verified state, its lookups
+// on a resolver the test names (newTestMailSenderRun), since this test binary refuses the default public ones.
 func TestMailComponentSmtpUsesLocalEnableAndTheMembersMailbox(t *testing.T) {
-	world := newMailSendResultTestWorld(t)
-	client := world.client
-	instance, _, _ := enrolledInstance(t)
 	prover := &mailComponentIdleProver{entered: make(chan struct{}, 1)}
-	settings := DefaultSidecarSettings()
-	settings.Connect.SmtpProver = prover
-	client.sidecar = &Sidecar{instance: instance, networkId: &testNetworkId, settings: settings}
-	client.setNetworkRow(testMailIngestNetwork())
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	dispatcher := newTestSubprotocol(t, nil).subprotocol
-	versions := newTestPushHeldVersions()
-	push, err := newPushClient(ctx, &PushClientEnv{Subprotocol: dispatcher, Store: world.store}, versions.versions)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer push.Close()
-	versions.awaitStart(t, "the generation's first push resync")
-	versions.answer(t)
-	run := &mailComponentRun{ctx: ctx, cancel: cancel, env: &SidecarEnv{
-		Ctx: ctx, SidecarApi: &SidecarApi{}, Subprotocol: dispatcher,
-	}}
-	client.componentRun = run
-	defer client.replaceSmtp(run, nil)
-	binding, _, err := client.bound()
-	if err != nil {
-		t.Fatal(err)
-	}
-	client.enabledLocally = false
-	client.setNetworkEnabled(true)
+	resolvers := &testMailSenderResolvers{}
+	sender := newTestMailSenderRun(t, prover, resolvers.factory)
+	world, client, run, binding := sender.world, sender.client, sender.run, sender.binding
 	client.passSmtp(run, binding)
 	if run.smtp != nil {
 		t.Fatal("network enable alone started the local prover")
@@ -65,7 +40,7 @@ func TestMailComponentSmtpUsesLocalEnableAndTheMembersMailbox(t *testing.T) {
 	if smtp == nil || smtp.mailboxId != world.mailboxId || smtp.memberId != world.member {
 		t.Fatalf("the enabled prover host did not attach the member's mailbox: %v", world.log.snapshot())
 	}
-	binding, _, err = client.bound()
+	binding, _, err := client.bound()
 	if err != nil || binding.Sender != smtp.sender || binding.BurnerSelectors != smtp.dkim || smtp.dkim.domainAnswers() == nil || smtp.dkim.domainAnswers().Root != testMailIngestRoot {
 		t.Fatal("the active sender or its DKIM domain answers are missing")
 	}
@@ -78,5 +53,8 @@ func TestMailComponentSmtpUsesLocalEnableAndTheMembersMailbox(t *testing.T) {
 	binding, _, err = client.bound()
 	if err != nil || binding.Sender != nil || binding.BurnerSelectors != nil {
 		t.Fatal("the stopped sender remained bound")
+	}
+	if built, releases := resolvers.snapshot(); len(built) != 1 || releases[0] != 1 {
+		t.Errorf("one sender built %d resolvers, released %v", len(built), releases)
 	}
 }

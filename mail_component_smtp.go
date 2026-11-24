@@ -1,5 +1,17 @@
 //go:build !sidecar_http && !ios_extension && !js
 
+// The desktop sender the mail component starts on a consented prover host (§14, §15.10's step 4; MAIL-M9-01): its
+// prover host, the member's outbox runner and an SmtpSender over the generation's ur/smtpedge socket, the API's HTTPS
+// transport for MTA-STS policies, the device's DKIM keys and the member's encrypted mailbox, with every DNS lookup it
+// makes from the device over a resolver of its own (mail_sender_resolver.go; CODESTYLE's DoH rule: one owner, one
+// cache): TL2's _mta-sts lookup, TL3's MX lookup and the DKIM domain answers, and the anchors TL1 validates to.
+//
+// The resolver is what MailSendSettings.ResolverFactory builds, else a DohCache over connect's default resolvers,
+// public ones (§2.8 ext-3), under the DNS root's keys. In a test binary that default is refused before any part is
+// built (ErrMailSenderPublicResolver): testing.Testing reads true only in a binary go test linked, so production's
+// senders ask what they always have, while a test that would query public resolvers from the test host gets no sender,
+// and so dials nothing, until it names its own DNS.
+
 package sidecar
 
 import (
@@ -7,7 +19,9 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"fmt"
 	"sync"
+	"testing"
 
 	"github.com/urnetwork/connect"
 
@@ -19,7 +33,34 @@ func init() {
 	mailSidecarSenderFactory = newMailSidecarSender
 }
 
-// Builds the desktop sender over the generation's actual socket, own DNS and HTTPS transports, and encrypted mailbox.
+// The resolver a sender on settings asks: settings' ResolverFactory's, else a DohCache of the sender's own over
+// connect's default resolvers, under the DNS root's keys. inTest, a test binary's, refuses that default with
+// ErrMailSenderPublicResolver before anything is built. A factory's error comes back as it was given, and a resolver
+// without its Doh is refused, released first.
+func newMailSenderResolver(settings *MailSendSettings, inTest bool) (*MailSenderResolver, error) {
+	if settings != nil && settings.ResolverFactory != nil {
+		resolver, err := settings.ResolverFactory()
+		if err != nil {
+			return nil, err
+		}
+		if resolver == nil || resolver.Doh == nil {
+			if resolver != nil && resolver.Close != nil {
+				resolver.Close()
+			}
+			return nil, fmt.Errorf("%w: a sender's resolver with no Doh", ErrMailClientInvalid)
+		}
+		return resolver, nil
+	}
+	if inTest {
+		return nil, ErrMailSenderPublicResolver
+	}
+	cache := connect.NewDohCache(connect.DefaultDohSettings())
+	return &MailSenderResolver{Doh: cache, Close: cache.Close}, nil
+}
+
+// Builds the desktop sender over the generation's actual socket, own DNS and HTTPS transports, and encrypted mailbox:
+// its resolver first, so one a test binary refuses builds nothing, then every part over it. A part that fails ends
+// what was built before it, the resolver last; a built sender's close ends its workers, then releases the resolver.
 func newMailSidecarSender(client *MailClient, run *mailComponentRun, memberId, mailboxId Id) (*mailComponentSmtp, error) {
 	sidecar := client.sidecar
 	env := run.env
@@ -27,6 +68,22 @@ func newMailSidecarSender(client *MailClient, run *mailComponentRun, memberId, m
 	if env == nil || env.SidecarApi == nil || env.Subprotocol == nil || sidecar.instance == nil || root == "" {
 		return nil, ErrMailUnbound
 	}
+	// the one guarded resolver every lookup of this sender asks, which a test binary must name
+	resolver, err := newMailSenderResolver(client.sendSettings(), testing.Testing())
+	if err != nil {
+		return nil, err
+	}
+	release := func() {
+		if resolver.Close != nil {
+			resolver.Close()
+		}
+	}
+	composed := false
+	defer func() {
+		if !composed {
+			release()
+		}
+	}()
 	mailbox, err := client.SmtpMailbox()
 	if err != nil {
 		return nil, err
@@ -63,12 +120,11 @@ func newMailSidecarSender(client *MailClient, run *mailComponentRun, memberId, m
 	if err != nil {
 		return nil, err
 	}
-	doh := connect.NewDohCache(connect.DefaultDohSettings())
 	pins := NewSmtpPinStore(store, settings, clock, client.log)
-	policy := NewSmtpTlsPolicy(NewSmtpDane(nil, clock, nil), NewSmtpMtaSts(doh, env.SidecarApi.Transport(), store, settings, clock),
-		pins, NewSmtpTlsAllowanceStore(store, settings, clock), sidecar, doh, nil, settings, clock)
+	policy := NewSmtpTlsPolicy(NewSmtpDane(resolver.Anchors, clock, nil), NewSmtpMtaSts(resolver.Doh, env.SidecarApi.Transport(), store, settings, clock),
+		pins, NewSmtpTlsAllowanceStore(store, settings, clock), sidecar, resolver.Doh, nil, settings, clock)
 	dkim := NewSmtpDkimKeys(sidecar.instance.secrets(client.networkId, SmtpDkimSecretsNamespace), env.SidecarApi, settings, clock, client.log)
-	dkim.SetDomainAnswers(&SmtpDkimDomainAnswers{Doh: doh, Root: root})
+	dkim.SetDomainAnswers(&SmtpDkimDomainAnswers{Doh: resolver.Doh, Root: root})
 	sender, err := NewSmtpSender(&SmtpSenderArgs{
 		Dialer: NewSidecarSmtpEdgeDialer(sidecar, settings), Prover: prover, Policy: policy, Pins: pins, Dkim: dkim,
 		Mailbox: mailbox, MemberDevice: func(id Id) bool { return memberKey(id) != nil },
@@ -84,7 +140,6 @@ func newMailSidecarSender(client *MailClient, run *mailComponentRun, memberId, m
 		Settings: settings, Clock: clock, Log: client.log,
 	})
 	if err != nil {
-		doh.Close()
 		return nil, err
 	}
 	hold := NewSmtpStatusHold(settings, clock)
@@ -94,7 +149,6 @@ func newMailSidecarSender(client *MailClient, run *mailComponentRun, memberId, m
 	})
 	if err != nil {
 		sender.Close()
-		doh.Close()
 		return nil, err
 	}
 	wake := make(chan struct{}, 1)
@@ -107,13 +161,13 @@ func newMailSidecarSender(client *MailClient, run *mailComponentRun, memberId, m
 	})
 	if err != nil {
 		sender.Close()
-		doh.Close()
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(run.ctx)
 	var workers sync.WaitGroup
 	workers.Go(func() { host.Run(ctx) })
 	workers.Go(func() { runner.Run(ctx, wake) })
+	composed = true
 	return &mailComponentSmtp{
 		memberId: memberId, mailboxId: mailboxId, sender: sender, dkim: dkim,
 		close: func() {
@@ -121,7 +175,7 @@ func newMailSidecarSender(client *MailClient, run *mailComponentRun, memberId, m
 			remove()
 			sender.Close()
 			workers.Wait()
-			doh.Close()
+			release()
 		},
 	}, nil
 }
