@@ -151,6 +151,36 @@ func TestComputeAssuranceAdmits(t *testing.T) {
 		}
 	}
 
+	// a refusal says why, and only a refusal says anything
+	reasons := []struct {
+		assurance *ComputeAssurance
+		provider  string
+		label     ComputeLabel
+		want      string
+	}{
+		{assurance: DefaultComputeAssurance(), provider: "engy", label: ComputeLabelNone, want: ""},
+		{assurance: &ComputeAssurance{Floor: ComputeLabelA2}, provider: "local", label: ComputeLabelLocal, want: ""},
+		{assurance: &ComputeAssurance{Floor: ComputeLabelA1, Providers: []string{"*"}}, provider: "chutes",
+			label: ComputeLabelAp, want: "below the network's assurance floor A1"},
+		{assurance: &ComputeAssurance{Floor: ComputeLabelNone, Providers: []string{"*"}, TeeOnly: true}, provider: "engy",
+			label: ComputeLabelNone, want: "below the assurance floor AP that tee_only sets"},
+		{assurance: &ComputeAssurance{Floor: ComputeLabelNone, Providers: []string{"engy"}}, provider: "chutes",
+			label: ComputeLabelAp, want: "its provider is not among the network's allowed providers"},
+		{assurance: &ComputeAssurance{}, provider: "chutes", label: ComputeLabelA2, want: "no assurance floor allows a remote model"},
+		{assurance: DefaultComputeAssurance(), provider: "chutes", label: "A3", want: "an unknown label"},
+		{assurance: DefaultComputeAssurance(), provider: "chutes", label: ComputeLabelLocal,
+			want: "the local label is this device's models' alone"},
+	}
+	for _, c := range reasons {
+		if got := c.assurance.Refusal(c.provider, c.label); got != c.want {
+			t.Errorf("%+v, %s %s: %q, want %q", c.assurance, c.provider, c.label, got, c.want)
+		}
+		if c.assurance.Admits(c.provider, c.label) != (c.want == "") {
+			t.Errorf("%+v, %s %s: admitted %t with the reason %q", c.assurance, c.provider, c.label,
+				c.assurance.Admits(c.provider, c.label), c.want)
+		}
+	}
+
 	floors := []struct {
 		assurance *ComputeAssurance
 		want      ComputeLabel

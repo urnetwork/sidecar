@@ -14,9 +14,10 @@
 // default. A name no entry answers is unknown; the parse alone never makes a name exist.
 //
 // The catalog shows only what this device may use, and says why not of the rest: a local entry the device lacks the
-// memory, a build or an accelerator for is listed unavailable with the reason, which Resolve answers with, and a
-// platform with no engine build lists no local entry at all, saying so (macOS on Intel, Windows on arm64; §6.5). A
-// filter or floor that leaves no remote entry keeps the local ones and says why no remote one is offered.
+// memory, a build or an accelerator for is listed unavailable with the reason, which Resolve answers with, and so is
+// an entry the person's or the network's limits refuse (Limit, Refuse); a platform with no engine build lists no
+// local entry at all, saying so (macOS on Intel, Windows on arm64; §6.5). A filter or floor that leaves no remote
+// entry usable keeps the local ones and says why no remote one is offered.
 //
 // Traps it keeps: no catalog holds two entries of one name, or one model twice, so a catalog that would is refused
 // whole; no remote entry calls itself local; and nothing here reads a disclosure's text, which CTRUST renders from the
@@ -672,58 +673,99 @@ func (self *InferCatalog) Recommended() (string, *InferCatalogEntry) {
 	return "", nil
 }
 
-// What a list of the catalog keeps: the picker's and ur models' filters (§6.3, §15.1), and a person's or network's
-// limits (§16.4).
+// What a list of the catalog shows: its own filters, ur models' --local, --tee and --provider and the picker's TEE
+// switch (§6.3, §15.1), which hide what they leave out. The person's and the network's limits do not hide a model
+// but list it unavailable with the reason (Limit, Refuse).
 type InferCatalogFilter struct {
 	// Local entries alone.
 	LocalOnly bool
-	// The floor, providers and tee_only a remote entry must pass, a local one passing any (ComputeAssurance.Admits);
-	// nil keeps every remote entry. Search endpoints are no inference, and pass.
+	// The floor, providers and tee_only a remote entry must pass to be shown, a local one passing any
+	// (ComputeAssurance.Admits): --tee is tee_only, --provider a providers list of one. Nil shows every remote entry.
+	// Search endpoints are no inference, and pass.
 	Assurance *ComputeAssurance
 }
 
-// The entries filter keeps, the catalog's device and local view with them. Where the catalog held a remote entry and
-// none passes, RemoteUnavailable says why, and the local entries stay (§6.3).
+// Whether the entry is a remote model.
+func (self *InferCatalogEntry) remote() bool {
+	return self.Kind == InferCatalogKindTee || self.Kind == InferCatalogKindDirect
+}
+
+// The entries filter shows, the catalog's device and local view with them. Where the catalog held a remote entry and
+// the filter shows none, RemoteUnavailable says why, and the local entries stay (§6.3).
 func (self *InferCatalog) Filter(filter *InferCatalogFilter) *InferCatalog {
 	if filter == nil {
 		filter = &InferCatalogFilter{}
 	}
-	kept := []*InferCatalogEntry{}
 	remoteHeld := false
 	remoteKept := false
-	for _, entry := range self.entries {
-		remote := entry.Kind == InferCatalogKindTee || entry.Kind == InferCatalogKindDirect
-		remoteHeld = remoteHeld || remote
+	catalog := self.derive(func(entry *InferCatalogEntry) *InferCatalogEntry {
+		remoteHeld = remoteHeld || entry.remote()
 		switch {
 		case filter.LocalOnly && entry.Kind != InferCatalogKindLocal:
-			continue
+			return nil
 		case entry.Kind != InferCatalogKindSearch && filter.Assurance != nil &&
 			!filter.Assurance.Admits(entry.Provider, entry.Label):
-			continue
+			return nil
 		}
-		remoteKept = remoteKept || remote
-		kept = append(kept, entry)
-	}
-	catalog := self.subset(kept)
+		remoteKept = remoteKept || entry.remote()
+		return entry
+	})
 	if remoteHeld && !remoteKept {
-		switch {
-		case filter.LocalOnly:
+		if filter.LocalOnly {
 			catalog.remoteUnavailable = "the list holds local models alone"
-		case filter.Assurance.EffectiveFloor() == "":
-			catalog.remoteUnavailable = "no assurance floor allows a remote model"
-		default:
-			catalog.remoteUnavailable = fmt.Sprintf("no remote model meets the assurance floor %s from an allowed provider",
-				filter.Assurance.EffectiveFloor())
+		} else {
+			catalog.remoteUnavailable = filter.Assurance.remoteRefusal()
 		}
 	}
 	return catalog
 }
 
-// A catalog of entries already this one's, its device and its reasons kept: each entry checked and distinct, and never
-// changed once a catalog holds it, so the two share them, and nothing can fail.
-func (self *InferCatalog) subset(entries []*InferCatalogEntry) *InferCatalog {
+// This catalog with every entry refusal gives a reason for listed unavailable with that reason, an entry already
+// unavailable keeping its own: how the person's and the network's limits, the policy and budgets show in the list
+// (§6.3, §16.4), each entry they refuse listed with why rather than hidden, and never run, since Resolve refuses it.
+// refusal sees a copy, and answers empty for an entry it leaves usable. Where no remote entry stays usable while one
+// was, RemoteUnavailable becomes remoteUnavailable, why no remote model is offered.
+func (self *InferCatalog) Refuse(refusal func(entry *InferCatalogEntry) string, remoteUnavailable string) *InferCatalog {
+	remoteUsable := false
+	remoteStaysUsable := false
+	catalog := self.derive(func(entry *InferCatalogEntry) *InferCatalogEntry {
+		if entry.Unavailable != "" {
+			return entry
+		}
+		remoteUsable = remoteUsable || entry.remote()
+		reason := refusal(entry.clone())
+		if reason == "" {
+			remoteStaysUsable = remoteStaysUsable || entry.remote()
+			return entry
+		}
+		refused := entry.clone()
+		refused.Unavailable = reason
+		return refused
+	})
+	if remoteUsable && !remoteStaysUsable {
+		catalog.remoteUnavailable = remoteUnavailable
+	}
+	return catalog
+}
+
+// This catalog with every model the floor, the person's tee_only or the providers list refuses listed unavailable
+// with the reason (§6.3, §16.4): a local model passes whatever they say, and search endpoints are no inference.
+func (self *InferCatalog) Limit(assurance *ComputeAssurance) *InferCatalog {
+	return self.Refuse(func(entry *InferCatalogEntry) string {
+		if entry.Kind == InferCatalogKindSearch {
+			return ""
+		}
+		return assurance.Refusal(entry.Provider, entry.Label)
+	}, assurance.remoteRefusal())
+}
+
+// A catalog of this one's entries, each replaced by what replace returns for it, or left out where that is nil, its
+// device and reasons kept. A replacement is the entry itself or a copy differing in Unavailable alone, so every one
+// stays whole and distinct as this catalog's entries are, and the indexes carry over: nothing can fail. A catalog
+// never changes an entry it holds, so catalogs share the entries not replaced.
+func (self *InferCatalog) derive(replace func(entry *InferCatalogEntry) *InferCatalogEntry) *InferCatalog {
 	catalog := &InferCatalog{
-		entries:           entries,
+		entries:           []*InferCatalogEntry{},
 		device:            self.device,
 		localUnavailable:  self.localUnavailable,
 		remoteUnavailable: self.remoteUnavailable,
@@ -731,18 +773,21 @@ func (self *InferCatalog) subset(entries []*InferCatalogEntry) *InferCatalog {
 		nameEntries:       map[string]*InferCatalogEntry{},
 		modelEntries:      map[string]*InferCatalogEntry{},
 	}
-	kept := map[*InferCatalogEntry]bool{}
-	for _, entry := range entries {
-		kept[entry] = true
+	replacements := map[*InferCatalogEntry]*InferCatalogEntry{}
+	for _, entry := range self.entries {
+		if replacement := replace(entry); replacement != nil {
+			replacements[entry] = replacement
+			catalog.entries = append(catalog.entries, replacement)
+		}
 	}
 	for name, entry := range self.nameEntries {
-		if kept[entry] {
-			catalog.nameEntries[name] = entry
+		if replacement, ok := replacements[entry]; ok {
+			catalog.nameEntries[name] = replacement
 		}
 	}
 	for model, entry := range self.modelEntries {
-		if kept[entry] {
-			catalog.modelEntries[model] = entry
+		if replacement, ok := replacements[entry]; ok {
+			catalog.modelEntries[model] = replacement
 		}
 	}
 	return catalog

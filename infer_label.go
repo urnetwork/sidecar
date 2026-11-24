@@ -130,20 +130,46 @@ func DefaultComputeAssurance() *ComputeAssurance {
 	}
 }
 
-// Whether a model of label from provider passes the floor, the person's tee_only and the providers list. A local
-// model passes all three, whatever they say (§6.3, §16.4); a remote one must meet the floor, AP as well where tee_only
-// is set, and come from a listed provider. A provider or label the device does not know passes nothing.
+// Whether a model of label from provider passes the floor, the person's tee_only and the providers list: Refusal
+// gives no reason.
 func (self *ComputeAssurance) Admits(provider string, label ComputeLabel) bool {
-	if label == ComputeLabelLocal {
-		return provider == computeLocalProvider
+	return self.Refusal(provider, label) == ""
+}
+
+// Why a model of label from provider does not pass the floor, the person's tee_only and the providers list, or empty
+// where it passes. A local model passes all three, whatever they say (§6.3, §16.4); a remote one must meet the floor,
+// AP as well where tee_only is set, and come from a listed provider. A label the device does not know, or the local
+// label on a remote provider's model and the reverse, passes nothing.
+func (self *ComputeAssurance) Refusal(provider string, label ComputeLabel) string {
+	switch {
+	case !label.Valid():
+		return "an unknown label"
+	case (label == ComputeLabelLocal) != (provider == computeLocalProvider):
+		return "the local label is this device's models' alone"
+	case label == ComputeLabelLocal:
+		return ""
 	}
-	if provider == computeLocalProvider || !label.Meets(self.Floor) {
-		return false
+	floor := self.EffectiveFloor()
+	switch {
+	case floor == "":
+		return "no assurance floor allows a remote model"
+	case !label.Meets(floor) && floor != self.Floor:
+		return fmt.Sprintf("below the assurance floor %s that tee_only sets", floor)
+	case !label.Meets(floor):
+		return fmt.Sprintf("below the network's assurance floor %s", floor)
+	case !slices.Contains(self.Providers, computeEveryProvider) && !slices.Contains(self.Providers, provider):
+		return "its provider is not among the network's allowed providers"
 	}
-	if self.TeeOnly && !label.Meets(ComputeLabelAp) {
-		return false
+	return ""
+}
+
+// Why no remote model passes, for a list that holds none: the floor and the providers it asks for.
+func (self *ComputeAssurance) remoteRefusal() string {
+	floor := self.EffectiveFloor()
+	if floor == "" {
+		return "no assurance floor allows a remote model"
 	}
-	return slices.Contains(self.Providers, computeEveryProvider) || slices.Contains(self.Providers, provider)
+	return fmt.Sprintf("no remote model meets the assurance floor %s from an allowed provider", floor)
 }
 
 // The lowest label a remote model may carry here: the floor, raised to AP where tee_only is set. Empty for a floor

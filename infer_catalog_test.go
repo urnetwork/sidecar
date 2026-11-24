@@ -532,6 +532,136 @@ func TestInferCatalogFilter(t *testing.T) {
 	}
 }
 
+// The person's and the network's limits list a model they refuse unavailable with the reason, never hiding it, and
+// Resolve refuses it (§6.3, §16.4): a local model passes them all, a search endpoint is no inference, and where no
+// remote model stays usable the catalog says why.
+func TestInferCatalogLimitListsRefusedModels(t *testing.T) {
+	local := testInferLocalCatalog(t, testInferManifest(), testInferDevice("linux/amd64", InferDeviceClassDesktop, 24, false))
+	catalog, err := local.Join([]*InferCatalogEntry{
+		testInferRemoteEntry("chutes", "qwen3.8-27b-tee", ComputeLabelAp, InferEffortLow, InferEffortHigh),
+		testInferRemoteEntry("engy", "glm-5.2", ComputeLabelNone, InferEffortOff, InferEffortHigh),
+		testInferSearchEntry("parallel", "fast"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		why       string
+		assurance *ComputeAssurance
+		chutes    string
+		engy      string
+		remote    string
+	}{
+		{why: "the default", assurance: DefaultComputeAssurance()},
+		{why: "a floor of AP", assurance: &ComputeAssurance{Floor: ComputeLabelAp, Providers: []string{"*"}},
+			engy: "assurance floor AP"},
+		{why: "tee_only", assurance: &ComputeAssurance{Floor: ComputeLabelNone, Providers: []string{"*"}, TeeOnly: true},
+			engy: "tee_only"},
+		{why: "a floor of A1", assurance: &ComputeAssurance{Floor: ComputeLabelA1, Providers: []string{"*"}},
+			chutes: "assurance floor A1", engy: "assurance floor A1", remote: "A1"},
+		{why: "engy alone", assurance: &ComputeAssurance{Floor: ComputeLabelNone, Providers: []string{"engy"}},
+			chutes: "allowed providers"},
+		{why: "the zero assurance", assurance: &ComputeAssurance{},
+			chutes: "no assurance floor", engy: "no assurance floor", remote: "no assurance floor"},
+	}
+	for _, c := range cases {
+		limited := catalog.Limit(c.assurance)
+		entries := limited.Entries()
+		if len(entries) != len(catalog.Entries()) {
+			t.Errorf("%s hid entries: %d of %d", c.why, len(entries), len(catalog.Entries()))
+		}
+		for _, entry := range entries {
+			want := ""
+			switch entry.Provider {
+			case "chutes":
+				want = c.chutes
+			case "engy":
+				want = c.engy
+			case "local":
+				if entry.Model == "gemma-4-26b-a4b" {
+					want = "32.0 GiB"
+				}
+			}
+			if (want == "") != (entry.Unavailable == "") || !strings.Contains(entry.Unavailable, want) {
+				t.Errorf("%s: %s-%s unavailable %q, want %q", c.why, entry.Provider, entry.Model, entry.Unavailable, want)
+			}
+		}
+		if (c.remote == "") != (limited.RemoteUnavailable() == "") || !strings.Contains(limited.RemoteUnavailable(), c.remote) {
+			t.Errorf("%s says %q, want %q", c.why, limited.RemoteUnavailable(), c.remote)
+		}
+		_, err := limited.Resolve("engy-glm-5.2-high", "")
+		if (c.engy == "") != (err == nil) || (err != nil && !errors.Is(err, ErrInferModelUnavailable)) {
+			t.Errorf("%s resolved engy's model: %v", c.why, err)
+		}
+		if _, err := limited.Resolve("local-gemma-4-12b-off", ""); err != nil {
+			t.Errorf("%s refused a local model: %v", c.why, err)
+		}
+		if _, err := limited.SearchEndpoint("search/parallel/fast"); err != nil {
+			t.Errorf("%s refused the search endpoint: %v", c.why, err)
+		}
+	}
+	// the limits leave the catalog they were applied to as it was
+	if _, err := catalog.Resolve("engy-glm-5.2-high", ""); err != nil {
+		t.Errorf("the catalog under the limits changed: %v", err)
+	}
+}
+
+// Refuse lists each entry its refusal gives a reason for unavailable with that reason, an entry already unavailable
+// keeping its own; the refusal sees copies; and once no remote entry stays usable the catalog says the reason given.
+func TestInferCatalogRefuse(t *testing.T) {
+	local := testInferLocalCatalog(t, testInferManifest(), testInferDevice("linux/amd64", InferDeviceClassLaptop, 12, false))
+	catalog, err := local.Join([]*InferCatalogEntry{
+		testInferRemoteEntry("chutes", "qwen3.8-27b-tee", ComputeLabelAp, InferEffortLow, InferEffortHigh),
+		testInferRemoteEntry("engy", "glm-5.2", ComputeLabelNone, InferEffortOff, InferEffortHigh),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := []string{}
+	refused := catalog.Refuse(func(entry *InferCatalogEntry) string {
+		seen = append(seen, entry.Provider+"-"+entry.Model)
+		entry.Efforts[0] = InferEffortMax
+		if entry.Provider == "engy" || entry.Model == "gemma-4-e2b" {
+			return "past this device's budget"
+		}
+		return ""
+	}, "every remote model is past a budget")
+	if slices.Contains(seen, "local-gemma-4-12b") || slices.Contains(seen, "local-gemma-4-26b-a4b") {
+		t.Errorf("the refusal was asked of entries already unavailable: %v", seen)
+	}
+	reasons := map[string]string{}
+	for _, entry := range refused.Entries() {
+		reasons[entry.Provider+"-"+entry.Model] = entry.Unavailable
+		if entry.Efforts[0] == InferEffortMax {
+			t.Errorf("the refusal changed %s-%s", entry.Provider, entry.Model)
+		}
+	}
+	if reasons["engy-glm-5.2"] != "past this device's budget" || reasons["local-gemma-4-e2b"] != "past this device's budget" ||
+		reasons["chutes-qwen3.8-27b-tee"] != "" || reasons["local-gemma-4-e4b"] != "" ||
+		!strings.Contains(reasons["local-gemma-4-12b"], "GiB") {
+		t.Errorf("the reasons: %v", reasons)
+	}
+	if refused.RemoteUnavailable() != "" {
+		t.Errorf("a usable remote model left, yet %q", refused.RemoteUnavailable())
+	}
+	none := refused.Refuse(func(entry *InferCatalogEntry) string {
+		if entry.Provider == "chutes" {
+			return "outside the policy"
+		}
+		return ""
+	}, "every remote model is refused")
+	if none.RemoteUnavailable() != "every remote model is refused" {
+		t.Errorf("no usable remote model, yet %q", none.RemoteUnavailable())
+	}
+	if _, err := none.Resolve("chutes-qwen3.8-27b-tee-high", ""); !errors.Is(err, ErrInferModelUnavailable) ||
+		!strings.Contains(err.Error(), "outside the policy") {
+		t.Errorf("a refused model resolved: %v", err)
+	}
+	if _, err := none.Resolve("local-gemma-4-e4b-off", ""); err != nil {
+		t.Errorf("a local model the refusals left: %v", err)
+	}
+}
+
 // Nothing a caller holds changes a catalog: the entries it was given, the entries it gives out, the resolution's
 // entry, the device.
 func TestInferCatalogEntriesAreCopies(t *testing.T) {
