@@ -15,6 +15,7 @@ import (
 // The name attestation registers its component under.
 const computeAttestComponentName = "attest"
 
+// Registers attestation's component, which every Sidecar on a compute leg then constructs.
 func init() {
 	registerComputeComponent(computeAttestComponentName, newComputeAttest, nil)
 }
