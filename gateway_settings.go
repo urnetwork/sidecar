@@ -12,11 +12,16 @@
 
 package sidecar
 
-// DESIGN-COMPUTE §8, the local gateway: its listener, grants and tokens, its API fronts, retries and recording. Empty
-// until GW's tasks add their fields.
-type GatewaySettings struct{}
+// DESIGN-COMPUTE §8, the local gateway: its listener, grants and tokens, its API fronts, retries and recording. GW's
+// tasks add their fields; HostedSearch is SRCH's.
+type GatewaySettings struct {
+	// §21.7's refusal of hosted web search, which the fronts call before routing (gateway_search.go).
+	HostedSearch *GatewayHostedSearchSettings
+}
 
 // The component's defaults, the only place one is set.
 func DefaultGatewaySettings() *GatewaySettings {
-	return &GatewaySettings{}
+	return &GatewaySettings{
+		HostedSearch: DefaultGatewayHostedSearchSettings(),
+	}
 }
