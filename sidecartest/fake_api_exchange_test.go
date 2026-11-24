@@ -200,6 +200,27 @@ func TestFakeApiExchangeMintsAServiceTokenForItsClient(t *testing.T) {
 	}
 }
 
+// The compute audience (CSRV-M12-03) is issued as sockets' is: to the client's sidecar with no scope, naming its
+// sidecar, good for compute alone, as server's exchange issues it (server/oauth's TestExchangeIssuesTheComputeAudience).
+func TestFakeApiExchangeIssuesTheComputeAudience(t *testing.T) {
+	fixture := newFakeApiExchangeFixture(t)
+	result := fixture.exchange(fixture.api.ServiceOrigin("compute"))
+	if result.Scope != "" || result.ExpiresIn != 15*60 {
+		t.Errorf("the answer: %+v", result)
+	}
+	principal, err := fixture.api.Authenticator().Authenticate(fixture.ctx, "compute", result.AccessToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if principal.Audience != "compute" || principal.SidecarId == nil || *principal.SidecarId != connect.Id(fixture.sidecarId) ||
+		principal.ClientId != connect.Id(fixture.clientId) || len(principal.Scopes) != 0 {
+		t.Errorf("the principal: %+v", principal)
+	}
+	if _, err := fixture.api.Authenticator().Authenticate(fixture.ctx, "evs", result.AccessToken); !errors.Is(err, sidecar.ErrAuthenticationRefused) {
+		t.Errorf("another audience: %v", err)
+	}
+}
+
 // Until a projection's source is installed the exchange grants no scope, as server's does: a repo: or recovery:
 // scope, or any other, is refused.
 func TestFakeApiExchangeGrantsNoScopeWithoutAProjection(t *testing.T) {

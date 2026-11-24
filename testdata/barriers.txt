@@ -113,6 +113,12 @@ barrier certs.revoke.after certsservice/revoke.go
 barrier certs.revoke.before certsservice/revoke.go
 barrier certs.run_order.before certsservice/run.go
 barrier certs.run_order.issued certsservice/run.go
+barrier compute.drain.end.after computeservice/engine.go
+barrier compute.drain.end.before computeservice/engine.go
+barrier compute.request.admit.after computeservice/engine.go
+barrier compute.request.admit.before computeservice/engine.go
+barrier compute.stream.comment.after computeservice/engine_stream.go
+barrier compute.stream.comment.before computeservice/engine_stream.go
 barrier config.apply config_apply.go
 barrier config.apply.after config_apply.go
 barrier config.apply.before config_apply.go
