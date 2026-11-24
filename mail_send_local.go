@@ -11,18 +11,22 @@
 //	          deposit crossed no edge (MailSameNetworkDeposit)
 //	targets   one deposit a repo: a member's mailbox, or a group's repo, which fans the message out to its members
 //	          once (§15.7's group mail), each repo's trailer naming only its own recipients, so a Bcc stays unseen
-//	rights    every target must give the sender deposit or write at the installed state (I-5), as the exchange, which
-//	          mints repo:<id>:deposit, and evs's gate, which honors it, will (D-ACL-21), with no rule of mail's own. A
-//	          mailbox takes it from its member's consented devices by their write (QD-1173), from that member's other
-//	          subjects and the agents it sponsors by §8.5's kind default, and from every other subject of the network
-//	          the projection marks mail_send, the same row's cell for same-network mail between members (D-MAIL-8,
-//	          owner decision 333); a group's repo takes it by its deposit grant or a member's write. The From check
-//	          reads the send grants on mail: that mark a sender, so a device that may send as its From deposits into
-//	          every member's mailbox as into its own, but where the receipts row refuses it. A sender no send grant
-//	          marks holds deposit in no mailbox but its own member's or sponsor's, and is answered
-//	          MailSendNoDepositRight at every other one: only a burner's reply reaches that answer, its From held to
-//	          the live label rather than to a grant (mail_burner_reply.go), since the From check refuses any other
-//	          send of such a sender first
+//	rights    every target must give the sender deposit at the installed state (I-5), the one right the exchange mints
+//	          repo:<id>:deposit on and evs's gate honors (D-ACL-21), with no rule of mail's own: write alone is none,
+//	          a writer depositing only where the repo takes deposits (QD-1173). So a target the exchange would refuse
+//	          answers MailSendNoDepositRight here, before any exchange, not failed after it. A mailbox takes it from its
+//	          member's consented devices by their write, from that member's other subjects and the agents it sponsors
+//	          by §8.5's kind default, and from every other subject of the network the projection marks mail_send, the
+//	          same row's cell for same-network mail between members (D-MAIL-8, owner decision 333). A group's repo
+//	          takes deposits only where its RepoCreate marks it an inbox, since only a marked general repo's
+//	          generations carry a drop key (§8.5, D-KEYS-17), and there from its deposit grant's subjects and its
+//	          writers; one not marked takes none, a deposit grant's subject's included, for which the exchange would
+//	          mint a scope that no drop key serves. The From check reads the send grants on mail: that mark a sender,
+//	          so a device that may send as its From deposits into every member's mailbox as into its own, but where
+//	          the receipts row refuses it. A sender no send grant marks holds deposit in no mailbox but its own
+//	          member's or sponsor's, and is answered MailSendNoDepositRight at every other one: only a burner's reply
+//	          reaches that answer, its From held to the live label rather than to a grant (mail_burner_reply.go), since
+//	          the From check refuses any other send of such a sender first
 //	receipts  a deposit right that is §16.8's receipt deposit carries no mail, the one a reader of an owner-bound repo
 //	          that does not write holds there: ingest leaves such a depositor's ref to the record's receipts
 //	          (MailIngestAclAuthority.DepositorClass), so a send into it refuses closed as MailSendNoDepositRight rather
@@ -118,17 +122,23 @@ func mailSendMayDeposit(state *AclState, senderSidecarId Id, repoId Id, now time
 	}
 	switch repo.GetKind() {
 	case protocol.RepoKind_REPO_KIND_MAILBOX:
-		// any member's, by the rights EvsAccess gives below: its member's consented devices by their write, that
+		// any member's, by the deposit EvsAccess gives below: its member's consented devices by their write, that
 		// member's other subjects and the agents it sponsors by the kind default, and every other sender by the
 		// mail_send mark §8.5's mailbox row reads (owner decision 333)
 	case protocol.RepoKind_REPO_KIND_GENERAL:
-		// a group's repo, which its members deposit to through their own access
+		// a group's repo, only where its RepoCreate marks it an inbox: no other general repo's generations carry a
+		// drop key (§8.5, D-KEYS-17), so no deposit lands there, whoever holds deposit
+		if !gkmRepoTakesDeposits(repo) {
+			return MailSendNoDepositRight
+		}
 	default:
 		return MailSendNoDepositRight
 	}
 	rights := state.EvsAccess(AclSidecarSubject(senderSidecarId), repoId, AclTokenAudienceEvs, now).Rights
 	switch {
-	case !rights.Has(AclEvsDeposit) && !rights.Has(AclEvsWrite):
+	case !rights.Has(AclEvsDeposit):
+		// the right the exchange mints repo:<id>:deposit on (AclExchangeScopes), which write gives only where the repo
+		// takes deposits (QD-1173): write alone is no deposit
 		return MailSendNoDepositRight
 	case aclRepoKindOwnerBound(repo.GetKind()) && rights.Has(AclEvsRead) && !rights.Has(AclEvsWrite):
 		// its deposit there is the receipt deposit, which ingest never takes as mail (the file header's receipts row)
