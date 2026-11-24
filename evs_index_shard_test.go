@@ -24,7 +24,7 @@ const testShardVectorPath = "testdata/index/shard/vectors.json"
 
 // A shard's header on fixed tables, so a vector's bytes do not ride on the build running the test.
 func testShardHeader(fileType uint32) *protocol.IndexFileHeader {
-	header := indexNewFileHeader(fileType, indexTables{normVersion: "17.0.0", textModuleVersion: "v0.43.0"})
+	header := indexNewFileHeader(fileType, indexTables{normVersion: "17.0.0", textModuleVersion: "v0.44.0"})
 	if fileType == indexFileBucketShard {
 		header.BucketStartDay = 20340
 		header.BucketDays = 30

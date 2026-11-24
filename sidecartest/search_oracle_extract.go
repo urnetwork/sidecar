@@ -3,7 +3,7 @@
 // apart from the index's extractor. Every reading is a rule of the format and calls no parser of the standard library
 // or of a module: header fields, RFC 2047 words, RFC 2231 parameters, multipart bodies, base64, quoted-printable, HTML
 // tags and character references are byte loops here, and HTML's reference table is generated into
-// search_oracle_entities.go from entities.json. What comes from outside is tables: x/text v0.43.0's encoding/htmlindex
+// search_oracle_entities.go from entities.json. What comes from outside is tables: x/text v0.44.0's encoding/htmlindex
 // labels and decoders (C1-C3), which normalizer 1 already pins, and Go's unicode package for S4's letters and numbers.
 //
 // Extraction is total: every byte string gives exactly one result and there is no error. Names, labels and encodings
@@ -625,7 +625,7 @@ func searchOracleBase64Groups(values []byte) []byte {
 }
 
 // The encoding a charset label names (C1): its trimmed bytes all 0x21 to 0x7E, and their lower one of x/text
-// v0.43.0's htmlindex labels; with htmlindex's name for it.
+// v0.44.0's htmlindex labels; with htmlindex's name for it.
 func searchOracleCharset(label []byte) (encoding.Encoding, string, bool) {
 	label = searchOracleTrim(label)
 	if len(label) == 0 {

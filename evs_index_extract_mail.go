@@ -8,7 +8,7 @@
 // (D3); never a transport header, an attachment's bytes or a message/rfc822 part's text.
 //
 // Every reading is this file's own byte loop, so no library's release changes the bytes an index holds (QD-690): the
-// one outside table is x/text v0.43.0's charset decoders, which normalizer 1 already pins. Names, labels and
+// one outside table is x/text v0.44.0's charset decoders, which normalizer 1 already pins. Names, labels and
 // encodings compare under lower, only the white bytes are trimmed (evs_index_extract_transfer.go), and two limits from
 // IndexFormatSettings bound what one pass holds: HeaderMaxByteCount for a header line and a joined value, and
 // LineWindowByteCount for a delimiter line (QD-691).
@@ -148,7 +148,7 @@ func indexCharsetName(label string) (string, bool) {
 
 // C2 and C3: raw as the charset label says. No label, one that names nothing, and one naming utf-8 or replacement
 // leave the bytes as they are, ill-formed UTF-8 then meeting normalizer 1's N1; any other is decoded by x/text
-// v0.43.0's decoder for its encoding, which answers malformed input with U+FFFD and never fails. No charset is guessed
+// v0.44.0's decoder for its encoding, which answers malformed input with U+FFFD and never fails. No charset is guessed
 // from content.
 func indexDecodeCharset(label string, raw []byte) []byte {
 	labelled, name, ok := indexCharsetEncoding(label)

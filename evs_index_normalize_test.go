@@ -209,7 +209,7 @@ func TestLinkedTablesAreNormalizerOne(t *testing.T) {
 		normVersion:       "17.0.0",
 		casesVersion:      "17.0.0",
 		unicodeVersion:    "17.0.0",
-		textModuleVersion: "v0.43.0",
+		textModuleVersion: "v0.44.0",
 	}
 	if tables != want {
 		t.Errorf("linked %+v, want %+v", tables, want)

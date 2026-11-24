@@ -2,7 +2,7 @@
 
 // A text part's transfer encoding and charset in one pass (DESIGN-DETAILS 11.2.5's T1 to T3 and C1 to C3, as 11.2.8's
 // base64, quoted-printable and charset rows hold them): base64 keeps up to three alphabet bytes, quoted-printable an
-// '=' and what may follow it, at most LineWindowByteCount blank bytes and a CR, and the charset stage x/text v0.43.0's
+// '=' and what may follow it, at most LineWindowByteCount blank bytes and a CR, and the charset stage x/text v0.44.0's
 // decoder with its own few bytes. Each gives exactly what evs_index_extract_transfer.go's whole-value function gives
 // the same body, whatever pieces the body arrives in. Not safe for concurrent use.
 
@@ -188,7 +188,7 @@ func (self *indexStreamQuotedPrintable) finish() {
 }
 
 // C2 and C3 as a stage: bytes under a label that names utf-8, replacement or nothing go to next as they are; any other
-// label's go through x/text v0.43.0's decoder for its encoding, which answers malformed input with U+FFFD and never
+// label's go through x/text v0.44.0's decoder for its encoding, which answers malformed input with U+FFFD and never
 // fails, so its output pieced is its output whole.
 func indexNewStreamCharset(label string, next indexStreamStage) indexStreamStage {
 	labelled, name, ok := indexCharsetEncoding(label)

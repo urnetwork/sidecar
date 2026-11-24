@@ -7,9 +7,12 @@ fails there and names its leg (the every-leg runner sets `SIDECAR_LEG`).
 What pins the bytes:
 
 - **Normalizer 1** (§11.14's tables row; FI-22): `norm.Version`, `cases.UnicodeVersion` and `unicode.Version` 17.0.0,
-  from golang.org/x/text v0.43.0 linked unreplaced. A writer records the linked `norm.Version` and module version in
+  from golang.org/x/text v0.44.0 linked unreplaced. A writer records the linked `norm.Version` and module version in
   every file's `IndexFileHeader` (fields 5 and 14), and a build whose tables are any other writes nothing. A toolchain
-  or x/text bump therefore fails these tests until a new normalizer is assigned: it is never a vector rewrite.
+  or x/text bump therefore fails these tests until a new normalizer is assigned: it is never a vector rewrite. The one
+  exception is QD-1385's: x/crypto's raise brought x/text v0.44.0, whose unicode/norm, cases and encoding packages and
+  tables are v0.43.0's byte for byte, so normalizer 1 was re-pinned from v0.43.0 to v0.44.0, and the vectors were
+  rewritten in the module version their headers record and the bytes and hashes that carry it, nothing else.
 - **Extractor 1** (DESIGN-DETAILS 11.2): `conformance/` is the design's own, read and never rewritten.
 - **The format** (`protocol/INDEX-FORMAT.md`): entries, slots, shards, small files and the remote bodies' sizes.
 

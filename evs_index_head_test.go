@@ -27,7 +27,7 @@ import (
 const testHeadVectorPath = "testdata/index/head/vectors.json"
 
 // The tables every header in these tests names, fixed so a vector does not ride on the build.
-var testHeadTables = indexTables{normVersion: "17.0.0", textModuleVersion: "v0.43.0"}
+var testHeadTables = indexTables{normVersion: "17.0.0", textModuleVersion: "v0.44.0"}
 
 // One ref's index and its writers, on a file-mode ref of a general repo.
 type testHeadWorld struct {

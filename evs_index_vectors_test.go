@@ -332,9 +332,9 @@ func TestIndexHeadersRecordTheLinkedBuild(t *testing.T) {
 		t.Errorf("the linked build and the vectors differ: %v", findings)
 	}
 	bumped := tables
-	bumped.textModuleVersion = "v0.44.0"
+	bumped.textModuleVersion = "v0.45.0"
 	if findings := testIndexHeaderFindings(bumped, headers); len(findings) != 1+len(headers) {
-		t.Errorf("a build linking x/text v0.44.0 gave %d findings, want %d: %v", len(findings), 1+len(headers), findings)
+		t.Errorf("a build linking x/text v0.45.0 gave %d findings, want %d: %v", len(findings), 1+len(headers), findings)
 	}
 	otherUnicode := tables
 	otherUnicode.normVersion = "18.0.0"
