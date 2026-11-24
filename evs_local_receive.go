@@ -23,8 +23,9 @@
 //	an owned ref   ur/<this sidecar>/...: accepted at once: the journal's RECEIVED, git update-ref new old, LOCAL, ok;
 //	               then the queue, QueueFirstDelay after and once per QueueInterval, one push for everything queued;
 //	               a final refusal, evs's or the token exchange's refusal of the push's scope for good, holds the
-//	               queue until the local ref moves or `ur evs retry`. A ref under ur/<this sidecar>/import/ takes only
-//	               its deletion, refused before the journal as `import helper`
+//	               queue until the local ref moves or `ur evs retry`; so does no enrolled client, offline, which a
+//	               reconnect, the next client generation's start, also releases (`no enrolled client`). A ref under
+//	               ur/<this sidecar>/import/ takes only its deletion, refused before the journal as `import helper`
 //	restart        stale git lock files removed; journals read; RECEIVED settled (shared deleted; owned moved when its
 //	               local ref is still old, then LOCAL); settle where applied_tip is not the tip; resolve for each SENT
 //	               (evs_local_journal.go); a conflict branch with no journal queued; then listeners open
@@ -85,6 +86,9 @@ type EvsGitReceiver struct {
 	queueWakeup chan struct{}
 	// the last push the queue made per ref, which QueueInterval spaces
 	queuedAt map[Id]time.Time
+	// a client generation began since the queue's last round, whose next round releases the holds offline left
+	// (reconnected)
+	reconnectDue bool
 	// the repo's git-lfs store, which the tip check reads and touches (evs_lfs_tipcheck.go); made at first use
 	lfs *EvsLfsStore
 }
@@ -797,19 +801,12 @@ func (self *EvsGitReceiver) dueQueue() ([]Id, time.Time) {
 	return due, next
 }
 
-// The queue's loop until ctx ends: each due owned ref pushed, and every SENT attempt asked again each
-// JournalResolveInterval.
+// The queue's loop until ctx ends: a round at each wake and each push due (queueRound), and every SENT attempt asked
+// again each JournalResolveInterval.
 func (self *EvsGitReceiver) runQueue(ctx context.Context) error {
 	resolveAt := self.clock.After(self.settings.JournalResolveInterval)
 	for {
-		due, next := self.dueQueue()
-		for _, refId := range due {
-			if err := self.publishQueued(ctx, refId); err != nil && ctx.Err() == nil {
-				self.client.log.Warningf("[evs]the queue of repo %s ref %s: %v", self.mount.RepoId, refId, err)
-				// tried again at the interval; a final refusal holds instead (publishQueued)
-				self.queue(refId, self.settings.QueueInterval)
-			}
-		}
+		next := self.queueRound(ctx)
 		var timer <-chan time.Time
 		if !next.IsZero() {
 			timer = self.clock.After(next.Sub(self.clock.Now()))
@@ -826,6 +823,79 @@ func (self *EvsGitReceiver) runQueue(ctx context.Context) error {
 	}
 }
 
+// One round of the queue: where a client generation began since the last round (reconnected), the holds offline left
+// released and queued, then each due owned ref pushed, one that failed tried again at the interval and one held not
+// (publishQueued). It answers when the next push is due, zero for none. Rounds run one at a time on the queue's loop,
+// which alone writes an offline hold, so no reconnect's release misses a hold written as the generation began: that
+// hold's round ended before the round the reconnect's wake begins, which releases it.
+func (self *EvsGitReceiver) queueRound(ctx context.Context) time.Time {
+	reconnected := func() bool {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		reconnected := self.reconnectDue
+		self.reconnectDue = false
+		return reconnected
+	}()
+	if reconnected {
+		if _, err := self.release(ctx, evsLocalOfflineHeld); err != nil && ctx.Err() == nil {
+			self.client.log.Warningf("[evs]the queue of repo %s at a reconnect: %v", self.mount.RepoId, err)
+			// asked again at the next round, the resolve's minute at the latest
+			func() {
+				self.stateLock.Lock()
+				defer self.stateLock.Unlock()
+				self.reconnectDue = true
+			}()
+		}
+	}
+	due, next := self.dueQueue()
+	for _, refId := range due {
+		if err := self.publishQueued(ctx, refId); err != nil && ctx.Err() == nil {
+			self.client.log.Warningf("[evs]the queue of repo %s ref %s: %v", self.mount.RepoId, refId, err)
+			// tried again at the interval; a final refusal, and no enrolled client, hold instead (publishQueued)
+			self.queue(refId, self.settings.QueueInterval)
+		}
+	}
+	return next
+}
+
+// A client generation began, as each attaches the evs component (EvsComponent.Attach): DESIGN-DETAILS 8.2.8's offline
+// row has the queue build on the generation then current, so the queue's next round, which this wakes, releases each
+// owned ref held for want of an enrolled client and pushes it. Never blocks.
+func (self *EvsGitReceiver) reconnected() {
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.reconnectDue = true
+	}()
+	select {
+	case self.queueWakeup <- struct{}{}:
+	default:
+	}
+}
+
+// A client generation began: every mount's queue releases its offline holds at its next round (EvsGitReceiver's
+// reconnected). Never blocks.
+func (self *EvsMounts) reconnected() {
+	for _, mount := range self.List() {
+		if mount.receiver != nil {
+			mount.receiver.reconnected()
+		}
+	}
+}
+
+// The hold of an owned ref's queue whose push, or the resolve of what it sent, found no enrolled client
+// (ErrSidecarServiceTokenNoClient): this sidecar runs no client generation, Unenrolled or Revoked, so no service token
+// can be had and no request goes, offline in 8.2.8's queue rows. `ur status` shows it, and the queue waits for the
+// connection rather than redo its local git work every QueueInterval to fail at its first token: the next client
+// generation's start releases it (reconnected), as the local ref's move and `ur evs retry` do, and the queue then builds
+// on that generation. What was sent is resolved from the history after, as for every hold.
+const evsLocalOfflineHoldCode = "no enrolled client"
+
+// Whether journal is held offline (evsLocalOfflineHoldCode).
+func evsLocalOfflineHeld(journal *EvsJournalRef) bool {
+	return journal.HoldCode == evsLocalOfflineHoldCode
+}
+
 // The final refusals that hold an owned ref's queue until its local ref moves or `ur evs retry` (8.2.8's queue rows).
 var evsLocalQueueHoldCodes = []protocol.EvsRefusalCode{
 	protocol.EvsRefusalCode_EVS_REFUSAL_REF_MODE, protocol.EvsRefusalCode_EVS_REFUSAL_SCOPE,
@@ -834,12 +904,15 @@ var evsLocalQueueHoldCodes = []protocol.EvsRefusalCode{
 
 // The hold of an owned ref's queue whose push the token exchange refused for good (sidecarServiceTokenRefusalOf's final
 // refusals of the exchange's), as 8.2.8's queue row holds it on evs's SCOPE: "token exchange" and the exchange's code,
-// its status where it named none, as `ur status` shows it, nothing of api's text. invalid_scope arrives here only once
-// retryRefusingNothing has ridden out ExchangeScopeWaitTimeout. No enrolled client is the sidecar's own state, not the
-// exchange's answer: the queue goes again at QueueInterval as it waits for the connection (8.2.8's offline row), and so
-// does every failure that may change. false for those, and for any error of another kind.
+// its status where it named none, as `ur status` shows it, nothing of api's text. It holds whichever client asked, evs's
+// for the push (errEvsNoServiceToken) or gkm's for its key (errGkmNoServiceToken), which EnsureWritable ends at since
+// gkm-ladder-token-refusal, as the same exchange refuses the same device for good whatever the audience (QD-1231).
+// invalid_scope arrives here only once retryRefusingNothing, or GkmApi, has ridden out its ExchangeScopeWaitTimeout. No
+// enrolled client is the sidecar's own state, not the exchange's answer: it holds as offline (evsLocalOfflineHoldCode),
+// which a reconnect releases, and every failure that may change goes again at QueueInterval, as gkm's own 401, no
+// exchange's answer, does. false for those, and for any error of another kind.
 func evsLocalExchangeHoldCode(err error) (string, bool) {
-	if !errors.Is(err, errEvsNoServiceToken) {
+	if !errors.Is(err, errEvsNoServiceToken) && !errors.Is(err, errGkmNoServiceToken) {
 		return "", false
 	}
 	refusal := sidecarServiceTokenRefusalOf(err)
@@ -859,7 +932,8 @@ func evsLocalExchangeHoldCode(err error) (string, bool) {
 }
 
 // One push of an owned ref's queue (8.2.8's queue row): everything queued in one push from evs's tip to the local ref,
-// FORCE when it does not descend.
+// FORCE when it does not descend. No enrolled client, at the resolve of what was sent, the tip check or the push, holds
+// the queue offline (evsLocalOfflineHoldCode).
 func (self *EvsGitReceiver) publishQueued(ctx context.Context, refId Id) error {
 	releaseUpkeep, err := self.mount.locks.LockUpkeepShared(ctx)
 	if err != nil {
@@ -872,6 +946,10 @@ func (self *EvsGitReceiver) publishQueued(ctx context.Context, refId Id) error {
 	}
 	defer releasePublish()
 	if err := self.resolve(ctx, refId); err != nil {
+		if errors.Is(err, ErrSidecarServiceTokenNoClient) {
+			// what was sent cannot be read back with no client generation: offline, as a push finding none is
+			return self.holdOfflineAtLocal(ctx, refId)
+		}
 		return err
 	}
 	var record *EvsGitRef
@@ -921,6 +999,9 @@ func (self *EvsGitReceiver) publishQueued(ctx context.Context, refId Id) error {
 	}
 	// the git-lfs tip check before the first POST: a missing object holds the entry, ur status naming it
 	if checked, err := self.lfsTipCheck(ctx, record.Tip, local); err != nil {
+		if errors.Is(err, ErrSidecarServiceTokenNoClient) {
+			return self.hold(ctx, refId, evsLocalOfflineHoldCode, local)
+		}
 		return err
 	} else if checked != nil && 0 < len(checked.Missing) {
 		return self.holdLfs(ctx, refId, local, checked.Missing)
@@ -956,6 +1037,11 @@ func (self *EvsGitReceiver) publishQueued(ctx context.Context, refId Id) error {
 		// the token exchange refused the push's scope for good, as evs's 403 SCOPE refuses its right: held the same way
 		return self.hold(ctx, refId, code, local)
 	}
+	if errors.Is(err, ErrSidecarServiceTokenNoClient) {
+		// no client generation, so no token for any request of the push's: held until the connection returns, a
+		// reconnect releasing it, rather than built and sealed again every QueueInterval to fail at its first token
+		return self.hold(ctx, refId, evsLocalOfflineHoldCode, local)
+	}
 	if errors.Is(err, ErrEvsDirectoryFull) || errors.Is(err, ErrEvsGitUpdateInvalid) || errors.Is(err, ErrEvsGitTaintedPath) {
 		// refused for good on these inputs: held until the local ref moves or `ur evs retry`
 		return self.hold(ctx, refId, evsOneLine(err.Error()), local)
@@ -989,6 +1075,38 @@ func (self *EvsGitReceiver) holdNaming(ctx context.Context, refId Id, code strin
 	})
 }
 
+// Holds an owned ref's queue offline (evsLocalOfflineHoldCode) at its local ref as it stands: where the resolve of what
+// was sent found no enrolled client, before the push read its local ref. Nothing where no journal or record names the
+// ref.
+func (self *EvsGitReceiver) holdOfflineAtLocal(ctx context.Context, refId Id) error {
+	var local *EvsGitOid
+	named := false
+	err := self.withApply(ctx, refId, func() error {
+		ref, err := self.engine.state.gitRef(refId)
+		if err != nil {
+			return err
+		}
+		journal, err := self.engine.state.journal(refId)
+		if err != nil {
+			return err
+		}
+		refName := journal.RefName
+		if len(refName) == 0 {
+			refName = ref.Name
+		}
+		if len(refName) == 0 {
+			return nil
+		}
+		named = true
+		local, err = self.mount.localRef(ctx, EvsGitRefOfName(refName))
+		return err
+	})
+	if err != nil || !named {
+		return err
+	}
+	return self.hold(ctx, refId, evsLocalOfflineHoldCode, local)
+}
+
 // Holds an owned ref's queue on objects the tip check found missing: `ur status` names them and the upload command,
 // and the queue waits for the local ref to move or `ur evs retry` once they are uploaded.
 func (self *EvsGitReceiver) holdLfs(ctx context.Context, refId Id, local *EvsGitOid, missing []*EvsLfsMissingObject) error {
@@ -1017,6 +1135,15 @@ func (self *EvsGitReceiver) dropReceived(ctx context.Context, refId Id, update *
 // `ur evs retry` (DESIGN-DETAILS 8.7): every held queue of the mount released and pushed again; refName nil retries
 // every one. It answers the refs it released.
 func (self *EvsGitReceiver) Retry(ctx context.Context, refName []byte) ([][]byte, error) {
+	return self.release(ctx, func(journal *EvsJournalRef) bool {
+		return refName == nil || bytes.Equal(journal.RefName, refName)
+	})
+}
+
+// Every held queue of the mount whose journal held answers true for released and pushed again: `ur evs retry`'s, and a
+// reconnect's of the holds offline left (queueRound). It answers the refs it released, and stops at the first journal
+// it cannot read or write.
+func (self *EvsGitReceiver) release(ctx context.Context, held func(journal *EvsJournalRef) bool) ([][]byte, error) {
 	refIds, err := self.engine.state.journalRefIds()
 	if err != nil {
 		return nil, err
@@ -1029,7 +1156,7 @@ func (self *EvsGitReceiver) Retry(ctx context.Context, refName []byte) ([][]byte
 			if err != nil {
 				return err
 			}
-			if journal.HoldCode == "" || (refName != nil && !bytes.Equal(journal.RefName, refName)) {
+			if journal.HoldCode == "" || !held(journal) {
 				return nil
 			}
 			journal.HoldCode, journal.HoldMs, journal.HoldLocal, journal.HoldLfsOids = "", 0, "", nil

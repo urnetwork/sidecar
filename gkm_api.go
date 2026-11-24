@@ -56,6 +56,16 @@
 // at most ExchangeRetryCount times. Such a failure carries errGkmNoServiceToken, so a flow that reads an unknown
 // outcome back after a lost answer knows nothing was sent.
 //
+// Neither the ride-out nor that retry is taken by a call no verified state backs: one on a repo at a role the client's
+// state does not give, which presents the repo's one scope (scopesFor), and one presenting the scopes of a state the
+// config follower hands over before it stands (SetUnconfirmedRepoScopes, QD-817's join). No grant a verified state
+// gives is there to wait for, so its first failure to get a token ends it, whatever the keeper answered, as every one
+// did before QD-1230. A flow holds its repo's flow lock across its calls, so a wait there would hold every other flow
+// of the repo for nothing: a network's first device joins the config group at the genesis, which gives it no scope,
+// before base 1 lands, while api's gate holds no state of the network and answers 503, and its creation of the group
+// past base 1 takes the same lock; a joining device's join at its unconfirmed state meets invalid_scope while api's
+// gate lags its admission, and the follower's reads of the config heads, which it needs to stand, take that lock.
+//
 // Safe for concurrent use.
 
 package sidecar
@@ -231,6 +241,8 @@ type GkmApi struct {
 	// whether batchScopes hold an r, rw or admin scope, which a call on no repo presents: what the ReaderKey upkeep
 	// waits on after an upload that found none (accessScopes); set under stateLock with batchScopes
 	accessScopesHeld *MonitorValue[bool]
+	// whether batchScopes are an unconfirmed state's (SetUnconfirmedRepoScopes), which no verified state gives yet
+	scopesUnconfirmed bool
 }
 
 // A client of the gkm at args.GkmUrl.
@@ -270,8 +282,22 @@ func NewGkmApi(args *GkmApiArgs) (*GkmApi, error) {
 }
 
 // Replaces the scopes the client's state gives it, which its calls present in batches of at most 64: what the state
-// applier calls at each new state. A scope of no known role is left out.
+// applier calls at each new verified state. A scope of no known role is left out.
 func (self *GkmApi) SetRepoScopes(scopes []GkmRepoScope) {
+	self.setRepoScopes(scopes, false)
+}
+
+// SetRepoScopes for the scopes of a state the config follower hands over before it stands (QD-817), a joining device's
+// config repo's alone, which no verified state gives yet. Its calls present them as they do SetRepoScopes's, but none
+// takes QD-1230's ride-out or the retry of a token failure that may change: the first failure to get a token ends the
+// call, as every one did before QD-1230, since QD-1230 rides out a grant the client's verified state gives, and a join
+// that waited would hold the config repo's flow, which the follower's own reads of the config heads take.
+func (self *GkmApi) SetUnconfirmedRepoScopes(scopes []GkmRepoScope) {
+	self.setRepoScopes(scopes, true)
+}
+
+// Replaces the scopes' batches, which an unconfirmed state gives where unconfirmed is set.
+func (self *GkmApi) setRepoScopes(scopes []GkmRepoScope, unconfirmed bool) {
 	sorted := []GkmRepoScope{}
 	seenRepoIds := map[Id]bool{}
 	for _, scope := range scopes {
@@ -300,6 +326,7 @@ func (self *GkmApi) SetRepoScopes(scopes []GkmRepoScope) {
 	self.batchScopes = batchScopes
 	self.repoIdBatches = repoIdBatches
 	self.repoIdRoles = repoIdRoles
+	self.scopesUnconfirmed = unconfirmed
 	// a leaf lock, taken under stateLock so two calls leave it as their batches stand
 	self.accessScopesHeld.Set(accessScopesHeld)
 }
@@ -327,6 +354,15 @@ type gkmCallScopes struct {
 	// Whether the client's verified state gives the call's repo at its role or a stronger one: the exchange's
 	// invalid_scope to the call's own scope is ridden out only then (QD-1230).
 	stateGives bool
+	// Whether no verified state gives what the call presents: the client's state does not give the call's repo at its
+	// role, so the call presents that one scope, which the exchange or gkm refuses, or the scopes are an unconfirmed
+	// state's (SetUnconfirmedRepoScopes). A token that could not be had for it ends the call at once, whatever the
+	// keeper answered, since no grant a verified state gives is there to wait for, and a wait would hold the repo's flow
+	// for nothing: a network's first device's join of the config group at the genesis, before base 1 lands, asks for a
+	// role the genesis does not give while api's gate holds no state of the network and answers 503, and its creation
+	// of the group waits on that flow; a joining device's join at its unconfirmed state meets invalid_scope while api's
+	// gate lags its admission, and the follower's own reads of the config heads wait on that flow.
+	unverified bool
 }
 
 // The scopes a call on repoId needing role presents: the batch holding the repo when its role covers role, else that
@@ -339,7 +375,7 @@ func (self *GkmApi) scopesFor(repoId *Id, role string) (gkmCallScopes, error) {
 		for _, scopes := range self.batchScopes {
 			for _, scope := range scopes {
 				if !strings.HasSuffix(scope, ":"+GkmScopeRoleDeposit) {
-					return gkmCallScopes{scopes: scopes}, nil
+					return gkmCallScopes{scopes: scopes, unverified: self.scopesUnconfirmed}, nil
 				}
 			}
 		}
@@ -349,10 +385,10 @@ func (self *GkmApi) scopesFor(repoId *Id, role string) (gkmCallScopes, error) {
 	batch, ok := self.repoIdBatches[*repoId]
 	batchRole := self.repoIdRoles[*repoId]
 	if !ok || !gkmRoleCovers(batchRole, role) {
-		// a role the client's state does not give: that one scope, refused as gkm or the exchange refuses it
-		return gkmCallScopes{scopes: repoScopes}, nil
+		// a role the client's state does not give: that one scope, refused as gkm or the exchange refuses it, once
+		return gkmCallScopes{scopes: repoScopes, unverified: true}, nil
 	}
-	callScopes := gkmCallScopes{scopes: self.batchScopes[batch], stateGives: true}
+	callScopes := gkmCallScopes{scopes: self.batchScopes[batch], stateGives: !self.scopesUnconfirmed, unverified: self.scopesUnconfirmed}
 	if !slices.Equal(callScopes.scopes, repoScopes) {
 		callScopes.narrowedScopes = repoScopes
 		callScopes.batchScope = GkmRepoScope{RepoId: *repoId, Role: batchRole}.scope()
@@ -362,8 +398,9 @@ func (self *GkmApi) scopesFor(repoId *Id, role string) (gkmCallScopes, error) {
 	return callScopes, nil
 }
 
-// Every batch holding an r, rw or admin scope, for a route gkm answers per token.
-func (self *GkmApi) accessBatches() [][]string {
+// Every batch holding an r, rw or admin scope, for a route gkm answers per token, and whether an unconfirmed state gives
+// them.
+func (self *GkmApi) accessBatches() ([][]string, bool) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	batches := [][]string{}
@@ -372,7 +409,7 @@ func (self *GkmApi) accessBatches() [][]string {
 			batches = append(batches, scopes)
 		}
 	}
-	return batches
+	return batches, self.scopesUnconfirmed
 }
 
 // An id as a path or query names it: 32 lowercase hex characters (QD-442).
@@ -412,8 +449,8 @@ func gkmBody(message proto.Message) ([]byte, error) {
 // (sidecarServiceTokenRefusalOf): the exchange's invalid_scope to the call's own scope, which the client's state
 // gives, goes again ReadRetryWait apart until ExchangeScopeWaitTimeout has passed since the call's first, the last try
 // at the window's end; another refusal for good ends the call at once; and a failure that may change goes again at
-// most ExchangeRetryCount times. No answer, the lb's 502 or 504 among them, comes back at once, as a transport error
-// does.
+// most ExchangeRetryCount times. A call no verified state backs (gkmCallScopes.unverified) goes once, whatever the
+// keeper answered. No answer, the lb's 502 or 504 among them, comes back at once, as a transport error does.
 func (self *GkmApi) do(ctx context.Context, call *gkmCall) (int, []byte, error) {
 	scopes := call.scopes.scopes
 	// whether scopes is the call's own repo scope alone or holds no other to narrow to, so nothing narrows it again
@@ -434,6 +471,10 @@ func (self *GkmApi) do(ctx context.Context, call *gkmCall) (int, []byte, error) 
 		if errors.Is(err, errGkmNoServiceToken) {
 			refusal := sidecarServiceTokenRefusalOf(err)
 			switch {
+			case call.scopes.unverified:
+				// a role the client's state does not give, or an unconfirmed state's scopes: no grant a verified state
+				// gives to wait for, so the call goes once, as before QD-1230, whatever the keeper answered
+				return 0, nil, err
 			case refusal.scopeRefused && !narrowed:
 				// QD-1230: the batch was granted nothing, its scope on the call's repo left out with the rest, and the
 				// call's own scope alone may be
@@ -1120,7 +1161,7 @@ func (self *GkmApi) Ack(ctx context.Context, repoId Id, groupId Id, epoch uint64
 // what names a Welcome: one last-resort KeyPackage serves Adds in several groups, and every one of them is joined
 // (DESIGN-DETAILS 6.2.2's pointer row).
 func (self *GkmApi) Welcomes(ctx context.Context) ([]*protocol.GkmWelcomeEntry, error) {
-	batches := self.accessBatches()
+	batches, unconfirmed := self.accessBatches()
 	if len(batches) == 0 {
 		return nil, ErrGkmNoScope
 	}
@@ -1129,7 +1170,7 @@ func (self *GkmApi) Welcomes(ctx context.Context) ([]*protocol.GkmWelcomeEntry, 
 	for _, scopes := range batches {
 		reply := &protocol.GkmWelcomesReply{}
 		// no narrowed retry: gkm leaves out a group whose repo's scope its state does not honor, refusing nothing
-		call := &gkmCall{route: "GET /gkm/welcomes", method: http.MethodGet, path: "/gkm/welcomes", scopes: gkmCallScopes{scopes: scopes}, retry: true}
+		call := &gkmCall{route: "GET /gkm/welcomes", method: http.MethodGet, path: "/gkm/welcomes", scopes: gkmCallScopes{scopes: scopes, unverified: unconfirmed}, retry: true}
 		if err := self.callMessage(ctx, call, reply); err != nil {
 			return nil, err
 		}

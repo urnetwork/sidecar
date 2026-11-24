@@ -27,6 +27,11 @@
 // with the server's. Every wait is on the orderer's clock, and every wait under a claim renews it each third of its
 // lease (17.2.6), so the lock lapses only under a holder that stalled or lost the server. A wait or a failed read ends
 // nothing by itself: the claim is released where 17.2.7 says, an attempt at the latest at its OrderDeadline.
+//
+// A custom route whose service token could not be had sent nothing, and is read by why (sidecarServiceTokenRefusalOf):
+// one that may change, a keychain still locked or the exchange's 503 say, is no answer, tried again as one is; one for
+// good, invalid_grant or no enrolled client, lets no request of the row's go until it changes, so the holder's work on
+// the row ends with its hold lost and the claim left to lapse.
 
 package sidecar
 
@@ -714,8 +719,14 @@ func (self *tlsCustomHold) poll(ctx context.Context, timeout time.Duration) bool
 
 // Whether a custom route's request was left unanswered rather than refused: no reply, a reply that does not parse, or
 // a server's failure (5xx, or a 429 before the route), which the same request may get past later. A custom route's
-// refusal, any other 4xx and a request refused before it was sent are answers.
+// refusal, any other 4xx and a request refused before it was sent are answers. A request that never went for want of
+// its service token (errTlsCustomNoServiceToken) is read by why (sidecarServiceTokenRefusalOf): unanswered where that
+// may change, a keychain still locked or the exchange's 503 say, and answered where it is for good, invalid_grant or no
+// enrolled client, since no request of the row's goes until it changes.
 func tlsCustomUnanswered(err error) bool {
+	if errors.Is(err, errTlsCustomNoServiceToken) {
+		return !sidecarServiceTokenRefusalOf(err).final
+	}
 	var refusal *TlsCustomError
 	if errors.As(err, &refusal) {
 		return http.StatusInternalServerError <= refusal.Status
@@ -725,6 +736,13 @@ func tlsCustomUnanswered(err error) bool {
 		return apiErr.Status == http.StatusTooManyRequests || !(http.StatusOK < apiErr.Status && apiErr.Status < http.StatusInternalServerError)
 	}
 	return !errors.Is(err, ErrSidecarApiArgs)
+}
+
+// Whether a custom route's request never went because its service token was refused for good, invalid_grant or no
+// enrolled client say (sidecarServiceTokenRefusalOf): no request of the row's, a release included, goes until that
+// changes, so the holder's work on the row ends with its hold lost and the claim left to lapse.
+func tlsCustomTokenRefusedForGood(err error) bool {
+	return errors.Is(err, errTlsCustomNoServiceToken) && sidecarServiceTokenRefusalOf(err).final
 }
 
 // A progress event under the hold's claim.
@@ -1101,6 +1119,11 @@ func (self *TlsCustomDomainOrderer) authorize(ctx context.Context, report *TlsCu
 			if err == nil && status.Readiness == TlsCustomReadinessReady {
 				break
 			}
+			if tlsCustomTokenRefusedForGood(err) {
+				// no read goes until the token keeper's refusal changes: nothing more is sent for the row
+				hold.lost = true
+				return nil, true
+			}
 			if err == nil && status.Readiness == TlsCustomReadinessStale {
 				// stale confirmed for this serial: the same digest again, under the same claim, at a new serial
 				if written, done = self.challengeWrite(ctx, hold, value); done {
@@ -1164,6 +1187,9 @@ func (self *TlsCustomDomainOrderer) authorize(ctx context.Context, report *TlsCu
 //     hour spent: again once the answer's retry_after has passed, at least OrderPollInterval on;
 //   - 409 claim, the lock another's, and 403, the caller no longer an orderer of the domain: the hold is lost, and
 //     nothing more is sent for the row;
+//   - a service token refused for good, invalid_grant or no enrolled client (tlsCustomTokenRefusedForGood): nothing
+//     went, and no request goes, a release included, until that changes, so the hold is lost as above; a token that
+//     may yet be had, a keychain still locked or the exchange's 503 or 429, goes again as no answer or a 429 does;
 //   - any other refusal, which no retry under the claim changes and for which nothing was written: progress release.
 //
 // The claim is released otherwise only where 17.2.7 ends the attempt: once its OrderDeadline has passed, or would
@@ -1187,6 +1213,9 @@ func (self *TlsCustomDomainOrderer) challengeWrite(ctx context.Context, hold *tl
 		var refusal *TlsCustomError
 		var apiErr *SidecarApiError
 		switch {
+		case tlsCustomTokenRefusedForGood(err):
+			hold.lost = true
+			return nil, true
 		case errors.As(err, &refusal):
 			switch {
 			case refusal.Refusal.Reason == TlsCustomRefusalClaim || refusal.Status == http.StatusForbidden:
@@ -1759,8 +1788,13 @@ type TlsCustomRepoFiles interface {
 	WriteKeyFile(ctx context.Context, repoId Id, domain string, data []byte) error
 }
 
-// TlsCustomApi on api's routes, each call under a service token for aud certs from token: Sidecar.ServiceToken for
-// SidecarTlsSettings.CertsResource, which caches it.
+// A custom route's call whose service token could not be had, so no request went: carried with the token keeper's
+// error, which sidecarServiceTokenRefusalOf reads (tlsCustomUnanswered, tlsCustomTokenRefusedForGood).
+var errTlsCustomNoServiceToken = errors.New("no service token")
+
+// TlsCustomApi on api's routes, each call under a service token for aud certs from token: Sidecar.certsServiceToken
+// for SidecarTlsSettings.CertsResource, which asks again within its bound what may change, through ServiceToken, which
+// caches it. A call whose token could not be had sends nothing and answers an error carrying errTlsCustomNoServiceToken.
 type sidecarTlsCustomApi struct {
 	api   *SidecarApi
 	token func(ctx context.Context) (string, error)
@@ -1771,9 +1805,18 @@ func NewTlsCustomApi(api *SidecarApi, token func(ctx context.Context) (string, e
 	return &sidecarTlsCustomApi{api: api, token: token}
 }
 
+// The call's service token, or the token keeper's error carrying errTlsCustomNoServiceToken.
+func (self *sidecarTlsCustomApi) serviceToken(ctx context.Context) (string, error) {
+	serviceToken, err := self.token(ctx)
+	if err != nil {
+		return "", fmt.Errorf("tls custom route: %w: %w", errTlsCustomNoServiceToken, err)
+	}
+	return serviceToken, nil
+}
+
 // See TlsCustomApi.
 func (self *sidecarTlsCustomApi) Work(ctx context.Context) (*TlsCertsResult, error) {
-	serviceToken, err := self.token(ctx)
+	serviceToken, err := self.serviceToken(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1782,7 +1825,7 @@ func (self *sidecarTlsCustomApi) Work(ctx context.Context) (*TlsCertsResult, err
 
 // See TlsCustomApi.
 func (self *sidecarTlsCustomApi) Claim(ctx context.Context, args *TlsCustomClaimArgs) (*TlsCustomClaimResult, error) {
-	serviceToken, err := self.token(ctx)
+	serviceToken, err := self.serviceToken(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1791,7 +1834,7 @@ func (self *sidecarTlsCustomApi) Claim(ctx context.Context, args *TlsCustomClaim
 
 // See TlsCustomApi.
 func (self *sidecarTlsCustomApi) Progress(ctx context.Context, args *TlsCustomProgressArgs) (*TlsCustomClaimResult, error) {
-	serviceToken, err := self.token(ctx)
+	serviceToken, err := self.serviceToken(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1800,7 +1843,7 @@ func (self *sidecarTlsCustomApi) Progress(ctx context.Context, args *TlsCustomPr
 
 // See TlsCustomApi.
 func (self *sidecarTlsCustomApi) Register(ctx context.Context, args *TlsCertRegisterArgs) error {
-	serviceToken, err := self.token(ctx)
+	serviceToken, err := self.serviceToken(ctx)
 	if err != nil {
 		return err
 	}
@@ -1809,7 +1852,7 @@ func (self *sidecarTlsCustomApi) Register(ctx context.Context, args *TlsCertRegi
 
 // See TlsCustomApi.
 func (self *sidecarTlsCustomApi) Account(ctx context.Context, args *TlsCustomAccountArgs) (*TlsCustomAccount, error) {
-	serviceToken, err := self.token(ctx)
+	serviceToken, err := self.serviceToken(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1818,7 +1861,7 @@ func (self *sidecarTlsCustomApi) Account(ctx context.Context, args *TlsCustomAcc
 
 // See TlsCustomApi.
 func (self *sidecarTlsCustomApi) Challenge(ctx context.Context, args *TlsCustomChallengeArgs) (*TlsCustomChallengeResult, error) {
-	serviceToken, err := self.token(ctx)
+	serviceToken, err := self.serviceToken(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1827,7 +1870,7 @@ func (self *sidecarTlsCustomApi) Challenge(ctx context.Context, args *TlsCustomC
 
 // See TlsCustomApi.
 func (self *sidecarTlsCustomApi) ChallengeStatus(ctx context.Context, challengeId uint64) (*TlsCustomChallengeResult, error) {
-	serviceToken, err := self.token(ctx)
+	serviceToken, err := self.serviceToken(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -2034,7 +2077,8 @@ func (self *sidecarTlsCustomDevices) secretRepo() *TlsCustomSecretRepo {
 }
 
 // What an ordering desktop's orderer takes from this Sidecar (DESIGN-DETAILS 17.2.7): the custom routes under a
-// service token for aud certs, its own verified view of the network's devices and grants, each key file's local copy
+// service token for aud certs (certsServiceToken, which asks again within its bound what may change and ends a call at
+// once on a refusal for good), its own verified view of the network's devices and grants, each key file's local copy
 // beside the device key, the network's root from its zone, its clock, and its local alarms, which it logs. The host
 // gives the CA (cli/'s acmez client), the resolver and the secret repos' key files (cli/'s evs), so no sdk leg links
 // them. The TLS-ALPN-01 path uses this device's active listener for the exact mapped owner. ErrTlsCertsUnconfigured with
@@ -2059,7 +2103,7 @@ func (self *Sidecar) TlsCustomOrdererDeps(ctx context.Context, acme TlsAcmeClien
 	devices := &sidecarTlsCustomDevices{sidecar: self, networkId: *networkId, sidecarId: identity.SidecarId}
 	deps := &TlsCustomDomainOrdererDeps{
 		Api: NewTlsCustomApi(self.sidecarApi, func(ctx context.Context) (string, error) {
-			return self.ServiceToken(ctx, resource, nil)
+			return self.certsServiceToken(ctx, resource, nil)
 		}),
 		Acme:     acme,
 		Resolver: resolver,

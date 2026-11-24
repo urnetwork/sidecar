@@ -115,6 +115,17 @@ func (self *EvsComponent) Attach(env *SidecarEnv) error {
 	go self.runMapper(env.Ctx)
 	// the prefix rules' repairs and owed pin pushes, on a device whose composition repairs (DESIGN-DETAILS 16.2.8)
 	go self.runPrefixRepair(env.Ctx)
+	// a reconnect: the owned refs' queues held for want of an enrolled client build on this generation (DESIGN-DETAILS
+	// 8.2.8's offline row; evs_local_receive.go)
+	localTier := func() interface{ reconnected() } {
+		self.client.stateLock.Lock()
+		defer self.client.stateLock.Unlock()
+		localTier, _ := self.client.localTier.(interface{ reconnected() })
+		return localTier
+	}()
+	if localTier != nil {
+		localTier.reconnected()
+	}
 	go func() {
 		<-env.Ctx.Done()
 		remove()

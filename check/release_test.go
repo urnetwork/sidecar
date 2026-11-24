@@ -451,12 +451,20 @@ func TestReleaseForkFindingsFireWhenTheForksMoveIntoTheModule(t *testing.T) {
 	})
 	wantFindings(t, releaseForkFindings(filepath.Join(fixture.directory, "sidecar")),
 		"v2026: replace github.com/emersion/go-smtp => ./third_party/go-smtp, and the release's is ../third_party/go-smtp",
+		"v2026: replace github.com/google/go-sev-guest => ./third_party/go-sev-guest, and the release's is ../third_party/go-sev-guest",
+		"v2026: replace github.com/google/go-tdx-guest => ./third_party/go-tdx-guest, and the release's is ../third_party/go-tdx-guest",
 		"v2026: replace github.com/mjl-/mox => ./third_party/mox, and the release's is ../third_party/mox",
 		"smtpproof/v2026: replace github.com/emersion/go-smtp => ../../v2026/third_party/go-smtp, and the release's is ../../third_party/go-smtp",
+		"smtpproof/v2026: replace github.com/google/go-sev-guest => ../../v2026/third_party/go-sev-guest, and the release's is ../../third_party/go-sev-guest",
+		"smtpproof/v2026: replace github.com/google/go-tdx-guest => ../../v2026/third_party/go-tdx-guest, and the release's is ../../third_party/go-tdx-guest",
 		"smtpproof/v2026: replace github.com/mjl-/mox => ../../v2026/third_party/mox, and the release's is ../../third_party/mox",
 		"cli: replace github.com/emersion/go-smtp => ../third_party/go-smtp reaches no go.mod",
+		"cli: replace github.com/google/go-sev-guest => ../third_party/go-sev-guest reaches no go.mod",
+		"cli: replace github.com/google/go-tdx-guest => ../third_party/go-tdx-guest reaches no go.mod",
 		"cli: replace github.com/mjl-/mox => ../third_party/mox reaches no go.mod",
 		"mlsinterop: replace github.com/emersion/go-smtp => ../third_party/go-smtp reaches no go.mod",
+		"mlsinterop: replace github.com/google/go-sev-guest => ../third_party/go-sev-guest reaches no go.mod",
+		"mlsinterop: replace github.com/google/go-tdx-guest => ../third_party/go-tdx-guest reaches no go.mod",
 		"mlsinterop: replace github.com/mjl-/mox => ../third_party/mox reaches no go.mod",
 		"v2026/third_party: the forks moved into the root module's tree")
 }

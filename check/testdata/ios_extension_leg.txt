@@ -344,6 +344,7 @@ settings_mcp.go
 settings_validate.go
 sidecar.go
 sidecar_component.go
+sidecar_compute_leg.go
 sidecar_core.go
 sidecar_gate.go
 sidecar_generation.go

@@ -1,8 +1,9 @@
 //go:build !sidecar_http && !js && !ios_extension
 
-// The zone watch's two public resolvers over connect's DoH (DNS-M5-22; D-TRUST-9, §2.8 ext-3): one connect.DohCache a
-// resolver, each with remote DoH alone and one url, so no lookup falls back to the host's resolver or reaches a
-// URnetwork proxy, and each answer is that resolver's own. Off sidecar_http and js, since it links connect.
+// The zone watch's public resolvers over connect's DoH, D-TRUST-9's two by default (DNS-M5-22; §2.8 ext-3): one
+// connect.DohCache a resolver, each with remote DoH alone and one url, so no lookup falls back to the host's resolver
+// or reaches a URnetwork proxy, and each answer is that resolver's own. Off sidecar_http and js, since it links
+// connect.
 //
 // DnsWatchDohSettings' ForwarderFactory stands in for the urls: it builds the resolvers' forwarders, which the resolver
 // owns and releases at its Close, so a test or the e2e world asks a DNS of its own through the same parsing. A nil
@@ -56,8 +57,8 @@ type DnsWatchForwarders struct {
 
 // Tunables of the DoH resolvers.
 type DnsWatchDohSettings struct {
-	// How many resolvers the watch asks, each a different operator's: D-TRUST-9's two, the pair whose answers
-	// DnsWatch.Pass compares for a split, which compares no third. Must be positive.
+	// How many resolvers the watch asks, each a different operator's: D-TRUST-9's two. DnsWatch.Pass compares every
+	// one's answer for a split, so a third adds a view. At least two, since one alone shows no split.
 	ResolverCount int
 	// The resolvers' RFC 8484 urls, ResolverCount of them: by default the first ResolverCount of connect's default
 	// remote DoH servers, each a different operator. Unread where ForwarderFactory is set.
@@ -90,8 +91,8 @@ type DnsWatchDohResolver struct {
 
 // The resolvers settings name, nil taking the defaults: its ForwarderFactory's forwarders, else a DohCache of the
 // resolver's own over each url, which in a test binary are refused with ErrDnsWatchPublicResolver before any cache is
-// built. A factory's error comes back as it was given, and forwarders other than ResolverCount, or one nil, are
-// refused, released first.
+// built. A ResolverCount under two is refused before anything is built or asked. A factory's error comes back as it
+// was given, and forwarders other than ResolverCount, or one nil, are refused, released first.
 func NewDnsWatchDohResolver(settings *DnsWatchDohSettings) (*DnsWatchDohResolver, error) {
 	return newDnsWatchDohResolver(settings, testing.Testing())
 }
@@ -101,8 +102,8 @@ func newDnsWatchDohResolver(settings *DnsWatchDohSettings, inTest bool) (*DnsWat
 	if settings == nil {
 		settings = DefaultDnsWatchDohSettings()
 	}
-	if settings.ResolverCount <= 0 {
-		return nil, fmt.Errorf("%w: the zone watch asks at least one resolver", errInvalidSettings)
+	if settings.ResolverCount < 2 {
+		return nil, fmt.Errorf("%w: the zone watch compares at least two resolvers' answers", errInvalidSettings)
 	}
 	if settings.ForwarderFactory != nil {
 		forwarders, err := settings.ForwarderFactory()

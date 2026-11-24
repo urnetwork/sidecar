@@ -20,6 +20,11 @@
 //     only at a use's first presentation (§16.6), which the gate judges; the effect says only that this request
 //     wrote nothing (ErrSidecarEffectNotDone).
 //
+// A call's service token that could not be had is read by why (sidecarServiceTokenRefusalOf), nothing having reached
+// dns, so a write goes on as a read does: a refusal for good, the exchange's invalid_grant or no enrolled client say,
+// ends the call at once, and one that may change, no answer from api, its 429 or 5xx, a keychain still locked or no api
+// yet, is asked again within ExchangeRetryCount and the call's RequestTimeout (sidecarRetryServiceToken).
+//
 // The token goes only into the request's Authorization header, never a url, an error or a log (I-7), and an error
 // names the route and never a body. Safe for concurrent use.
 
@@ -50,15 +55,29 @@ type DnsClientSettings struct {
 	ResyncInterval time.Duration
 	// The least time between two refetches hints ask for, so a burst of hints costs one fetch.
 	HintRefetchMinInterval time.Duration
+	// How many times one call asks for its service token again after a failure that may change, as
+	// sidecarServiceTokenRefusalOf reads §7.8's answers: no answer from api, its 429 or 5xx, a keychain still locked,
+	// no api yet. 3, as gkm's client asks (GkmSettings.ExchangeRetryCount). Each waits the exchange's retry_after,
+	// else ExchangeRetryWait, all inside the call's RequestTimeout. A refusal for good, as invalid_grant or no enrolled
+	// client, ends the call at once. Nothing reached dns, so a write goes again as a read does. Non-positive asks once.
+	ExchangeRetryCount int
+	// The wait before asking again when the exchange named none: 1 s.
+	ExchangeRetryWait time.Duration
+	// The longest retry_after a call waits out before it ends with the exchange's answer: 10 s, a third of
+	// RequestTimeout, so a call that waits one out keeps the time its request needs.
+	ExchangeRetryMaxWait time.Duration
 }
 
-// §6.8's hourly resync, a request's 30 s and an answer's 4 MiB.
+// §6.8's hourly resync, a request's 30 s and an answer's 4 MiB, and a token asked again 3 times 1 s apart.
 func DefaultDnsClientSettings() *DnsClientSettings {
 	return &DnsClientSettings{
 		RequestTimeout:         30 * time.Second,
 		ReplyMaxByteCount:      4 * 1024 * 1024,
 		ResyncInterval:         time.Hour,
 		HintRefetchMinInterval: time.Second,
+		ExchangeRetryCount:     3,
+		ExchangeRetryWait:      time.Second,
+		ExchangeRetryMaxWait:   10 * time.Second,
 	}
 }
 
@@ -150,14 +169,26 @@ func (self *DnsClient) Labels() *NetworkLabelTable {
 	return self.labels
 }
 
-// One request to the block: its answer's body for a 2xx, a *DnsApiError for a refusal, or the transport's error.
+// One request to the block: its answer's body for a 2xx, a *DnsApiError for a refusal, or the transport's error. A
+// token that could not be had is read by why, asked again within the settings' bound where that may change, and sends
+// nothing (see the file header); its error wraps the token keeper's.
 func (self *DnsClient) do(ctx context.Context, route string, method string, path string, body []byte, header http.Header) ([]byte, error) {
 	callCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	stop := self.clock.AfterFunc(self.settings.RequestTimeout, cancel)
 	defer stop()
-	token, err := self.serviceToken(callCtx, self.baseUrl, nil)
+	retry := sidecarServiceTokenRetry{
+		count:   self.settings.ExchangeRetryCount,
+		wait:    self.settings.ExchangeRetryWait,
+		maxWait: self.settings.ExchangeRetryMaxWait,
+	}
+	token, err := sidecarRetryServiceToken(callCtx, self.clock, retry, func(ctx context.Context) (string, error) {
+		return self.serviceToken(ctx, self.baseUrl, nil)
+	})
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, fmt.Errorf("dns %s: no service token: %w", route, err)
 	}
 	var bodyReader io.Reader
