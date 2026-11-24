@@ -9,7 +9,6 @@ package sidecar
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"net/http"
 	"slices"
 	"strings"
@@ -274,26 +273,46 @@ func (self *testForwarderWorld) genRotateIn(groupId Id, repoId Id, generation ui
 // genRotateIn chained to parentRepoKey as the generation below's key, past generation 1.
 func (self *testForwarderWorld) genRotateOver(groupId Id, repoId Id, generation uint64, parentRepoKey []byte) *bridge.Signed {
 	self.t.Helper()
+	return self.genRotateBy(self.net.owner, groupId, repoId, generation, parentRepoKey)
+}
+
+// genRotateOver signed by signer, as an honest rotator at the net's tip writes it whoever signs it: at the tip's pin
+// and time, the key holders' digest there, and the cause testForwarderCause gives (§10.9's rotation checks), so only who
+// signed it can fail them.
+func (self *testForwarderWorld) genRotateBy(signer testConfigDevice, groupId Id, repoId Id, generation uint64, parentRepoKey []byte) *bridge.Signed {
+	self.t.Helper()
+	return self.signGenRotate(signer, self.genRotateBody(groupId, repoId, generation, parentRepoKey, testForwarderCause(generation)))
+}
+
+// The GenRotate genRotateBy signs, unsigned, of cause, its GenLink sealed under it, for a test to edit before it signs
+// it.
+func (self *testForwarderWorld) genRotateBody(groupId Id, repoId Id, generation uint64, parentRepoKey []byte, cause GkmCause) *protocol.GenRotate {
+	self.t.Helper()
 	repoKey := testConfigSealKey(generation).repoKey
 	state := self.net.log.State()
-	holders := sha256.Sum256([]byte("forwarder test holders"))
 	rotate := &protocol.GenRotate{
 		GroupId: groupId.Bytes(), RepoId: repoId.Bytes(), Generation: generation,
-		Commitment: gkmCommitment(repoId, generation, repoKey), Cause: uint32(GkmCauseSchedule),
-		Auth: state.Pin(), TimeMs: state.TimeMs(), HoldersSha256: holders[:],
+		Commitment: gkmCommitment(repoId, generation, repoKey), Cause: uint32(cause),
+		Auth: state.Pin(), TimeMs: state.TimeMs(), HoldersSha256: self.holdersSha256(),
 	}
 	if 1 < generation {
 		linkKey, err := gkmDeriveKey(repoKey, repoId, EvsKeyPurposeLink, generation, nil)
 		if err != nil {
 			self.t.Fatal(err)
 		}
-		genLink, err := gkmSeal(linkKey, parentRepoKey, gkmGenLinkAad(repoId, generation, GkmCauseSchedule))
+		genLink, err := gkmSeal(linkKey, parentRepoKey, gkmGenLinkAad(repoId, generation, cause))
 		if err != nil {
 			self.t.Fatal(err)
 		}
 		rotate.ParentCommitment, rotate.Genlink = gkmCommitment(repoId, generation-1, parentRepoKey), genLink
 	}
-	signed, err := SignGenRotate(rotate, gkmForwardSigner(self.net.owner))
+	return rotate
+}
+
+// rotate as signer signs it.
+func (self *testForwarderWorld) signGenRotate(signer testConfigDevice, rotate *protocol.GenRotate) *bridge.Signed {
+	self.t.Helper()
+	signed, err := SignGenRotate(rotate, gkmForwardSigner(signer))
 	if err != nil {
 		self.t.Fatal(err)
 	}

@@ -12,11 +12,15 @@
 // The records, under the component's sealed store (4.2.2's layout):
 //
 //	genesis                       the Signed Genesis, verbatim, whose hash is the anchor's
-//	log/<n, 20 digits>            one AuthEntry, verbatim: from the newest base's retention point on, dropped when a
-//	                              newer compiled base's point passes them
-//	rows/<rows_sha256 hex>        a base's ProjectionRows, verbatim; the newest compiled base's and any newer kept
+//	log/<n, 20 digits>            one AuthEntry, verbatim: from the newest compiled base's retention point or the tail
+//	                              of the base before it, whichever is first, on, dropped when a newer compiled base's
+//	                              passes them, so a compile restores at that previous base (bridge_forward_compile.go)
+//	rows/<rows_sha256 hex>        a base's ProjectionRows, verbatim; the newest compiled base's, the one before it and
+//	                              any newer kept
 //	head/<v, 20 digits>-<sha hex> a verified config head's files, the newest HeadCacheCount kept
 //	gen/<g, 20 digits>            RK_g with its Signed GenRotate (bridge_forward_keys.go)
+//	poisoned/<g, 20 digits>       the Signed GenRotate of a generation §10.9's checks refused, with the refusal, so the
+//	                              same statement is refused again with no judging (bridge_forward_keys.go)
 //	groups                        the config repo's groups a re-form led the Forwarder through, 16 bytes each, the
 //	                              last the one it lists generations in; absent before one (bridge_forward_keys.go)
 //	compiled                      the newest compile the sink took (bridge_forward_compile.go)
@@ -52,6 +56,7 @@ const (
 	forwarderRowsPrefix       = "rows/"
 	forwarderHeadPrefix       = "head/"
 	forwarderGenerationPrefix = "gen/"
+	forwarderPoisonedPrefix   = "poisoned/"
 	forwarderCompiledName     = "compiled"
 	// the digits a position, a version or a generation is written in, so names sort in number order
 	forwarderNumberDigits = 20
@@ -225,6 +230,23 @@ func (self *forwarderRecords) openRows(rowsSha256 []byte) (io.ReadCloser, error)
 		return nil, fmt.Errorf("rows named by %d bytes", len(rowsSha256))
 	}
 	return self.store.Open(forwarderRowsName(rowsSha256))
+}
+
+// The first position of a base's tail, the entries its rows do not fold, which a log restored at the base re-applies:
+// folded_through + 1, or the base's own position n where it folds through the entry before it.
+func forwarderTailFrom(n uint64, header *bridge.ProjectionHeader) uint64 {
+	return min(n, header.GetFoldedThrough()+1)
+}
+
+// Whether a log restores at the stored base at n, the stored entries starting at from: they reach back to its tail,
+// and the store holds its rows (bridge_forward_compile.go's step 1).
+func (self *forwarderRecords) restorableAt(from uint64, n uint64, header *bridge.ProjectionHeader) bool {
+	if from == 0 || forwarderTailFrom(n, header) < from || len(header.GetRowsSha256()) != sha256.Size {
+		return false
+	}
+	name := forwarderRowsName(header.GetRowsSha256())
+	entries, err := self.store.List(name)
+	return err == nil && slices.ContainsFunc(entries, func(entry SidecarStoreEntry) bool { return entry.Name == name })
 }
 
 // Drops every stored rows record but those named.

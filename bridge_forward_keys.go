@@ -32,18 +32,35 @@
 // Signed verified under its signer's identity key in the judged state, and its signer held to §10.6's rule, a repo
 // admin's device, in an owner-bound repo only the owner's consented device, or a network admin's outside owner-bound
 // kinds (GkmFormSignerAllowed), at the auth pin the form carries: at the state there where the judged log reaches it,
-// which is from its newest base on, judging nothing of one before, which counts against no one; waiting for the log at
-// one above it; and refusing one off its chain as a fork. The judged log starts at its newest base, a long-running
-// member's at its previous one, so a form pinned between the two counts against no one here and is judged at such a
-// member (config_state_at.go's window). A form the rule refuses, or that waits, is not followed: the generations a
-// compile wants past it wait with the forms that do not lead on as their cause, which config_key_waiting names once one
-// has waited (owner decision 716), and a form pinned off the judged chain raises head_alarm (fork) as well, with the
+// judging nothing of one before, which counts against no one; waiting for the log at one above it; and refusing one off
+// its chain as a fork. The judged log reaches back to the base before its newest, as a long-running member's does
+// (config_state_at.go's window; bridge_forward_compile.go's step 1), so a form pinned between the two bases is judged
+// here as it is there; where the store or the admission rule keeps the judge at the newest base, such a form counts
+// against no one, as at a new device. A form the rule refuses, or that waits, is not followed: the generations a compile
+// wants past it wait with the forms that do not lead on as their cause, which config_key_waiting names once one has
+// waited (owner decision 716), and a form pinned off the judged chain raises head_alarm (fork) as well, with the
 // compile's pin and the form's, once while the walks that retry meet it. A form that makes the group listed in carries
 // its ladder's statements only once it is judged so.
 //
+// Each generation a listing reads past those held is held to §10.9's checks as a member device holds each it takes
+// (gkm_rotate.go's holdGenerationInFlow), each statement at its own pin in the judged state. The rotations are judged
+// first, oldest first, each GenRotate by the rotation checks (CheckRotation) on the generation below it: who may rotate
+// there, its holders, its cause, its time and its floors. One pinned above the judged state, or timed past this clock
+// and its skew, waits: the list stops there for this compile. One the checks refuse poisons its generation (§10.9's
+// poisoned row): its key is never kept, so a body sealed to it stays pending, though its key may still open the
+// generation below by the ladder, which holds each key to its own commitment; the generation above must be REMOVE to
+// stand on it, as every member judges, since every member reads the same GenRotates; its refusal is kept as
+// poisoned/<g>, so the same statement is refused again with no judging after its pin has left the judged window too, as
+// a member's keychain keeps a poisoned generation; and it waits with the refusal as its cause, which config_key_waiting
+// names once it has waited (owner decision 716), while a body wants it or nothing past it has opened. A member holds a
+// poisoned generation's key to read what was sealed to it and never seals to it; the Forwarder, which seals nothing and
+// cannot rotate past it, holds none. Then the keys are opened, newest first, and each DelegationWrap the compile reads
+// is held to the delivery checks (CheckDelivery), a STAGED one at gen/<g>'s state and a LATE one at its own, in the
+// group listed: one they refuse opens nothing (openWrap). Any statement pinned off the judged chain raises head_alarm
+// (fork) as well, with the compile's pin and its own, once while the listings that retry meet it.
+//
 // The Forwarder holds a GenRotate, a GroupForm and a wrap to their signers' identity keys in the judged state, the
-// wrap to the Delegation and key it names, and RK_g to gen/<g>'s commitment. §10.9's rotation and delivery checks, who
-// may rotate and deliver at each one's own state, are not run here.
+// wrap to the Delegation and key it names, and RK_g to gen/<g>'s commitment.
 //
 // testHookSecret sees each RK_g where it is opened (OpenEvsRepoKey). No key reaches a log line.
 
@@ -193,6 +210,75 @@ func (self *forwarderRecords) generation(generation uint64, known func(groupId I
 		return nil
 	}
 	return held
+}
+
+// A generation a listing read, as a compile judges it (the file's comment).
+type forwarderListedGeneration struct {
+	generation uint64
+	parsed     *GkmGeneration
+	// the Signed GenRotate as gkm served it, encoded
+	signedBytes []byte
+	// kept already: judged when it was kept
+	held bool
+	// RK_g as the ladder from the generation above or a DelegationWrap opened it, nil for none
+	key *EvsRepoKey
+	// the refusal of its rotation (§10.9's poisoned row), nil for none: never kept, and the parent poisoned for the
+	// generation above it
+	refusal *GkmVerdict
+	// the refusal came from its poisoned/<g> record, so it was not judged again
+	recorded bool
+	// the condition and evidence of the rotation's head_alarm (fork) where its refusal is a fork, which the record keeps
+	forkCondition string
+	forkPin       *bridge.AuthPin
+	// the first refusal of a DelegationWrap of it the compile read, nil for none: that wrap opens nothing
+	deliveryRefusal *GkmVerdict
+	// why a DelegationWrap of it the compile read waits, empty for none
+	deliveryWait string
+}
+
+// A refused generation as poisoned/<g> keeps it: the Signed GenRotate refused, the refusal's reason and detail, its
+// fork condition, empty for none, and that fork's evidence pin, encoded, each a uvarint length and its bytes.
+func forwarderEncodePoisoned(entry *forwarderListedGeneration) []byte {
+	pinBytes := []byte{}
+	if entry.forkPin != nil {
+		pinBytes, _ = forwarderMarshal(entry.forkPin)
+	}
+	data := []byte{}
+	for _, field := range [][]byte{entry.signedBytes, []byte(entry.refusal.Reason), []byte(entry.refusal.Detail), []byte(entry.forkCondition), pinBytes} {
+		data = binary.AppendUvarint(data, uint64(len(field)))
+		data = append(data, field...)
+	}
+	return data
+}
+
+// Takes into entry the refusal poisoned/<g> keeps where it keeps one for entry's statement, the GenRotate listed at g;
+// none kept, one kept for another statement or one that does not read leaves the listed one to be judged.
+func (self *forwarderRecords) poisoned(entry *forwarderListedGeneration) {
+	data, err := self.read(forwarderNumberName(forwarderPoisonedPrefix, entry.generation))
+	if err != nil {
+		return
+	}
+	fields := [5][]byte{}
+	for i := range fields {
+		length, read := binary.Uvarint(data)
+		if read <= 0 || uint64(len(data)-read) < length {
+			return
+		}
+		fields[i] = data[read : read+int(length)]
+		data = data[read+int(length):]
+	}
+	if !bytes.Equal(fields[0], entry.signedBytes) {
+		return
+	}
+	entry.refusal = &GkmVerdict{Refused: true, Poisoned: entry.generation, Reason: GkmRefusalReason(fields[1]), Detail: string(fields[2])}
+	entry.recorded = true
+	if 0 < len(fields[3]) {
+		pin := &bridge.AuthPin{}
+		if proto.Unmarshal(fields[4], pin) == nil {
+			entry.refusal.Fork = true
+			entry.forkCondition, entry.forkPin = string(fields[3]), pin
+		}
+	}
 }
 
 // The config repo's key of a generation, read from the store, nil for one not held: what a host's config head reader
@@ -426,11 +512,12 @@ func (self *Forwarder) keepGroups(groups *forwarderGroups, chain []*GkmGroupForm
 
 // Step 2 of a compile: opens the generations gkm lists past those held, when the compile lacks one of wanted, holds
 // none, or follows a head read that lacked a generation's key, into held and the store, listing them in the group the
-// config's GroupForms lead to (the file's comment). Returns how many it opened. state is the judged state, whose
-// identity keys a GenRotate, a GroupForm and a wrap verify under. A read of gkm that fails is an error, which the
-// compile retries; a generation with no wrap is not. Each generation wanted that does not open, and each listed one no
-// wrap opened, waits with its cause, whether or not gkm lists it, and config_key_waiting is raised for it once it has
-// waited KeyWaitAlarmInterval (QD-1210).
+// config's GroupForms lead to and holding each to §10.9's rotation and delivery checks (the file's comment). Returns how
+// many it opened. state is the judged state, whose identity keys a GenRotate, a GroupForm and a wrap verify under, and
+// whose window each is judged in at its own pin. A read of gkm that fails is an error, which the compile retries; a
+// generation with no wrap, or one the checks refuse, is not. Each generation wanted that does not open, each listed one
+// no wrap opened and each refused one nothing past has opened waits with its cause, whether or not gkm lists it, and
+// config_key_waiting is raised for it once it has waited KeyWaitAlarmInterval (QD-1210; owner decision 716).
 func (self *Forwarder) openGenerations(ctx context.Context, state *ConfigState, held map[uint64]*forwarderGeneration, wanted []uint64) (int, error) {
 	if self.args.Gkm == nil {
 		return 0, nil
@@ -490,9 +577,9 @@ func (self *Forwarder) openGenerations(ctx context.Context, state *ConfigState, 
 	if 0 < since {
 		below = held[since].generation.Rotate.GetCommitment()
 	}
-	listed := []*GkmGeneration{}
-	signedRotates := [][]byte{}
-	// where the list stopped short of what gkm served, and why: the cause of each wanted generation from there on
+	listed := []*forwarderListedGeneration{}
+	// where the list stopped short of what gkm served, or of what this compile judges, and why: the cause of each
+	// wanted generation from there on
 	stoppedAt, stopped := uint64(0), ""
 	// where a statement off the held chain stopped it, 0 for none: head_alarm (fork)'s condition (settleGenerationForks)
 	forkedAt := uint64(0)
@@ -535,50 +622,144 @@ func (self *Forwarder) openGenerations(ctx context.Context, state *ConfigState, 
 			break
 		}
 		below = rotate.GetCommitment()
-		listed = append(listed, parsed)
-		signedRotates = append(signedRotates, signedBytes)
+		entry := &forwarderListedGeneration{generation: generation, parsed: parsed, signedBytes: signedBytes, held: held[generation] != nil}
+		if !entry.held {
+			self.records.poisoned(entry)
+		}
+		listed = append(listed, entry)
 	}
 	self.settleGenerationForks(state.Pin(), stoppedAt, forkedAt)
 	readerKeys, err := self.args.Keys.ReaderKeys()
 	if err != nil {
 		return failed(0, fmt.Errorf("the forwarding reader keys: %w", err))
 	}
-	opened := 0
-	for i := len(listed) - 1; 0 <= i; i -= 1 {
-		generation := since + 1 + uint64(i)
-		if held[generation] != nil {
-			continue
+	// the statements this listing met pinned off the judged chain: once it is judged, every other one standing at a
+	// generation it read has ended
+	forked := map[string]bool{}
+	for _, entry := range listed {
+		if entry.recorded && entry.forkCondition != "" {
+			forked[entry.forkCondition] = true
+			self.raiseHeadAlarm(entry.forkCondition, SidecarHeadAlarmFork, state.Pin(), entry.forkPin)
 		}
-		var key *EvsRepoKey
-		if above := held[generation+1]; above != nil {
-			// the ladder, downward
-			if parent, err := above.key.OpenParent(listed[i]); err == nil {
-				key = parent
+	}
+	// rotations, oldest first, each at its own pin on the generation below it (§10.9's rotation checks)
+	gkmSettings := self.settings.Gkm
+	if gkmSettings == nil {
+		gkmSettings = DefaultGkmSettings()
+	}
+	judgedCount := len(listed)
+	var parent *GkmGeneration
+	if 0 < since {
+		parent = held[since].generation
+	}
+	parentPoisoned := false
+	for i, entry := range listed {
+		if !entry.held && !entry.recorded {
+			verdict, err := CheckRotation(state, &GkmRotationCheckArgs{
+				RepoId: self.args.ConfigRepoId, Generation: entry.parsed, Parent: parent, ParentPoisoned: parentPoisoned,
+				DropKeyLifetime: gkmSettings.DropKeyLifetime, Now: now,
+			})
+			if err != nil {
+				// pinned past the judged state, timed past this clock, or a state that cannot answer: judged again at a
+				// later compile, and nothing from here on kept by this one
+				if self.log.V(1).Enabled() {
+					self.log.Infof("[forward]%s gen/%d in %s waits at %d: %v", self.args.NetworkId, entry.generation, listing.groupId, state.Pin().GetVersion(), err)
+				}
+				judgedCount = i
+				if stoppedAt == 0 || entry.generation < stoppedAt {
+					stoppedAt, stopped = entry.generation, fmt.Sprintf("gen/%d in %s waits: %v", entry.generation, listing.groupId, err)
+				}
+				break
+			}
+			if verdict.Refused {
+				entry.refusal = &verdict
+				if condition := self.refuseStatement(state, listing.groupId, entry.generation, verdict, entry.signedBytes, entry.parsed.Rotate.GetAuth(), forked); condition != "" {
+					entry.forkCondition, entry.forkPin = condition, entry.parsed.Rotate.GetAuth()
+				}
 			}
 		}
-		if key == nil {
-			key = self.openWrap(fetchCtx, state, listing.groupId, listed[i], generation, readerKeys)
-		}
-		if key == nil {
+		parent, parentPoisoned = entry.parsed, entry.refusal != nil
+	}
+	listed = listed[:judgedCount]
+	// keys, newest first: the ladder from the generation above, a refused one's included, since the ladder holds each
+	// key to its own commitment; else the component's own DelegationWraps, each held to §10.9's delivery checks
+	// (openWrap), but for a refused generation, which is never kept
+	for i := len(listed) - 1; 0 <= i; i -= 1 {
+		entry := listed[i]
+		if entry.held {
 			continue
 		}
-		record := forwarderEncodeGeneration(signedRotates[i], state.IdentityKey(listed[i].SignerId), key.repoKey)
+		var above *EvsRepoKey
+		if kept := held[entry.generation+1]; kept != nil {
+			above = kept.key
+		} else if i+1 < len(listed) {
+			above = listed[i+1].key
+		}
+		if above != nil {
+			if parent, err := above.OpenParent(entry.parsed); err == nil {
+				entry.key = parent
+				continue
+			}
+		}
+		if entry.refusal == nil {
+			self.openWrap(fetchCtx, state, listing.groupId, entry, readerKeys, now, forked)
+		}
+	}
+	self.settleStatementForks(stoppedAt, forked)
+	// keeps each judged generation no refusal poisons whose key opened, and each refusal not kept yet
+	opened := 0
+	for i := len(listed) - 1; 0 <= i; i -= 1 {
+		entry := listed[i]
+		switch {
+		case entry.held:
+			continue
+		case entry.refusal != nil:
+			if !entry.recorded {
+				testHookBarrier("bridge_forward.poisoned.store", self.args.NetworkId.String())
+				if err := self.records.write(forwarderNumberName(forwarderPoisonedPrefix, entry.generation), forwarderEncodePoisoned(entry)); err != nil {
+					// judged again at the next compile, as at this one
+					self.log.Warningf("[forward]%s the refusal of gen/%d was not kept: %v", self.args.NetworkId, entry.generation, err)
+				}
+			}
+			continue
+		case entry.key == nil:
+			continue
+		}
+		record := forwarderEncodeGeneration(entry.signedBytes, state.IdentityKey(entry.parsed.SignerId), entry.key.repoKey)
 		testHookBarrier("bridge_forward.generation.store", self.args.NetworkId.String())
-		if err := self.records.write(forwarderNumberName(forwarderGenerationPrefix, generation), record); err != nil {
+		if err := self.records.write(forwarderNumberName(forwarderGenerationPrefix, entry.generation), record); err != nil {
 			return failed(opened, err)
 		}
-		held[generation] = &forwarderGeneration{key: key, generation: listed[i]}
+		held[entry.generation] = &forwarderGeneration{key: entry.key, generation: entry.parsed}
 		for _, readerKey := range readerKeys {
-			self.lateAsks.Done(listing.groupId, generation, forwarderWrapRecipient(readerKey.DelegationId[:]))
+			self.lateAsks.Done(listing.groupId, entry.generation, forwarderWrapRecipient(readerKey.DelegationId[:]))
 		}
 		opened += 1
 	}
-	// what waits, and why: each listed generation no wrap opened, and each wanted one that did not open, whether or not
-	// gkm lists it (QD-1210); any other waits for nothing
+	// what waits, and why: each listed generation that did not open, a refused one while nothing past it has opened, and
+	// each wanted one that did not open, whether or not gkm lists it (QD-1210); any other waits for nothing
+	newestHeld = 0
+	for generation := range held {
+		newestHeld = max(newestHeld, generation)
+	}
 	causes := map[uint64]string{}
-	for i := range listed {
-		if generation := since + 1 + uint64(i); held[generation] == nil {
-			causes[generation] = "no DelegationWrap of it has reached the forwarding reader key"
+	refusals := map[uint64]string{}
+	for _, entry := range listed {
+		if held[entry.generation] != nil {
+			continue
+		}
+		switch {
+		case entry.refusal != nil:
+			refusals[entry.generation] = fmt.Sprintf("gen/%d in %s is refused: %s", entry.generation, listing.groupId, entry.refusal.Detail)
+			if newestHeld < entry.generation {
+				causes[entry.generation] = refusals[entry.generation]
+			}
+		case entry.deliveryRefusal != nil:
+			causes[entry.generation] = fmt.Sprintf("a DelegationWrap of gen/%d in %s is refused: %s", entry.generation, listing.groupId, entry.deliveryRefusal.Detail)
+		case entry.deliveryWait != "":
+			causes[entry.generation] = entry.deliveryWait
+		default:
+			causes[entry.generation] = "no DelegationWrap of it has reached the forwarding reader key"
 		}
 	}
 	for _, generation := range wanted {
@@ -586,6 +767,8 @@ func (self *Forwarder) openGenerations(ctx context.Context, state *ConfigState, 
 			continue
 		}
 		switch {
+		case refusals[generation] != "":
+			causes[generation] = refusals[generation]
 		case 0 < stoppedAt && stoppedAt <= generation:
 			causes[generation] = stopped
 		case listing.stayed != "":
@@ -643,19 +826,30 @@ func forwarderWrapRecipient(delegationId []byte) string {
 	return "d:" + hex.EncodeToString(delegationId)
 }
 
-// RK_g from a DelegationWrap of one generation to one of the component's reader keys, read in groupId, the group
-// listed, whose id its body names, a carried generation's too (rule 7); nil when gkm holds none that opens. A
-// generation already found waiting is asked for late, once a LateAskInterval for each key.
-func (self *Forwarder) openWrap(ctx context.Context, state *ConfigState, groupId Id, generation *GkmGeneration, g uint64, readerKeys []ForwarderReaderKey) *EvsRepoKey {
+// RK_g of one listed generation into entry, from the component's own DelegationWraps of it, read in groupId, the group
+// listed, whose id their bodies name, a carried generation's too (rule 7). Each wrap read that verifies under its
+// signer's admitted key is held to §10.9's delivery checks at its own state (CheckDelivery), as a member holds its own,
+// and the key comes only from one that passes and opens to the reader key it was read for: one the checks refuse opens
+// nothing, its refusal the generation's cause where nothing else opens it, and one pinned off the judged chain raises
+// head_alarm (fork) too (refuseStatement); one that waits for the log or this clock opens nothing now. Unlike a member,
+// which poisons the generation and rotates past it at once, the Forwarder can rotate nothing, and the members that seal
+// to the generation never read its wraps: so a wrap refused here poisons neither the generation nor the one above it,
+// and an honest body sealed to it still opens by a wrap that passes or by the ladder. The reader keys are read in turn
+// until the key opens. A generation already found waiting is asked for late, once a LateAskInterval for each key.
+func (self *Forwarder) openWrap(ctx context.Context, state *ConfigState, groupId Id, entry *forwarderListedGeneration, readerKeys []ForwarderReaderKey, now time.Time, forked map[string]bool) {
 	identityKey := GkmIdentityKeys(state)
+	g := entry.generation
 	for _, readerKey := range readerKeys {
+		if entry.key != nil {
+			return
+		}
 		if readerKey.PrivateKey == nil {
 			continue
 		}
 		recipient := forwarderWrapRecipient(readerKey.DelegationId[:])
 		query := &GkmWrapsQuery{Recipient: recipient}
 		if self.keyWaits[g] != nil {
-			if since, ok := self.lateAsks.Ask(groupId, g, recipient, self.clock.Now()); ok {
+			if since, ok := self.lateAsks.Ask(groupId, g, recipient, now); ok {
 				keySha256 := sha256.Sum256(readerKey.PrivateKey.PublicKey().Bytes())
 				query.Want = keySha256[:gkmDigestPrefixByteCount]
 				query.Since = since
@@ -674,16 +868,71 @@ func (self *Forwarder) openWrap(ctx context.Context, state *ConfigState, groupId
 			}
 			delivery, err := ParseGkmDelivery(proto.Clone(signed).(*bridge.Signed), GkmWrapTypeDelegation, identityKey)
 			if err != nil {
+				// a signer the judged state admits no key for, or a wrap that does not verify: none of this
+				// component's, passed over as a member passes over one of its own
 				continue
 			}
-			key, err := openGkmDelivery(delivery, generation, groupId.Bytes(), readerKey.DelegationId[:], readerKey.PrivateKey)
+			verdict, err := CheckDelivery(state, &GkmDeliveryCheckArgs{
+				RepoId: self.args.ConfigRepoId, Delivery: delivery, Generation: entry.parsed, GroupId: groupId, Now: now,
+			})
 			if err != nil {
+				entry.deliveryWait = fmt.Sprintf("a DelegationWrap of gen/%d in %s waits: %v", g, groupId, err)
 				continue
 			}
-			return key
+			if verdict.Refused {
+				if entry.deliveryRefusal == nil {
+					entry.deliveryRefusal = &verdict
+				}
+				// a LATE delivery is judged at its own pin, a STAGED one at gen/<g>'s
+				pin := delivery.Body.GetAuth()
+				if pin == nil {
+					pin = entry.parsed.Rotate.GetAuth()
+				}
+				signedBytes, err := forwarderMarshal(signed)
+				if err != nil {
+					signedBytes = entry.signedBytes
+				}
+				self.refuseStatement(state, groupId, g, verdict, signedBytes, pin, forked)
+				continue
+			}
+			if entry.key != nil {
+				continue
+			}
+			if key, err := openGkmDelivery(delivery, entry.parsed, groupId.Bytes(), readerKey.DelegationId[:], readerKey.PrivateKey); err == nil {
+				entry.key = key
+			}
 		}
 	}
-	return nil
+}
+
+// Logs a statement of a generation §10.9's checks refused by verdict, a GenRotate or a DelegationWrap, signedBytes its
+// Signed, and raises head_alarm (fork) where the refusal is a fork, its pin off the judged chain: with the compile's
+// pin and pin, the statement's, for evidence, once while the listings that retry meet it (the file's comment). The
+// fork's condition, named in forked as well, or empty for a refusal that is no fork.
+func (self *Forwarder) refuseStatement(state *ConfigState, groupId Id, generation uint64, verdict GkmVerdict, signedBytes []byte, pin *bridge.AuthPin, forked map[string]bool) string {
+	self.log.Warningf("[forward]%s a statement of gen/%d in %s is refused at %d: %s", self.args.NetworkId, generation, groupId, pin.GetVersion(), verdict.Detail)
+	if !verdict.Fork {
+		return ""
+	}
+	statementSha256 := sha256.Sum256(signedBytes)
+	condition := forwarderConditionStatement + strconv.FormatUint(generation, 10) + "/" + hex.EncodeToString(statementSha256[:])
+	forked[condition] = true
+	self.raiseHeadAlarm(condition, SidecarHeadAlarmFork, state.Pin(), pin)
+	return condition
+}
+
+// A listing's statement conditions (the file's comment): each standing one at a generation the listing read, below
+// stoppedAt or wherever nothing stopped it, ends unless met holds it, since the listing judged that generation again
+// and met no such statement; one at or past where the list stopped stands, unread, as settleGenerationForks keeps one.
+func (self *Forwarder) settleStatementForks(stoppedAt uint64, met map[string]bool) {
+	self.endHeadConditions(forwarderConditionStatement, func(condition string) bool {
+		if met[condition] {
+			return true
+		}
+		generationText, _, _ := strings.Cut(strings.TrimPrefix(condition, forwarderConditionStatement), "/")
+		generation, err := strconv.ParseUint(generationText, 10, 64)
+		return err == nil && 0 < stoppedAt && stoppedAt <= generation
+	})
 }
 
 // Raises config_key_waiting for the newest generation that has waited KeyWaitAlarmInterval for its key, and again each
