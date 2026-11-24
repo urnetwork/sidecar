@@ -1045,8 +1045,8 @@ func (self *Sidecar) TlsPublishes() []*TlsPublishResult {
 	return publisher.list()
 }
 
-// The names this device publishes, each once, sorted: what D-TRUST-9's zone watch watches (DnsWatchArgs.
-// PublishedHosts) and what says the CT watch's sidecar is listening.
+// The names this device's publishes serve, each once, sorted: with its app listeners' names, what D-TRUST-9's zone
+// watch watches (dnsWatchPublishedHosts) and what says the CT watch's sidecar is listening (tlsListening).
 func (self *Sidecar) TlsPublishedHosts() []string {
 	hosts := []string{}
 	for _, publish := range self.TlsPublishes() {

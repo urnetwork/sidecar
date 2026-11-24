@@ -16,9 +16,13 @@
 // The component composes the watch at the first client generation that can: the network known, its DnsClient made
 // and the watch's file in the network's dns/ directory read, which a locked keychain refuses. A generation that
 // cannot leaves it to the next. Once composed, the watch runs across generations, its passes on the component's own
-// context and the Sidecar's clock: it reads GET /dns/zone through the network's DnsClient, watches this device's
-// published hosts (TlsPublishedHosts) and what its file holds, and raises its alarms as the Sidecar's dns_alarm
-// events. Close detaches it, ends it and releases its resolvers, after any composition under way.
+// context and the Sidecar's clock: it reads GET /dns/zone through the network's DnsClient, watches the names this
+// device publishes and what its file holds, and raises its alarms as the Sidecar's dns_alarm events. Close detaches
+// it, ends it and releases its resolvers, after any composition under way.
+//
+// The names this device publishes are its publishes' (TlsPublishedHosts) and its app listeners' (ListenTls), the two
+// D-TLS-8's CT watch counts as listening (tlsListening). An sdk host publishes through its tls/ app listeners alone,
+// so a watch on the publishes alone would watch none of a desktop app's names.
 //
 // The resolvers are those the settings' Doh names: production's are connect's first two default remote DoH servers,
 // each a DohCache of the watch's own. A test binary refuses those (ErrDnsWatchPublicResolver), so a test names its
@@ -31,6 +35,7 @@ package sidecar
 
 import (
 	"context"
+	"slices"
 	"sync"
 )
 
@@ -117,7 +122,7 @@ func (self *dnsWatchComponent) compose() error {
 		Resolver:       resolver,
 		Store:          store,
 		Zone:           client.Zone,
-		PublishedHosts: self.sidecar.TlsPublishedHosts,
+		PublishedHosts: self.sidecar.dnsWatchPublishedHosts,
 		Event: func(event SidecarEvent) {
 			self.sidecar.Alarm(event)
 		},
@@ -147,6 +152,16 @@ func (self *dnsWatchComponent) Close() {
 		self.resolver = nil
 	}
 	self.cancel()
+}
+
+// The names this device publishes now, each once, sorted: its publishes' and its tls component's app listeners'.
+func (self *Sidecar) dnsWatchPublishedHosts() []string {
+	hosts := self.TlsPublishedHosts()
+	if component := self.tlsComponent(); component != nil {
+		hosts = append(hosts, component.listenerServerNames()...)
+	}
+	slices.Sort(hosts)
+	return slices.Compact(hosts)
 }
 
 // Detaches watch, unless another has been attached in its place.

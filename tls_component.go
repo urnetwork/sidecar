@@ -686,6 +686,17 @@ func (self *TlsComponent) listening() bool {
 	return 0 < len(self.listeners)
 }
 
+// The names its app listeners serve now, each listener's in turn, a name two serve given twice.
+func (self *TlsComponent) listenerServerNames() []string {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	names := []string{}
+	for listener := range self.listeners {
+		names = append(names, listener.serverNames...)
+	}
+	return names
+}
+
 // An app listener on address: the name checked, its server names from the network's own, the network's certificate
 // ensured (§13.10's step 3), then the registration through parts, then the front on it. Nothing is ordered for a name
 // refused here, and nothing registers without the certificate.
@@ -814,6 +825,9 @@ func (self *Sidecar) ListenTls(ctx context.Context, address string, settings *Tl
 type TlsListener struct {
 	front        *TlsFront
 	registration tlsListenRegistration
+	// the names its front serves, as its target held them at the listen: what D-TRUST-9's zone watch watches while it
+	// serves (dnsWatchPublishedHosts)
+	serverNames []string
 	// each connection the front opens, waiting for an Accept: unbuffered, so the front's dial waits for one, at most
 	// its TargetDialTimeout, as a socket with no backlog would
 	accepted chan net.Conn
@@ -847,6 +861,9 @@ func newTlsListener(ctx context.Context, frontArgs *TlsFrontArgs, registration t
 		accepted:     make(chan net.Conn),
 		closed:       make(chan struct{}),
 		untrack:      untrack,
+	}
+	if frontArgs.Target != nil {
+		self.serverNames = append([]string{}, frontArgs.Target.ServerNames...)
 	}
 	settings := DefaultTlsFrontSettings()
 	if frontArgs.Settings != nil {
