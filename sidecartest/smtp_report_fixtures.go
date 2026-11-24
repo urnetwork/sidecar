@@ -1,9 +1,10 @@
 // Fixtures for smtpedgeservice's report intake (§14.8): DNS for reporters' keys, a DKIM signer,
 // builders of ARF and aggregate reports, and fakes of the intake's seams: tokens, labels, mail keys,
-// SMTP-M9-15's join and §21's abuse sink. The signer canonicalizes with code of its own, written apart
-// from smtpedgeservice's, so a canonicalization slip in either fails the verifier's tests rather than
-// cancelling out. Names are .example, addresses RFC 5737's, and keys are made per process, never kept
-// in the repository. Safe for concurrent use.
+// SMTP-M9-15's join and §21's abuse sink; and for the network mail key (plan-SMTP-report-seal-key), a
+// mail repo keyed at FakeGkm with gkm's drop-key route over it, and an opener of sealed copies. The
+// signer and the opener are written apart from smtpedgeservice's code, so a slip in either fails the
+// other's tests rather than cancelling out. Names are .example, addresses RFC 5737's, and keys are made
+// per process, never kept in the repository. Safe for concurrent use.
 
 package sidecartest
 
@@ -21,14 +22,23 @@ import (
 	"crypto/x509"
 	"encoding/base32"
 	"encoding/base64"
+	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/urnetwork/sidecar"
+	"github.com/urnetwork/sidecar/protocol"
+	"github.com/urnetwork/sidecar/protocol/bridge"
 	"github.com/urnetwork/sidecar/smtpedgeservice"
 )
 
@@ -750,4 +760,285 @@ func (self *FakeSmtpReportJoin) JoinReport(ctx context.Context, report *smtpedge
 	kept.XUrRef = report.Headers.XUrRef
 	kept.FeedbackId = report.Headers.FeedbackId
 	return &kept, nil
+}
+
+// What NewSmtpReportKeyFixture keys. A zero field takes its default.
+type SmtpReportKeyFixtureArgs struct {
+	// The repo whose drop key is the network mail key. Zero: a fresh id.
+	RepoId sidecar.Id
+	// Its kind: unspecified is a personal network's mailbox, its owner the fixture's member.
+	Kind protocol.RepoKind
+	// Its inbox role: a Team's admin inbox is a general repo with REPO_INBOX_ADMIN.
+	Inbox protocol.RepoInbox
+}
+
+// §15.8's mail repo keyed at FakeGkm, for the report seal key's checks on either side of api's gate (§14.8,
+// D-KEYS-17): the device of the fixture's member, its owner, keys and writes the repo; FakeGkm keeps its GenRotates
+// as gkm stores them, which DropKeyReply and DropKeyHandler serve as gkm's drop-key route does; and each
+// generation's drop key's private half opens the sealed copies made to it. The verified state is a FakeGkmAuthLog
+// whose tip a test moves with Shrink, and the owner's device follows it. A test drives one from one goroutine; the
+// handler is safe for concurrent use.
+type SmtpReportKeyFixture struct {
+	RepoId   sidecar.Id
+	MemberId sidecar.Id
+	Owner    *FakeGkmSigner
+	Clock    *FakeClock
+	Gkm      *FakeGkm
+
+	blobs   *FakeBlobs
+	log     *FakeGkmAuthLog
+	fixture *FakeGkmAuthFixture
+	client  sidecar.GkmClient
+
+	stateLock sync.Mutex
+	// the drop-key reads the handler answered or refused
+	dropKeyReadCount int
+}
+
+// The repo of args, nil for the defaults, keyed by its owner's device at generation 1, on clock, nil for a fresh one.
+func NewSmtpReportKeyFixture(ctx context.Context, clock *FakeClock, args *SmtpReportKeyFixtureArgs) (*SmtpReportKeyFixture, error) {
+	if args == nil {
+		args = &SmtpReportKeyFixtureArgs{}
+	}
+	if clock == nil {
+		clock = NewFakeClock(DefaultClockStart())
+	}
+	repoId := args.RepoId
+	if repoId == (sidecar.Id{}) {
+		repoId = sidecar.NewId()
+	}
+	kind := args.Kind
+	if kind == protocol.RepoKind_REPO_KIND_UNSPECIFIED {
+		kind = protocol.RepoKind_REPO_KIND_MAILBOX
+	}
+	self := &SmtpReportKeyFixture{
+		RepoId:   repoId,
+		MemberId: sidecar.NewId(),
+		Owner:    NewFakeGkmSigner(),
+		Clock:    clock,
+		blobs:    NewFakeBlobs(clock, nil, nil, nil),
+		log:      NewFakeGkmAuthLog(),
+	}
+	repo := &protocol.AclRepo{
+		RepoId: repoId.Bytes(),
+		Kind:   kind,
+		Inbox:  args.Inbox,
+		Admins: []*protocol.AclRepoAdminRow{{SidecarId: self.Owner.SidecarId.Bytes(), Signer: self.Owner.SidecarId.Bytes(), At: 1}},
+	}
+	createArgs := &sidecar.GkmCreateGroupArgs{RepoId: repoId, Kind: kind, Inbox: args.Inbox}
+	if kind == protocol.RepoKind_REPO_KIND_MAILBOX {
+		repo.OwnerMemberId = self.MemberId.Bytes()
+		createArgs.OwnerMemberId = &self.MemberId
+	}
+	rows := FakeGkmAuthRows(repo)
+	sidecarRows, member := FakeGkmAuthMemberDevices(self.MemberId, self.Owner.SidecarId)
+	rows.Sidecars = sidecarRows
+	rows.Members = []*bridge.MemberRow{member}
+	self.fixture = &FakeGkmAuthFixture{
+		Rows:         rows,
+		IdentityKeys: map[sidecar.Id][]byte{self.Owner.SidecarId: self.Owner.PublicKey()},
+		RepoReaders:  map[sidecar.Id][]sidecar.Id{repoId: {self.Owner.SidecarId}},
+		RepoWriters:  map[sidecar.Id][]sidecar.Id{repoId: {self.Owner.SidecarId}},
+	}
+	view := self.log.Append(self.fixture)
+	self.Gkm = NewFakeGkm(clock, self.blobs, nil)
+	self.client = self.Gkm.Client(self.Owner.SidecarId, self.Owner.Sign)
+	self.client.AuthAdvanced(view)
+	if _, err := self.client.CreateGroup(ctx, createArgs); err != nil {
+		return nil, err
+	}
+	return self, nil
+}
+
+// The verified state's newest position.
+func (self *SmtpReportKeyFixture) View() *FakeGkmAuthView {
+	return self.log.Tip()
+}
+
+// The verified state's position at version, from 1, as a verifier that lags holds it; nil past the tip.
+func (self *SmtpReportKeyFixture) ViewAt(version uint64) *FakeGkmAuthView {
+	self.log.stateLock.Lock()
+	defer self.log.stateLock.Unlock()
+	if version == 0 || uint64(len(self.log.views)) < version {
+		return nil
+	}
+	return self.log.views[version-1]
+}
+
+// The repo's GenRotates after since, of its newest group, as gkm's drop-key route answers them (§10.14): each the
+// Signed bytes gkm stores, oldest first.
+func (self *SmtpReportKeyFixture) DropKeyReply(ctx context.Context, since uint64) (*protocol.GkmGenerationsReply, error) {
+	reply := &protocol.GkmGenerationsReply{}
+	groupId, newest, ok := self.Gkm.Newest(self.RepoId)
+	if !ok {
+		return reply, nil
+	}
+	cluster, err := self.blobs.FirstCluster()
+	if err != nil {
+		return nil, err
+	}
+	for generation := since + 1; generation <= newest; generation += 1 {
+		object, err := cluster.Get(ctx, sidecar.GkmGenerationPath(groupId, generation))
+		if err != nil {
+			return nil, err
+		}
+		objectBytes, err := func() ([]byte, error) {
+			defer object.Body.Close()
+			return io.ReadAll(object.Body)
+		}()
+		if err != nil {
+			return nil, err
+		}
+		signed := &bridge.Signed{}
+		if err := proto.Unmarshal(objectBytes, signed); err != nil {
+			return nil, err
+		}
+		reply.Generations = append(reply.Generations, signed)
+	}
+	return reply, nil
+}
+
+// The drop key pair of a generation, the newest for 0, as the owner's device derives it: what the network's readers
+// open sealed copies with.
+func (self *SmtpReportKeyFixture) DropPrivateKey(ctx context.Context, generation uint64) (hpke.PrivateKey, error) {
+	var key *sidecar.EvsRepoKey
+	var err error
+	if generation == 0 {
+		key, err = self.client.CurrentRepoKey(ctx, self.RepoId)
+	} else {
+		key, err = self.client.RepoKey(ctx, self.RepoId, generation)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return key.DropKeyPair()
+}
+
+// Moves the state on by a removal from the repo that no generation covers yet: holders_shrunk_at at the new position,
+// so the newest drop key seals nothing until a rotation from that state covers it. Returns the new position.
+func (self *SmtpReportKeyFixture) Shrink() *FakeGkmAuthView {
+	next := self.fixture.clone()
+	version := self.log.Tip().Pin().GetVersion() + 1
+	acl := &protocol.AclRows{}
+	if err := proto.Unmarshal(next.Rows.GetAcl(), acl); err != nil {
+		panic(fmt.Sprintf("smtp report key fixture: rows: %v", err))
+	}
+	for _, repo := range acl.GetRepos() {
+		if bytes.Equal(repo.GetRepoId(), self.RepoId.Bytes()) {
+			repo.HoldersShrunkAt = version
+		}
+	}
+	aclBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(acl)
+	if err != nil {
+		panic(fmt.Sprintf("smtp report key fixture: rows: %v", err))
+	}
+	next.Rows.Acl = aclBytes
+	self.fixture = next
+	view := self.log.Append(next)
+	self.client.AuthAdvanced(view)
+	return view
+}
+
+// A new generation by the owner's device at the state's newest position: cause REMOVE after a Shrink, REQUEST
+// otherwise.
+func (self *SmtpReportKeyFixture) Rotate(ctx context.Context) error {
+	_, err := self.client.RotateRepo(ctx, self.RepoId)
+	return err
+}
+
+// How many drop-key reads DropKeyHandler has taken, refused ones included.
+func (self *SmtpReportKeyFixture) DropKeyReadCount() int {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.dropKeyReadCount
+}
+
+// gkm's drop-key route over the fixture, GET /gkm/repos/<id>/drop-key?since=<g>, its answer a GkmGenerationsReply as
+// gkm's. authorize judges each request first, its bearer and its repo, and answers the status to send, 200 to serve
+// it; nil serves every request. A repo the fixture does not key answers 404, as gkm answers a repo with no group.
+func (self *SmtpReportKeyFixture) DropKeyHandler(authorize func(request *http.Request, repoId sidecar.Id) int) http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /gkm/repos/{repo_id}/drop-key", func(w http.ResponseWriter, request *http.Request) {
+		func() {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			self.dropKeyReadCount += 1
+		}()
+		idBytes, err := hex.DecodeString(request.PathValue("repo_id"))
+		if err != nil || len(idBytes) != len(sidecar.Id{}) {
+			http.Error(w, "", http.StatusBadRequest)
+			return
+		}
+		repoId := sidecar.Id(idBytes)
+		if authorize != nil {
+			if status := authorize(request, repoId); status != http.StatusOK {
+				http.Error(w, "", status)
+				return
+			}
+		}
+		if repoId != self.RepoId {
+			http.Error(w, "", http.StatusNotFound)
+			return
+		}
+		since := uint64(0)
+		if text := request.URL.Query().Get("since"); text != "" {
+			if since, err = strconv.ParseUint(text, 10, 64); err != nil {
+				http.Error(w, "", http.StatusBadRequest)
+				return
+			}
+		}
+		reply, err := self.DropKeyReply(request.Context(), since)
+		if err != nil {
+			http.Error(w, "", http.StatusServiceUnavailable)
+			return
+		}
+		body, err := proto.Marshal(reply)
+		if err != nil {
+			http.Error(w, "", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Write(body)
+	})
+	return mux
+}
+
+// A sealed report copy's raw bytes under the network mail key's private half (§14.8's sealed_report, owner decision
+// 437), read apart from smtpedgeservice's opener so a test on a path that holds no export of that package checks the
+// format itself: u8(1) || enc (1,120 B) || ct_0 || ... || ct_k, ct_i the HPKE context's i-th Open of a chunk of at
+// most the format's size plus its 16 B tag, under aad_i = u8(1) || network_id || u64be(arrival ms) || u8(1 for the
+// last chunk, else 0) and info "UR smtp 1.0 report".
+func OpenSmtpSealedReportFixture(privateKey hpke.PrivateKey, networkId sidecar.Id, arrival time.Time, sealed []byte) ([]byte, error) {
+	const encapsulationByteCount = 1120
+	const tagByteCount = 16
+	blockByteCount := smtpedgeservice.DefaultSmtpEdgeSettings().ReportSealChunkByteCount + tagByteCount
+	if len(sealed) < 1+encapsulationByteCount+tagByteCount || sealed[0] != 1 {
+		return nil, errors.New("open sealed report fixture: not a sealed copy")
+	}
+	recipient, err := hpke.NewRecipient(sealed[1:1+encapsulationByteCount], privateKey, hpke.HKDFSHA256(), hpke.AES128GCM(), []byte("UR smtp 1.0 report"))
+	if err != nil {
+		return nil, err
+	}
+	rest := sealed[1+encapsulationByteCount:]
+	raw := []byte{}
+	for {
+		final := len(rest) <= blockByteCount
+		block := rest[:min(len(rest), blockByteCount)]
+		aad := append([]byte{1}, networkId[:]...)
+		aad = binary.BigEndian.AppendUint64(aad, uint64(arrival.UnixMilli()))
+		if final {
+			aad = append(aad, 1)
+		} else {
+			aad = append(aad, 0)
+		}
+		plaintext, err := recipient.Open(aad, block)
+		if err != nil {
+			return nil, err
+		}
+		raw = append(raw, plaintext...)
+		rest = rest[len(block):]
+		if final {
+			return raw, nil
+		}
+	}
 }

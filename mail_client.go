@@ -249,6 +249,10 @@ type MailClient struct {
 	// held across one registration of the mailcfg reader's Lookups on its gate, so a reader the client no longer
 	// keeps never registers after the one that replaced it (registerConfigLookups); never taken with stateLock held
 	configLookupLock sync.Mutex
+	// held from a read of outboxLookupGate to its setting, so a caller that comes on kind mail's registration in
+	// flight waits for it to end rather than going to a gate whose Lookup is not there yet (registerOutboxLookup);
+	// never taken with stateLock held
+	outboxLookupLock sync.Mutex
 
 	stateLock sync.Mutex
 	binding   *MailBinding
@@ -280,7 +284,8 @@ type MailClient struct {
 	// the component's running generation and a test's seams, on the legs that run a component (mail_component.go)
 	componentRun   any
 	componentSeams any
-	// the gate kind mail's Lookup is registered on, and what removes it (mail_outbox.go)
+	// the gate kind mail's Lookup is registered on, set only once the registration has returned, and what removes it
+	// (mail_send_queue.go)
 	outboxLookupGate   MailConfigGate
 	outboxLookupRemove func()
 	// the send watch, which raises mail_send from the member's or/, on the legs that run a component
@@ -369,13 +374,17 @@ func (self *MailClient) Bind(binding *MailBinding) {
 	self.bindWhen(binding, nil)
 }
 
-// A generation can decline a stale binding, or supply its sender, under the same lock that installs it.
+// A generation can decline a stale binding, or supply its sender, under the same lock that installs it. Barriers
+// mail.client.bind.before and .after, keyed by this device's sidecar, sit around the install, .after ahead of the
+// close of the mailcfg reader a change of repos or state dropped, so a schedule can hold a rebind between dropping a
+// reader and closing it, where only registerConfigLookups' check keeps that reader from registering.
 func (self *MailClient) bindWhen(binding *MailBinding, accept func(*MailBinding) bool) {
 	if binding == nil {
 		return
 	}
 	copied := *binding
 	var closeConfig *MailConfig
+	testHookBarrier("mail.client.bind.before", self.sidecarId.String())
 	applied := func() bool {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
@@ -399,6 +408,7 @@ func (self *MailClient) bindWhen(binding *MailBinding, accept func(*MailBinding)
 		self.notifyWithLock()
 		return true
 	}()
+	testHookBarrier("mail.client.bind.after", self.sidecarId.String())
 	if closeConfig != nil {
 		closeConfig.Close()
 	}
@@ -963,7 +973,8 @@ func (self *MailClient) SendResult(ctx context.Context, sendId Id) (*SmtpSendRes
 	return self.sendResult(ctx, sendId)
 }
 
-// Ends what the client built: mailcfg's follower. The component's Close calls it.
+// Ends what the client built: mailcfg's follower, and kind mail's Lookup on its gate, which a registration still in
+// flight takes back itself as it ends (registerOutboxLookup). The component's Close calls it.
 func (self *MailClient) closeParts() {
 	config := func() *MailConfig {
 		self.stateLock.Lock()
