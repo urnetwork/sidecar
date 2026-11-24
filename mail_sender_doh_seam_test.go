@@ -137,7 +137,7 @@ func (self *testMailSenderResolvers) snapshot() ([]*testMailSenderDoh, []int) {
 	return slices.Clone(self.built), slices.Clone(self.releaseCounts)
 }
 
-// A generation of the mail component on a prover host, as a daemon's composes its sender: the send-result world's
+// A generation of the mail component on a prover host, composing its sender as a daemon's does: the send-result world's
 // client over an enrolled memory Sidecar whose prover is prover, its send settings naming factory (nil for none), mail
 // on for the network but not yet enabled on this device, and a run whose push client has started. Whatever sender the
 // run holds ends with the test.
