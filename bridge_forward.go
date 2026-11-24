@@ -16,8 +16,16 @@
 //	alarms    the sink's decision names the next time its posture raises an alarm, and the loop reads the decision
 //	          then
 //
+// head_alarm is raised once per condition (§17.8; owner decision 716): each is keyed by what it is about, a generation
+// gkm lists off the held chain, a GroupForm pinned off the judged one, a head served for a base that names another, a
+// genesis or a page api serves off the anchored chain, a pin the app's sidecar role witnessed, and stands from its first
+// raise until the read that met it finds it gone, so a retry, a later compile or a repeated witness that meets it again
+// raises nothing, and one that ended and comes back is raised again. What stands is held in memory, as the posture's
+// raises are: a restart raises a standing condition once more at its first meeting.
+//
 // Between compiles nothing of the network stays in memory but the pin, the timers, the settings, the last compile's
-// link targets and the binding cache: rows, entries, heads and generation keys are records in the store.
+// link targets, the standing head_alarm conditions and the binding cache: rows, entries, heads and generation keys are
+// records in the store.
 //
 // A compile runs only when CompileAdmission passes. The estimate of a compile's memory is CompileEstimateRowsFactor
 // times the rows' bytes, since a row decodes into a struct and a separate allocation for each id, key and hash it
@@ -44,6 +52,7 @@ import (
 	"io"
 	"runtime"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -80,6 +89,26 @@ const (
 	ForwarderAlarmForwardClientLapsed = "forward_client_lapsed"
 	// A narrowing entry the posture cannot check has waited past its timeout (the posture's PostureAlarmCompileOverdue).
 	ForwarderAlarmNarrowingOverdue = "narrowing_overdue"
+)
+
+// The families of the Forwarder's head_alarm conditions (the file's comment), each a prefix and what names one
+// condition after it.
+const (
+	// + g: a listed GenRotate at generation g off the held chain (bridge_forward_keys.go)
+	forwarderConditionGeneration = "generation/"
+	// + the hex SHA-256 of the Signed GroupForm: a form the walk to the config's newest group met pinned off the
+	// judged chain (bridge_forward_keys.go)
+	forwarderConditionForm = "form/"
+	// the head's record name, head/<v>-<sha>, itself: a head the reader was served for a base that names another
+	// (bridge_forward_compile.go)
+	forwarderConditionHead = forwarderHeadPrefix
+	// a genesis api served that is not the anchor's (bridge_forward_follow.go)
+	forwarderConditionGenesis = "genesis"
+	// + n: a page whose entry at n does not chain onto the one before (bridge_forward_follow.go)
+	forwarderConditionPage = "page/"
+	// a pin the app's sidecar role witnessed off this chain, or past what api serves (bridge_forward_follow.go)
+	forwarderConditionWitnessFork     = "witness/fork"
+	forwarderConditionWitnessWithheld = "witness/withheld"
 )
 
 // Tunables of a forwarding role.
@@ -524,6 +553,8 @@ type Forwarder struct {
 	bindingsLoaded bool
 	// the alarms the last compile's state raised, so a repeat is not raised again
 	raisedCompileAlarms []BridgeAlarm
+	// the head_alarm conditions standing, by their names (the file's comment), each with the kind it was raised as
+	headConditions map[string]SidecarHeadAlarm
 }
 
 // A Forwarder over args, its goroutine started, following at once. The network, the sidecar, the anchor, the
@@ -558,6 +589,8 @@ func NewForwarder(ctx context.Context, args *ForwarderArgs) (*Forwarder, error) 
 		bindings: NewBridgeBindingCache(settings.BindingRetainTimeout, settings.BindingMaxCount),
 		lateAsks: NewGkmLateAsks(settings.Gkm),
 		keyWaits: map[uint64]*forwarderKeyWait{},
+
+		headConditions: map[string]SidecarHeadAlarm{},
 	}
 	go self.run()
 	return self, nil
@@ -859,7 +892,31 @@ func (self *Forwarder) clearAlarm(reason SidecarBridgeAlarm) {
 	self.alarms = slices.DeleteFunc(self.alarms, func(standing BridgeAlarm) bool { return standing.Reason == reason })
 }
 
-// Raises head_alarm with this device's pin and the other, as §6.5 encodes them.
+// Raises head_alarm for a condition that does not stand, and holds it standing until endHeadConditions ends it: one met
+// again while it stands raises nothing (the file's comment). On run's goroutine.
+func (self *Forwarder) raiseHeadAlarm(condition string, kind SidecarHeadAlarm, local *bridge.AuthPin, remote *bridge.AuthPin) {
+	if _, standing := self.headConditions[condition]; standing {
+		if self.log.V(1).Enabled() {
+			self.log.Infof("[forward]%s head_alarm %s stands for %s: not raised again", self.args.NetworkId, kind, condition)
+		}
+		return
+	}
+	self.headConditions[condition] = kind
+	self.emitHeadAlarm(kind, local, remote)
+}
+
+// Ends each standing head_alarm condition of a family, a prefix of their names, that keep does not hold, nil keeping
+// none: the read that met it found it gone, so a later meeting raises it again. On run's goroutine.
+func (self *Forwarder) endHeadConditions(family string, keep func(condition string) bool) {
+	for condition := range self.headConditions {
+		if strings.HasPrefix(condition, family) && (keep == nil || !keep(condition)) {
+			delete(self.headConditions, condition)
+		}
+	}
+}
+
+// Raises head_alarm with this device's pin and the other, as §6.5 encodes them. Every raise goes through
+// raiseHeadAlarm, once per condition.
 func (self *Forwarder) emitHeadAlarm(kind SidecarHeadAlarm, local *bridge.AuthPin, remote *bridge.AuthPin) {
 	self.log.Errorf("[forward]%s head_alarm %s: this device at %d, the other at %d", self.args.NetworkId, kind, local.GetVersion(), remote.GetVersion())
 	if self.args.Emit == nil {
