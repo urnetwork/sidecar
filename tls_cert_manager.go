@@ -26,6 +26,18 @@
 // A network certificate never answers for a custom host and a custom certificate never for a network name: each is
 // chosen by its own names, and a custom leaf names exactly one host.
 //
+// What the pass orders for, the network's certificate or a custom host, goes again after a failed order on a backoff,
+// CertRetryMinInterval doubling to CertRetryMaxInterval, as an owned ref's queue goes again on what may change
+// (DESIGN-DETAILS 8.2.8). An order whose certs token was refused for good, the exchange's invalid_grant or
+// restore_required, another of its refusals sidecarServiceTokenRefusalOf calls final, or no enrolled client, is held
+// instead, as that queue holds on a final refusal (owner decision 729): the same request meets the same answer, so the
+// pass asks nothing more for that name, the exchange least of all, until the device's state or its enrollment moves. A
+// generation's api attaching or detaching (SetApi), the device's verified state moving past the version the refused
+// pass read its names at (TlsCertNames.PinVersion), or a certs call landing under the manager's token, which shows the
+// refusal no longer stands, lets every hold go; so does a person's rotation (RotateTlsKey), new work for every order on
+// the key, as a local ref's move is for that queue. certs' own answers, its 401 to a renewed token included, back off
+// as before. A person's EnsureTlsCertificate waits on neither.
+//
 // The state file holds chains and open orders, which are public values (cert-1), and no key. One pass runs at a time,
 // and no state lock is held across the keychain, the store or the api. Errors and logs name no host, label or id's
 // owner (I-13). Safe for concurrent use.
@@ -83,6 +95,10 @@ var (
 	// A chain past its validity: refused as any other, and passed over without a report where a row merely still
 	// lists a lapsed chain.
 	errTlsCertChainExpired = fmt.Errorf("%w: past its validity", ErrTlsCertChain)
+	// A call whose certs token the token keeper could not have, the manager's own or a renewal's after certs' 401
+	// (certsServiceToken), so no request went: carried with the keeper's error, which sidecarServiceTokenRefusalOf
+	// reads (tlsCertTokenRefusedForGood).
+	errTlsCertNoServiceToken = errors.New("tls certificate: no service token")
 )
 
 // §13.15's certificate routes as the manager calls them, which *SidecarApi answers (tls_api_client.go).
@@ -123,6 +139,9 @@ type TlsCertNames struct {
 	CustomHostOwners map[string]string
 	// URnetwork's other roots, which no custom host may sit under. Root is always one.
 	OtherRoots []string
+	// The version of the device's verified authorization state these names were read at (ConfigState.Pin): a name
+	// whose certs token was refused for good is held until it moves. 0 for a source that reads none.
+	PinVersion uint64
 }
 
 // What NewTlsCertManager takes.
@@ -206,10 +225,21 @@ type tlsCertStateFile struct {
 	Revokes []*tlsCertRevokeEntry `json:"revokes,omitempty"`
 }
 
-// When the background pass may try a target again, and the wait its next failure sets.
+// When the background pass may try a target again, and the wait its next failure sets; or, while heldAt is set, that
+// no time lets it go, only the pass's standing moving past heldAt.
 type tlsCertRetry struct {
 	nextTime time.Time
 	wait     time.Duration
+	// the standing at which the target's certs token was refused for good, nil for none
+	heldAt *tlsCertStanding
+}
+
+// The device's state and enrollment as one pass reads them: the attachment of the api it runs on (SetApi's count) and
+// the version of the verified state its names were read at (TlsCertNames.PinVersion). A target held at one standing is
+// tried again by the first pass at another.
+type tlsCertStanding struct {
+	apiAttachCount uint64
+	pinVersion     uint64
 }
 
 // The manager. See the file header.
@@ -239,8 +269,10 @@ type TlsCertManager struct {
 
 	stateLock sync.Mutex
 	api       TlsCertApi
-	loaded    bool
-	state     *tlsCertStateFile
+	// raised at each SetApi, so a hold taken on one generation's api lets go once another attaches or none is
+	apiAttachCount uint64
+	loaded         bool
+	state          *tlsCertStateFile
 	// the keys as last read from the keychain
 	currentKey *TlsDeviceKey
 	pendingKey *TlsDeviceKey
@@ -298,12 +330,14 @@ func (self *TlsCertManager) Close() {
 }
 
 // Attaches api, one generation's, and asks for a pass; nil detaches it, and every route answers ErrTlsCertsOffline
-// until the next.
+// until the next. Either moves the pass's standing, since a generation starts and ends as the device's enrollment or
+// state moves, so a name held for a certs token refused for good is tried again at the next pass with an api.
 func (self *TlsCertManager) SetApi(api TlsCertApi) {
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		self.api = api
+		self.apiAttachCount += 1
 	}()
 	if api != nil {
 		self.requestPass()
@@ -400,7 +434,8 @@ func tlsCertErrorText(err error) string {
 	}
 	for _, known := range []error{
 		ErrTlsCertsUnconfigured, ErrTlsCertsOffline, ErrTlsCertOrderFailed, ErrTlsCertChain, ErrTlsNoIssuedCertificate,
-		ErrTlsIdentifierSet, ErrSidecarStoreLocked, ErrSidecarStoreFailed, context.Canceled, context.DeadlineExceeded,
+		ErrTlsIdentifierSet, ErrSidecarStoreLocked, ErrSidecarStoreFailed, ErrSidecarServiceTokenNoClient,
+		ErrSidecarServiceTokenNoApi, context.Canceled, context.DeadlineExceeded, errTlsCertNoServiceToken,
 	} {
 		if errors.Is(err, known) {
 			return known.Error()
@@ -439,12 +474,19 @@ func (self *TlsCertManager) releasePass() {
 
 // The attached api, or ErrTlsCertsOffline.
 func (self *TlsCertManager) currentApi() (TlsCertApi, error) {
+	api, _, err := self.currentApiAttachment()
+	return api, err
+}
+
+// The attached api and the count of SetApi calls that attached it, which a pass's standing reads, or
+// ErrTlsCertsOffline.
+func (self *TlsCertManager) currentApiAttachment() (TlsCertApi, uint64, error) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	if self.api == nil {
-		return nil, ErrTlsCertsOffline
+		return nil, 0, ErrTlsCertsOffline
 	}
-	return self.api, nil
+	return self.api, self.apiAttachCount, nil
 }
 
 // Reads the chain back into its leaf and key hash. An entry whose chain no longer parses is no certificate.
@@ -982,6 +1024,40 @@ func tlsCertCustomSet(names *TlsCertNames, host string) ([]string, [sha256.Size]
 	return identifierSet, identifierSetSha256, nil
 }
 
+// The manager's service token for aud certs at CertsResource (§7.8): the ServiceToken it was made with, which on a
+// Sidecar asks again within its bound what may change (Sidecar.certsServiceToken), or the token keeper's error carrying
+// errTlsCertNoServiceToken, nothing having gone. The renewal after certs' 401 asks through here too
+// (TlsComponent.renewServiceToken), so a refusal for good reads alike whichever call met it.
+func (self *TlsCertManager) certsServiceToken(ctx context.Context) (string, error) {
+	serviceToken, err := self.serviceToken(ctx, self.settings.CertsResource, nil)
+	if err != nil {
+		return "", fmt.Errorf("%w: %w", errTlsCertNoServiceToken, err)
+	}
+	return serviceToken, nil
+}
+
+// Whether err ended a call at its certs token, refused for good (certsServiceToken): the exchange's invalid_grant or
+// restore_required, another of its refusals sidecarServiceTokenRefusalOf calls final, or no enrolled client. The same
+// request meets the same answer until the device's state or its enrollment moves, so the background pass holds the
+// name (retryNote). certs' own answers, its 401 to a renewed token included, and a token that may yet be had, the
+// exchange's 429 or 5xx past the token's bound, a keychain still locked or no api yet, are not.
+func tlsCertTokenRefusedForGood(err error) bool {
+	return errors.Is(err, errTlsCertNoServiceToken) && sidecarServiceTokenRefusalOf(err).final
+}
+
+// Lets go every target held for a certs token refused for good, whatever the standing: certs answered a call under the
+// manager's token, so no such refusal stands any more, or a person's rotation set new work. A backoff for what may
+// change stays.
+func (self *TlsCertManager) releaseHolds() {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	for target, retry := range self.targetRetries {
+		if retry.heldAt != nil {
+			delete(self.targetRetries, target)
+		}
+	}
+}
+
 // Places one order with the pass lock held: a CSR on key for exactly identifierSet, the identity key's attestation
 // of that key and set, and a service token for aud certs. The order is kept before this returns, so a restart asks
 // after it and places no second one. replaces is RFC 9773's id of the certificate it takes over from, empty for none
@@ -1020,7 +1096,7 @@ func (self *TlsCertManager) placeOrderWithPass(ctx context.Context, key *TlsDevi
 	if err != nil {
 		return nil, err
 	}
-	serviceToken, err := self.serviceToken(ctx, self.settings.CertsResource, nil)
+	serviceToken, err := self.certsServiceToken(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1028,6 +1104,7 @@ func (self *TlsCertManager) placeOrderWithPass(ctx context.Context, key *TlsDevi
 	if err != nil {
 		return nil, err
 	}
+	self.releaseHolds()
 	order := &tlsCertOrderEntry{
 		CertId:              result.CertId,
 		CustomHost:          customHost,
@@ -1185,14 +1262,14 @@ func (self *TlsCertManager) stepOrder(ctx context.Context, order *tlsCertOrderEn
 	if err != nil {
 		return 0, false, err
 	}
-	serviceToken, err := self.serviceToken(ctx, self.settings.CertsResource, nil)
+	serviceToken, err := self.certsServiceToken(ctx)
 	if err != nil {
 		return 0, false, err
 	}
 	status, err := api.TlsCertOrderStatus(ctx, serviceToken, order.CertId)
 	if err != nil {
 		var apiErr *SidecarApiError
-		if errors.As(err, &apiErr) && apiErr.Status == 404 {
+		if !errors.Is(err, errTlsCertNoServiceToken) && errors.As(err, &apiErr) && apiErr.Status == 404 {
 			// the row is gone, as after a restore: the next call orders again
 			if dropErr := self.dropOrderWithPass(order.CertId); dropErr != nil {
 				return 0, false, dropErr
@@ -1201,6 +1278,7 @@ func (self *TlsCertManager) stepOrder(ctx context.Context, order *tlsCertOrderEn
 		}
 		return 0, false, err
 	}
+	self.releaseHolds()
 	switch status.State {
 	case TlsCertStateIssued:
 		if len(status.Chain) == 0 {
@@ -1232,16 +1310,25 @@ func (self *TlsCertManager) stepOrder(ctx context.Context, order *tlsCertOrderEn
 	return wait, false, nil
 }
 
-// Whether the background pass may try target at now.
-func (self *TlsCertManager) retryDue(target string, now time.Time) bool {
+// Whether the background pass, at standing, may try target at now: one held for a certs token refused for good once
+// standing is not the refusal's, whatever the time; any other once its backoff is over.
+func (self *TlsCertManager) retryDue(target string, now time.Time, standing tlsCertStanding) bool {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	retry, ok := self.targetRetries[target]
-	return !ok || !now.Before(retry.nextTime)
+	switch {
+	case !ok:
+		return true
+	case retry.heldAt != nil:
+		return *retry.heldAt != standing
+	}
+	return !now.Before(retry.nextTime)
 }
 
-// Records target's attempt: a success forgets its backoff, a failure doubles it within the settings' bounds.
-func (self *TlsCertManager) retryNote(target string, now time.Time, err error) {
+// Records target's attempt at standing: a success forgets its backoff; a certs token refused for good
+// (tlsCertTokenRefusedForGood) holds it at standing, which no time lets go; any other failure doubles its backoff
+// within the settings' bounds.
+func (self *TlsCertManager) retryNote(target string, now time.Time, standing tlsCertStanding, err error) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	if err == nil {
@@ -1253,6 +1340,11 @@ func (self *TlsCertManager) retryNote(target string, now time.Time, err error) {
 		retry = &tlsCertRetry{}
 		self.targetRetries[target] = retry
 	}
+	if tlsCertTokenRefusedForGood(err) {
+		retry.heldAt = &standing
+		return
+	}
+	retry.heldAt = nil
 	retry.wait = min(max(2*retry.wait, self.settings.CertRetryMinInterval), self.settings.CertRetryMaxInterval)
 	retry.nextTime = now.Add(retry.wait)
 }
@@ -1286,7 +1378,7 @@ func (self *TlsCertManager) Sync(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	api, err := self.currentApi()
+	api, apiAttachCount, err := self.currentApiAttachment()
 	if err != nil {
 		// with no rows to read, what time alone decides still applies
 		return errors.Join(err, self.expireWithPass())
@@ -1436,10 +1528,12 @@ func (self *TlsCertManager) Sync(ctx context.Context) error {
 		return errors.Join(passErr, err)
 	}
 
-	note(self.keepNetworkWithPass(ctx, current, pending, networkSet, networkSetSha256, now))
+	// read before any token is asked, so a generation that attaches during the pass lets go what this pass holds
+	standing := tlsCertStanding{apiAttachCount: apiAttachCount, pinVersion: names.PinVersion}
+	note(self.keepNetworkWithPass(ctx, current, pending, networkSet, networkSetSha256, standing, now))
 
 	for _, host := range names.CustomHosts {
-		note(self.keepCustomHostWithPass(ctx, names, host, current, pending, ownRows, now))
+		note(self.keepCustomHostWithPass(ctx, names, host, current, pending, ownRows, standing, now))
 	}
 	return passErr
 }
@@ -1520,20 +1614,21 @@ func (self *TlsCertManager) revokeOwedWithPass(ctx context.Context, api TlsCertA
 // one for the set the device's names now give when the live chain names another (TLS-M6-03): an alias added or retired
 // makes a new set, which spends budget, so the order is placed once, the old chain serving until the new one installs,
 // and names no `replaces`, since it is no renewal of the old set. A certificate that was revoked or expired is not
-// ordered again here: only a person's EnsureTlsCertificate does that.
-func (self *TlsCertManager) keepNetworkWithPass(ctx context.Context, current *TlsDeviceKey, pending *TlsDeviceKey, networkSet []string, networkSetSha256 [sha256.Size]byte, now time.Time) error {
+// ordered again here: only a person's EnsureTlsCertificate does that. Nothing is tried while a failed order's backoff
+// runs or, where its certs token was refused for good, while the pass runs at that refusal's standing.
+func (self *TlsCertManager) keepNetworkWithPass(ctx context.Context, current *TlsDeviceKey, pending *TlsDeviceKey, networkSet []string, networkSetSha256 [sha256.Size]byte, standing tlsCertStanding, now time.Time) error {
 	wanted := func() bool {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		return self.state.Wanted
 	}()
-	if !wanted || !self.retryDue(tlsCertNetworkTarget, now) {
+	if !wanted || !self.retryDue(tlsCertNetworkTarget, now, standing) {
 		return nil
 	}
 	if pending == nil && TlsKeyRotationDue(current, now, self.settings) {
 		rotated, err := self.keys.RotateTlsKey(TlsKeyRotationScheduled)
 		if err != nil {
-			self.retryNote(tlsCertNetworkTarget, now, err)
+			self.retryNote(tlsCertNetworkTarget, now, standing, err)
 			return err
 		}
 		pending = rotated
@@ -1583,7 +1678,7 @@ func (self *TlsCertManager) keepNetworkWithPass(ctx context.Context, current *Tl
 		replaces = ""
 	}
 	_, err := self.placeOrderWithPass(ctx, orderKey, networkSet, "", replaces)
-	self.retryNote(tlsCertNetworkTarget, now, err)
+	self.retryNote(tlsCertNetworkTarget, now, standing, err)
 	return err
 }
 
@@ -1623,8 +1718,9 @@ func (self *TlsCertManager) lostRowReplaces(key *TlsDeviceKey, now time.Time) st
 // Keeps one custom host's certificate, with the pass lock held (DESIGN-DETAILS 17.7's line for this task): installs
 // the chains its custom_issued rows hold, and queues one CSR naming exactly the host when the device has no open row
 // for it and no live certificate, or when its newest row failed for its attestation. The server names the
-// predecessor, so `replaces` stays empty.
-func (self *TlsCertManager) keepCustomHostWithPass(ctx context.Context, names *TlsCertNames, host string, current *TlsDeviceKey, pending *TlsDeviceKey, ownRows map[Id]*TlsCertRecord, now time.Time) error {
+// predecessor, so `replaces` stays empty. Nothing is queued while a failed order's backoff runs or, where its certs
+// token was refused for good, while the pass runs at that refusal's standing; chains install either way.
+func (self *TlsCertManager) keepCustomHostWithPass(ctx context.Context, names *TlsCertNames, host string, current *TlsDeviceKey, pending *TlsDeviceKey, ownRows map[Id]*TlsCertRecord, standing tlsCertStanding, now time.Time) error {
 	customSet, customSetSha256, err := tlsCertCustomSet(names, host)
 	if err != nil {
 		return err
@@ -1675,7 +1771,7 @@ func (self *TlsCertManager) keepCustomHostWithPass(ctx context.Context, names *T
 			}
 		}
 	}
-	if open || !self.retryDue(host, now) {
+	if open || !self.retryDue(host, now, standing) {
 		return firstErr
 	}
 	live := func() bool {
@@ -1697,7 +1793,7 @@ func (self *TlsCertManager) keepCustomHostWithPass(ctx context.Context, names *T
 		return firstErr
 	}
 	_, err = self.placeOrderWithPass(ctx, orderKey, customSet, host, "")
-	self.retryNote(host, now, err)
+	self.retryNote(host, now, standing, err)
 	if err != nil && firstErr == nil {
 		firstErr = err
 	}
@@ -1706,7 +1802,9 @@ func (self *TlsCertManager) keepCustomHostWithPass(ctx context.Context, names *T
 
 // Sets a pending successor for reason and asks for a pass, which orders its certificate with `replaces`. The key
 // serving keeps serving until that chain installs. After suspicion the predecessor's certificate is revoked with
-// keyCompromise once its successor serves (§13.8).
+// keyCompromise once its successor serves (§13.8). A person's rotation is new work for every order on the key, as a
+// local ref's move is for an owned ref's held queue (DESIGN-DETAILS 8.2.8), so it lets every hold go: the pass it asks
+// for tries the successor's order whatever certs token was refused before, and holds it again if refused again.
 func (self *TlsCertManager) RotateTlsKey(ctx context.Context, reason TlsKeyRotationReason) error {
 	if err := self.acquirePass(ctx); err != nil {
 		return err
@@ -1718,6 +1816,7 @@ func (self *TlsCertManager) RotateTlsKey(ctx context.Context, reason TlsKeyRotat
 	if _, _, err := self.refreshKeysWithPass(); err != nil {
 		return err
 	}
+	self.releaseHolds()
 	self.requestPass()
 	return nil
 }

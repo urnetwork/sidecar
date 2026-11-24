@@ -1,6 +1,6 @@
 // The Forwarder's transient compile on the root's fakes (BRIDGE-M8-05; DESIGN-DETAILS 4.2.4, 4.2.5): the admission
-// rule's two refusals and their alarms, a kill at each step, the head a base names, and a store trimmed to its newest
-// base's retention point.
+// rule's two refusals and their alarms, a kill at each step, the head a base names, and a store trimmed to what a
+// compile restoring at the base before the newest needs.
 
 package sidecar
 
@@ -169,10 +169,11 @@ func TestACompileTakesOnlyTheHeadOfItsOwnNetwork(t *testing.T) {
 	}
 }
 
-// A compile restores at the newest base with its tail, reads that base's head, and trims the store to the base's
-// retention point, its rows and the newest heads; a restart compiles from what is left, and the links a folded
-// address gives stand at every one.
-func TestACompileRestoresAtTheNewestBaseAndTrimsTheStore(t *testing.T) {
+// A compile restores at the base before the newest with its tail, applies the newest, reads the newest's head, and
+// trims the store to the newest base's retention point or the previous base's tail, the two bases' rows and the newest
+// heads, so the next compile restores at the previous base again; a restart compiles from what is left, and the links
+// a folded address gives stand at every one.
+func TestACompileRestoresAtThePreviousBaseAndTrimsTheStore(t *testing.T) {
 	world := newTestForwarderWorld(t)
 	world.rotate(world.recipient())
 	world.bind(world.peer)
@@ -185,20 +186,27 @@ func TestACompileRestoresAtTheNewestBaseAndTrimsTheStore(t *testing.T) {
 			t.Fatalf("%s: links %v in force %t, status %+v", what, targets, inForce, status)
 		}
 	}
+	baseRows := func() string {
+		return forwarderRowsName(net.log.State().Base().GetRowsSha256())
+	}
 	linked(forwarder, "at base 1")
+	first := baseRows()
 
 	world.ledger.foldLedger(net.n, nil)
 	world.hint(forwarder)
 	linked(forwarder, "at base 2")
-	if len(world.stored(forwarderRowsPrefix)) != 1 || len(world.stored(forwarderHeadPrefix)) != 2 || len(world.stored(forwarderLogPrefix)) != int(net.n) {
+	second := baseRows()
+	if rows := world.stored(forwarderRowsPrefix); len(rows) != 2 || !slices.Contains(rows, first) || !slices.Contains(rows, second) ||
+		len(world.stored(forwarderHeadPrefix)) != 2 || len(world.stored(forwarderLogPrefix)) != int(net.n) {
 		t.Fatalf("after base 2 the store holds %v", world.stored(""))
 	}
-	second := net.n
+	secondAt := net.n
 	net.consentedMember("after base 2")
 	world.ledger.foldLedger(net.n, nil)
 	world.hint(forwarder)
 	linked(forwarder, "at base 3")
-	if len(world.stored(forwarderRowsPrefix)) != 1 || len(world.stored(forwarderHeadPrefix)) != 2 || len(world.stored(forwarderLogPrefix)) != int(net.n-second+1) {
+	if rows := world.stored(forwarderRowsPrefix); len(rows) != 2 || !slices.Contains(rows, second) || !slices.Contains(rows, baseRows()) ||
+		len(world.stored(forwarderHeadPrefix)) != 2 || len(world.stored(forwarderLogPrefix)) != int(net.n-secondAt+1) {
 		t.Fatalf("after base 3 the store holds %v", world.stored(""))
 	}
 

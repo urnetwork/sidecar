@@ -751,13 +751,19 @@ func NewBridgeNet(t AdmissionT, net *Net, settings *BridgeNetSettings) *BridgeNe
 	self.rows = &bridgeNetRows{bridgeNet: self, rows: map[[sha256.Size]byte][]byte{}}
 	var groupId sidecar.Id
 	rand.Read(groupId[:])
+	// generation 1 as the owner's device claims it at the tip, its key holders' digest the one every reader
+	// recomputes there (§10.9's rotation checks, which a host's Forwarder runs at the claim's pin)
+	now := net.Clock().Now()
+	holders, err := sidecar.KeyHolders(admission.State(), admission.ConfigRepoId(), now)
 	var rotate *sidecarprotocol.GenRotate
-	self.configKey, rotate, err = sidecar.NewGkmFirstGeneration(admission.ConfigRepoId(), groupId, &sidecar.GkmGenerationArgs{
-		Cause:         sidecar.GkmCauseRequest,
-		Auth:          admission.Tip(),
-		Time:          net.Clock().Now(),
-		HoldersSha256: make([]byte, sha256.Size),
-	})
+	if err == nil {
+		self.configKey, rotate, err = sidecar.NewGkmFirstGeneration(admission.ConfigRepoId(), groupId, &sidecar.GkmGenerationArgs{
+			Cause:         sidecar.GkmCauseRequest,
+			Auth:          admission.Tip(),
+			Time:          now,
+			HoldersSha256: holders.Sha256(),
+		})
+	}
 	if err == nil {
 		self.gkm, err = newBridgeNetGkm(groupId, self.configKey, rotate, admission.Owner())
 	}
@@ -1039,10 +1045,10 @@ type BridgeNetForwarding struct {
 }
 
 // Files device's forwarding Delegation, signed by its own identity key as §18.6's setup signs it, for a forwarding key
-// and an X-Wing reader key from label and no host client, which must land, and then the DelegationWrap of the
-// config's generation to its reader key, setup's step 4 (DESIGN-DETAILS 4.2.6); a newer one of the same device
-// supersedes the one live before it. A host compiles it into the device's BridgeIdentity at its next adoption
-// (Follow).
+// and an X-Wing reader key from label and no host client, which must land, and then the late DelegationWrap of the
+// config's generation to its reader key at the tip it landed at, setup's step 4 (DESIGN-DETAILS 4.2.6), which a host's
+// Forwarder holds to §10.9's delivery checks there; a newer one of the same device supersedes the one live before it.
+// A host compiles it into the device's BridgeIdentity at its next adoption (Follow).
 func (self *BridgeNet) FileForwarding(device *BridgeNetDevice, label string) *BridgeNetForwarding {
 	self.t.Helper()
 	statement, key := self.admission.DelegationStatement("bridge forwarding "+label, nil, 0, 0)
@@ -1061,7 +1067,7 @@ func (self *BridgeNet) FileForwarding(device *BridgeNetDevice, label string) *Br
 		ReaderKey:    readerKey,
 		At:           self.admission.Tip().GetVersion(),
 	}
-	if err := self.gkm.wrap(forwarding.DelegationId, readerKey); err != nil {
+	if err := self.gkm.wrap(forwarding.DelegationId, readerKey, self.admission.Tip(), self.net.Clock().Now()); err != nil {
 		self.t.Fatalf("the DelegationWrap of %s's forwarding Delegation: %v", device.Name, err)
 	}
 	return forwarding
