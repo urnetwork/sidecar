@@ -19,6 +19,8 @@
 //	                              any newer kept
 //	head/<v, 20 digits>-<sha hex> a verified config head's files, the newest HeadCacheCount kept
 //	gen/<g, 20 digits>            RK_g with its Signed GenRotate (bridge_forward_keys.go)
+//	poisoned/<g, 20 digits>       the Signed GenRotate of a generation §10.9's checks refused, with the refusal, so the
+//	                              same statement is refused again with no judging (bridge_forward_keys.go)
 //	groups                        the config repo's groups a re-form led the Forwarder through, 16 bytes each, the
 //	                              last the one it lists generations in; absent before one (bridge_forward_keys.go)
 //	compiled                      the newest compile the sink took (bridge_forward_compile.go)
@@ -54,6 +56,7 @@ const (
 	forwarderRowsPrefix       = "rows/"
 	forwarderHeadPrefix       = "head/"
 	forwarderGenerationPrefix = "gen/"
+	forwarderPoisonedPrefix   = "poisoned/"
 	forwarderCompiledName     = "compiled"
 	// the digits a position, a version or a generation is written in, so names sort in number order
 	forwarderNumberDigits = 20
