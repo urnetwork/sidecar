@@ -91,6 +91,8 @@ type AuthFeatureRequiredError struct {
 	Err error
 }
 
+// The feature and why, then who can turn it on, this person or the network's Owners and Admins by member id, and how
+// many sidecars would pause.
 func (self *AuthFeatureRequiredError) Error() string {
 	parts := []string{fmt.Sprintf("authorization feature %s: %v", self.Feature, self.Err)}
 	switch {
@@ -109,6 +111,7 @@ func (self *AuthFeatureRequiredError) Error() string {
 	return strings.Join(parts, "; ")
 }
 
+// ErrAuthFeatureOff for an act that needs the feature, else the turning-on's refusal.
 func (self *AuthFeatureRequiredError) Unwrap() error {
 	return self.Err
 }
