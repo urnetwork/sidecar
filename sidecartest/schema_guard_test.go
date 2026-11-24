@@ -249,7 +249,10 @@ func TestSchemaGuardRefusesRecordProtosOldHeader(t *testing.T) {
 	}
 	findings := guard.protoFindings()
 	slices.Sort(findings)
-	wantGuardFindings(t, findings, "message ApprovalCancel", "message ApprovalDecision", "message CanonicalAction")
+	// and the two version-5 messages the broker's gates parse inside a CanonicalAction, kind 19's enclave and kind
+	// 21's budget (DESIGN-COMPUTE §16.3)
+	wantGuardFindings(t, findings, "message ApprovalCancel", "message ApprovalDecision", "message BudgetFields",
+		"message CanonicalAction", "message EnclaveFields")
 }
 
 // The test tree's list: rows for each kind of backing, and one withdrawn.
