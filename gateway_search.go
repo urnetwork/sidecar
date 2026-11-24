@@ -334,6 +334,7 @@ type gatewayHostedSearchUsage struct {
 	ServerToolUse            *gatewayHostedSearchServerUsage `json:"server_tool_use"`
 }
 
+// The usage's count of the server's own tool calls: zero, since no search ran.
 type gatewayHostedSearchServerUsage struct {
 	WebSearchRequests int `json:"web_search_requests"`
 }
@@ -353,6 +354,7 @@ type gatewayHostedSearchToolResult struct {
 	Content   *gatewayHostedSearchToolResultError `json:"content"`
 }
 
+// The result block's content: the API's error object, its code unavailable.
 type gatewayHostedSearchToolResultError struct {
 	Type      string `json:"type"`
 	ErrorCode string `json:"error_code"`
@@ -370,33 +372,39 @@ type gatewayHostedSearchMessage struct {
 	Usage        *gatewayHostedSearchUsage `json:"usage"`
 }
 
+// message_start's data: the message before any block.
 type gatewayHostedSearchMessageStart struct {
 	Type    string                      `json:"type"`
 	Message *gatewayHostedSearchMessage `json:"message"`
 }
 
+// content_block_start's data: one block whole, at its index, as the API sends a server tool's blocks.
 type gatewayHostedSearchBlockStart struct {
 	Type         string `json:"type"`
 	Index        int    `json:"index"`
 	ContentBlock any    `json:"content_block"`
 }
 
+// content_block_stop's data.
 type gatewayHostedSearchBlockStop struct {
 	Type  string `json:"type"`
 	Index int    `json:"index"`
 }
 
+// message_delta's data: the stop reason and the whole usage.
 type gatewayHostedSearchMessageDelta struct {
 	Type  string                         `json:"type"`
 	Delta *gatewayHostedSearchStopReason `json:"delta"`
 	Usage *gatewayHostedSearchUsage      `json:"usage"`
 }
 
+// message_delta's delta.
 type gatewayHostedSearchStopReason struct {
 	StopReason   *string `json:"stop_reason"`
 	StopSequence *string `json:"stop_sequence"`
 }
 
+// message_stop's data.
 type gatewayHostedSearchMessageStop struct {
 	Type string `json:"type"`
 }
