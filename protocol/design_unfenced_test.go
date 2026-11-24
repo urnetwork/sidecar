@@ -626,6 +626,17 @@ message MailProverRecord {
 // §15.7's s/model row and plan-MAIL-format-bytes#5's two fields, counts MAIL-M7-12's.
 message MailSpamModel { uint32 version = 1; repeated uint32 counts = 2; }
 
+// sidecar/protocol/dns.proto
+// §12.9.1's watch, which the design writes as a field list with its numbers, not a fence (owner decision 778).
+message DnsSdWatch { uint64 since = 1; uint32 hold_ms = 2; }
+message DnsSdWatchResult {
+  uint64 version = 1; bool serving = 2; repeated DnsSdInstance instances = 3; bool truncated = 4;
+}
+message DnsSdInstance {
+  string name = 1; string service = 2; repeated string subtypes = 3; uint32 port = 4; bytes txt = 5;
+  string host_label = 6; fixed32 ipv4 = 7; bool own = 8; uint32 ttl = 9;
+}
+
 // sidecar/protocol/record.proto
 // record-m2-01-canonical-action-detail's answer (QD-740): what CanonicalAction.sealed_detail opens to, a dial or
 // route grant's prefixes and ports and a version-3 access request's, with the numbers the answer gives.
@@ -683,6 +694,9 @@ type testFenceValueAddition struct {
 // that holds its answer. Each joins the fence it extends, as testFenceAdditions' fields do, and one the design comes
 // to write fails until its line here leaves.
 var testFenceValueAdditions = []testFenceValueAddition{
+	// §6.11's prose gives the watch's numbers, and types.proto takes them with their code track (owner decision 778).
+	{enum: "MessageType", name: "DNS_SD_WATCH", number: 0x1B02, question: "owner decision 778"},
+	{enum: "MessageType", name: "DNS_SD_WATCH_RESULT", number: 0x1B03, question: "owner decision 778"},
 }
 
 // One value an owner's answer takes out of an enum the design fences, its number reserved.

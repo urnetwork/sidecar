@@ -40,4 +40,5 @@ enum MessageType {
                                               // (Appendix D's §6.11 row); reserved for LSTN by CARCH-M11-05
   CORE_HINT = 0x1A01;                         // §5; push core
   DNS_ZONE_CHANGED = 0x1B01;                  // §12; push dns
+  DNS_SD_WATCH = 0x1B02; DNS_SD_WATCH_RESULT = 0x1B03; // §12.9.1, §17.7.1; peer RPC on a data-class contract only
 }

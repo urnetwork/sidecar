@@ -79,8 +79,10 @@ const (
 	MessageType_LISTENERS        MessageType = 6401
 	MessageType_LISTENERS_RESULT MessageType = 6402 // DESIGN-COMPUTE §26.8; peer RPC on the control class too
 	// (Appendix D's §6.11 row); reserved for LSTN by CARCH-M11-05
-	MessageType_CORE_HINT        MessageType = 6657 // §5; push core
-	MessageType_DNS_ZONE_CHANGED MessageType = 6913 // §12; push dns
+	MessageType_CORE_HINT           MessageType = 6657 // §5; push core
+	MessageType_DNS_ZONE_CHANGED    MessageType = 6913 // §12; push dns
+	MessageType_DNS_SD_WATCH        MessageType = 6914
+	MessageType_DNS_SD_WATCH_RESULT MessageType = 6915 // §12.9.1, §17.7.1; peer RPC on a data-class contract only
 )
 
 // Enum value maps for MessageType.
@@ -132,6 +134,8 @@ var (
 		6402: "LISTENERS_RESULT",
 		6657: "CORE_HINT",
 		6913: "DNS_ZONE_CHANGED",
+		6914: "DNS_SD_WATCH",
+		6915: "DNS_SD_WATCH_RESULT",
 	}
 	MessageType_value = map[string]int32{
 		"MESSAGE_TYPE_NONE":        0,
@@ -180,6 +184,8 @@ var (
 		"LISTENERS_RESULT":         6402,
 		"CORE_HINT":                6657,
 		"DNS_ZONE_CHANGED":         6913,
+		"DNS_SD_WATCH":             6914,
+		"DNS_SD_WATCH_RESULT":      6915,
 	}
 )
 
@@ -214,7 +220,7 @@ var File_protocol_types_proto protoreflect.FileDescriptor
 
 const file_protocol_types_proto_rawDesc = "" +
 	"\n" +
-	"\x14protocol/types.proto\x12\x11urnetwork.sidecar*\xac\a\n" +
+	"\x14protocol/types.proto\x12\x11urnetwork.sidecar*\xd9\a\n" +
 	"\vMessageType\x12\x15\n" +
 	"\x11MESSAGE_TYPE_NONE\x10\x00\x12\t\n" +
 	"\x05HELLO\x10\x01\x12\x10\n" +
@@ -266,7 +272,9 @@ const file_protocol_types_proto_rawDesc = "" +
 	"\tLISTENERS\x10\x812\x12\x15\n" +
 	"\x10LISTENERS_RESULT\x10\x822\x12\x0e\n" +
 	"\tCORE_HINT\x10\x814\x12\x15\n" +
-	"\x10DNS_ZONE_CHANGED\x10\x816\"\x06\b\x82(\x10\x83(*\x0eEVS_HEAD_CHECK*\x15EVS_HEAD_CHECK_RESULTB'Z%github.com/urnetwork/sidecar/protocolb\x06proto3"
+	"\x10DNS_ZONE_CHANGED\x10\x816\x12\x11\n" +
+	"\fDNS_SD_WATCH\x10\x826\x12\x18\n" +
+	"\x13DNS_SD_WATCH_RESULT\x10\x836\"\x06\b\x82(\x10\x83(*\x0eEVS_HEAD_CHECK*\x15EVS_HEAD_CHECK_RESULTB'Z%github.com/urnetwork/sidecar/protocolb\x06proto3"
 
 var (
 	file_protocol_types_proto_rawDescOnce sync.Once

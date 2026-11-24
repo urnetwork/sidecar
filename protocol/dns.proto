@@ -1,0 +1,38 @@
+// Service discovery's watch (§12.9.1, §17.7.1; owner decision 778): a viewer's ask of a host for the DNS-SD
+// instances that host would let it reach, and the answer. Peer to peer over a Required session on the pair's
+// Network contract of class data, never control (§6.11, D-PROTO-18), so no server reads a field here, and only
+// sizes and timing show (§2.8's connect-1 and connect-2). Freezes with M6's formats (§23.8).
+
+syntax = "proto3";
+package urnetwork.sidecar;
+
+option go_package = "github.com/urnetwork/sidecar/protocol";
+
+// sidecar/protocol/dns.proto (12.9.1): DNS_SD_WATCH 0x1B02's body. The host answers at once when its view for this
+// viewer differs from since, else when it changes or at hold_ms. No oneof (§6.11's rule).
+message DnsSdWatch {
+  uint64 since = 1;                   // the host's view version the viewer holds; 0 for none
+  uint32 hold_ms = 2;                 // at most WatchHoldTimeout (§17.7.1)
+}
+
+// DNS_SD_WATCH_RESULT 0x1B03's body: the instances the host's hook would pass with the viewer as the source.
+message DnsSdWatchResult {
+  uint64 version = 1;
+  bool serving = 2;                   // false where the host publishes nothing
+  repeated DnsSdInstance instances = 3;
+  bool truncated = 4;                 // past InstanceCount or AnswerByteCount
+}
+
+// One instance, as the viewer's resolver and advertising proxy take it. Every field is the host's word, never
+// trusted, and no MCP tool reads one (§17.7.1).
+message DnsSdInstance {
+  string name = 1;                    // one label, at most 63 octets
+  string service = 2;                 // _<service>._tcp or _udp
+  repeated string subtypes = 3;
+  uint32 port = 4;
+  bytes txt = 5;                      // the TXT record's rdata, at most TxtByteCount
+  string host_label = 6;              // the target's own label, as an LDH label
+  fixed32 ipv4 = 7;                   // where this viewer reaches the instance, most significant octet first
+  bool own = 8;                       // the host's own service
+  uint32 ttl = 9;                     // seconds left
+}

@@ -41,6 +41,7 @@ var testProtoFiles = []string{
 	"protocol/config.proto",
 	"protocol/core.proto",
 	"protocol/directory.proto",
+	"protocol/dns.proto",
 	"protocol/envelope.proto",
 	"protocol/evs.proto",
 	"protocol/evsindex.proto",
@@ -248,7 +249,7 @@ func TestEnumNumbersStable(t *testing.T) {
 				"MAIL_INGRESS": 0x1701, "MAIL_HINT": 0x1702,
 				"LISTENERS": 0x1901, "LISTENERS_RESULT": 0x1902, // DESIGN-COMPUTE §26.8 (CARCH-M11-05)
 				"CORE_HINT":        0x1A01,
-				"DNS_ZONE_CHANGED": 0x1B01,
+				"DNS_ZONE_CHANGED": 0x1B01, "DNS_SD_WATCH": 0x1B02, "DNS_SD_WATCH_RESULT": 0x1B03, // §12.9.1 (owner decision 778)
 			},
 		},
 	}

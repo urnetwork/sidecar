@@ -258,6 +258,7 @@ protocol/acl.pb.go
 protocol/config.pb.go
 protocol/core.pb.go
 protocol/directory.pb.go
+protocol/dns_sd_name.go
 protocol/doc.go
 protocol/envelope.pb.go
 protocol/evs.pb.go
