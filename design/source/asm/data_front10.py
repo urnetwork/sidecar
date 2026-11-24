@@ -2646,3 +2646,50 @@ assert DECISIONS_INTRO.count(_D723) == 1, 'decisions lead moved'
 DECISIONS_INTRO = DECISIONS_INTRO.replace(
     _D723, _D723 + "Its fourth piece numbers two more recorded while it ran, the test harness's Net joining the "
     "connect clients it ends (724) and the abuse action notice naming its network (725), extending @@OD:720@@. ")
+
+# The eighth late fold's first piece (dr17-late-fold, 2026-11-24): the integration phase's answers after 725, QD-1226
+# to QD-1232, and QD-1384 and QD-1385 (726-732); QD-1227 is an owner instruction and QD-1386 amends DESIGN-COMPUTE.md.
+INDEX += [
+    (726, "Clients ride out api's gate lag",
+     "evs's and gkm's clients ask the exchange's invalid_scope again for §8.9's 5 s before ending a call, gkm's under "
+     'the missing scope alone.'),
+    (727, "The minio fork's advisories",
+     'The minio fork moves the modules its shipped build reaches 41 advisories through, takes go 1.27.4 and a '
+     'govulncheck rule.'),
+    (728, "api's deposit token at gkm",
+     "gkm admits api's own deposit token at the drop-key route alone, so the report intake seals to the network's "
+     'mail key.'),
+    (729, 'The queue holds on either refusal',
+     "An owned ref's queue holds on the token exchange's refusal for good whether evs's client or gkm's asked it."),
+    (730, "A restarted client's first stream",
+     "connect takes a restarted client's first ClientHello and holds or nacks an answer ahead of its sequence's "
+     'head.'),
+    (731, 'The zone watch beside the CT watch',
+     "D-TRUST-9's zone watch runs where the CT watch does: ur daemon and the sdk's desktop class, not phones."),
+    (732, 'The golang.org/x modules move together',
+     'x/crypto v0.59.0 and the other golang.org/x modules move in one change, normalizer 1 re-pinned at x/text '
+     'v0.44.0.'),
+]
+for _n, _note in [
+        (78, ' Followed by @@OD:728@@: gkm admits the token the report intake reads the drop key with.'),
+        (98, " Extended by @@OD:731@@: the zone watch runs in ur daemon and the sdk's desktop class."),
+        (195, ' Followed by @@OD:727@@: the fork moves its own advisories and takes a govulncheck rule.'),
+        (272, ' Followed by @@OD:732@@: the golang.org/x modules move together the same way.'),
+        (691, " Extended by @@OD:730@@: a restarted client's first stream is answered without resend backoff."),
+        (708, ' Extended by @@OD:726@@: the single-scope ask covers a scope a batch left out, within a 5 s window.'),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 733))
+DATES.update({_n: '2026-11-23' for _n in range(726, 730)})
+DATES.update({_n: '2026-11-24' for _n in range(730, 733)})
+_D725 = "and the abuse action notice naming its network (725), extending @@OD:720@@. "
+assert DECISIONS_INTRO.count(_D725) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D725, _D725 + "An eighth late fold on 2026-11-24 numbers the answers recorded after it: evs's and gkm's clients "
+    "riding out api's gate lag on a new grant (726), extending @@OD:708@@; the minio fork's advisories (727), "
+    "following @@OD:195@@; api's deposit token at gkm's drop-key route (728); the owned ref's queue holding on either "
+    "client's exchange refusal (729); a restarted client's first stream in connect (730), extending @@OD:691@@; the "
+    "zone watch beside the CT watch (731); and the golang.org/x modules moving together, normalizer 1 re-pinned at "
+    "x/text v0.44.0 (732), following @@OD:272@@. ")

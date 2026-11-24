@@ -1941,8 +1941,10 @@ settle    whenever evs's tip for a ref changes, the local ref follows it when it
           one goes (owner decision 240)
 owned     ur/<sidecar_id>/… refs are accepted at once (the journal, the local ref, `ok`; the queue pushing within
           250 ms, then at most once per 2 s, one push for everything queued; sidecar/design/market2.md:518);
-          offline pushes queue, and on reconnect the engine seals to the generation then current; a final refusal
-          holds the queue and is shown until the local ref moves or ur evs retry; ur/<sidecar_id>/import/… is an
+          offline pushes queue, and on reconnect the engine seals to the generation then current; a final refusal,
+          the token exchange's refusal for good among them whether evs's client or gkm's asked it, shown as
+          token exchange <code> (owner decision 729), holds the queue and is shown until the local ref moves or
+          ur evs retry; ur/<sidecar_id>/import/… is an
           import's: the daemon takes no client update of a ref there but its deletion
 locks     a publish lock per ref serializes one device's pushes to it and is held across the network; the apply
           lock covers only local state and is never held across a request; the sync engine takes only the apply
@@ -3051,13 +3053,15 @@ text      invalid UTF-8 -> U+FFFD; NFKC; full case folding, cases.Fold() followe
           signs stay); subject, from, to and title cut at 1 KiB on a code point; each field padded with one space
           each side, fields joined in field order
 tables    golang.org/x/text links Unicode 15.0.0 tables under Go < 1.27 and 17.0.0 under Go 1.27
-          (.gomodcache/golang.org/x/text@v0.43.0/unicode/norm/tables15.0.0.go:3, tables17.0.0.go:3; cases/ alike),
+          (.gomodcache/golang.org/x/text@v0.44.0/unicode/norm/tables15.0.0.go:3, tables17.0.0.go:3; cases/ alike),
           and connect and sdk declare go 1.27.4 (connect/go.mod:3, sdk/go.mod:3): normalizer 1 is Unicode 17.0.0
-          from one x/text module version, at least v0.43.0, linked by every leg with one toolchain, since one
-          norm.Version does not fix NFC: v0.40.0 and v0.41.0 compose U+05D2 U+0307 to U+105C9 and U+05DA U+0307 to
-          U+105E4 (U+FB32 and U+FB3A alike), where v0.42.0 and v0.43.0 keep them, all reporting 17.0.0, examples
-          of a defect covering 19,960 two-rune strings, supplementary letters included (U+10044 U+0307 to U+1E0A;
-          §4.7), which is why every module of connect, sdk, server and sn requires v0.43.0 (connect/go.mod:33);
+          from one x/text module version, v0.44.0, linked by every leg with one toolchain, since one norm.Version
+          does not fix NFC: v0.40.0 and v0.41.0 compose U+05D2 U+0307 to U+105C9 and U+05DA U+0307 to U+105E4
+          (U+FB32 and U+FB3A alike), where v0.42.0 to v0.44.0 keep them, all reporting 17.0.0, examples of a
+          defect covering 19,960 two-rune strings, supplementary letters included (U+10044 U+0307 to U+1E0A;
+          §4.7), which is why every module of connect, sdk, server and sn requires v0.44.0 (connect/go.mod:33);
+          normalizer 1 was pinned at v0.43.0 and re-pinned at v0.44.0, whose unicode/norm, cases and tables are
+          byte-identical, by the golang.org/x modules' coordinated move (owner decision 732);
           headers record norm.Version, cases.UnicodeVersion and the module version; another table or module
           version is another normalizer, and a rebuild; testdata/index/ pins the fold map: U+13A0 and U+AB70 both
           give U+13A0, U+13F0 and U+13F8 both give U+13F0
