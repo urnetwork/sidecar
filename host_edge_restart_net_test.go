@@ -35,7 +35,7 @@ import (
 type edgeRestartNetSettings struct {
 	// How long after the restart the restarted pool's stream has to open and carry bytes both ways. Connect's restart
 	// path took 2.4, 4.8, 10.6 or 18.6 s, as one or another of the listener's resends reached the restarted client, in
-	// 140 runs on a machine at load 37 to 80 (2026-11-24). Below connect's 60 s AckTimeout, TlsTimeout and
+	// 190 runs on a machine at load 37 to 84 (2026-11-24). Below connect's 60 s AckTimeout, TlsTimeout and
 	// SelectiveAckTimeout, so a pass never waited for one of them to expire. Also the edge's DefaultCallTimeout: an open
 	// hands connect what its own deadline leaves, which on a clock nothing moves is all of it, and connect holds the
 	// open's send that long, in real time, for the restarted client's session.
