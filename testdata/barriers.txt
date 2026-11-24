@@ -549,6 +549,7 @@ barrier mail.ingest.push.after mail_ingest.go
 barrier mail.ingest.push.before mail_ingest.go
 barrier mail.outbox.dsn.after mail_smtp_mailbox.go
 barrier mail.outbox.dsn.before mail_smtp_mailbox.go
+barrier mail.outbox.lookup.wait mail_send_queue.go
 barrier mail.outbox.queue.after mail_outbox.go
 barrier mail.outbox.queue.before mail_outbox.go
 barrier mail.outbox.remove.after mail_smtp_mailbox.go
