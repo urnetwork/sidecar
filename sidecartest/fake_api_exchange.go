@@ -11,11 +11,16 @@
 // spends its jti), the client's removal, then the scope source and the mint. The token is minted by the authenticator
 // the api was given, the Net host's, so T2's engines authenticate it as server's verify its JWT.
 //
-// Scopes come from the installed FakeApiScopeSource. Until a test installs one the api grants no scope at all, as
-// server's does until TEAM-M2-15 installs the projection's: a request for any scope is refused invalid_scope, and a
-// request for none gets a token that grants nothing but names its client. A client acts as itself here, so a token
-// never carries ur_subject_client_id, and the act claim has no place in sidecar.Principal. Other grants are not served:
-// ur-cli's run on T3 (TEAM-M1-08). Tokens are never kept.
+// Scopes come from the installed FakeApiScopeSource, whose refusals answer as server's ExchangeScopeSource's do: a
+// request none of whose scopes it grants is refused invalid_scope, a client it does not admit invalid_grant
+// (exchange_scopes.go's refused-whole rows), and a network whose state it cannot judge by yet temporarily_unavailable,
+// 503, which the client asks again past. A world running the real gate installs one over it (sidecartest/enginenet).
+// Until a test installs one the api grants no scope at all: a request for any scope is refused invalid_scope, and a
+// request for none gets a token that grants nothing but names its client. That is the fake's own stand-in for a world
+// with no gate; server's exchange with no source installed asks a projection source over no gate, which answers
+// temporarily_unavailable. A client acts as itself here, so a token never carries ur_subject_client_id, and the act
+// claim has no place in sidecar.Principal. Other grants are not served: ur-cli's run on T3 (TEAM-M1-08). Tokens are
+// never kept.
 
 package sidecartest
 
@@ -60,15 +65,24 @@ var fakeApiServiceAudiences = map[string]bool{
 	"sockets": true,
 }
 
-// A scope the exchange will not grant (RFC 6749 §5.2). A FakeApiScopeSource refuses with an error wrapping it.
+// A scope the exchange will not grant (RFC 6749 §5.2): 400 invalid_scope. A FakeApiScopeSource refuses with an error
+// wrapping it a request none of whose scopes the state grants, as server's ErrInvalidScope.
 var ErrFakeApiInvalidScope = errors.New("invalid_scope")
+
+// A grant the exchange will not honor (RFC 6749 §5.2): 400 invalid_grant, a subject token that does not verify or a
+// client that is not active, and, from a FakeApiScopeSource, a client whose sidecar the state does not admit, not yet
+// or no longer, whatever it asks (server's ErrInvalidGrant, which a revocation answers).
+var ErrFakeApiInvalidGrant = errors.New("invalid_grant")
+
+// The exchange cannot judge the request now (server/oauth's ErrExchangeUnavailable): 503 temporarily_unavailable,
+// which the client asks again past. A FakeApiScopeSource answers it while it holds no verified state of the network.
+var ErrFakeApiExchangeUnavailable = errors.New("temporarily_unavailable")
 
 // The exchange's other refusals, each its RFC code.
 var (
 	errFakeApiInvalidRequest   = errors.New("invalid_request")
 	errFakeApiInvalidTarget    = errors.New("invalid_target")
 	errFakeApiInvalidDpopProof = errors.New("invalid_dpop_proof")
-	errFakeApiInvalidGrant     = errors.New("invalid_grant")
 	errFakeApiRestoreRequired  = errors.New("restore_required")
 )
 
@@ -96,11 +110,13 @@ type FakeApiScopeGrant struct {
 	MemberId *sidecar.Id
 }
 
-// Where the exchange's scopes come from: §8's rows in the newest projection, once TEAM-M2-15 and ACL-M2-14 build the
-// real one. A refusal wraps ErrFakeApiInvalidScope; any other error is the exchange's server error.
+// Where the exchange's scopes come from: §8's rows in the newest projection, as server's ProjectionExchangeScopeSource
+// reads them (TEAM-M2-15). A refusal of the scopes wraps ErrFakeApiInvalidScope, a refusal of the client
+// ErrFakeApiInvalidGrant, and a state it cannot judge by yet ErrFakeApiExchangeUnavailable; any other error is the
+// exchange's server error.
 type FakeApiScopeSource func(ctx context.Context, request *FakeApiScopeRequest) (*FakeApiScopeGrant, error)
 
-// The source until one is installed, as server's until a projection's: it grants no scope at all.
+// The source until one is installed: it grants no scope at all (the file header).
 func fakeApiNoProjectionScopeSource(ctx context.Context, request *FakeApiScopeRequest) (*FakeApiScopeGrant, error) {
 	if 0 < len(request.Scopes) {
 		return nil, fmt.Errorf("%w: no projection grants scopes yet", ErrFakeApiInvalidScope)
@@ -304,10 +320,10 @@ func (self *FakeApi) exchangeToken(ctx context.Context, args *fakeApiExchangeArg
 		return self.bearerClients[args.subjectToken]
 	}()
 	if client == nil {
-		return nil, fmt.Errorf("%w: the subject token does not verify", errFakeApiInvalidGrant)
+		return nil, fmt.Errorf("%w: the subject token does not verify", ErrFakeApiInvalidGrant)
 	}
 	if !now.Before(client.expireTime) {
-		return nil, fmt.Errorf("%w: the subject token is expired", errFakeApiInvalidGrant)
+		return nil, fmt.Errorf("%w: the subject token is expired", ErrFakeApiInvalidGrant)
 	}
 
 	// the ClientKey's proof of this request, before any state is read: its jti is spent whatever follows
@@ -331,7 +347,7 @@ func (self *FakeApi) exchangeToken(ctx context.Context, args *fakeApiExchangeArg
 	}
 
 	if self.clientOfToken(args.subjectToken) == nil {
-		return nil, fmt.Errorf("%w: the client is not active", errFakeApiInvalidGrant)
+		return nil, fmt.Errorf("%w: the client is not active", ErrFakeApiInvalidGrant)
 	}
 	var sidecarId *sidecar.Id
 	if client.sidecarId != (sidecar.Id{}) {
@@ -411,10 +427,12 @@ func fakeApiExchangeFailure(writer http.ResponseWriter, err error) {
 		fakeApiOauthError(writer, http.StatusBadRequest, "invalid_scope", "The scope is not granted.")
 	case errors.Is(err, errFakeApiInvalidDpopProof):
 		fakeApiOauthError(writer, http.StatusBadRequest, "invalid_dpop_proof", "The DPoP proof is invalid.")
-	case errors.Is(err, errFakeApiInvalidGrant):
+	case errors.Is(err, ErrFakeApiInvalidGrant):
 		fakeApiOauthError(writer, http.StatusBadRequest, "invalid_grant", "The grant is invalid or expired.")
 	case errors.Is(err, errFakeApiRestoreRequired):
 		fakeApiOauthError(writer, http.StatusBadRequest, "restore_required", "The network is being restored. Try again later.")
+	case errors.Is(err, ErrFakeApiExchangeUnavailable):
+		fakeApiOauthError(writer, http.StatusServiceUnavailable, "temporarily_unavailable", "Please try again.")
 	default:
 		fakeApiOauthError(writer, http.StatusInternalServerError, "server_error", "Please try again.")
 	}

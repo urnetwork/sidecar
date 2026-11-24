@@ -8,8 +8,11 @@
 //	          evsservice.NewAclGateViews over it, and rev/ is sidecar.RevocationChecker on the Net's stores
 //	origins  the Net's FakeApi serves https://evs.<domain> and https://gkm.<domain> through the engines' handlers
 //	          (FakeApi.ServeService), the origins a Net's Sidecar settings name, on the transport its api uses
-//	scopes    the exchange's scope source is §8's table (sidecar.AclExchangeScopes) at the gate's state of the
-//	          token's network, as TEAM-M2-15's projection source is api's
+//	scopes    the exchange's scope source is api's (TEAM-M2-15's ProjectionExchangeScopeSource) copied over the gate:
+//	          §8's table (sidecar.AclExchangeScopes) at the gate's state of the token's network, with its refusals,
+//	          so the exchange answers temporarily_unavailable while the gate holds no state of the network,
+//	          invalid_grant to a client the state does not admit, not yet or no longer, and invalid_scope to a
+//	          request it grants none of, as api's does (exchangeScopes)
 //
 // Every request is the real gate's, a bootstrapping network's included: its first device reaches evs and gkm only once
 // base 1 has landed (bootstrap.go; QD-824), and before that the gate holds no log of it and answers nothing.
@@ -27,6 +30,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -249,12 +253,33 @@ func (self *Engines) ScopeRequests() []*sidecartest.FakeApiScopeRequest {
 	return append([]*sidecartest.FakeApiScopeRequest{}, self.scopeRequests...)
 }
 
-// The exchange's scope source (the file header): §8's table at the gate's state of the token's network. A network the
-// gate has not loaded is told to it and answers a server error, which the sidecar asks again past.
+// The exchange's scope source (the file header): server/oauth's ProjectionExchangeScopeSource.Grant step for step,
+// over the world's gate, so a client meets the answer api's exchange gives in each case a test reaches here, and
+// rides out, or ends at, what it would at api:
+//
+//	not loaded   a network the gate holds no verified state of, a bootstrapping one before its base 1 among them, is
+//	             told to the gate and answers temporarily_unavailable, 503, which refuses nothing; with
+//	             FollowBeforeExchange, so does a gate that could not catch up to api's tip
+//	unadmitted   a client bound to no sidecar, or to one the state holds no row of, an admission not at the gate yet
+//	             among them, is refused invalid_grant, whatever it asks
+//	standing     a sidecar the state holds a row of whose admission no longer stands, revoked, its member gone,
+//	             parked, suspended or past its not_after, is refused invalid_grant, whatever it asks: a revoked
+//	             device's exchange ends there, as at api, and rides out nothing
+//	scopes       each repo scope alone by §8's table at the gate's state (sidecar.AclExchangeScopes), the config's
+//	             admin only to a config writer from base 1 (QD-894), and no repo scope at an audience that takes none:
+//	             a request none of whose scopes is granted, a grant not at the gate yet among them, is refused
+//	             invalid_scope, which a client rides out for §8.9's 5 s (QD-1226, QD-1230); one some of whose scopes
+//	             are granted gets those alone; one that asks none gets a token naming its sidecar and member
+//
+// proj_v is the position of the state read, and the member the admitted sidecar's row names, none for a tagged one.
+// Server's exchange also grants an unadmitted client of member M its recovery:<M> scope at gkm, and a forwarding
+// client the config's r while its sidecar's forwarding Delegation lives (grantUnadmitted, grantForwardOnly). The
+// fake's exchange names neither the member a client's credential names nor the sidecar a forwarding client speaks
+// for, so neither is modeled here: each is refused invalid_grant, as an unadmitted client's every other ask is.
 func (self *Engines) exchangeScopes(ctx context.Context, request *sidecartest.FakeApiScopeRequest) (*sidecartest.FakeApiScopeGrant, error) {
 	if self.settings.FollowBeforeExchange {
 		if err := self.Sync(ctx, request.NetworkId); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%w: the gate did not catch up: %w", sidecartest.ErrFakeApiExchangeUnavailable, err)
 		}
 	}
 	func() {
@@ -262,34 +287,98 @@ func (self *Engines) exchangeScopes(ctx context.Context, request *sidecartest.Fa
 		defer self.stateLock.Unlock()
 		self.scopeRequests = append(self.scopeRequests, request)
 	}()
-	snapshot, status := self.cache.State(request.NetworkId)
-	if status != sidecar.AclGateLoaded || snapshot == nil || snapshot.Config == nil {
-		self.cache.Changed(request.NetworkId)
-		return nil, fmt.Errorf("network %s's projection is not loaded yet", request.NetworkId)
+	// 0 for a service audience that takes no repo scope: dns, certs, mail and sockets
+	aclAudience := enginesAudiences[request.Audience]
+	snapshot := sidecar.RequestAclGateSnapshot(self.cache, request.NetworkId)
+	if snapshot == nil || snapshot.Config == nil || snapshot.Acl == nil {
+		return nil, fmt.Errorf("%w: network %s's state is not loaded", sidecartest.ErrFakeApiExchangeUnavailable, request.NetworkId)
 	}
-	audience, ok := enginesAudiences[request.Audience]
-	if !ok || request.SidecarId == nil {
-		if 0 < len(request.Scopes) {
-			return nil, fmt.Errorf("%w: no repo scope for this subject or audience", sidecartest.ErrFakeApiInvalidScope)
+	state := snapshot.Config
+	now := self.net.Clock().Now()
+
+	// §8.6's hard denies, as server's exchangeSidecarStanding: a row, not revoked or its member gone, not parked or
+	// suspended, its not_after unpassed
+	standing := func(sidecarId sidecar.Id) bool {
+		row := state.SidecarRow(sidecarId)
+		if row == nil || !snapshot.Acl.Admitted(sidecarId) || state.Parked(sidecarId) || state.Suspended(sidecarId) {
+			return false
 		}
-		return &sidecartest.FakeApiScopeGrant{ProjVersion: snapshot.Pin.GetVersion()}, nil
+		return row.GetNotAfter() == 0 || now.UnixMilli() < row.GetNotAfter()
 	}
-	grant, err := sidecar.AclExchangeScopes(snapshot.Config, &sidecar.AclExchangeRequest{
-		SidecarId: *request.SidecarId,
-		Audience:  audience,
-		Scopes:    request.Scopes,
-		Now:       self.net.Clock().Now(),
-	})
+	if request.SidecarId == nil || state.SidecarRow(*request.SidecarId) == nil {
+		return nil, fmt.Errorf("%w: a client the state does not admit gets no token here", sidecartest.ErrFakeApiInvalidGrant)
+	}
+	sidecarId := *request.SidecarId
+	if !standing(sidecarId) {
+		return nil, fmt.Errorf("%w: the client's sidecar is not admitted", sidecartest.ErrFakeApiInvalidGrant)
+	}
+
+	configRepoId, err := sidecar.IdFromBytes(state.Genesis().GetConfigRepoId())
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", sidecartest.ErrFakeApiInvalidScope, err)
+		return nil, fmt.Errorf("the state's genesis names no config repo: %w", err)
 	}
-	answer := &sidecartest.FakeApiScopeGrant{Scopes: grant.Scopes, ProjVersion: grant.ProjVersion}
-	if row := snapshot.Config.SidecarRow(*request.SidecarId); row != nil {
-		if memberId, err := sidecar.IdFromBytes(row.GetMemberId()); err == nil {
-			answer.MemberId = &memberId
+	// the config's admin goes to each config writer from base 1, as at api, which the table judges too
+	configAdmin := aclAudience != 0 && state.Base() != nil && state.IsConfigWriter(sidecarId)
+	// repo:<id>:<role> whatever its role, as server's exchange parses a scope before the table; false for another
+	parseRepoScope := func(scope string) (sidecar.Id, string, bool) {
+		rest, ok := strings.CutPrefix(scope, enginesRepoScopePrefix)
+		if !ok {
+			return sidecar.Id{}, "", false
+		}
+		idText, role, ok := strings.Cut(rest, ":")
+		if !ok {
+			return sidecar.Id{}, "", false
+		}
+		repoId, err := sidecar.ParseId(idText)
+		if err != nil || repoId == (sidecar.Id{}) {
+			return sidecar.Id{}, "", false
+		}
+		return repoId, role, true
+	}
+	tableScopes := []string{}
+	for _, scope := range request.Scopes {
+		repoId, role, ok := parseRepoScope(scope)
+		if ok && repoId == configRepoId && role == enginesAdminRole && !configAdmin {
+			continue
+		}
+		if ok {
+			tableScopes = append(tableScopes, scope)
 		}
 	}
-	return answer, nil
+	tableGranted := map[string]bool{}
+	if 0 < len(tableScopes) && aclAudience != 0 {
+		tableGrant, err := sidecar.AclExchangeScopes(state, &sidecar.AclExchangeRequest{
+			SidecarId: sidecarId,
+			Audience:  aclAudience,
+			Scopes:    tableScopes,
+			Now:       now,
+		})
+		if err != nil {
+			if errors.Is(err, sidecar.ErrAclExchangeScope) {
+				return nil, fmt.Errorf("%w: %w", sidecartest.ErrFakeApiInvalidScope, err)
+			}
+			return nil, err
+		}
+		for _, scope := range tableGrant.Scopes {
+			tableGranted[scope] = true
+		}
+	}
+
+	grant := &sidecartest.FakeApiScopeGrant{Scopes: []string{}, ProjVersion: snapshot.Pin.GetVersion()}
+	// the member the admitted sidecar's row names, none for a tagged one, as server's exchangeSidecarMember
+	if admitted := state.Sidecar(sidecarId); admitted != nil && admitted.MemberId != (sidecar.Id{}) && len(admitted.TagIds) == 0 {
+		memberId := admitted.MemberId
+		grant.MemberId = &memberId
+	}
+	for _, scope := range request.Scopes {
+		if tableGranted[scope] {
+			grant.Scopes = append(grant.Scopes, scope)
+		}
+	}
+	if 0 < len(request.Scopes) && len(grant.Scopes) == 0 {
+		return nil, fmt.Errorf("%w: the gate's state grants none of the scopes", sidecartest.ErrFakeApiInvalidScope)
+	}
+	return grant, nil
 }
 
 // The audiences that take repo scopes, by the exchange's names.
@@ -297,6 +386,12 @@ var enginesAudiences = map[string]sidecar.AclTokenAudience{
 	evsservice.EvsAudience: sidecar.AclTokenAudienceEvs,
 	gkmservice.GkmAudience: sidecar.AclTokenAudienceGkm,
 }
+
+// §7.8's repo capability scope, repo:<id>:<role>, and the role the config's admin is.
+const (
+	enginesRepoScopePrefix = "repo:"
+	enginesAdminRole       = "admin"
+)
 
 // evs's block as server/cli/evs builds it (evshost.NewHost), on the world's state: the engine with the segment route's
 // receipt keys, storage gate, HDD share, usage producer and cohort limit, every batch flushed at once and every repo/
