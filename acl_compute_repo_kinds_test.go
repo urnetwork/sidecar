@@ -1,3 +1,5 @@
+//go:build !sidecar_http && !ios_extension
+
 package sidecar
 
 // CACL-M11-05: acl.proto declares the repo kinds agents, agent and listeners and the inbox marker team, which
@@ -18,7 +20,7 @@ var testFeatureRepoKinds = []protocol.RepoKind{
 	protocol.RepoKind_REPO_KIND_AGENTS, protocol.RepoKind_REPO_KIND_AGENT, protocol.RepoKind_REPO_KIND_LISTENERS,
 }
 
-// §11.12's nine are known and the feature kinds are not, to the ACL state and to evs alike.
+// §11.12's nine are known and the feature kinds are not, to the ACL state, to evs and to a group's ur_group alike.
 func TestFeatureRepoKindsUnknownToReaders(t *testing.T) {
 	for kind := protocol.RepoKind_REPO_KIND_GENERAL; kind <= protocol.RepoKind_REPO_KIND_SECRET; kind++ {
 		if !aclRepoKindKnown(kind) || !EvsRepoKindKnown(kind) {
@@ -26,7 +28,7 @@ func TestFeatureRepoKindsUnknownToReaders(t *testing.T) {
 		}
 	}
 	for _, kind := range append([]protocol.RepoKind{protocol.RepoKind_REPO_KIND_UNSPECIFIED, 99}, testFeatureRepoKinds...) {
-		if aclRepoKindKnown(kind) || EvsRepoKindKnown(kind) {
+		if aclRepoKindKnown(kind) || EvsRepoKindKnown(kind) || mlsCheckUrGroup(&MlsUrGroup{Kind: kind}) == nil {
 			t.Errorf("%s is known", kind)
 		}
 	}
