@@ -85,8 +85,6 @@ type inferEngineLoadSettings struct {
 	// How many engines of the model the helper holds, each running one call at a time with one live conversation
 	// (#2807): 1 on a phone, up to 2 on a desktop with the memory for both.
 	InstanceCount int `json:"instance_count"`
-	// The engine's CPU threads; 0 for its own default.
-	ThreadCount int `json:"thread_count,omitempty"`
 }
 
 // load's params.

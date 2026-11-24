@@ -51,7 +51,6 @@ type inferEngineLiteRtApi struct {
 	getApiVersion                 func(major *int32, minor *int32, patch *int32) int32
 	engineSettingsCreate          func(modelPath string, backend string, visionBackend string, audioBackend string, out *uintptr) int32
 	engineSettingsSetMaxNumTokens func(settings uintptr, maxNumTokens int32) int32
-	engineSettingsSetNumThreads   func(settings uintptr, threadCount int32) int32
 	engineSettingsDelete          func(settings uintptr)
 	engineCreate                  func(settings uintptr, out *uintptr) int32
 	engineDelete                  func(engine uintptr)
@@ -87,7 +86,6 @@ func (self *inferEngineLiteRtApi) symbols() []struct {
 		{name: "litert_lm_get_api_version", function: &self.getApiVersion},
 		{name: "litert_lm_engine_settings_create", function: &self.engineSettingsCreate},
 		{name: "litert_lm_engine_settings_set_max_num_tokens", function: &self.engineSettingsSetMaxNumTokens},
-		{name: "litert_lm_engine_settings_set_num_threads", function: &self.engineSettingsSetNumThreads},
 		{name: "litert_lm_engine_settings_delete", function: &self.engineSettingsDelete},
 		{name: "litert_lm_engine_create", function: &self.engineCreate},
 		{name: "litert_lm_engine_delete", function: &self.engineDelete},
@@ -206,11 +204,6 @@ func (self *inferEngineLiteRt) loadOne(api *inferEngineLiteRtApi, params *inferE
 	defer api.engineSettingsDelete(settings)
 	if status := api.engineSettingsSetMaxNumTokens(settings, int32(params.Settings.MaxTokenCount)); status != inferEngineLiteRtStatusOk {
 		return nil, api.failed("litert_lm_engine_settings_set_max_num_tokens", status)
-	}
-	if 0 < params.Settings.ThreadCount {
-		if status := api.engineSettingsSetNumThreads(settings, int32(params.Settings.ThreadCount)); status != inferEngineLiteRtStatusOk {
-			return nil, api.failed("litert_lm_engine_settings_set_num_threads", status)
-		}
 	}
 	engine := uintptr(0)
 	if status := api.engineCreate(settings, &engine); status != inferEngineLiteRtStatusOk {

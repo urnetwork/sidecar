@@ -73,8 +73,6 @@ type InferSettings struct {
 	// with the memory for both", a second only where the device's memory holds the model's minimum twice over. Below 2
 	// holds one.
 	EngineInstanceMaxCount int
-	// The engine's CPU threads: 0, which leaves the count to the engine. Negative is refused.
-	EngineThreadCount int `settings:"zero"`
 	// How long a helper may take to load its model: 5 minutes, a 16 GB model read from a slow disk. Past it the helper is
 	// ended and the call answers engine_failed. Non-positive ends every load at once.
 	EngineLoadTimeout time.Duration
@@ -115,7 +113,6 @@ func DefaultInferSettings() *InferSettings {
 		EngineAnswerMaxByteCount:    1024 * 1024,
 		EngineProcessMaxCount:       2,
 		EngineInstanceMaxCount:      2,
-		EngineThreadCount:           0,
 		EngineLoadTimeout:           5 * time.Minute,
 		EngineCancelTimeout:         10 * time.Second,
 		EngineStopTimeout:           5 * time.Second,

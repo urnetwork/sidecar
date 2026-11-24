@@ -205,7 +205,6 @@ func (self *InferEngineProcess) plan(ctx context.Context, call *InferCall) (*inf
 	params := &inferEngineLoadParams{Settings: &inferEngineLoadSettings{
 		Backend:       backend,
 		MaxTokenCount: call.Entry.ContextWindow,
-		ThreadCount:   self.settings.EngineThreadCount,
 	}}
 	for _, library := range engine.Libraries {
 		file, err := pinned(self.engineDirectory, library)
