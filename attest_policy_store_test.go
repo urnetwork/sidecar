@@ -7,7 +7,6 @@
 package sidecar
 
 import (
-	"context"
 	"errors"
 	"io"
 	"sync"
@@ -325,16 +324,11 @@ func TestSidecarComputePolicyStoreRefusesWithNoRoot(t *testing.T) {
 		t.Skip("this build pins a release key")
 	}
 	instance, enrollment := newTestEnrolledInstance(t)
-	platform := newTestSidecarPlatform()
-	sidecar, err := NewSidecar(context.Background(), &testSidecarHost{store: instance.Store(&enrollment.networkId)}, nil, testSidecarSettings(platform))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), sidecarTestTimeout)
-		defer cancel()
-		sidecar.CloseAndWait(ctx)
-	})
+	settings := testSidecarSettings(newTestSidecarPlatform())
+	settings.Attest = DefaultAttestSettings()
+	// no serving path, so nothing here reaches past the test
+	settings.Attest.FetchBaseUrls = []string{}
+	sidecar := newTestRunningSidecar(t, instance, &enrollment.networkId, settings)
 	store, err := sidecar.ComputePolicyStore()
 	if err != nil {
 		t.Fatal(err)

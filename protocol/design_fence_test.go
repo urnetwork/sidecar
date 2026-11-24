@@ -78,6 +78,8 @@ var testComputeFencePlacements = map[string]testComputeFencePlacement{
 	"ApprovalChannel":  {path: "protocol/record.proto", extends: true},
 	"AutoVerdictBody":  {path: "protocol/record.proto"},
 	"AutoInput":        {path: "protocol/record.proto"},
+	// §28.12's kind 30 support_message, whose body RECORD.md section 6.4 takes beside the other kinds' (support-skill)
+	"SupportMessageBody": {path: "protocol/record.proto"},
 }
 
 // A fence's block comments, which DESIGN-COMPUTE.md's use (ApprovalChannel's /* DESIGN's 0-3 */) and DESIGN.md's do not.
