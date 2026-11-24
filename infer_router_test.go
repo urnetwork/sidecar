@@ -129,7 +129,11 @@ type testInferRouterWorld struct {
 	engine   *testInferEngine
 	tee      *testInferPath
 	direct   *testInferPath
-	router   *inferRouter
+	// the remote catalog's entries
+	remote []*InferCatalogEntry
+	// the checks
+	checker inferChecker
+	router  *inferRouter
 }
 
 // The world, with changes made to its settings and paths before the router is built over them; a nil path is a kind
@@ -142,10 +146,11 @@ func newTestInferRouterWorld(t *testing.T, change func(world *testInferRouterWor
 			capabilities: testInferDevice("darwin/arm64", InferDeviceClassDesktop, 64, true, InferAcceleratorGpu),
 			script:       testInferAnswer("local"),
 		},
-		tee:    &testInferPath{script: testInferAnswer("tee")},
-		direct: &testInferPath{script: testInferAnswer("direct")},
+		tee:     &testInferPath{script: testInferAnswer("tee")},
+		direct:  &testInferPath{script: testInferAnswer("direct")},
+		remote:  testInferRemoteEntries(),
+		checker: &testInferPassChecker{},
 	}
-	var checker inferChecker = &testInferPassChecker{}
 	if change != nil {
 		change(world)
 	}
@@ -160,8 +165,8 @@ func newTestInferRouterWorld(t *testing.T, change func(world *testInferRouterWor
 		Settings:      world.settings,
 		Manifest:      testInferManifest(),
 		RemotePaths:   paths,
-		RemoteCatalog: &testInferRemoteCatalog{entries: testInferRemoteEntries()},
-		Checker:       checker,
+		RemoteCatalog: &testInferRemoteCatalog{entries: world.remote},
+		Checker:       world.checker,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -565,8 +570,8 @@ func TestRouterOneTerminalEvent(t *testing.T) {
 	}
 }
 
-// Until INFER-M11-03's checks land the router's own checks refuse every remote call, model_refused, before any path is
-// asked, and list every remote entry unavailable; a local call runs.
+// The router's own checks refuse every remote call while their sources are not wired, as on a router with no Sidecar,
+// model_refused, before any path is asked, and list every remote entry unavailable; a local call runs.
 func TestRouterRemoteRefusedUntilChecksLand(t *testing.T) {
 	world := newTestInferRouterWorld(t, nil)
 	world.router.checker = newInferSidecarChecker(nil, world.settings)
