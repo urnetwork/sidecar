@@ -207,10 +207,12 @@ func (self *HarnessRun) emitPending(approvalId Id) {
 		return
 	}
 	pending := &HarnessApprovalPending{ApprovalId: approvalId, Evidence: self.evidenceWanted(), Tainted: self.Tainted()}
-	if render, err := self.approvals.Render(approvalId); err == nil {
-		pending.Kind = render.KindName
-		pending.Text = render.Text()
-		pending.Tainted = render.Tainted
+	if self.approvals != nil {
+		if render, err := self.approvals.Render(approvalId); err == nil {
+			pending.Kind = render.KindName
+			pending.Text = render.Text()
+			pending.Tainted = render.Tainted
+		}
 	}
 	self.emit(self.agentId, NewHarnessApprovalPendingEvent(pending))
 }

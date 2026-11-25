@@ -411,6 +411,8 @@ func (self *HarnessUiBroker) Ask(ctx context.Context, runId Id, agentId Id, requ
 	case <-timeout:
 		answer = &HarnessUiResponse{Id: asked.Id, Cancelled: true}
 	case <-ctx.Done():
+		// every view closes the dialog the run stopped waiting on
+		self.emit(agentId, NewHarnessUiResponseEvent(&HarnessUiResponse{Id: asked.Id, Cancelled: true}))
 		return nil, ctx.Err()
 	}
 	// every view closes the dialog
@@ -432,6 +434,8 @@ func (self *HarnessUiBroker) askConnect(ctx context.Context, runId Id, agentId I
 	}
 	answer, err := handler(ctx, runId, request)
 	if err != nil {
+		// every view closes the dialog its handler could not answer
+		self.emit(agentId, NewHarnessUiResponseEvent(&HarnessUiResponse{Id: request.Id, Cancelled: true}))
 		return nil, err
 	}
 	if answer == nil {

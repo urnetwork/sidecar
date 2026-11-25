@@ -571,10 +571,11 @@ func TestSocketListenStandingEffectAndLookup(t *testing.T) {
 
 // A listen's kept action stands while its expiry is ahead and a fresh build differs from it in that expiry alone; a
 // fresh one replaces it once it expires, once the fresh one names another rule, and once the rule gives a shorter
-// grant than the kept one asks; another weight is another key.
+// grant than the kept one asks; another weight is another key. The component keeps them in a GrantActionKeeper, whose
+// ended check kept_action_followups_test.go holds at the real gate.
 func TestSocketListenKeepsTheActionItsRequestWasFiledWith(t *testing.T) {
 	fixture := newTestListenFixture(t)
-	component := fixture.component
+	keeper := fixture.component.listenActions
 	nowMs := testSocketNow.UnixMilli()
 	action := func(ruleLabel string, expiresMs int64) *StoredCanonicalAction {
 		return buildTestAction(t, &protocol.CanonicalAction{
@@ -585,32 +586,32 @@ func TestSocketListenKeepsTheActionItsRequestWasFiledWith(t *testing.T) {
 	}
 	key := socketListenActionKey{name: "tls/443/blog", weight: 100}
 	first := action("rule", nowMs+60_000)
-	if kept := component.keptListenAction(key, first, testSocketNow); kept != first {
+	if kept := keeper.Keep(key, first, testSocketNow, nil); kept != first {
 		t.Fatal("the first action was not kept")
 	}
 	later := action("rule", nowMs+120_000)
-	if kept := component.keptListenAction(key, later, testSocketNow.Add(time.Minute-time.Millisecond)); kept != first {
+	if kept := keeper.Keep(key, later, testSocketNow.Add(time.Minute-time.Millisecond), nil); kept != first {
 		t.Error("a later build replaced the action its request was filed with")
 	}
-	if kept := component.keptListenAction(socketListenActionKey{name: "tls/443/blog", weight: 250}, later, testSocketNow); kept != later {
+	if kept := keeper.Keep(socketListenActionKey{name: "tls/443/blog", weight: 250}, later, testSocketNow, nil); kept != later {
 		t.Error("another weight took the first weight's action")
 	}
-	if kept := component.keptListenAction(key, action("another rule", nowMs+120_000), testSocketNow); kept == first {
+	if kept := keeper.Keep(key, action("another rule", nowMs+120_000), testSocketNow, nil); kept == first {
 		t.Error("an action naming another rule kept the first")
 	}
-	component.keptListenAction(key, first, testSocketNow)
+	keeper.Keep(key, first, testSocketNow, nil)
 	shorter := action("rule", nowMs+30_000)
-	if kept := component.keptListenAction(key, shorter, testSocketNow); kept != shorter {
+	if kept := keeper.Keep(key, shorter, testSocketNow, nil); kept != shorter {
 		t.Error("a grant shorter than the kept one asks kept the longer")
 	}
 	// the kept one, shorter, has expired a minute on, and the fresh one takes its place
-	if kept := component.keptListenAction(key, later, testSocketNow.Add(time.Minute)); kept != later {
+	if kept := keeper.Keep(key, later, testSocketNow.Add(time.Minute), nil); kept != later {
 		t.Error("an expired action was kept")
 	}
 	func() {
-		component.stateLock.Lock()
-		defer component.stateLock.Unlock()
-		for keptKey, kept := range component.listenActions {
+		keeper.stateLock.Lock()
+		defer keeper.stateLock.Unlock()
+		for keptKey, kept := range keeper.keyActions {
 			if kept.Action.GetExpiresMillis() <= nowMs+60_000 {
 				t.Errorf("an expired action under %+v outlived its expiry", keptKey)
 			}

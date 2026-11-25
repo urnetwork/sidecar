@@ -266,6 +266,11 @@ func newSidecarHarness(sidecar *Sidecar) (*sidecarHarness, error) {
 		settings = DefaultHarnessSettings()
 	}
 	sources := installHarnessSources(sidecar, harnessSourcesRegistrations)
+	var support func() (*SupportClient, error)
+	if sidecar.settings.Support != nil && sidecar.settings.Support.ServiceEnabled {
+		// the release's support switch (§28.21): off, no agent lists the support tools or their skill
+		support = sidecar.Support
+	}
 	harness, err := NewHarness(&HarnessArgs{
 		Settings:     settings,
 		Log:          sidecar.log,
@@ -281,6 +286,7 @@ func newSidecarHarness(sidecar *Sidecar) (*sidecarHarness, error) {
 		Purchases:    sources.Purchases,
 		BudgetRaiser: sources.BudgetRaiser,
 		Foreground:   sources.Foreground,
+		Support:      support,
 	})
 	if err != nil {
 		return nil, err

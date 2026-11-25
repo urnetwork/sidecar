@@ -187,6 +187,9 @@ type SocketComponent struct {
 	log           Logger
 	// removes the listen kind's Lookup the host's gate reconciles a reserved use by; nil without a host
 	removeListenLookup func()
+	// each tls/ or smtp/ listen's action as its request was filed, kept until its expiry or until the grant its
+	// decision activated has ended (socketListenAction)
+	listenActions *GrantActionKeeper[socketListenActionKey]
 
 	stateLock sync.Mutex
 	// the attached generation, nil between generations
@@ -199,8 +202,6 @@ type SocketComponent struct {
 	// the grant filer a tls/ or smtp/ listen's action is built and activated by where the component has no host, which
 	// a test sets; nil reads the host's (listenGrantFiler)
 	grants *AclGrantFiler
-	// each tls/ or smtp/ listen's action as its request was filed, kept until its expiry (keptListenAction)
-	listenActions map[socketListenActionKey]*StoredCanonicalAction
 	// the §5.4 action a tls/ or smtp/ listen goes through Authorize as: socketListenAction, which a test replaces
 	listenAction func(ctx context.Context, generation *socketGeneration, name string, settings *SocketListenSettings) (*SidecarAction, error)
 }
@@ -279,7 +280,7 @@ func NewSocketComponent(ctx context.Context, args *SocketComponentArgs) (*Socket
 		clock:         registrar.clock,
 		log:           registrar.log,
 		listeners:     map[*SocketListener]bool{},
-		listenActions: map[socketListenActionKey]*StoredCanonicalAction{},
+		listenActions: NewGrantActionKeeper[socketListenActionKey](),
 	}
 	component.listenAction = component.socketListenAction
 	return component, nil
