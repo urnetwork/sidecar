@@ -83,9 +83,12 @@ type HarnessSettings struct {
 	GrepLineCharCount int
 	// The paths find returns where the call names no limit: 1000.
 	FindResultCount int
-	// The most bytes grep reads of one file: 16 MiB, so one large file cannot hold a call. Larger files are skipped and
-	// named. Non-positive skips every file.
+	// The most bytes grep reads of one file: 16 MiB, so one large file cannot hold a call. Larger files are skipped.
+	// Non-positive skips every file.
 	GrepFileByteCount int64
+	// How much of a file's start grep reads for a NUL, as ripgrep looks for binary files, skipping one that holds it:
+	// 8 KiB. Non-positive skips no file as binary.
+	GrepBinaryProbeByteCount int
 
 	// §7.5's enclave profile (HARN-M14-05): bash's timeout, 10 minutes, and what it keeps of each of stdout and stderr,
 	// 256 KiB. Non-positive ends every command at once and keeps nothing.
@@ -151,6 +154,8 @@ func DefaultHarnessSettings() *HarnessSettings {
 		GrepLineCharCount: 500,
 		FindResultCount:   1000,
 		GrepFileByteCount: 16 * 1024 * 1024,
+
+		GrepBinaryProbeByteCount: 8 * 1024,
 
 		BashTimeout:         10 * time.Minute,
 		BashStreamByteCount: 256 * 1024,

@@ -102,6 +102,7 @@ type HarnessCall struct {
 	emit       func(event *HarnessEvent) error
 	ask        func(ctx context.Context, request *HarnessUiRequest) (*HarnessUiResponse, error)
 	attached   func() bool
+	workspace  *harnessWorkspace
 	// the O tier's gate outcome, set by the before-hook before Execute
 	outcome *SidecarOutcome
 }
@@ -118,6 +119,8 @@ type HarnessCallArgs struct {
 	Ask func(ctx context.Context, request *HarnessUiRequest) (*HarnessUiResponse, error)
 	// Whether a person's view watches the run. Nil reads no.
 	Attached func() bool
+	// The agent's workspace (§7.5), nil for a profile or a leg with none.
+	Workspace *harnessWorkspace
 }
 
 // A call over args.
@@ -130,6 +133,7 @@ func NewHarnessCall(args *HarnessCallArgs) *HarnessCall {
 		emit:       args.Emit,
 		ask:        args.Ask,
 		attached:   args.Attached,
+		workspace:  args.Workspace,
 	}
 	if args.Run != nil {
 		call.agentId = args.Run.AgentId()
@@ -198,6 +202,11 @@ func (self *HarnessCall) Ask(ctx context.Context, request *HarnessUiRequest) (*H
 // Whether a person's view watches the run.
 func (self *HarnessCall) Attached() bool {
 	return self.attached != nil && self.attached()
+}
+
+// The agent's workspace, nil for a profile or a leg with none.
+func (self *HarnessCall) Workspace() *harnessWorkspace {
+	return self.workspace
 }
 
 // What the gate's effect came to, for an O call; nil for the rest.
