@@ -9,7 +9,9 @@
 //     private names, the ledger's rules by opaque id and state, and the forwards this daemon holds. Names and rules
 //     are what members' sidecars filed, so the result is a member's data.
 //   - bridge_forward(target, port, local_port, protocol, expires) asks a dial grant to one target's port and listens
-//     for it on 127.0.0.1, never the LAN: an agent's forward is its own host's alone. It returns the grant's id.
+//     for it on 127.0.0.1, never the LAN: an agent's forward is its own host's alone. It returns the grant's id. Its
+//     expires reaches the filer as the end it names, never as a time from now, so the call made again with the same
+//     expires asks the same end and spends the decision on it.
 //   - bridge_expose(port, local_port, target, protocol, expires) files a BridgeMap of a port of this host's overlay
 //     address, a host's first map filing its own BridgeAddress first; bridge_expose(cidrs) files a BridgeRoute of
 //     this host's subnets, 0.0.0.0/0 alone an exit. It returns the rule's id.
@@ -356,8 +358,7 @@ func addBridgeTools(catalog *McpCatalog, bridges func() McpBridges) {
 		if in.Target == "" || !mcpBridgePort(in.Port) || !mcpBridgePort(in.LocalPort) {
 			return nil, errMcpBridgeArguments
 		}
-		at := now()
-		expires, err := mcpBridgeExpires(in.Expires, at)
+		expires, err := mcpBridgeExpires(in.Expires, now())
 		if err != nil {
 			return nil, err
 		}
@@ -366,13 +367,13 @@ func addBridgeTools(catalog *McpCatalog, bridges func() McpBridges) {
 			Listen: append([]string{}, mcpBridgeForwardListenAddresses...),
 		}
 		if !expires.IsZero() {
-			// whole seconds, rounded up, so the grant never ends before the time asked
-			lifetime := expires.Sub(at)
-			seconds := int64((lifetime + time.Second - 1) / time.Second)
-			if seconds <= 0 || int64(^uint32(0)) < seconds {
-				return nil, errMcpBridgeArguments
+			// the end itself, any part of a ms rounded up so the grant never ends before the time asked: the same call
+			// made again asks the same end and finds the action its request was filed with, where a lifetime from now
+			// would ask a later end each call and file anew
+			params.ExpiresMs = expires.UnixMilli()
+			if time.UnixMilli(params.ExpiresMs).Before(expires) {
+				params.ExpiresMs += 1
 			}
-			params.LifetimeSeconds = uint32(seconds)
 		}
 		held := bridges()
 		if held == nil {

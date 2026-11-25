@@ -130,9 +130,7 @@ type testRecordEnumerationAddition struct {
 // The values the compute extension adds to section 6.2's rows, which RECORD.md section 21 leaves to the fold while
 // record.proto takes them with their code (QD-1366, compute-plan-record-registry-fold). A line whose value section 6.2
 // comes to give fails until it leaves.
-var testRecordEnumerationAdditions = []testRecordEnumerationAddition{
-	{key: "CanonicalAction.kind", number: 27, name: "support_send", source: "DESIGN-COMPUTE.md §16.3, §28.8 (CO-45; support-skill)"},
-}
+var testRecordEnumerationAdditions = []testRecordEnumerationAddition{}
 
 // One kind DESIGN-COMPUTE.md adds to section 6.3 ahead of a design-records fold, with the section that writes it.
 type testRecordKindAddition struct {
@@ -145,9 +143,7 @@ type testRecordKindAddition struct {
 // The kinds the compute extension adds to section 6.3's registry, which record_kind.go takes with their code while
 // RECORD.md waits for the fold (QD-1366, compute-plan-record-registry-fold). A line whose kind section 6.3 comes to
 // give fails until it leaves.
-var testRecordKindAdditions = []testRecordKindAddition{
-	{number: 30, name: "support_message", class: "action", source: "DESIGN-COMPUTE.md §28.12 (CO-45; support-skill)"},
-}
+var testRecordKindAdditions = []testRecordKindAddition{}
 
 // The value and name pairs of one of section 6.2's rows, cut before its parenthesis.
 func testRecordEnumerationRow(t *testing.T, doc *recordMd, key string) map[int]string {
