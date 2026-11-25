@@ -269,15 +269,15 @@ var indexRecordVaultEntryKinds = []RecordKind{
 }
 
 // Whether log logKind indexes an entry of kind as a document of its own (RECORD.md 7.1's documents row): a vault its
-// coordination entries; a record repo each entry but class log, raw capture and copy, a kind this build does not know
-// among them; a team record none.
+// coordination entries; a record repo each entry but class log, raw capture, DESIGN-COMPUTE §24.5's bulk and copy, a
+// kind this build does not know among them; a team record none.
 func indexRecordIndexesEntry(logKind protocol.RepoKind, kind RecordKind) bool {
 	switch logKind {
 	case protocol.RepoKind_REPO_KIND_VAULT:
 		return slices.Contains(indexRecordVaultEntryKinds, kind)
 	case protocol.RepoKind_REPO_KIND_RECORD:
 		class := kind.Class()
-		return class != RecordClassLog && class != RecordClassCapture && kind != RecordKindCopy
+		return class != RecordClassLog && class != RecordClassCapture && class != RecordClassBulk && kind != RecordKindCopy
 	}
 	return false
 }
