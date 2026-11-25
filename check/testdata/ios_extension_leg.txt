@@ -257,6 +257,7 @@ mls_treekem.go
 mls_treemath.go
 monitor.go
 protocol/acl.pb.go
+protocol/attest.pb.go
 protocol/config.pb.go
 protocol/core.pb.go
 protocol/directory.pb.go

@@ -90,6 +90,13 @@ type ComputeEngineDeps struct {
 	// adapters, K_P's signer, the signer's mTLS client): the host's, absent in tests. nil answers every name with an
 	// error.
 	SecretFile func(name string) ([]byte, error)
+	// The newest verified compute policy the broker holds (§5.4), the provider adapters' only source of hosts,
+	// receivers, targets and model ids: ATTEST's fetcher on the block, which INFER-M12-04 wires. nil gives every
+	// adapter none, so no direct target is made.
+	Policy func() *sidecar.ComputePolicy
+	// What the provider adapters reach their providers with (§4.6): a test's pointed at a fake provider. nil: a
+	// client of the standard transport.
+	ProviderHttpClient *http.Client
 	// The service log. nil writes it through Log.
 	ServiceLog ComputeServiceLog
 	// Lifecycle, alarms and, when ServiceLog is nil, the service log. nil discards.
@@ -121,6 +128,8 @@ type ComputeEngine struct {
 	metrics         *computeMetrics
 	routes          []*ComputeRoute
 	handler         http.Handler
+	// the provider adapters this deployment enables, and their gating (provider_registry.go)
+	providers *ComputeProviderRegistry
 
 	// requests in flight, hijacked tunnels and streams among them
 	inFlightCount *sidecar.MonitorValue[int]
@@ -184,6 +193,12 @@ func NewComputeEngine(ctx context.Context, host *sidecar.ServiceHost, settings *
 		inFlightCount:   sidecar.NewMonitorValue(0),
 		draining:        make(chan struct{}),
 	}
+	providers, err := newComputeEngineProviderRegistry(self)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	self.providers = providers
 	mux := http.NewServeMux()
 	for _, route := range self.routes {
 		mux.HandleFunc(route.Method+" "+route.Pattern, self.guard(route))

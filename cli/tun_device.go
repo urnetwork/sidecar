@@ -866,7 +866,8 @@ func (self *urTun) write(source connect.TransferPath, provideMode protocol.Provi
 	if self.writeClosed {
 		return
 	}
-	// room for a reply to the translator's address, which grows by IPv6's larger header on its way back
+	// room for a reply to the translator's address, which grows by IPv6's larger header, and a fragment's, on its way
+	// back
 	byteCount := headroom + len(packet) + device.BridgeTranslateReplyGrowth
 	if cap(self.writeBuffer) < byteCount {
 		self.writeBuffer = make([]byte, byteCount)

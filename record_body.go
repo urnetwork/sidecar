@@ -7,8 +7,9 @@
 //
 // Hook payloads and agent text reach these bodies redacted already (§16.7, D-MCP-5): this layer checks what it is
 // given and redacts nothing itself, so a credential is kept out by the redactor before sealing (I-7). Bodies of the
-// kinds M6 adds (model, cost, attestation, disclosure, the log upkeep, file_event, model_call) have their caps in
-// RECORD.md sections 10 to 13 and their own tasks; until those land they pass here unchecked, and nothing writes one.
+// kinds M6 adds (model, cost, attestation, disclosure, the log upkeep, file_event) have their caps in RECORD.md
+// sections 10 to 13 and their own tasks; until those land they pass here unchecked, and nothing writes one. model_call
+// is checked here: its identifiers within their bytes, and DESIGN-COMPUTE §6.8's evidence rule (recordModelCallValidate).
 // The directory's kinds, announce, request, decision and erasure_request, take §16.11's classes and caps from
 // directory_fields.go, a stored one through directory_decode.go's bounded decoders.
 //
@@ -97,6 +98,8 @@ type RecordBodySettings struct {
 	InventoryRepoCount int
 	// A model manifest field's bytes, an identifier: 128.
 	ModelFieldByteCount int
+	// A model_call's model, provider and request id, each in bytes: 128, as record.proto writes them.
+	ModelCallFieldByteCount int
 	// A cost entry's usages, by model: 16 (section 13.1).
 	CostUsageCount int
 	// A ledger_scope's repo ids: 256.
@@ -168,6 +171,7 @@ func DefaultRecordBodySettings() *RecordBodySettings {
 		InventoryModelCount:       16,
 		InventoryRepoCount:        64,
 		ModelFieldByteCount:       128,
+		ModelCallFieldByteCount:   128,
 		CostUsageCount:            16,
 		LedgerRepoCount:           256,
 		LedgerProjectCount:        256,
@@ -387,6 +391,8 @@ func RecordBodyValidate(kind RecordKind, body proto.Message) error {
 		return errors.Join(checks...)
 	case *protocol.ModelManifest:
 		return recordModelManifestValidate(typed, false)
+	case *protocol.ModelCallBody:
+		return recordModelCallValidate(typed)
 	case *protocol.RunCostBody:
 		return recordBodyRule(len(typed.GetUsage()) <= settings.CostUsageCount, "%d model usages", len(typed.GetUsage()))
 	case *protocol.LedgerScopeBody:
@@ -522,6 +528,44 @@ func recordModelManifestValidate(body *protocol.ModelManifest, writer bool) erro
 					"%s evidence %d: the weights digest alone is measured", item.name, evidence),
 			)
 		}
+	}
+	return errors.Join(checks...)
+}
+
+// ModelCallBody.route (DESIGN-COMPUTE §6.8): where a call ran. A hook's or a harness's own model_call has none.
+const (
+	RecordModelCallRouteLocal  = "local"
+	RecordModelCallRouteTee    = "tee"
+	RecordModelCallRouteDirect = "direct"
+)
+
+// model_call (RECORD.md section 12, DESIGN-COMPUTE §6.8, D-INFER-4): model, provider and request id within their bytes;
+// a route, where there is one, of local, tee or direct; an attestation only on the TEE route; and the platform field at
+// evidence 4, attested, only on the TEE route with the attestation set and naming the profile it verified, else at
+// declared or reported. No other field of the body carries evidence, so nothing claims more than what is behind it:
+// weaker evidence is never presented as attested (D-RECORD-11). A writer holds a body to it before it seals, and a
+// reader after it opens one, so a stored body that claims an attestation it does not carry shows no body.
+func recordModelCallValidate(body *protocol.ModelCallBody) error {
+	settings := DefaultRecordBodySettings()
+	route := body.GetRoute()
+	checks := []error{
+		recordBodyRule(len(body.GetModel()) <= settings.ModelCallFieldByteCount, "model of %d bytes", len(body.GetModel())),
+		recordBodyRule(len(body.GetProvider()) <= settings.ModelCallFieldByteCount, "provider of %d bytes", len(body.GetProvider())),
+		recordBodyRule(len(body.GetRequestId()) <= settings.ModelCallFieldByteCount, "request_id of %d bytes", len(body.GetRequestId())),
+		recordBodyRule(route == "" || route == RecordModelCallRouteLocal || route == RecordModelCallRouteTee || route == RecordModelCallRouteDirect,
+			"a route of %d bytes that is not local, tee or direct", len(route)),
+		recordBodyRule(body.GetAttestation() == nil || route == RecordModelCallRouteTee, "an attestation off the tee route"),
+	}
+	if platform := body.GetPlatform(); platform != nil {
+		evidence := platform.GetEvidence()
+		attested := evidence == RecordModelEvidenceAttested
+		verified := route == RecordModelCallRouteTee && body.GetAttestation() != nil && platform.GetValue() != "" &&
+			platform.GetValue() == body.GetAttestation().GetProfileId()
+		checks = append(checks,
+			recordBodyRule(len(platform.GetValue()) <= settings.ModelFieldByteCount, "platform of %d bytes", len(platform.GetValue())),
+			recordBodyRule(RecordModelEvidenceDeclared <= evidence && (evidence <= RecordModelEvidenceReported || attested), "platform evidence %d", evidence),
+			recordBodyRule(!attested || verified, "a platform attested without a verified TEE attestation naming its profile"),
+		)
 	}
 	return errors.Join(checks...)
 }
