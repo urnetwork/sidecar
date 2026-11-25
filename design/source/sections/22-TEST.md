@@ -279,7 +279,9 @@ Parentheses hold T1 tests; the rest run in T2 and T3. Inline server paths (contr
       old reading and the other's debit flushed between: the second reservation is clamped by the balance's floor in
       Redis and the balance ends at zero, never below (DESIGN-DETAILS.md section 13); meter rows re-sent after Stripe's
       24 h dedup window replace, never add, and a correction is a new version (FS-43); declared sidecars get no Public
-      contract, only sidecar_clients
+      contract, only sidecar_clients; sidecar nominations racing for a network's last slots admit exactly its limit,
+      a failed nomination releasing its slot and a replaced resident keeping its successor's entry (owner decision
+      786)
 §21   TTL sweeps on an injected clock; an access-log row per read; holds pause only sweeps, GC and a drop's deletions,
       the last silently (owner decision 184; FS-92), each kind to its deadline (FS-48); abuse clocks on a fake clock
       across a weekend, every registrar or registry notice paging (FS-49); FS-48's and FS-49's T2 are pure tests of
@@ -885,7 +887,8 @@ real        T3 runs each T3 row through server's real handlers and stores (api, 
             Blobs wrapper records each key's write on the schedule's clock and returns it as LastModified, Advance
             shortens by PEXPIRE the Redis TTLs of the families a row names, and api takes the clock through a test
             seam beside DenyPostgresForTest; once an Advance has moved the Net's clock past a threshold since its
-            last reread, a sidecart3.Settings field defaulting to the file clusters' CheckInterval (30 s), the Net
+            last reread, sidecart3.Settings' AdminInfoRereadAfter, by default the file clusters' CheckInterval
+            (30 s), and refused at their CheckStaleAfter, the Net
             rereads its file clusters' admin info once, holding every later blob request until that reread has
             finished, so none after such a move goes on with stale admin info, whatever their order, to a 503 and
             a retry on a clock no one moves, while a clock following real time in small steps rereads about once

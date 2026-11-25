@@ -7,7 +7,7 @@
 | Path | What it is |
 |---|---|
 | `sections/01-CTX.md` … `sections/23-PHASE.md` | DESIGN.md §1-§23, one file per section. The build copies them verbatim, adding only links. |
-| `owner/DECISIONS.md` | The owner's record, entries 1-784. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
+| `owner/DECISIONS.md` | The owner's record, entries 1-789. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
 | `owner/APPLY.md` | The rules for applying the owner's decisions: precedence (§1), supersession, where two decisions disagree (§2), notation (§3), editing rules (§4), and the follow-up decisions 112-136 with the sections each binds (§6-§8). |
 | `CONVENTIONS.md` | The writing conventions every section follows: the owner directive (§0), the owner rules (§1), the section template (§2) and the X registry (§7), which DESIGN.md's X1-X20 table replaced. |
 | `OUTLINE.md` | The original outline: section codes, scope boundaries, and the word budgets that G0's density rule replaced on 2026-11-04. |
@@ -44,7 +44,7 @@ It needs only `python3`; it was built and checked with Python 3.13. The steps, a
 
 The data files are layered. Each `data_*N.py` loads its predecessor with `runpy` and patches it: `data_front10.py` loads `data_front9.py`, back to `data_front3.py`, and the registers, glossary and appendices go the same way. Change the top layer (the `*10` files), or add an `*11` layer that loads them. Comments in the scripts cite working files from the design sessions (the reconcilers' orders, `peer/`, `review/`, `snap/`), which were not imported; they are history.
 
-## Adding owner decision N (785 onward)
+## Adding owner decision N (790 onward)
 
 1. Add entry N to `owner/DECISIONS.md`: the question, the answer, its cost, the options not taken, and what raised it.
 2. In `asm/data_front10.py`, append `(N, "<what it settles>", "<one line>")` to `INDEX`, add `DATES[N]`, and raise the `assert` to `list(range(1, N + 1))`. Update `STATUS` and `DECISIONS_INTRO` where they name a range. `@@OD:k@@` writes a link to decision k.
@@ -1471,3 +1471,51 @@ The design-records track dr20-late-fold (lane slot mail, wave f48m) brings the d
 - **Superseded options.** 320 grep hits, none on a changed line unread, none live.
 - **Text.** No bare placeholders or HTML tags; the one research-sheet id stands; 12,786 section references, with the one unresolved as before. `v7/words.json` was regenerated, and `v7/text_checks.json` regenerated unchanged.
 - **DESIGN-DEFER.md.** 107 entries and 175 pointers, unchanged.
+
+### Owner decisions 785 to 789: the build's answers since the eleventh fold
+
+The answers to the questions the build raised after the eleventh fold, QD-1399 to QD-1404, which the owner answered on 2026-11-24, one at a time, accepting each recommendation under the owner's standing acceptance of recommended options, take numbers here in ledger order, all but QD-1401, a compute answer:
+
+| Ledger id | Owner decision | What it settles |
+|---|---|---|
+| QD-1399 | 785 | api installs its own `hold/` writer, so a hold's renewal from api's staff route writes in an api-only process; placement stays dispatched to the worker. |
+| QD-1400 | 786 | `sidecar_clients` is a hard cap at connect: the nomination's gate counts and adds in one Redis script; enrollment's ZCOUNT stays an early refusal. |
+| QD-1402 | 787 | A store connection held at a client's own pace goes through a second, uncapped transport per host, outside owner decision 780's cap. |
+| QD-1403 | 788 | Where api and taskworker share a process, the worker keeps the `rev/` store and log sequencer api installed. |
+| QD-1404 | 789 | `device.Bridge` publishes again when the device wakes or its clock steps (`Bridge.CheckClock()`), a desktop's wait capped by `BridgeSettings.ClockCheckInterval`. |
+
+- **api's own `hold/` writer (785).** §19.4 takes a bullet on the writers that share a process, and §21.9's preservation holds say who writes a hold's object: the worker at placement, for its GroupForms read, and api at a renewal, both If-Match, the pass that reconciles the object deciding and writing on one read, as api-renew-hold-writer built it (server c73308a29).
+- **`sidecar_clients` at connect (786).** §20.7's row loses "as `concurrent_clients`" and states the gate's script, the release and close rules, the poll's restore and re-admission, the soft window after Redis loses the set, and enrollment's early refusal; §20.14's `{sq_}` row and §2.8's api-13 say the connect gate's script adds to the set, the metadata list moving to v71 with no new value, field, Redis family or ttl, and §22.5's §20 row names the race's test, as sidecar-clients-quota-race built it (server 19fe2fa4c, 4b41a9d88). Outside this folder, QD-216's resolution in .stack/decisions/RESOLUTIONS.md and QUOTA-M1-04's Build line in .stack/plan/QUOTA.md each take a line naming the amendment.
+- **Client-paced connections (787).** §11.15's fan-out paragraph takes the exemption beside owner decision 780, as evs-read-fanout-bounds built it (sidecar 18ae917b, server 2c058aacf); owner decision 780's index row notes it.
+- **One process's stores (788).** §19.4's new bullet, stated as decided ahead of its code: fix track all-process-store-slots builds it.
+- **The bridge's clock (789).** §17.8 takes a paragraph after its disposition table, stated as decided ahead of its code: fix track bridge-wall-clock-wake builds it.
+- **Asked of the compute document.** QD-1401, `ur-engine`'s main built from the cli package under the `ur_engine` tag, amends the plan's reading QD-1247 and DESIGN-COMPUTE.md alone, so it takes no number: DESIGN-COMPUTE-AMENDMENTS.md files it under its §6 as the build's, beside QD-1386, and QD-1247's second reading names it.
+
+`build.sh` on this folder reproduces DESIGN.md (SHA-256 `1189f94b347f8b8f96caa119ea2cace7519eefedd80cfcf6afe04beb44a232f0`) and DESIGN-DEFER.md (SHA-256 `749042be18fd33e2a87c087fe0824b4224b52f37cc5def707e0de03854ac07a3`, unchanged), and the validation shows:
+
+- **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item and no new §2.8 row, so no guard line.
+- **Owner decisions.** All 789 rows are present and cited; APPLY.md's section pairs hold. `MAXD`, the two range checks and `LATE_DATES` take 789, each of 785 to 789 dated 2026-11-24. One open owner question, Q-REPO-6.
+- **Superseded options.** 320 grep hits, none on a changed line unread, none live.
+- **Text.** No bare placeholders or HTML tags; the one research-sheet id stands; 12,796 section references, with the one unresolved as before. `v7/words.json` was regenerated, and `v7/text_checks.json` regenerated unchanged.
+- **DESIGN-DEFER.md.** 107 entries and 175 pointers, unchanged: none of the five defers anything.
+- **The metadata list** is v71, api-13's words; check's `metadataListAdditions` stays empty.
+
+### What was built since the eleventh fold
+
+- **Coalesced hints (782).** push-superseded-seq-only built the superseded hint's seq-alone shape (sidecar 9eb24fd7, babad47d), which §6.8's sentence and fence already state: protocol/push.proto's comment on `PushHint.hint` now says, as §6.8's fence does, that its bytes drop when superseded or past its topic's bound, where it said "dropped when coalesced", `make proto` regenerating push.pb.go's copy of the comment, and owner decision 782's entry says the shape is built.
+- **evs's read fan-out (780).** Built (evs-read-fanout-bounds, sidecar 2b54f84b, 92603c3c, 6fef1ea0; server bff8e349b, 1e01804d3): §11.15's fan-out paragraph and §11.9's read row say what the bound holds as built, one push attempt's, one read request's, both rounds in either form, and one GET .../refs's store reads, each attempt's slots its own, and how a request's wait past the cap ends at its deadline, unsent, marking no host failed (server 59c454d96, file-cluster-cap-deadline); owner decision 780's entry says it is built.
+- **T3's setup (781).** Built (t3-setup-retries, server 8a5f73cd1, 6a6234117): §22.4's real row names the threshold, `sidecart3.Settings`' `AdminInfoRereadAfter`, refused at the clusters' `CheckStaleAfter`; owner decision 781's entry says it is built and what a truly down stack costs.
+- **§4.6's C23** takes connect-restart-encrypt-race's three fixes to connect's encryption layer on the restart path (connect 634825b4, 1c3ee536, c9105b02) and the edge restart test's measurement after them (sidecar 308cb681). check's X9 ledger holds §4.6's ids alone, and Appendix E reads the row from the section, so nothing else moves with it.
+- **Service discovery (778).** §17.7.1 takes an "As built" paragraph for what mdns-service-discovery settled where the subsection was silent (sidecar 85e6afc5 to d605f71e): the gatherer's demand window, subtypes on each platform, the watch's pacing, retries and call bound, a listed instance's TTL, the share and hide counts and the share upkeep, macOS's record moves and its viewing through the app's VPN component, the Linux proxy's NSEC, legacy answers and announcements, its IPv4-only answers until fix track discovery-proxy-ipv6-mdns answers ff02::fb too, and the translator's /48 kept per network; the disclosure paragraph says `ur bridge devices` shows the own-services notice too and counts it seen. §12.9.1's parts went with the first piece.
+- **The support skill's settings.** §16.8's record primitives paragraph names the format's limits on field 80, its text's 16 KiB and its 3 files, as `CanonicalActionSettings`' fields, whose defaults `SupportSettings` shares, and §23's compute paragraph the release's switch, `SupportSettings.ServiceEnabled`, which keeps every support surface unavailable until G-SUP-service passes, as support-skill built the skill, a draft.
+- **Already carried.** §18's gorilla/websocket citation has named v1.5.4-0.20240701034025-d67f41855da4/server.go:89-99 since the eighth late fold (2b10ff70), the version websocket-vuln-bump moved every repository to (connect, server, sdk and sidecar require it), and the cited lines are still `checkSameOrigin`; owner decisions 724 and 725 were recorded as built by the eighth late fold.
+
+`build.sh` on this folder reproduces DESIGN.md (SHA-256 `0f5d650618f132aaf423926bb4eddf81e7011aed308561dbf709687793c3fbf1`) and DESIGN-DEFER.md (SHA-256 `749042be18fd33e2a87c087fe0824b4224b52f37cc5def707e0de03854ac07a3`, unchanged), and the validation shows:
+
+- **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item and no §2.8 row, so no guard line.
+- **Owner decisions.** All 789 rows are present and cited; APPLY.md's section pairs hold. One open owner question, Q-REPO-6.
+- **Superseded options.** 320 grep hits, none on a changed line unread, none live.
+- **Text.** No bare placeholders or HTML tags; the one research-sheet id stands; 12,801 section references, with the one unresolved as before. `v7/words.json` was regenerated, and `v7/text_checks.json` regenerated unchanged.
+- **DESIGN-DEFER.md.** 107 entries and 175 pointers, unchanged.
+
+Outside this folder the fold touched DESIGN.md and DESIGN-DEFER.md (rebuilt), RECORD.md (sections 6.2, 6.3, 6.4, 7.2, 8 and 21), DESIGN-AMENDMENTS.md's lead and its two "Later decisions" items' lines, DESIGN-COMPUTE-AMENDMENTS.md (QD-1401 and QD-1247's note), metadata_list.yml (v71), protocol/design_unfenced_test.go and record_kind_test.go (the support lines and the seven declarations fenced), and protocol/push.proto with push.pb.go (the comment); outside git, QD-216's resolution, QUOTA-M1-04's Build line and .stack/decisions/folded.txt. Left for the tracks that own them: the `support` push topic (support-push-topic), which §6.8 keeps as prose; owner decision 788's slots (all-process-store-slots); owner decision 789's wake seam (bridge-wall-clock-wake); the Linux proxy's IPv6 mDNS (discovery-proxy-ipv6-mdns); `Coverage`'s field 8, `ModelCallBody`'s field 15, kinds 54 to 56 and class 8, which DESIGN-COMPUTE.md's fences hold until their compute tracks declare them; and QD-024 and QD-1086, as before.

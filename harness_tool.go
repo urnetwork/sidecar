@@ -90,12 +90,13 @@ var (
 	ErrHarnessToolTierInvalid = errors.New("the tool's tier is not R, W or O")
 )
 
-// One tool call as its tool sees it: the run (taint, marks, Authorize), the agent, the profile, the call's id, Emit
-// for the tool's cards and Ask for a ui_request, and whether a person watches. Built by the loop for each call; safe
-// for concurrent use.
+// One tool call as its tool sees it: the run (taint, marks, Authorize), the agent and its registered name, the profile,
+// the call's id, Emit for the tool's cards and Ask for a ui_request, and whether a person watches. Built by the loop
+// for each call; safe for concurrent use.
 type HarnessCall struct {
 	run        *HarnessRun
 	agentId    Id
+	agentName  string
 	profile    HarnessProfile
 	toolCallId string
 	toolName   string
@@ -109,7 +110,9 @@ type HarnessCall struct {
 
 // What a call is built from.
 type HarnessCallArgs struct {
-	Run        *HarnessRun
+	Run *HarnessRun
+	// The agent's registered name (§20.5).
+	AgentName  string
 	Profile    HarnessProfile
 	ToolCallId string
 	ToolName   string
@@ -127,6 +130,7 @@ type HarnessCallArgs struct {
 func NewHarnessCall(args *HarnessCallArgs) *HarnessCall {
 	call := &HarnessCall{
 		run:        args.Run,
+		agentName:  args.AgentName,
 		profile:    args.Profile,
 		toolCallId: args.ToolCallId,
 		toolName:   args.ToolName,
@@ -163,6 +167,11 @@ func (self *HarnessCall) Run() *HarnessRun {
 // The agent making the call.
 func (self *HarnessCall) AgentId() Id {
 	return self.agentId
+}
+
+// The agent's registered name (§20.5), which support's messages and SKILL's threads name it by.
+func (self *HarnessCall) AgentName() string {
+	return self.agentName
 }
 
 // The profile the run is in.

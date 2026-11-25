@@ -262,6 +262,8 @@ func (self *Harness) startAgent(ctx context.Context, spec *HarnessAgentSpec, con
 		defer self.stateLock.Unlock()
 		self.agents[agentId] = agent
 	}()
+	// support_update reaches its agents once the client can be reached (harness_support.go)
+	self.listenSupport()
 	return agent, nil
 }
 
@@ -269,6 +271,10 @@ func (self *Harness) startAgent(ctx context.Context, spec *HarnessAgentSpec, con
 // the run's first model_change, a root, or for a continuation hanging from the continued run's node.
 func (self *harnessAgent) journalStart(ctx context.Context, skillText string, resolution *InferCatalogResolution, continuation *HarnessContinuation) error {
 	sections := []*HarnessPiSection{{Name: "skill", Text: skillText}}
+	// the skills the agent's tools come with, after recURd's (§28.4's support)
+	for _, skill := range self.toolSet.skills {
+		sections = append(sections, &HarnessPiSection{Name: skill.Name, Text: skill.Text})
+	}
 	if self.spec.Instructions != "" {
 		sections = append(sections, &HarnessPiSection{Name: "instructions", Text: self.spec.Instructions})
 	}

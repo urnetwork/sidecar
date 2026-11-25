@@ -58,6 +58,7 @@ func (self *harnessAgent) runCall(ctx context.Context, toolCall *HarnessPiToolCa
 	}
 	call := NewHarnessCall(&HarnessCallArgs{
 		Run:        self.run,
+		AgentName:  self.name,
 		Profile:    self.profile,
 		ToolCallId: toolCall.Id,
 		ToolName:   toolCall.Name,

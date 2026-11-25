@@ -184,6 +184,9 @@ type ComputeLedgerSettings struct {
 	// A subject's budget counters live this long past their last write: 63 days, past this UTC month and the last,
 	// the two a counter's fields name.
 	BudgetCounterTtl time.Duration
+	// The longest budget name a counter's field carries: 24 bytes of [a-z0-9_], room for §16.5's names and a
+	// policy budget's own, short enough that a hold's field stays small. A reading: §16.4 names no figure.
+	ProjectionBudgetNameMaxByteCount int
 	// The most budget lines one hold carries: 32, past any policy's lines for one call's subjects (its agent, device,
 	// member and network, a day's and a month's each, and their defaults), so one script's work stays bounded. A
 	// reading: §16.4 names no figure.
@@ -301,7 +304,8 @@ func DefaultComputeLedgerSettings() *ComputeLedgerSettings {
 		ProjectionMemoTtl:      10 * time.Minute,
 		BudgetCounterTtl:       63 * day,
 
-		ProjectionHoldMaxLineCount: 32,
+		ProjectionBudgetNameMaxByteCount: 24,
+		ProjectionHoldMaxLineCount:       32,
 
 		SpendDayCount:       7,
 		ChargesPageRowCount: 100,

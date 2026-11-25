@@ -309,3 +309,43 @@ func TestHarnessUiDialogsTakeFittingAnswers(t *testing.T) {
 		t.Fatalf("an answer after the request ended: %v", err)
 	}
 }
+
+// A dialog its asker stopped waiting on, an aborted run's, closes in every view: a ui_response, cancelled, goes out, the
+// call answers its context's error, and a late answer finds nothing waiting.
+func TestHarnessUiDialogClosesWhenItsAskerStops(t *testing.T) {
+	emitter := newHarnessUiTestEmitter()
+	broker := NewHarnessUiBroker(&HarnessUiBrokerArgs{Emit: emitter.emit})
+	runId, agentId := NewId(), NewId()
+	defer broker.AttachPerson(runId)()
+	ctx, cancel := context.WithCancel(context.Background())
+	asked := make(chan error, 1)
+	go func() {
+		_, err := broker.Ask(ctx, runId, agentId, &HarnessUiRequest{Method: HarnessUiConfirm, Title: "Go on?"})
+		asked <- err
+	}()
+	raised := emitter.next(t)
+	if raised.Type != HarnessEventUiRequest {
+		t.Fatalf("emitted %s", raised.Type)
+	}
+	requestId := raised.UiRequest().Id
+	cancel()
+	closed := emitter.next(t)
+	closedId, cancelled := "", false
+	closed.Decode("id", &closedId)
+	closed.Decode("cancelled", &cancelled)
+	if closed.Type != HarnessEventUiResponse || closedId != requestId || !cancelled {
+		t.Fatalf("the dialog closed with %s %q, cancelled %v", closed.Type, closedId, cancelled)
+	}
+	select {
+	case err := <-asked:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("the stopped call answered %v", err)
+		}
+	case <-time.After(60 * time.Second):
+		t.Fatal("Ask did not answer")
+	}
+	confirmed := true
+	if err := broker.Respond(&HarnessUiResponse{Id: requestId, Confirmed: &confirmed}); !errors.Is(err, ErrHarnessUiAnswerInvalid) {
+		t.Fatalf("a late answer: %v", err)
+	}
+}

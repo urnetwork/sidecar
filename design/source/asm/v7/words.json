@@ -12,7 +12,7 @@
   "num": 2,
   "code": "TRUST",
   "words": 10697,
-  "code_words": 24434,
+  "code_words": 24493,
   "ceiling": 3000,
   "over": 7697,
   "over_pct": 256.6
@@ -29,11 +29,11 @@
  {
   "num": 4,
   "code": "REPO",
-  "words": 9654,
+  "words": 9842,
   "code_words": 2314,
   "ceiling": 2800,
-  "over": 6854,
-  "over_pct": 244.8
+  "over": 7042,
+  "over_pct": 251.5
  },
  {
   "num": 5,
@@ -92,11 +92,11 @@
  {
   "num": 11,
   "code": "EVS",
-  "words": 23239,
-  "code_words": 56876,
+  "words": 23571,
+  "code_words": 56877,
   "ceiling": 5000,
-  "over": 18239,
-  "over_pct": 364.8
+  "over": 18571,
+  "over_pct": 371.4
  },
  {
   "num": 12,
@@ -137,20 +137,20 @@
  {
   "num": 16,
   "code": "MCP",
-  "words": 17011,
+  "words": 17033,
   "code_words": 23572,
   "ceiling": 3500,
-  "over": 13511,
-  "over_pct": 386.0
+  "over": 13533,
+  "over_pct": 386.7
  },
  {
   "num": 17,
   "code": "BRIDGE",
-  "words": 15118,
+  "words": 15749,
   "code_words": 8417,
   "ceiling": 3800,
-  "over": 11318,
-  "over_pct": 297.8
+  "over": 11949,
+  "over_pct": 314.4
  },
  {
   "num": 18,
@@ -164,35 +164,35 @@
  {
   "num": 19,
   "code": "OPS",
-  "words": 10814,
+  "words": 10988,
   "code_words": 11130,
   "ceiling": 3500,
-  "over": 7314,
-  "over_pct": 209.0
+  "over": 7488,
+  "over_pct": 213.9
  },
  {
   "num": 20,
   "code": "QUOTA",
-  "words": 6010,
-  "code_words": 5021,
+  "words": 6161,
+  "code_words": 5030,
   "ceiling": 2500,
-  "over": 3510,
-  "over_pct": 140.4
+  "over": 3661,
+  "over_pct": 146.4
  },
  {
   "num": 21,
   "code": "ABUSE",
-  "words": 6255,
+  "words": 6367,
   "code_words": 1403,
   "ceiling": 2500,
-  "over": 3755,
-  "over_pct": 150.2
+  "over": 3867,
+  "over_pct": 154.7
  },
  {
   "num": 22,
   "code": "TEST",
   "words": 8130,
-  "code_words": 42250,
+  "code_words": 42283,
   "ceiling": 2500,
   "over": 5630,
   "over_pct": 225.2
@@ -200,10 +200,10 @@
  {
   "num": 23,
   "code": "PHASE",
-  "words": 7947,
+  "words": 7970,
   "code_words": 1185,
   "ceiling": 2500,
-  "over": 5447,
-  "over_pct": 217.9
+  "over": 5470,
+  "over_pct": 218.8
  }
 ]

@@ -2911,3 +2911,37 @@ _S782 = "and the build's later answers, owner decisions 779 to 782. "
 assert STATUS.count(_S782) == 1, 'status moved'
 STATUS = STATUS.replace(_S782, "and the build's later answers, owner decisions 779 to 782, and DESIGN-COMPUTE.md's "
                         "support skill, 783 and 784. ")
+
+# Owner decisions 785-789 (2026-11-24): the build's answers recorded after the eleventh fold (QD-1399, QD-1400 and
+# QD-1402 to QD-1404), folded by the twelfth fold, track dr20-late-fold; QD-1401, a compute answer, takes no number.
+INDEX += [
+    (785, "api's own hold/ writer",
+     "api installs its own hold/ writer, so a hold's renewal from api's staff route writes in an api-only process."),
+    (786, 'sidecar_clients a hard cap at connect',
+     "The connect gate counts a network's live sidecar clients and adds the client's entry in one Redis script."),
+    (787, 'Client-paced store connections uncapped',
+     "A store connection held at a client's own pace goes through a second, uncapped transport per host."),
+    (788, "One process keeps api's stores",
+     "Where api and taskworker share a process, the worker keeps api's rev/ store and log sequencer installed."),
+    (789, 'The bridge rereads the clock on a wake',
+     "device.Bridge publishes again when the device wakes or its clock steps; a desktop's wait is capped too."),
+]
+for _n, _note in [
+        (780, " Narrowed by @@OD:787@@: a connection held at a client's own pace counts against no cap."),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 790))
+DATES.update({_n: '2026-11-24' for _n in range(785, 790)})
+_D784 = "beside the report listener's. "
+assert DECISIONS_INTRO.count(_D784) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D784, _D784 + "A twelfth fold numbers the build's answers recorded after the eleventh: api's own hold/ writer "
+    "(785); sidecar_clients a hard cap at connect (786), following @@OD:4@@; client-paced store connections outside "
+    "the file clusters' cap (787), narrowing @@OD:780@@; one process keeping api's rev/ store and log sequencer "
+    "(788); and the bridge reading the wall clock again on a wake or a clock step (789). ")
+_S784 = "and DESIGN-COMPUTE.md's support skill, 783 and 784. "
+assert STATUS.count(_S784) == 1, 'status moved'
+STATUS = STATUS.replace(_S784, "and DESIGN-COMPUTE.md's support skill, 783 and 784, and the build's answers after "
+                        "it, owner decisions 785 to 789. ")
