@@ -1,0 +1,13 @@
+{"type":"approval_pending","approvalId":"019a0000-0000-7000-8000-000000000001","kind":"tainted_send","text":"request: tainted_send","evidence":["device","presence"],"tainted":true}
+{"type":"approval_resolved","approvalId":"019a0000-0000-7000-8000-000000000001","state":"approved","channels":["device"]}
+{"type":"approval_resolved","approvalId":"019a0000-0000-7000-8000-000000000001","state":"approved","channels":["auto"],"auto":{"reason":"nothing_injected","score":0.02},"note":"approved automatically by this device's check"}
+{"type":"attestation","model":"prov-model-high","label":"A1","result":{}}
+{"type":"attestation","model":"prov-model-high","label":"none"}
+{"type":"usage","model":"prov-model-high","inputTokens":10,"outputTokens":5,"cachedTokens":0,"reasoningTokens":0,"chargeNanoUsd":1200,"runNanoUsd":3400}
+{"type":"agent_spawned","child":"019a0000-0000-7000-8000-000000000002","name":"reviewer","model":"local-gemma-4-e2b-off","where":"local","run":"019a0000-0000-7000-8000-000000000003"}
+{"type":"agent_exited","child":"019a0000-0000-7000-8000-000000000002","name":"reviewer","model":"local-gemma-4-e2b-off","where":"local","run":"019a0000-0000-7000-8000-000000000003","stopReason":"ended"}
+{"type":"attach_status","state":"attached","harness":"ur","mode":"manage"}
+{"type":"ui_request","id":"ui-1","method":"select","title":"The model failed","options":["retry","local"]}
+{"type":"ui_request","id":"ui-2","method":"disclosure","disclosureId":"inference:none","disclosureVersion":2}
+{"type":"ui_response","id":"ui-1","value":"retry"}
+{"type":"ui_response","id":"ui-2","acknowledged":true}
