@@ -958,6 +958,7 @@ func TestDefaultSocketSettingsMatchDesign(t *testing.T) {
 		DialQuotaMaxWait:        30 * time.Second,
 		ListenDrainTimeout:      30 * time.Second,
 		ListenPositionWait:      2 * time.Second,
+		ListenGrantLandTimeout:  30 * time.Second,
 		ReceiverMaxStreams:      16,
 	}
 	got := *DefaultSidecarSettings().Sockets

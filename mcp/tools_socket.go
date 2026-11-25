@@ -22,8 +22,12 @@
 //     spendable decision runs into the GrantActivate the approval fixes; each action is kept as its request was filed
 //     until its expiry, so the listen asked again after a person approves spends the decision rather than filing
 //     anew; and a listen no requests rule takes names no rule, passing on a standing grant alone and refused with
-//     nothing filed where none covers it. A use that came to not_done refuses the listen and an uncertain one answers
-//     unavailable, which the same listen asked again completes. A network whose K_sock this daemon does not hold yet
+//     nothing filed where none covers it. The use is done only once this device's engine holds the grant it
+//     activated, waited on in the network's config, so the listen registers on a grant the log holds where the
+//     sockets service reads it rather than being refused by the service. A use that came to not_done refuses the
+//     listen and an uncertain one, its grant not yet in the engine among them, answers unavailable, which the same
+//     listen asked again completes: the gate then passes it under the grant it activated, and the result names that
+//     grant as it names one a use activated. A network whose K_sock this daemon does not hold yet
 //     takes no outward listen, as its sockets would register none. tls/ is tls_publish's, smtp/ a receiver's, share/
 //     ur share's and ur/ the platform's: each is refused here.
 //   - socket_unlisten(name) ends the daemon's listen on name at once (§9.9's Close); streams accepted stay.
@@ -187,6 +191,23 @@ func (self *mcpSidecarNetwork) socketListenGrants() *sidecar.AclGrantFiler {
 	return sidecar.NewAclGrantFiler(self.Sidecar, engine)
 }
 
+// What an outward socket_listen waits on for the grant its approval activates to reach this device's engine before it
+// registers (sidecar.SocketListenGrantArgs.Config): the network's verified config, nil while none stands, so a fresh
+// grant leaves the use uncertain.
+type mcpSocketGrantConfig interface {
+	socketListenConfig() sidecar.AclGrantConfig
+}
+
+// See mcpSocketGrantConfig: the client whose follower installs states in the engine socketListenGrants builds on, or
+// the client the network was built with.
+func (self *mcpSidecarNetwork) socketListenConfig() sidecar.AclGrantConfig {
+	_, client := self.policy()
+	if client == nil {
+		return nil
+	}
+	return client
+}
+
 // What an outward socket_listen's action is kept by (sidecar.GrantActionKeeper): its network, and the name and the
 // local port its request binds beside it.
 type mcpSocketListenKey struct {
@@ -196,9 +217,9 @@ type mcpSocketListenKey struct {
 }
 
 // The production action (the file header): sidecar.SocketListenGrantAction on the network's grant filer for its
-// sidecar, each action kept until its expiry by one keeper for the server's life, then NewSidecarAction bound to the
-// call's run and its session's agent. now reads the time a grant's expiry is measured from.
-// sidecar.ErrSocketUnavailable where the network stands no engine or holds no identity yet, and
+// sidecar, each action kept until its expiry by one keeper for the server's life, its grant waited on in the network's
+// config, then NewSidecarAction bound to the call's run and its session's agent. now reads the time a grant's expiry is
+// measured from. sidecar.ErrSocketUnavailable where the network stands no engine or holds no identity yet, and
 // sidecar.ErrAclGrantFile where no grant could cover the listen.
 func newMcpSocketListenAction(now func() time.Time) mcpSocketListenActionFunction {
 	keeper := sidecar.NewGrantActionKeeper[mcpSocketListenKey]()
@@ -206,6 +227,10 @@ func newMcpSocketListenAction(now func() time.Time) mcpSocketListenActionFunctio
 		var grants *sidecar.AclGrantFiler
 		if holder, ok := call.Network.(mcpSocketGrants); ok {
 			grants = holder.socketListenGrants()
+		}
+		var config sidecar.AclGrantConfig
+		if holder, ok := call.Network.(mcpSocketGrantConfig); ok {
+			config = holder.socketListenConfig()
 		}
 		var identity *sidecar.SidecarIdentity
 		if network, ok := mcpToolNetworkOf(call); ok {
@@ -223,6 +248,7 @@ func newMcpSocketListenAction(now func() time.Time) mcpSocketListenActionFunctio
 			Detail:   mcpSocketListenDetail(name, localPort),
 			RunId:    &runId,
 			AgentId:  agentId,
+			Config:   config,
 		}, keeper, mcpSocketListenKey{networkId: call.NetworkId, name: name, localPort: localPort}, now())
 		if err != nil {
 			return nil, err
