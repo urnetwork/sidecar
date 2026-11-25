@@ -1,6 +1,6 @@
 --- a/$HOME/.codex/config.toml
 +++ b/$HOME/.codex/config.toml
-@@ -11,3 +11,34 @@
+@@ -11,3 +11,37 @@
  
  [profiles.review]
  model = "review-example"
@@ -31,6 +31,9 @@
 +approval_mode = "prompt"
 +
 +[mcp_servers.ur.tools.socket_listen]
++approval_mode = "prompt"
++
++[mcp_servers.ur.tools.support_send]
 +approval_mode = "prompt"
 +
 +[mcp_servers.ur.tools.tls_publish]

@@ -272,6 +272,7 @@ var actionsToolKinds = map[string]sidecar.SidecarActionKind{
 	"mail_send":         sidecar.SidecarActionMail,
 	"directory_request": sidecar.SidecarActionAccessRequest,
 	"run_restore":       sidecar.SidecarActionRestore,
+	"support_send":      sidecar.SidecarActionSupportSend,
 }
 
 // What a field's name may not hold: a key, a secret or anything that opens one.

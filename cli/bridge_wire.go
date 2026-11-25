@@ -375,6 +375,8 @@ func (self *urBridgeWire) network() *urBridgeNetwork {
 		close: self.close,
 		// ur tun's choices for default traffic, in the network's sealed local state (tun_default.go)
 		choices: newUrTunSealedChoices(self.args.Sidecar),
+		// the translator's /48 beside them (tun_translator.go)
+		translator: newUrTunSealedTranslator(self.args.Sidecar),
 	}
 }
 
@@ -391,6 +393,8 @@ type urBridgeNetwork struct {
 	alarm func(alarm sidecar.SidecarBridgeAlarm)
 	// ends the bridge, nil for none
 	close func()
+	// where §17.5's translator /48 is kept (tun_translator.go); nil keeps it for the daemon's life alone, in memory
+	translator urTunTranslatorStore
 	// where ur tun's choices for the network's default traffic are kept (tun_default.go); nil keeps them for the
 	// daemon's life alone, in memory
 	choices urTunChoiceStore
@@ -493,6 +497,9 @@ func newUrBridgeDaemon(ctx context.Context, args *urBridgeDaemonArgs) *urBridgeD
 func (self *urBridgeDaemon) addNetwork(network *urBridgeNetwork) (func(), error) {
 	if network.choices == nil {
 		network.choices = &urTunMemoryChoices{}
+	}
+	if network.translator == nil {
+		network.translator = &urTunMemoryTranslator{}
 	}
 	err := func() error {
 		self.stateLock.Lock()
@@ -614,8 +621,11 @@ func (self *urBridgeDaemon) tunUp(networkId sidecar.Id, running *sidecar.Sidecar
 		},
 		Choices:     &choices,
 		Destination: network.destination,
-		OnClose:     self.forgetTun,
-		OnSync:      self.onTunSync,
+		Translator: func() (netip.Prefix, error) {
+			return urTunTranslatorPrefix(network.translator)
+		},
+		OnClose: self.forgetTun,
+		OnSync:  self.onTunSync,
 	})
 	if err != nil {
 		return nil, err
@@ -625,9 +635,10 @@ func (self *urBridgeDaemon) tunUp(networkId sidecar.Id, running *sidecar.Sidecar
 		defer self.stateLock.Unlock()
 		self.tun = tun
 	}()
-	// the device can send into the overlay now, so its discovery watches (§17.7.1's viewer row)
+	// the device can send into the overlay now, so its discovery watches (§17.7.1's viewer row), and a Linux
+	// advertising proxy answers on the tun's link
 	if network.discovery != nil {
-		network.discovery.setViewing(true)
+		network.discovery.setViewing(tun)
 	}
 	self.log.Infof("[tun]%s up", networkId)
 	return tun.status(), nil
@@ -647,7 +658,7 @@ func (self *urBridgeDaemon) forgetTun(tun *urTun, reason error) {
 		return nil
 	}()
 	if discovery != nil {
-		discovery.setViewing(false)
+		discovery.setViewing(nil)
 	}
 }
 

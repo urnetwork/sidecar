@@ -509,7 +509,7 @@ func (self *bridgeCompiler) maps() []*bridge.BridgeRuleMap {
 			MapId:         bytes.Clone(rule.RuleId),
 			MatchPrefix:   bridgeCompileWire(bridgePrefix{address: bridgeCompileInBlock(self.blocks[0], match.address), length: match.length}),
 			Protocol:      body.GetProtocol(),
-			Target:        bytes.Clone(body.GetTarget()),
+			Target:        self.mapTarget(body.GetTarget()),
 			TargetPort:    body.GetTargetPort(),
 			Expires:       rule.Expires,
 			DrainingSince: since,
@@ -527,9 +527,33 @@ func (self *bridgeCompiler) maps() []*bridge.BridgeRuleMap {
 	return maps
 }
 
-// Why a map is void here, empty for none: a target in a block, which is another host's overlay address or one a hop
-// away (§17.6's rule 2); a target that is one of the daemon's listeners (D-BRIDGE-19); or a form the device role
-// refuses, which would refuse the whole state.
+// A map's target as the rules carry it: an address of a block read into the current one, host bits kept, so a target
+// in one of S's exposed prefixes follows a cycled block as the prefix does; any other address as filed.
+func (self *bridgeCompiler) mapTarget(target []byte) []byte {
+	address, ok := netip.AddrFromSlice(target)
+	if !ok || !address.Unmap().Is4() || len(self.blocks) == 0 {
+		return bytes.Clone(target)
+	}
+	octets := address.Unmap().As4()
+	value := uint32(octets[0])<<24 | uint32(octets[1])<<16 | uint32(octets[2])<<8 | uint32(octets[3])
+	if !self.inBlocks(value) {
+		return bytes.Clone(target)
+	}
+	value = bridgeCompileInBlock(self.blocks[0], value)
+	return []byte{byte(value >> 24), byte(value >> 16), byte(value >> 8), byte(value)}
+}
+
+// Whether address lies in the exposed prefix of one of S's subnet routes in force, read into the current block.
+func (self *bridgeCompiler) exposedHolds(address uint32) bool {
+	return slices.ContainsFunc(self.served, func(served *bridgeCompileServed) bool {
+		return served.hasExposed && served.exposed.containsAddress(address)
+	})
+}
+
+// Why a map is void here, empty for none: a target in a block outside S's own exposed prefixes, which is another
+// host's overlay address or one a hop away (§17.6's rule 2), where one in them dials its served address at the hook
+// (§17.6's exposed prefixes; owner decision 778); a target that is one of the daemon's listeners (D-BRIDGE-19); or a
+// form the device role refuses, which would refuse the whole state.
 func (self *bridgeCompiler) mapRefusal(ruleMap *bridge.BridgeRuleMap) string {
 	target, ok := netip.AddrFromSlice(ruleMap.GetTarget())
 	if !ok || !target.IsValid() || target.IsUnspecified() {
@@ -538,8 +562,9 @@ func (self *bridgeCompiler) mapRefusal(ruleMap *bridge.BridgeRuleMap) string {
 	target = target.Unmap()
 	if target.Is4() {
 		octets := target.As4()
-		if self.inBlocks(uint32(octets[0])<<24 | uint32(octets[1])<<16 | uint32(octets[2])<<8 | uint32(octets[3])) {
-			return "a target in the network's block"
+		value := uint32(octets[0])<<24 | uint32(octets[1])<<16 | uint32(octets[2])<<8 | uint32(octets[3])
+		if self.inBlocks(value) && !self.exposedHolds(value) {
+			return "a target in the network's block outside this host's exposed prefixes"
 		}
 	}
 	if ruleMap.GetTargetPort() != 0 && len(ruleMap.GetPorts()) != 1 {

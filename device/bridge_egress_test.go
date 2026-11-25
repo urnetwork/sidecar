@@ -257,6 +257,22 @@ func TestBridgeEgressRuleOneMapsAnAddressRangeByOffset(t *testing.T) {
 	test.expectDeny("past the range", egressTestFlow(egressTestUntagged, connect.IpProtocolTcp, "100.80.2.8:22"))
 }
 
+// Rule 1 under §17.6's exposed reading (owner decision 778): a map onto an address of this host's exposed prefix dials
+// the served address, host bits kept, as a map onto a shared device's exposed /32 needs, with the map's own tag; a map
+// onto an address of the block that no exposed prefix of this host's holds is still never dialed.
+func TestBridgeEgressRuleOneDialsAnExposedTargetsServedAddress(t *testing.T) {
+	fixture := egressTestFixture()
+	fixture.Maps = append(fixture.Maps,
+		sidecartest.BridgeRulesFixtureMap{Map: 6, Match: "100.80.1.2", Ports: "tcp:62078", Target: "100.80.200.9:0"},
+		sidecartest.BridgeRulesFixtureMap{Map: 7, Match: "100.80.1.2", Ports: "tcp:62079", Target: "100.80.201.9:0"},
+	)
+	fixture.Subjects[0].Dial = append(fixture.Subjects[0].Dial, sidecartest.BridgeRulesFixtureReach{Ports: "tcp:62078-62079"})
+	test := newEgressTest(t, device.BridgePolicyProfileHost, device.PostureEnforcingDocument, fixture)
+	test.expectMap("an exposed target", egressTestFlow(egressTestUntagged, connect.IpProtocolTcp, "100.80.1.2:62078"),
+		"192.168.60.9:62078", egressTestTag(egressTestUntagged, sidecartest.BridgeFixtureMapId(6)))
+	test.expectDeny("a block address no exposed prefix holds", egressTestFlow(egressTestUntagged, connect.IpProtocolTcp, "100.80.1.2:62079"))
+}
+
 // Rule 2: an address of the block that this host does not hold is never dialed, even under the allow-all.
 func TestBridgeEgressRuleTwoNeverDialsAnotherHostsAddress(t *testing.T) {
 	test := newEgressTest(t, device.BridgePolicyProfileHost, device.PostureEnforcingNoDocument, egressTestFixture())

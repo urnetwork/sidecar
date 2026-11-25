@@ -82,6 +82,13 @@ type DaemonBridgeLanDevice struct {
 	// The /32 route its share filed, hex; the approval it waits on.
 	RuleId     string `json:"rule_id,omitempty"`
 	ApprovalId string `json:"approval_id,omitempty"`
+	// Where the network reaches it while shared, and, where an admin's route rows narrow what reaches it there, the
+	// protocols and ports they leave, "tcp:62078" and the like; empty where every port and protocol reaches it, as a
+	// device whose tunnel picks its ports per connection needs (§17.7.1's Xcode case).
+	SharedAddress string   `json:"shared_address,omitempty"`
+	RoutePorts    []string `json:"route_ports,omitempty"`
+	// Its route reaches it on no port at all: no row of any subject covers its address.
+	RouteClosed bool `json:"route_closed,omitempty"`
 	// What it announces of the effective list.
 	Services []*DaemonBridgeInstance `json:"services,omitempty"`
 }
@@ -105,12 +112,25 @@ type DaemonBridgeDevicesReply struct {
 	Proxy        bool     `json:"proxy"`
 	HiddenDevice bool     `json:"hidden_device,omitempty"`
 	Hides        []string `json:"hides,omitempty"`
+	// What the advertising proxy holds on this machine, and why it registers nothing where it does not; nil where no
+	// proxy is wired.
+	ProxyStatus *BridgeDiscoveryProxyStatus `json:"proxy_status,omitempty"`
 	// The effective list of types.
 	Types []string `json:"types,omitempty"`
 	// This host's LAN devices and its own instances, what it publishes, and what this device sees.
 	Lan       []*DaemonBridgeLanDevice  `json:"lan,omitempty"`
 	Published []*DaemonBridgeInstance   `json:"published,omitempty"`
 	Remote    []*DaemonBridgeRemoteHost `json:"remote,omitempty"`
+}
+
+// What the platform's advertising proxy holds (cli's, §17.7.1's advertising proxy rows), as ur bridge devices shows it.
+type BridgeDiscoveryProxyStatus struct {
+	// The instances registered on this machine, and those refused, a name another registration on it holds among them.
+	RegisteredCount int `json:"registered_count"`
+	RefusedCount    int `json:"refused_count,omitempty"`
+	// Why the proxy registers nothing where it is on: none on this platform, ur tun not carrying the network, or
+	// Avahi's reflector on Linux, which would repeat its answers onto the LAN.
+	Note string `json:"note,omitempty"`
 }
 
 // bridge.devices' params.
@@ -358,6 +378,15 @@ func (self *BridgeDiscoveryComponent) Set(setting string, value string, unhide b
 	if editErr != nil {
 		return editErr
 	}
+	if err == nil && setting == DaemonBridgeDiscoveryProxy {
+		// the platform's proxy reads the switch at each view: the viewer hands the view out again
+		func() {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			self.redeliverView = true
+		}()
+		self.viewWake.NotifyAll()
+	}
 	return err
 }
 
@@ -403,6 +432,9 @@ func (self *BridgeDiscoveryComponent) Devices() *DaemonBridgeDevicesReply {
 		Hides:        slices.Concat(input.state.HiddenPorts, input.state.HiddenInstances),
 		Types:        input.types,
 	}
+	if self.args.ProxyStatus != nil {
+		reply.ProxyStatus = self.args.ProxyStatus()
+	}
 	for i, hide := range reply.Hides {
 		// an instance's key holds its type, then its name
 		if service, name, isInstance := strings.Cut(hide, "\x00"); isInstance {
@@ -440,6 +472,18 @@ func (self *BridgeDiscoveryComponent) Devices() *DaemonBridgeDevicesReply {
 			}
 			if share := input.state.share(label); share != nil {
 				device.Share, device.RuleId, device.ApprovalId = share.State, share.RuleId, share.ApprovalId
+			}
+			// a share's address, and what of it the route rows leave reachable
+			if lanAddress := bridgeDiscoveryDeviceAddress(gathered); device.Share == bridgeDiscoveryShareActive && lanAddress.IsValid() {
+				if shared := input.routes.servedAddress(lanAddress); shared.IsValid() {
+					device.SharedAddress = shared.String()
+					if self.args.RoutePorts != nil {
+						if all, ports := self.args.RoutePorts(shared); !all {
+							device.RoutePorts = ports
+							device.RouteClosed = len(ports) == 0
+						}
+					}
+				}
 			}
 			devices[label] = device
 			labels = append(labels, label)
