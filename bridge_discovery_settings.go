@@ -40,6 +40,10 @@ type BridgeDiscoverySettings struct {
 	// Both positive.
 	WatchRetryInterval    time.Duration
 	WatchRetryMaxInterval time.Duration
+	// The least time from one watch call's start to the next to the same host: 1 s, so a host that answers every watch
+	// at once, a changing view's or a faulty one's, is asked at most once a second rather than at its round-trip rate,
+	// while a held watch, which answers at a change, is called again at once. Non-negative; 0 calls again at once.
+	WatchMinInterval time.Duration
 	// The TTL a listed entry's instance carries, renewed with each answer while it stays listed: 120 s
 	// (DESIGN-COMPUTE.md §26.8). Positive.
 	ListedTtl time.Duration
@@ -66,6 +70,7 @@ func DefaultBridgeDiscoverySettings() *BridgeDiscoverySettings {
 		WatchCallTimeout:        55 * time.Second,
 		WatchRetryInterval:      2 * time.Second,
 		WatchRetryMaxInterval:   30 * time.Second,
+		WatchMinInterval:        1 * time.Second,
 		ListedTtl:               120 * time.Second,
 		GatherDemandTimeout:     2 * time.Minute,
 		ShareUpkeepInterval:     1 * time.Minute,
@@ -111,6 +116,9 @@ func (self *BridgeDiscoverySettings) validate() error {
 		if value <= 0 {
 			return fmt.Errorf("%w: BridgeDiscoverySettings.%s is not positive", errInvalidSettings, name)
 		}
+	}
+	if self.WatchMinInterval < 0 {
+		return fmt.Errorf("%w: BridgeDiscoverySettings.WatchMinInterval is negative", errInvalidSettings)
 	}
 	if self.WatchCallTimeout <= wire.WatchHoldTimeout {
 		return fmt.Errorf("%w: BridgeDiscoverySettings.WatchCallTimeout is not past the hold", errInvalidSettings)

@@ -131,7 +131,9 @@ func TestCanonicalActionVersion5Descriptor(t *testing.T) {
 		"70 auto AutoFields",
 	})
 	action := testComputeMessage(t, testRecordProtoPath, "CanonicalAction")
-	if action.Fields().Len() != 41-4+17 {
+	// §28.8's field 80, kind 27's, with 81 to 89 reserved (support-skill)
+	testComputeMessageFields(t, testRecordProtoPath, "CanonicalAction", 80, 89, []string{"80 support SupportFields"})
+	if action.Fields().Len() != 41-4+17+1 {
 		t.Errorf("CanonicalAction holds %d fields", action.Fields().Len())
 	}
 	for number := protoreflect.FieldNumber(1); number <= 41; number++ {
@@ -142,7 +144,7 @@ func TestCanonicalActionVersion5Descriptor(t *testing.T) {
 	}
 	wantReserved := slices.Concat(
 		[]protoreflect.FieldNumber{23, 24, 25, 34},
-		testComputeNumbers(57, 59), testComputeNumbers(61, 69), testComputeNumbers(71, 79),
+		testComputeNumbers(57, 59), testComputeNumbers(61, 69), testComputeNumbers(71, 79), testComputeNumbers(81, 89),
 	)
 	if got := testComputeReserved(action); !slices.Equal(got, wantReserved) {
 		t.Errorf("CanonicalAction reserves %v", got)
@@ -182,6 +184,15 @@ func TestCanonicalActionVersion5Descriptor(t *testing.T) {
 		"11 feature string",
 	})
 	testComputeMessageFields(t, testRecordProtoPath, "AutoFields", 1, protowire.MaxValidNumber, []string{"1 basis uint32", "2 rules repeated uint32"})
+	testComputeMessageFields(t, testRecordProtoPath, "SupportFields", 1, protowire.MaxValidNumber, []string{
+		"1 product string", "2 entry string", "3 kind uint32", "4 text string", "5 bundle BundleManifest",
+		"6 files repeated FileFields", "7 client_ref bytes",
+	})
+	testComputeMessageFields(t, testRecordProtoPath, "BundleManifest", 1, protowire.MaxValidNumber, []string{
+		"1 events uint32", "2 first int64", "3 last int64", "4 bytes uint64", "5 sha256 bytes", "6 codes repeated BundleCodeCount",
+	})
+	testComputeMessageFields(t, testRecordProtoPath, "BundleCodeCount", 1, protowire.MaxValidNumber, []string{"1 component string", "2 code string", "3 count uint32"})
+	testComputeMessageFields(t, testRecordProtoPath, "FileFields", 1, protowire.MaxValidNumber, []string{"1 name string", "2 type uint32", "3 size uint64", "4 sha256 bytes"})
 	testComputeMessageFields(t, testRecordProtoPath, "CanonicalActionDetail5", 1, protowire.MaxValidNumber, []string{
 		"1 name string", "2 role uint32", "3 harness string", "4 grant_id bytes",
 	})
@@ -201,13 +212,14 @@ func TestCanonicalActionVersion5Descriptor(t *testing.T) {
 		24: "SIDECAR_ACTION_KIND_TAINTED_SEND",
 		25: "SIDECAR_ACTION_KIND_CALENDAR_WRITE",
 		26: "SIDECAR_ACTION_KIND_SERVICE_WRITE",
+		27: "SIDECAR_ACTION_KIND_SUPPORT_SEND",
 	}
 	for number, name := range wantKinds {
 		if SidecarActionKind_name[number] != name {
 			t.Errorf("kind %d is %q", number, SidecarActionKind_name[number])
 		}
 	}
-	if len(SidecarActionKind_name) != 27 || SidecarActionKind_name[18] != "SIDECAR_ACTION_KIND_MAIL_TLS_UNAUTHENTICATED" {
+	if len(SidecarActionKind_name) != 28 || SidecarActionKind_name[18] != "SIDECAR_ACTION_KIND_MAIL_TLS_UNAUTHENTICATED" {
 		t.Errorf("SidecarActionKind holds %d values", len(SidecarActionKind_name))
 	}
 }

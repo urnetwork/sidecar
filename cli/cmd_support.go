@@ -1,8 +1,9 @@
-// ur support (DESIGN-COMPUTE §28.4, §15.1): URnetwork's support conversation and the support log.
+// ur support (DESIGN-COMPUTE §28.4, §15.1): URnetwork's support conversation and the support log. This file holds the
+// command and the support log's form; cmd_support_conversation.go the conversation's.
 //
-//	ur support logs [--sent=<id>] [--json]
-//	    the support log's bundle as the next message would carry it, or as the one sent with an item did, rendered
-//	    whole (§28.7, FB's ur feedback preview), printed only to the terminal
+//	ur support logs [--sent=<client_ref>] [--json]
+//	    the support log's bundle as the next message would carry it, or as a sent message's did, rendered whole (§28.7,
+//	    FB's ur feedback preview), printed only to the terminal
 //
 // The support log is content-free by construction (support_log.go), and still no agent reads a bundle (§28.7, I-7):
 // the daemon builds one only for a control caller with no harness process among its ancestors, and ur prints it on
@@ -34,10 +35,18 @@ const (
 // What support.logs refuses to a caller under a harness: a bundle is the person's to read, never an agent's (§28.7).
 var errUrSupportUnderHarness = errors.New("the support log's bundle is shown to a person at a terminal, never under a harness (§28.7)")
 
+// Registers ur support.
 func init() {
 	registerUrCommand(&urCommand{
-		name:    "support",
-		usage:   "  ur support logs [--sent=<id>] [--json]",
+		name: "support",
+		usage: "  ur support [--json] [--network=<net>]\n" +
+			"  ur support show <id> [--json] [--network=<net>]\n" +
+			"  ur support send <text> [--re=<id>] [--kind=<k>] [--logs] [--attach=<file>...] [--network=<net>]\n" +
+			"  ur support logs [--sent=<client_ref>] [--json] [--network=<net>]\n" +
+			"  ur support watch [<id>] [--notes] [--network=<net>]\n" +
+			"  ur support delete <id> [--network=<net>]\n" +
+			"  ur support settings [--network=<net>]\n" +
+			"  ur support set [--agents=<switch>] [--agent-logs=<switch>] [--network=<net>]",
 		summary: "URnetwork's support conversation, and the support log's bundle",
 		run:     runUrSupport,
 	})
@@ -45,7 +54,8 @@ func init() {
 
 // support.logs' params.
 type urSupportLogsParams struct {
-	// the item whose sent bundle to show, empty for the next message's
+	Network string `json:"network,omitempty"`
+	// the client_ref of the sent message whose bundle to show, empty for the next message's
 	Sent string `json:"sent,omitempty"`
 }
 
@@ -119,9 +129,9 @@ func urSupportUnderHarness(ctx context.Context, daemon *sidecar.Daemon, call *si
 	return false
 }
 
-// What this ur says of itself in a bundle's header.
+// What this ur says of itself in a bundle's header: its version; the Harness's and the gateway's once they run here.
 func urSupportLogHost() *sidecar.SupportLogBundleHost {
-	return &sidecar.SupportLogBundleHost{Version: sidecar.Version, GatewayVersion: sidecar.Version}
+	return &sidecar.SupportLogBundleHost{Version: sidecar.Version}
 }
 
 // The support methods over the daemon's ring.
@@ -138,8 +148,8 @@ func urSupportMethods(daemon *sidecar.Daemon, supportLog *sidecar.SupportLog) []
 					return nil, errUrSupportUnderHarness
 				}
 				if params.Sent != "" {
-					// the support client keeps each sent bundle 7 days (§28.7), which arrives with the client (M13b)
-					return nil, fmt.Errorf("no bundle sent with item %s is kept on this device", params.Sent)
+					// the support client keeps each sent message's bundle 7 days (§28.7)
+					return urSupportSentBundle(daemon, params)
 				}
 				bundle, err := supportLog.Bundle(&sidecar.SupportLogBundleArgs{Host: urSupportLogHost()})
 				if err != nil {
@@ -151,11 +161,32 @@ func urSupportMethods(daemon *sidecar.Daemon, supportLog *sidecar.SupportLog) []
 	}
 }
 
+// A sent message's bundle, from the network's support client.
+func urSupportSentBundle(daemon *sidecar.Daemon, params *urSupportLogsParams) (*urSupportLogsReply, error) {
+	for _, hosted := range daemon.Sidecars() {
+		client, err := hosted.Sidecar.Support()
+		if err != nil {
+			continue
+		}
+		compressed, err := client.SentBundle(params.Sent)
+		if err != nil {
+			continue
+		}
+		document, err := sidecar.SupportLogBundleOpen(compressed, sidecar.DefaultSupportSettings().BundleMaxByteCount*16)
+		if err != nil {
+			return nil, err
+		}
+		return &urSupportLogsReply{Document: document}, nil
+	}
+	return nil, fmt.Errorf("no bundle sent with message %s is kept on this device", params.Sent)
+}
+
+// ur support: the logs form here, the conversation's in cmd_support_conversation.go.
 func runUrSupport(ctx context.Context, cli *urCli, options docopt.Opts) error {
 	switch {
 	case options["logs"] == true:
 		jsonOutput, _ := options.Bool("--json")
-		params := &urSupportLogsParams{Sent: urOptionString(options, "--sent")}
+		params := &urSupportLogsParams{Network: urOptionString(options, "--network"), Sent: urOptionString(options, "--sent")}
 		// a bundle goes to the person's terminal alone, so nothing is fetched where none is open
 		tty, err := cli.openTty()
 		if err != nil {
@@ -174,7 +205,7 @@ func runUrSupport(ctx context.Context, cli *urCli, options docopt.Opts) error {
 		renderUrSupportLogs(tty, reply)
 		return nil
 	}
-	return errors.New("ur support: no such form")
+	return runUrSupportConversation(ctx, cli, options)
 }
 
 // A bundle as a person reads it: its header, then one line an event, oldest first.
