@@ -12,6 +12,7 @@ import (
 	"errors"
 	"net/netip"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -280,5 +281,26 @@ func TestAppViewingNeedsAPairedMacWhoseAppRoutesTheBlock(t *testing.T) {
 	link := urAppDiscoveryLink{}
 	if link.ResolverAddress().IsValid() || link.SetLinkMulticastDns(true) == nil {
 		t.Fatal("the app's link answers for a tun it is not")
+	}
+}
+
+// ur tun's status names the translator's /96 and this host's IPv6 address while it runs, and why it does not where it
+// stays off; with neither it says nothing of IPv6.
+func TestTunPrintsTheTranslator(t *testing.T) {
+	cli, stdout, _ := newTestUrCli("/nonexistent/socket")
+	printUrTunStatus(cli, &urTunStatus{Device: "ur-test", EgressMode: "auto", Translator: "fd12:3456:789a:1::/96",
+		TranslatorAddress: "fd12:3456:789a::1"})
+	if !strings.Contains(stdout.String(), "ipv6       discovered instances at fd12:3456:789a:1::/96, this host at fd12:3456:789a::1") {
+		t.Fatalf("on:\n%s", stdout.String())
+	}
+	stdout.Reset()
+	printUrTunStatus(cli, &urTunStatus{Device: "ur-test", EgressMode: "auto", TranslatorError: "IPv6 is off on this device"})
+	if !strings.Contains(stdout.String(), "ipv6       discovered instances take no IPv6 address: IPv6 is off on this device") {
+		t.Fatalf("off:\n%s", stdout.String())
+	}
+	stdout.Reset()
+	printUrTunStatus(cli, &urTunStatus{Device: "ur-test", EgressMode: "auto"})
+	if strings.Contains(stdout.String(), "ipv6") {
+		t.Fatalf("neither:\n%s", stdout.String())
 	}
 }

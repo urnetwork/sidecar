@@ -12,8 +12,9 @@
 //	          macOS's registrations make)
 //	answer    a query from the host's own address on port 5353 gets each record that answers a question, those its
 //	          known-answer list holds with half their TTL or more left out (RFC 6762 §7.1), SRV, TXT and the target's
-//	          addresses as additionals (RFC 6763 §12), multicast to 224.0.0.251:5353; a query from another port is a
-//	          legacy one, answered to it alone with its id and questions and TTLs of at most LegacyTtl (RFC 6762 §6.7)
+//	          addresses as additionals (RFC 6763 §12), multicast to 224.0.0.251:5353; a type a name the proxy owns does not
+//	          hold, an AAAA while the translator is off among them, is denied by an NSEC (§6.1); a query from another
+//	          port is a legacy one, answered to it alone with its id and questions and TTLs of at most LegacyTtl (§6.7)
 //	announce  a record that appears is announced twice, AnnounceInterval apart (RFC 6762 §8.3); one that goes or changes
 //	          is withdrawn by a goodbye, its TTL 0 (§10.1), at once, and a closing proxy says goodbye to all
 //	off       where Avahi's reflector is on, which would repeat what it sends onto the LAN, the proxy sends nothing at all
@@ -427,20 +428,37 @@ func (self *urMdnsDiscoveryProxy) answer(packet []byte) {
 	legacy := source.Port() != urMdnsProxyPort
 	answers := []urMdnsRecord{}
 	answered := map[string]bool{}
+	negated := map[string]bool{}
 	additionalNames := []urMdnsName{}
 	for _, question := range query.questions {
+		// whether the name holds a record of the type asked, and whether it is a name this responder owns, one of its
+		// unique records', and the types it holds
+		matched, owned := false, false
+		types := []uint16{}
 		for key, held := range self.records {
 			record := &held.record
-			if !record.name.equal(question.name) || (question.qtype != urMdnsTypeAny && question.qtype != record.rrtype) || answered[key] {
+			if !record.name.equal(question.name) {
 				continue
 			}
+			owned = owned || record.cacheFlush
+			types = append(types, record.rrtype)
+			if question.qtype != urMdnsTypeAny && question.qtype != record.rrtype {
+				continue
+			}
+			matched = true
 			// what the asker already holds with half its TTL or more left (RFC 6762 §7.1)
-			if knownRecord, isKnown := urMdnsProxyKnown(query.answers, record); isKnown && record.ttl/2 <= knownRecord.ttl {
+			if knownRecord, isKnown := urMdnsProxyKnown(query.answers, record); answered[key] || isKnown && record.ttl/2 <= knownRecord.ttl {
 				continue
 			}
 			answered[key] = true
 			answers = append(answers, *record)
 			additionalNames = append(additionalNames, held.additionalNames...)
+		}
+		// a name this responder owns, asked for a type it holds none of, an AAAA while the translator is off among
+		// them: an NSEC says so, so the asker need not wait (RFC 6762 §6.1)
+		if owned && !matched && question.qtype != urMdnsTypeAny && !negated[question.name.key()] {
+			negated[question.name.key()] = true
+			answers = append(answers, urMdnsProxyNsec(question.name, types, uint32(self.settings.HostTtl/time.Second)))
 		}
 	}
 	if len(answers) == 0 {
@@ -472,6 +490,25 @@ func (self *urMdnsDiscoveryProxy) answer(packet []byte) {
 		return
 	}
 	self.send(answers, additionals, nil, netip.AddrPortFrom(urMdnsProxyGroup, urMdnsProxyPort), 0)
+}
+
+// An NSEC record of name asserting that it holds types and no other (RFC 6762 §6.1): its next domain name its own,
+// its bitmap window 0's alone, which holds every type the proxy writes.
+func urMdnsProxyNsec(name urMdnsName, types []uint16, ttl uint32) urMdnsRecord {
+	next, _ := name.wire()
+	bitmap := []byte{}
+	for _, rrtype := range types {
+		if 0xFF < rrtype {
+			continue
+		}
+		at := int(rrtype / 8)
+		for len(bitmap) <= at {
+			bitmap = append(bitmap, 0)
+		}
+		bitmap[at] |= 0x80 >> (rrtype % 8)
+	}
+	data := append(next, 0, byte(len(bitmap)))
+	return urMdnsRecord{name: name, rrtype: urMdnsTypeNsec, cacheFlush: true, ttl: ttl, data: append(data, bitmap...)}
 }
 
 // The known answer the asker holds of record, by name, type and rdata.
