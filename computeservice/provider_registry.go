@@ -215,7 +215,7 @@ func NewComputeProviderRegistry(args *ComputeProviderRegistryArgs) (*ComputeProv
 		switch {
 		case err != nil:
 			self.adapterErrs[id] = err
-			log.Warningf("[compute] the %s adapter did not build, so it serves nothing here: %v", id, err)
+			log.Infof("[compute] the %s adapter did not build, so it serves nothing here: %v", id, err)
 		case adapter == nil || adapter.Id() != id:
 			self.adapterErrs[id] = fmt.Errorf("its constructor built no %s adapter", id)
 		default:
