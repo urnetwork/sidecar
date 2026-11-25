@@ -212,11 +212,18 @@ var mcpCatalogDesign = []mcpCatalogDesignTool{
 	{name: "search", tier: McpTierRead, owner: "SEARCH-M10-29"},
 	{name: "search_agents", tier: McpTierRead, owner: "SEARCH-M10-29"},
 	{name: "search_status", tier: McpTierRead, owner: "SEARCH-M10-29"},
+	// DESIGN-COMPUTE §28.4's, which the support switch registers (tools_support.go)
+	{name: "support_send", tier: McpTierOutward, owner: "support-skill"},
+	{name: "support_list", tier: McpTierRead, owner: "support-skill"},
+	{name: "support_read", tier: McpTierRead, owner: "support-skill"},
 }
 
 // The design names whose owners have not landed their tools: every one, at MCP-M3-12. An owner removes its names
 // in the change that registers them; none is left.
-var mcpCatalogUnbuilt = []string{}
+var mcpCatalogUnbuilt = []string{
+	// registered only once the release's support switch is on, at G-SUP-service (DESIGN-COMPUTE §28.21)
+	"support_send", "support_list", "support_read",
+}
 
 // Whether a §16.5 tool is an evs or a search tool, the classes §16.6's refused table names: each reports what a call
 // reaches (McpToolSpec.Targets), so no repo row, a mailbox's vault/ family's among them (QD-673), rests on a tool

@@ -56,18 +56,20 @@ const (
 	RecordKindModel            RecordKind = 27
 	RecordKindCost             RecordKind = 28
 	RecordKindAttestation      RecordKind = 29
-	RecordKindMembership       RecordKind = 32
-	RecordKindKey              RecordKind = 33
-	RecordKindCoverage         RecordKind = 34
-	RecordKindRead             RecordKind = 35
-	RecordKindErasure          RecordKind = 36
-	RecordKindInventory        RecordKind = 37
-	RecordKindDisclosure       RecordKind = 38
-	RecordKindCopy             RecordKind = 39
-	RecordKindRetention        RecordKind = 40
-	RecordKindLogSettings      RecordKind = 41
-	RecordKindCheckpoint       RecordKind = 42
-	RecordKindLedgerScope      RecordKind = 43
+	// DESIGN-COMPUTE.md §28.12's (M13b): a message of the support conversation, sent or received
+	RecordKindSupportMessage RecordKind = 30
+	RecordKindMembership     RecordKind = 32
+	RecordKindKey            RecordKind = 33
+	RecordKindCoverage       RecordKind = 34
+	RecordKindRead           RecordKind = 35
+	RecordKindErasure        RecordKind = 36
+	RecordKindInventory      RecordKind = 37
+	RecordKindDisclosure     RecordKind = 38
+	RecordKindCopy           RecordKind = 39
+	RecordKindRetention      RecordKind = 40
+	RecordKindLogSettings    RecordKind = 41
+	RecordKindCheckpoint     RecordKind = 42
+	RecordKindLedgerScope    RecordKind = 43
 
 	// 48 to 63: raw capture.
 	RecordKindTranscript RecordKind = 48
@@ -192,22 +194,23 @@ var recordKindRows = map[RecordKind]recordKindRow{
 		signedBody: func() proto.Message { return &protocol.ApprovalCancel{} },
 		signedType: bridge.SignedType_SIGNED_APPROVAL_CANCEL,
 	},
-	RecordKindApprovalUse: {name: "approval_use", class: RecordClassAction, body: func() proto.Message { return &protocol.ApprovalUseBody{} }},
-	RecordKindRoute:       {name: "route", class: RecordClassAction, body: func() proto.Message { return &protocol.RouteBody{} }},
-	RecordKindPublish:     {name: "publish", class: RecordClassAction, body: func() proto.Message { return &protocol.PublishBody{} }},
-	RecordKindReach:       {name: "reach", class: RecordClassAction, body: func() proto.Message { return &protocol.ReachReceipt{} }},
-	RecordKindRestore:     {name: "restore", class: RecordClassAction, body: func() proto.Message { return &protocol.RestoreBody{} }},
-	RecordKindModel:       {name: "model", class: RecordClassAction, body: func() proto.Message { return &protocol.ModelManifest{} }},
-	RecordKindCost:        {name: "cost", class: RecordClassAction, body: func() proto.Message { return &protocol.RunCostBody{} }},
-	RecordKindAttestation: {name: "attestation", class: RecordClassAction, body: func() proto.Message { return &protocol.AttestationBody{} }},
-	RecordKindMembership:  {name: "membership", class: RecordClassAccounting, body: func() proto.Message { return &protocol.MembershipBody{} }},
-	RecordKindKey:         {name: "key", class: RecordClassAccounting, body: func() proto.Message { return &protocol.KeyBody{} }},
-	RecordKindCoverage:    {name: "coverage", class: RecordClassAccounting, body: func() proto.Message { return &protocol.Coverage{} }},
-	RecordKindRead:        {name: "read", class: RecordClassAccounting, body: func() proto.Message { return &protocol.ReadBody{} }},
-	RecordKindErasure:     {name: "erasure", class: RecordClassAccounting, body: func() proto.Message { return &protocol.ErasureBody{} }},
-	RecordKindInventory:   {name: "inventory", class: RecordClassAccounting, body: func() proto.Message { return &protocol.InventoryBody{} }},
-	RecordKindDisclosure:  {name: "disclosure", class: RecordClassAccounting, body: func() proto.Message { return &protocol.DisclosureBody{} }},
-	RecordKindCopy:        {name: "copy", class: RecordClassAccounting, body: func() proto.Message { return &protocol.CopyBody{} }},
+	RecordKindApprovalUse:    {name: "approval_use", class: RecordClassAction, body: func() proto.Message { return &protocol.ApprovalUseBody{} }},
+	RecordKindRoute:          {name: "route", class: RecordClassAction, body: func() proto.Message { return &protocol.RouteBody{} }},
+	RecordKindPublish:        {name: "publish", class: RecordClassAction, body: func() proto.Message { return &protocol.PublishBody{} }},
+	RecordKindReach:          {name: "reach", class: RecordClassAction, body: func() proto.Message { return &protocol.ReachReceipt{} }},
+	RecordKindRestore:        {name: "restore", class: RecordClassAction, body: func() proto.Message { return &protocol.RestoreBody{} }},
+	RecordKindModel:          {name: "model", class: RecordClassAction, body: func() proto.Message { return &protocol.ModelManifest{} }},
+	RecordKindCost:           {name: "cost", class: RecordClassAction, body: func() proto.Message { return &protocol.RunCostBody{} }},
+	RecordKindAttestation:    {name: "attestation", class: RecordClassAction, body: func() proto.Message { return &protocol.AttestationBody{} }},
+	RecordKindSupportMessage: {name: "support_message", class: RecordClassAction, body: func() proto.Message { return &protocol.SupportMessageBody{} }},
+	RecordKindMembership:     {name: "membership", class: RecordClassAccounting, body: func() proto.Message { return &protocol.MembershipBody{} }},
+	RecordKindKey:            {name: "key", class: RecordClassAccounting, body: func() proto.Message { return &protocol.KeyBody{} }},
+	RecordKindCoverage:       {name: "coverage", class: RecordClassAccounting, body: func() proto.Message { return &protocol.Coverage{} }},
+	RecordKindRead:           {name: "read", class: RecordClassAccounting, body: func() proto.Message { return &protocol.ReadBody{} }},
+	RecordKindErasure:        {name: "erasure", class: RecordClassAccounting, body: func() proto.Message { return &protocol.ErasureBody{} }},
+	RecordKindInventory:      {name: "inventory", class: RecordClassAccounting, body: func() proto.Message { return &protocol.InventoryBody{} }},
+	RecordKindDisclosure:     {name: "disclosure", class: RecordClassAccounting, body: func() proto.Message { return &protocol.DisclosureBody{} }},
+	RecordKindCopy:           {name: "copy", class: RecordClassAccounting, body: func() proto.Message { return &protocol.CopyBody{} }},
 	RecordKindRetention: {
 		name:       "retention",
 		class:      RecordClassLog,

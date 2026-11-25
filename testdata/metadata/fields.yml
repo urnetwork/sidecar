@@ -748,6 +748,7 @@ unset:
   CanonicalAction.calendar_name: "DESIGN-COMPUTE §23.9: kind 25's, which no URnetwork server sees"
   CanonicalAction.service_call: "DESIGN-COMPUTE §25.10: kind 26's, which no URnetwork server sees"
   CanonicalAction.auto: "DESIGN-COMPUTE §27.9: kinds 23 to 26's, which reach no server path"
+  CanonicalAction.support: "DESIGN-COMPUTE §28.8: kind 27's, which reaches no server path"
   EnclaveFields.name: "DESIGN-COMPUTE §16.3: empty on kind 19, the one kind whose enclave a server sees, its name riding sealed in field 38"
   # A version-2 decision is kind 25's and a version-3 decision channel 4's, and neither reaches a server gate, since
   # kinds 23 to 26 have none (DESIGN-COMPUTE §23.9, §27.9).
