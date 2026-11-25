@@ -23,3 +23,11 @@ const (
 
 // The key of a step that belongs to the engine and no one request.
 const computeBarrierEngineKey = "engine"
+
+// The provider store's steps (PROV-M12-01), keyed by the provider's code in decimal.
+const (
+	// Around a status change's transaction, whose commit is its linearization point: a gate result, a suspension or a
+	// resumption (provider_store.go).
+	BarrierComputeProviderStatusBefore = "compute.provider.status.before"
+	BarrierComputeProviderStatusAfter  = "compute.provider.status.after"
+)
