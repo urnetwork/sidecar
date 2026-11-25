@@ -458,9 +458,17 @@ func TestComponentQueueDropsAndCountsInStats(t *testing.T) {
 			t.Fatalf("ran %d, want %d", got, i)
 		}
 	}
+	// the test's component, beside any compute adds of its own on the legs that run compute, which queued nothing
 	stats := sidecar.Stats()
-	if len(stats.Components) != 1 || stats.Components[0].Name != "sockets" || stats.Components[0].DroppedCount != 1 ||
-		stats.Components[0].QueuedCount != 3 {
+	var sockets *SidecarComponentStats
+	for index, componentStats := range stats.Components {
+		if componentStats.Name == "sockets" {
+			sockets = &stats.Components[index]
+		} else if componentStats.QueuedCount != 0 || componentStats.DroppedCount != 0 {
+			t.Errorf("another component's queue moved: %+v", componentStats)
+		}
+	}
+	if sockets == nil || sockets.DroppedCount != 1 || sockets.QueuedCount != 3 {
 		t.Errorf("stats %+v", stats.Components)
 	}
 	if stats.GenerationCount != 1 {

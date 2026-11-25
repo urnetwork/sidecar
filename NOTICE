@@ -43,6 +43,9 @@ github.com/MichaelKinsy/PiG v0.7.0, a Go port of the Pi coding agent, is pinned 
 Pi 1.5.0 goldens and the enclave image's pig (QD-1255) and is in no go.mod, so no build of this
 repository links it. It is under the MIT license, Copyright Michael Kinsy, and its own NOTICE names
 Pi's (MIT, Copyright (c) 2025 Mario Zechner) and the browser and Node assets it embeds.
+testdata/harness/pi-1.5.0/ holds lines copied unchanged from PiG's fixtures and from the Pi 1.5.0
+documentation PiG embeds, which testdata/harness/pi-1.5.0/SOURCES.md lists; third_party/pig/ holds
+PiG's MIT license, which covers them, and says what was taken (HARN-M11-01).
 
 record_redact_rules.go and record_redact_entropy.go hold redaction rules copied from
 github.com/zricethezav/gitleaks v8.30.1's config/gitleaks.toml: their ids, regular expressions,
