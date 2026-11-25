@@ -368,3 +368,37 @@ func TestAvahiReflectorSettingReads(t *testing.T) {
 		t.Fatal("a missing file turned the reflector on")
 	}
 }
+
+// A type a name the proxy owns does not hold is denied by an NSEC listing what the name holds: an AAAA while the
+// translator is off, a TXT of a host name; a name it does not own, a type's, gets nothing.
+func TestMdnsDiscoveryProxyDeniesAnAbsentTypeByNsec(t *testing.T) {
+	link := newTestMdnsProxyLink()
+	settings := defaultUrMdnsProxySettings()
+	settings.AnnounceInterval = time.Hour
+	applied := make(chan urDiscoveryProxyStatus, 16)
+	proxy := newUrMdnsDiscoveryProxy(context.Background(), nil, link, settings, nil, func(status urDiscoveryProxyStatus) { applied <- status })
+	defer proxy.Close()
+	testMdnsProxyNext(t, applied)
+	proxy.Set([]*sidecar.BridgeDiscoveryRegistration{
+		testMdnsProxyRegistration("Files", "_smb._tcp", "nas", "host-a", "100.80.128.9", 445, ""),
+	}, nil)
+	testMdnsProxyNext(t, applied)
+	link.next(t)
+	host := netip.MustParseAddrPort("100.80.4.2:5353")
+	for _, qtype := range []uint16{urMdnsTypeAaaa, urMdnsTypeTxt} {
+		link.query(t, host, &urMdnsMessage{questions: []urMdnsQuestion{{name: urMdnsNameParse("nas.host-a.local"), qtype: qtype}}})
+		_, _, answer := link.next(t)
+		if len(answer.answers) != 1 || answer.answers[0].rrtype != urMdnsTypeNsec || !answer.answers[0].cacheFlush {
+			t.Fatalf("type %d answered %+v", qtype, answer.answers)
+		}
+		data := answer.answers[0].data
+		next, at, err := urMdnsReadName(data, 0)
+		// the next name its own, window 0, and a bitmap whose one bit is A's
+		if err != nil || !next.equal(urMdnsNameParse("nas.host-a.local")) || len(data) != at+3 || data[at] != 0 || data[at+1] != 1 || data[at+2] != 0x40 {
+			t.Fatalf("NSEC %x, %v", data, err)
+		}
+	}
+	// a type's name is shared, not this responder's alone: no NSEC for it
+	link.query(t, host, &urMdnsMessage{questions: []urMdnsQuestion{{name: urMdnsNameParse("_smb._tcp.local"), qtype: urMdnsTypeTxt}}})
+	link.quiet(t)
+}

@@ -42,6 +42,10 @@ type ComputeEngineSettings struct {
 	// The projection cache's settings, which the host builds the process's AclGateCache from (§8.9, C-09). nil:
 	// sidecar.DefaultAclGateSettings.
 	AclGate *sidecar.AclGateSettings
+	// The providers' settings (provider_settings.go, PROV-M12-01): which adapters this deployment enables in its env,
+	// and the registry's bounds. An engine whose providers' settings do not validate, the reference provider enabled
+	// in production among them, refuses to start (D-ENC-2, CO-21). nil: DefaultComputeProviderSettings.
+	Providers *ComputeProviderSettings
 }
 
 // The defaults.
@@ -63,6 +67,7 @@ func DefaultComputeEngineSettings() *ComputeEngineSettings {
 		RequestBodyMaxByteCount: 64 * 1024,
 		Revocation:              sidecar.DefaultRevocationSettings(),
 		AclGate:                 sidecar.DefaultAclGateSettings(),
+		Providers:               DefaultComputeProviderSettings(),
 	}
 }
 
@@ -74,8 +79,8 @@ func (self *ComputeEngineSettings) bodyMaxByteCount(route string) int64 {
 	return self.RequestBodyMaxByteCount
 }
 
-// An error for settings no engine could serve under: a body bound that is not positive, or one naming no route of
-// the design.
+// An error for settings no engine could serve under: a body bound that is not positive, one naming no route of the
+// design, or providers' settings that do not validate.
 func (self *ComputeEngineSettings) Validate() error {
 	if self.RequestBodyMaxByteCount <= 0 {
 		return fmt.Errorf("compute engine: the request body bound %d is not positive", self.RequestBodyMaxByteCount)
@@ -90,6 +95,11 @@ func (self *ComputeEngineSettings) Validate() error {
 		}
 		if maxByteCount <= 0 {
 			return fmt.Errorf("compute engine: the body bound of %s is not positive", route)
+		}
+	}
+	if self.Providers != nil {
+		if err := self.Providers.Validate(); err != nil {
+			return fmt.Errorf("compute engine: %w", err)
 		}
 	}
 	return nil
