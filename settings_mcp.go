@@ -52,6 +52,10 @@ type SidecarMcpSettings struct {
 	// How long a run's file stays once its Coverage entry is sealed: 30 days (§16.6's retention row),
 	// for restore (§16.7). A later Coverage starts it again.
 	RunFileRetention time.Duration
+	// The most a run file's JSON may hold, a bound on what a read takes: 1 MiB. Its lists grow by a session id, a gap
+	// code, a reason or a mark, each deduplicated, so a real file stays far below it. A file past it does not read,
+	// which reads its run tainted and marked. Non-positive reads no file.
+	RunFileByteCount int
 	// What Sidecar.SecretMatcher matches a tool result against (I-7; record_secret_match.go).
 	SecretMatch *SecretMatchSettings
 }
@@ -324,6 +328,7 @@ func defaultSidecarMcpSettings() *SidecarMcpSettings {
 		ApprovalPhoneLeaseExpiry:   7 * 24 * time.Hour,
 		PresenceKeyLifetime:        365 * 24 * time.Hour,
 		RunFileRetention:           30 * 24 * time.Hour,
+		RunFileByteCount:           1024 * 1024,
 		SecretMatch:                DefaultSecretMatchSettings(),
 	}
 }
