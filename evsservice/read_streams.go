@@ -6,7 +6,8 @@
 //	         not record-class or a ref that stands and is not an owned file-mode stream answers 400 INVALID before
 //	         anything is read past the heads
 //	heads    each ref's head from {evsh_} where §11.9's cache row allows, at least its pin, else the cluster's, all
-//	         read before the first frame, so a failure there answers 503
+//	         read before the first frame, so a failure there answers 503; the request's store reads, these and
+//	         every ref's after, at most EvsSettings.EntryReadConcurrency in flight (read_fanout.go)
 //	per ref  its head summary first; nothing more when it stands at or below its pin; `behind` with the first
 //	         missing version when its pin is older than the window, the client paging GET .../log; else each version
 //	         after the pin in order: its Signed EvsPush as received, its push record (a sealed push's seal record and
@@ -56,6 +57,8 @@ func (self *EvsEngine) serveReadStreams(request *EvsRequest, body *protocol.EvsR
 		return
 	}
 	ctx := request.Ctx
+	// every store read of the request through one bound (read_fanout.go)
+	cluster := self.attemptCluster(request)
 	refs := []*readStreamRef{}
 	seen := map[sidecar.Id]bool{}
 	for _, readRef := range body.GetRefs() {
@@ -68,7 +71,7 @@ func (self *EvsEngine) serveReadStreams(request *EvsRequest, body *protocol.EvsR
 		refs = append(refs, &readStreamRef{refId: refId, pinVersion: readRef.GetPinVersion()})
 		request.NoteRefIds(refId)
 	}
-	repo, err := self.repos.Read(ctx, request.Cluster, request.RepoId)
+	repo, err := self.repos.Read(ctx, cluster, request.RepoId)
 	if !self.answerTransition(request, err) {
 		return
 	}
@@ -84,7 +87,7 @@ func (self *EvsEngine) serveReadStreams(request *EvsRequest, body *protocol.EvsR
 		waitGroup.Add(1)
 		go func() {
 			defer waitGroup.Done()
-			ref.head, errs[i] = self.heads.ReadCached(ctx, request.Cluster, request.RepoId, ref.refId, ref.pinVersion, false)
+			ref.head, errs[i] = self.heads.ReadCached(ctx, cluster, request.RepoId, ref.refId, ref.pinVersion, false)
 		}()
 	}
 	waitGroup.Wait()
@@ -115,7 +118,7 @@ func (self *EvsEngine) serveReadStreams(request *EvsRequest, body *protocol.EvsR
 	spent := false
 	for _, ref := range refs {
 		read := &readAttempt{
-			engine: self, request: request, settings: settings, ctx: ctx, cluster: request.Cluster, repoId: request.RepoId,
+			engine: self, request: request, settings: settings, ctx: ctx, cluster: cluster, repoId: request.RepoId,
 			refId: ref.refId, body: body, head: ref.head,
 		}
 		if !stream.frame(&protocol.EvsReadFrame{Head: read.headSummary()}) {
@@ -137,7 +140,7 @@ func (self *EvsEngine) serveReadStreams(request *EvsRequest, body *protocol.EvsR
 			}
 			continue
 		}
-		read.pushes = newReadPushes(self, ctx, request.Cluster, request.RepoId, ref.refId, head)
+		read.pushes = newReadPushes(self, ctx, cluster, request.RepoId, ref.refId, head)
 		for version := ref.pinVersion + 1; version <= head.GetVersion(); version += 1 {
 			version := version
 			objects, err := read.streamVersionObjects(version)

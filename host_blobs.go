@@ -138,6 +138,25 @@ func BlobRequestDeadline(ctx context.Context, issued time.Time, requestTimeout t
 	return deadline
 }
 
+// The context key WithBlobClientPaced stores under.
+type blobClientPacedKey struct{}
+
+// ctx for a Get, GetRange or PutStream whose body moves at a client's own pace: a segment upload's body as
+// its client sends it, or an object a read streams to its client as it reads it. Such a request holds its
+// connection for as long as its client takes, so an implementation that caps the connections it opens to a
+// host (server's FileClusterSettings.MaxConnsPerHost, §11.15's fan-out) sends it outside the cap, where a
+// slow client holds none of the connections a burst's requests wait for (QD-1402). Every other request on
+// ctx, and every request to an implementation with no such cap, goes as before.
+func WithBlobClientPaced(ctx context.Context) context.Context {
+	return context.WithValue(ctx, blobClientPacedKey{}, true)
+}
+
+// Whether ctx says a request's body moves at a client's own pace (WithBlobClientPaced).
+func BlobClientPaced(ctx context.Context) bool {
+	paced, _ := ctx.Value(blobClientPacedKey{}).(bool)
+	return paced
+}
+
 // §11.8's create of an immutable key (place/, log/, pb/, hp/, pmap/, pidx/, spidx/, dropscan/ and any
 // other family its immutable row names): creates key holding body and returns the ETag it holds. The
 // one helper every family's writer calls, so each answers a lost response alike (D-EVS-13):
