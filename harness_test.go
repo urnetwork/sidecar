@@ -234,6 +234,14 @@ func (self *harnessTestJournal) Render(ctx context.Context, args *HarnessRenderA
 	for id := args.InputNodeId; id != ""; {
 		node := self.runNodes[args.RunId][id]
 		if node == nil {
+			// a parent link into another run (§24.7)
+			for _, nodes := range self.runNodes {
+				if found := nodes[id]; found != nil {
+					node = found
+				}
+			}
+		}
+		if node == nil {
 			return nil, fmt.Errorf("node %s is not journaled", id)
 		}
 		path = append([]*HarnessJournalNode{node}, path...)
@@ -259,8 +267,18 @@ func (self *harnessTestJournal) Render(ctx context.Context, args *HarnessRenderA
 			}
 		}
 	}
+	// the newest system message on the path is the one in force: the Harness writes each whole
+	systemAt := -1
 	for i, node := range path {
 		if node.Entry.Type() == HarnessPiEntryMessage && node.Entry.Message().Role() == HarnessPiRoleSystem {
+			systemAt = i
+		}
+	}
+	for i, node := range path {
+		if node.Entry.Type() == HarnessPiEntryMessage && node.Entry.Message().Role() == HarnessPiRoleSystem {
+			if i != systemAt {
+				continue
+			}
 			message := node.Entry.Message()
 			sections := harnessPiObject{}
 			message.object.decode("sections", &sections)
@@ -417,6 +435,19 @@ func harnessCollect(t *testing.T, agent HarnessAgent) *harnessEventLog {
 		log.events <- event
 	}))
 	return log
+}
+
+// Prompts agent again once its last run is idle: agent_settled reaches a listener on the listener's own goroutine,
+// which can run before the settled run marks the agent idle, so a prompt sent on seeing it alone could be refused as
+// running. Fails where the prompt is refused.
+func harnessPromptIdle(t *testing.T, agent HarnessAgent, text string) {
+	t.Helper()
+	if err := agent.WaitForIdle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := agent.Prompt(context.Background(), text, nil); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // The events up to and with the first of eventType, failing past a guard.
@@ -674,11 +705,33 @@ func TestHarnessJournalBeforeCompletingEvent(t *testing.T) {
 	}
 	world.journal.stateLock.Unlock()
 	before := len(router.made())
-	agent.Prompt(context.Background(), "this cannot journal", nil)
+	harnessPromptIdle(t, agent, "this cannot journal")
 	settled := log.until(t, HarnessEventAgentSettled)
 	if len(router.made()) != before || harnessStopReason(settled[len(settled)-1]) != HarnessStopError {
 		t.Fatalf("an unjournaled context was sent: %d requests, stop %q", len(router.made())-before,
 			harnessStopReason(settled[len(settled)-1]))
+	}
+
+	// a response that cannot be journaled ends the run: its message_end never goes out, and no retry calls again
+	world.journal.stateLock.Lock()
+	world.journal.gate = func(node *HarnessJournalNode) error {
+		if message := node.Entry.Message(); message != nil && message.Role() == HarnessPiRoleAssistant {
+			return errors.New("the journal's disk is full")
+		}
+		return nil
+	}
+	world.journal.stateLock.Unlock()
+	router.script(harnessTextCall("unjournaled answer"), harnessTextCall("a retry that must not run"))
+	before = len(router.made())
+	harnessPromptIdle(t, agent, "answer me")
+	settled = log.until(t, HarnessEventAgentSettled)
+	for _, event := range settled {
+		if event.Type == HarnessEventMessageEnd && event.Message().Role() == HarnessPiRoleAssistant {
+			t.Fatal("an unjournaled response's message_end went out")
+		}
+	}
+	if len(router.made())-before != 1 || harnessStopReason(settled[len(settled)-1]) != HarnessStopError {
+		t.Fatalf("an unjournaled response: %d calls, stop %q", len(router.made())-before, harnessStopReason(settled[len(settled)-1]))
 	}
 }
 
@@ -815,5 +868,46 @@ func TestHarnessUntrustedResultRenderedBetweenMarkers(t *testing.T) {
 	if !strings.HasPrefix(last, "BEGIN UNTRUSTED DATA (from tool fetch_page)\n") || strings.Count(last, HarnessUntrustedEnd) != 1 ||
 		!strings.HasSuffix(last, "\n"+HarnessUntrustedEnd) {
 		t.Fatalf("the result as the model read it: %q", last)
+	}
+}
+
+// Continue starts an agent's run on the context the journal rebuilt: its first node hangs from the continued run's
+// node, the request carries the continued messages, and the run starts tainted where the nodes it takes are.
+func TestHarnessContinueStartsOnRebuiltContext(t *testing.T) {
+	router := newHarnessScriptedRouter(t)
+	world := newHarnessTestWorld(t, router, nil, nil)
+	router.script(harnessTextCall("the first run's answer"), harnessTextCall("continued"))
+	first := world.agent(t, nil)
+	log := harnessCollect(t, first)
+	first.Prompt(context.Background(), "the first run's question", nil)
+	log.until(t, HarnessEventAgentSettled)
+	leaf := first.(*harnessAgent).leafNodeId
+	nodes := []*HarnessPiEntry{}
+	for _, node := range first.(*harnessAgent).contextNodes {
+		nodes = append(nodes, node.entry)
+	}
+	continued, err := world.harness.Continue(context.Background(), &HarnessAgentSpec{Model: harnessTestModel},
+		&HarnessContinuation{ParentRunId: first.Run().Id(), ParentNodeId: leaf, Nodes: nodes,
+			TaintReasons: []RunTaintReason{RunTaintInherited}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if continued.Run().Id() == first.Run().Id() || !continued.Run().Tainted() {
+		t.Fatal("a continuation of flagged nodes did not start a tainted run of its own")
+	}
+	continuedLog := harnessCollect(t, continued)
+	continued.Prompt(context.Background(), "go on", nil)
+	continuedLog.until(t, HarnessEventAgentSettled)
+	messages := router.made()[1].Messages
+	texts := []string{}
+	for _, message := range messages[1:] {
+		texts = append(texts, message.Text())
+	}
+	if want := []string{"the first run's question", "the first run's answer", "go on"}; !slices.Equal(texts, want) {
+		t.Fatalf("the continued request: %v", texts)
+	}
+	systemNode := world.journal.node(continued.Run().Id(), continued.(*harnessAgent).systemNodeId)
+	if parentId, _ := systemNode.Entry.ParentId(); parentId != leaf || systemNode.ParentRunId == nil || *systemNode.ParentRunId != first.Run().Id() {
+		t.Fatal("the continued run's first node does not hang from the continued run's node")
 	}
 }

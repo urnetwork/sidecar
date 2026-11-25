@@ -62,7 +62,13 @@ func (self *harnessAgent) callWithRecovery(ctx context.Context) (*HarnessPiMessa
 		if !self.foreground() {
 			return nil, &harnessRunEnd{stopReason: HarnessStopBackgrounded}
 		}
-		message, failure := self.callOnce(ctx)
+		message, failure, fatal := self.callOnce(ctx)
+		if fatal != nil {
+			if ctx.Err() != nil {
+				return nil, self.aborted()
+			}
+			return nil, &harnessRunEnd{stopReason: HarnessStopError, errorMessage: fatal.Error()}
+		}
 		if failure == nil {
 			if 0 < retries {
 				self.emit(NewHarnessAutoRetryEndEvent(true, retries, ""))

@@ -55,7 +55,7 @@ func TestHarnessRetryOnlyRetryableNeverOtherModel(t *testing.T) {
 	// model_refused is no retry's to cure: no retry, and with no person attached the run stops naming the code
 	router.script(&harnessScriptedCall{refuse: &InferError{Code: InferErrorModelRefused, Model: harnessTestModel, Message: "below the floor"}})
 	before := len(router.made())
-	agent.Prompt(context.Background(), "again", nil)
+	harnessPromptIdle(t, agent, "again")
 	events = log.until(t, HarnessEventAgentSettled)
 	errorMessage := ""
 	events[len(events)-1].Decode("errorMessage", &errorMessage)
@@ -259,7 +259,7 @@ func TestHarnessDisclosureAttachedAsksThenCalls(t *testing.T) {
 	// "Not now" fails the call with the failure choice: a new version the store does not cover
 	router.script(&harnessScriptedCall{refuse: &InferError{Code: InferErrorDisclosureRequired, Reason: InferDisclosureReasonUnacknowledged,
 		Model: harnessTestModel, DisclosureId: "inference:none", DisclosureVersion: 3, Message: "acknowledge the new version"}})
-	agent.Prompt(context.Background(), "again", nil)
+	harnessPromptIdle(t, agent, "again")
 	events = log.until(t, HarnessEventUiRequest)
 	request = events[len(events)-1].UiRequest()
 	notNow := HarnessUiDisclosureDecline

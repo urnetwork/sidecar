@@ -63,7 +63,7 @@ func TestHarnessCompactionThresholds(t *testing.T) {
 	// a 100,000-byte prompt takes 25,000 tokens
 	agent.Prompt(context.Background(), strings.Repeat("a", 100000), nil)
 	log.until(t, HarnessEventAgentSettled)
-	agent.Prompt(context.Background(), "a short question", nil)
+	harnessPromptIdle(t, agent, "a short question")
 	events := log.until(t, HarnessEventAgentSettled)
 	compacted := false
 	for _, event := range events {
@@ -118,9 +118,9 @@ func TestHarnessCompactionOnTooLargeRefusal(t *testing.T) {
 	log := harnessCollect(t, agent)
 	agent.Prompt(context.Background(), "one", nil)
 	log.until(t, HarnessEventAgentSettled)
-	agent.Prompt(context.Background(), "two", nil)
+	harnessPromptIdle(t, agent, "two")
 	log.until(t, HarnessEventAgentSettled)
-	agent.Prompt(context.Background(), "three", nil)
+	harnessPromptIdle(t, agent, "three")
 	events := log.until(t, HarnessEventAgentSettled)
 	reason := ""
 	for _, event := range events {

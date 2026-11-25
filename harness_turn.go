@@ -408,15 +408,21 @@ func (self *harnessAgent) runCharge() uint64 {
 }
 
 // One call: the request rendered from the journal, sent through the router, its stream turned into Pi's events; the
-// message journaled before message_end. Answers the message, or the router's error with what streamed so far.
-func (self *harnessAgent) callOnce(ctx context.Context) (*HarnessPiMessage, *InferError) {
+// message journaled before message_end. Answers the message, or the router's error with what streamed so far, or a
+// fatal error where the journal or the renderer failed, which no retry cures: nothing that would carry an unjournaled
+// context is sent, and the run ends.
+func (self *harnessAgent) callOnce(ctx context.Context) (*HarnessPiMessage, *InferError, error) {
 	if err := self.applyPendingModel(ctx); err != nil {
-		return nil, inferErrorOf(err)
+		refused := &InferError{}
+		if errors.As(err, &refused) {
+			return nil, refused, nil
+		}
+		return nil, nil, err
 	}
 	model := self.currentModel()
 	resolution, err := self.harness.modelEntry(ctx, model)
 	if err != nil {
-		return nil, &InferError{Code: InferErrorModelRefused, Model: model, Message: "the model does not resolve in the catalog"}
+		return nil, &InferError{Code: InferErrorModelRefused, Model: model, Message: "the model does not resolve in the catalog"}, nil
 	}
 	systemNodeId, leafNodeId := func() (string, string) {
 		self.stateLock.Lock()
@@ -426,7 +432,7 @@ func (self *harnessAgent) callOnce(ctx context.Context) (*HarnessPiMessage, *Inf
 	request, err := self.harness.journal.Render(ctx, &HarnessRenderArgs{RunId: self.run.Id(), InputNodeId: leafNodeId,
 		SystemNodeId: systemNodeId, Model: model})
 	if err != nil {
-		return nil, &InferError{Code: InferErrorEngineFailed, Model: model, Message: "the context did not render, so nothing was sent"}
+		return nil, nil, fmt.Errorf("the context did not render, so nothing was sent: %w", err)
 	}
 	runId, agentId := self.run.Id(), self.id
 	request.Model = model
@@ -443,7 +449,7 @@ func (self *harnessAgent) callOnce(ctx context.Context) (*HarnessPiMessage, *Inf
 		maxOutput: maxOutput, toolIndexes: map[string]int{}}
 	events, err := self.harness.router.Infer(ctx, request)
 	if err != nil {
-		return nil, inferErrorOf(err)
+		return nil, inferErrorOf(err), nil
 	}
 	var failure *InferError
 	for event := range events {
@@ -470,7 +476,7 @@ func (self *harnessAgent) callOnce(ctx context.Context) (*HarnessPiMessage, *Inf
 		if stream.started {
 			self.emit(NewHarnessMessageEndEvent(partial))
 		}
-		return nil, failure
+		return nil, failure, nil
 	}
 	stopReason := HarnessPiStopStop
 	if stream.cutByLength() {
@@ -481,10 +487,10 @@ func (self *harnessAgent) callOnce(ctx context.Context) (*HarnessPiMessage, *Inf
 	stream.start()
 	message := stream.message(stopReason, "")
 	if _, err := self.journalMessage(ctx, message, false, ""); err != nil {
-		return nil, &InferError{Code: InferErrorEngineFailed, Model: model, Message: err.Error()}
+		return nil, nil, err
 	}
 	self.emit(NewHarnessMessageEndEvent(message))
-	return message, nil
+	return message, nil, nil
 }
 
 // Journals a failed call's partial message beside the leaf, leaving the leaf where it was.

@@ -538,7 +538,9 @@ func (self *harnessAgent) setModel(model string, changedBy string) error {
 	return nil
 }
 
-// Takes a pending model change before a call, journaling its model_change.
+// Takes a pending model change before a call, journaling its model_change. Answers an *InferError where the catalog
+// stopped naming the model after SetModel took it, the call's failure for the failure choice, and any other error where
+// the model_change did not journal, which ends the run.
 func (self *harnessAgent) applyPendingModel(ctx context.Context) error {
 	model, changedBy, previous := func() (string, string, string) {
 		self.stateLock.Lock()
@@ -552,7 +554,7 @@ func (self *harnessAgent) applyPendingModel(ctx context.Context) error {
 	}
 	resolution, err := self.harness.modelEntry(ctx, model)
 	if err != nil {
-		return err
+		return &InferError{Code: InferErrorModelRefused, Model: model, Message: "the model does not resolve in the catalog"}
 	}
 	leaf := func() string {
 		self.stateLock.Lock()

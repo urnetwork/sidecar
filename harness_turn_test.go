@@ -15,14 +15,12 @@ import (
 func TestHarnessParallelToolsStartInCallOrder(t *testing.T) {
 	router := newHarnessScriptedRouter(t)
 	firstRelease := make(chan struct{})
-	secondDone := make(chan struct{})
 	tools := map[string]*HarnessToolSpec{
 		"slow": harnessLoopTool("slow", "", HarnessToolTierRead, func(ctx context.Context, args []byte) (*HarnessToolResult, error) {
 			<-firstRelease
 			return &HarnessToolResult{Text: "slow done", Trust: HarnessToolTrusted}, nil
 		}),
 		"fast": harnessLoopTool("fast", "", HarnessToolTierRead, func(ctx context.Context, args []byte) (*HarnessToolResult, error) {
-			defer close(secondDone)
 			return &HarnessToolResult{Text: "fast done", Trust: HarnessToolTrusted}, nil
 		}),
 	}
@@ -31,9 +29,11 @@ func TestHarnessParallelToolsStartInCallOrder(t *testing.T) {
 	agent := world.agent(t, nil)
 	log := harnessCollect(t, agent)
 	agent.Prompt(context.Background(), "go", nil)
-	<-secondDone
+	// the first call is held until an end went out, which only the second's can be; its Execute returning is not
+	// enough, since its end is emitted after it returns
+	events := log.until(t, HarnessEventToolExecutionEnd)
 	close(firstRelease)
-	events := log.until(t, HarnessEventAgentSettled)
+	events = append(events, log.until(t, HarnessEventAgentSettled)...)
 	sequence := []string{}
 	for _, event := range events {
 		switch event.Type {
