@@ -64,6 +64,8 @@ func TestDefaultSidecarSettingsMatchDesign(t *testing.T) {
 				// §16.6's retention row
 				ApprovalFileRetention: 30 * 24 * time.Hour,
 				RunFileRetention:      30 * 24 * time.Hour,
+				// a run file's read bound (HARN-M11-02's move of record_run.go's constant, QD-702)
+				RunFileByteCount: 1024 * 1024,
 				// MCP.md's reading 3, §16.6's expiry row, and MCP-M3-05's poll, a reading
 				ApprovalRequestTimeout:  24 * time.Hour,
 				ApprovalCompleteTimeout: 10 * time.Minute,

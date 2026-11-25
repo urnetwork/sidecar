@@ -686,6 +686,8 @@ barrier record.log.sign.after record_log.go
 barrier record.log.sign.before record_log.go
 barrier record.log.witness.after record_log.go
 barrier record.log.witness.before record_log.go
+barrier record.mark.after record_run.go
+barrier record.mark.before record_run.go
 barrier record.mirror.keep.after record_mirror.go
 barrier record.mirror.keep.before record_mirror.go
 barrier record.mirror.redeposit.after record_mirror.go

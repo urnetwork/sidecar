@@ -60,10 +60,11 @@ func NewHarnessApprovalPendingEvent(pending *HarnessApprovalPending) *HarnessEve
 		"kind", pending.Kind, "text", pending.Text, "evidence", evidence, "tainted", pending.Tainted)
 }
 
-// An automatic decision's verdict (§27.9): why the device's check let the action go ahead, and its score.
+// An automatic decision's verdict (§27.9): why the device's check let the action go ahead, and its score, each left
+// out where SAFE's record of it is not read.
 type HarnessAutoVerdict struct {
-	Reason string  `json:"reason"`
-	Score  float64 `json:"score"`
+	Reason string   `json:"reason,omitempty"`
+	Score  *float64 `json:"score,omitempty"`
 }
 
 // What approval_resolved shows: how the approval stands, the channels its kept decisions came by, and for an

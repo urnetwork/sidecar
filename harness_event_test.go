@@ -172,7 +172,7 @@ func TestHarnessSidecarEventsFollowPiUnion(t *testing.T) {
 			Text: "request: tainted_send", Evidence: []string{"device", "presence"}, Tainted: true}),
 		NewHarnessApprovalResolvedEvent(&HarnessApprovalResolved{ApprovalId: approvalId, State: "approved", Channels: []string{"device"}}),
 		NewHarnessApprovalResolvedEvent(&HarnessApprovalResolved{ApprovalId: approvalId, State: "approved", Channels: []string{"auto"},
-			Auto: &HarnessAutoVerdict{Reason: "nothing_injected", Score: 0.02}}),
+			Auto: &HarnessAutoVerdict{Reason: "nothing_injected", Score: func() *float64 { score := 0.02; return &score }()}}),
 		NewHarnessAttestationEvent("prov-model-high", ComputeLabel("A1"), &protocol.AttestationResult{}),
 		NewHarnessAttestationEvent("prov-model-high", ComputeLabel("none"), nil),
 		NewHarnessUsageEvent(&HarnessUsage{Model: "prov-model-high", InputTokens: 10, OutputTokens: 5, ChargeNanoUsd: 1200, RunNanoUsd: 3400}),
