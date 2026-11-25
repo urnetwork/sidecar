@@ -18,6 +18,15 @@
 //	standing  an action no requests rule takes names no rule and no expiry, so no decision could activate a grant for
 //	          it: a standing grant alone covers it (AclEngine.ActiveGrant), under aclStandingGrantEffect, and with none
 //	          it is refused before the gate, filing nothing
+//	landed    a use that activates a grant is done only once this device's engine holds the grant in force, waited on
+//	          in the network's config up to its GrantActivate's receipt (aclKeptGrantEffect, as a publish's
+//	          confirmGrant and a forward's confirmForwardGrant wait), so the caller acts on a grant the log holds where
+//	          the network's gates read it; one the engine does not hold by then leaves the use uncertain, never
+//	          not_done, since the grant may still land, and the same call made again completes it
+//	named     that call made again once the engine holds the grant passes the gate as standing under it (§16.6's step
+//	          2), whose empty key the grant component answers with nothing; the kept action's effect answers there the
+//	          grant its own decision activated (priorGrant), so its caller names that grant as it names one its use
+//	          activated, as a publish names its own
 //
 // The keeper is in memory alone: a request filed before a restart is filed again after it. Safe for concurrent use.
 // Nothing here creates, derives or unwraps a key.
@@ -27,6 +36,7 @@ package sidecar
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -34,7 +44,21 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/sidecar/protocol"
+	"github.com/urnetwork/sidecar/protocol/bridge"
 )
+
+// The grant a use activated is not in force in this device's engine yet (the file header's landed row): the use is
+// uncertain, never not_done, and the same call made again completes it.
+var ErrAclGrantUnconfirmed = errors.New("acl grant not confirmed in this device's engine")
+
+// What a use waits on for the grant it activated to reach this device's engine (the file header's landed row):
+// TEAM-M2-10's ConfigClient is one, whose follower installs each state in the engine before WaitFor answers.
+type AclGrantConfig interface {
+	// The state at or past n, once the follow reaches it.
+	WaitFor(ctx context.Context, n uint64) (*ConfigState, error)
+}
+
+var _ AclGrantConfig = (*ConfigClient)(nil)
 
 // Actions kept as their requests were filed, by a caller's key, each until its expiry (the file header's kept row).
 // Safe for concurrent use.
@@ -171,4 +195,86 @@ func (self *AclGrantFiler) priorGrant(action *StoredCanonicalAction, detail *Sid
 func (self *AclGrantFiler) grantEnded(action *StoredCanonicalAction, detail *SidecarActionDetail, runId *Id, agentId *Id, now time.Time) bool {
 	grantId, stands := self.priorGrant(action, detail, runId, agentId, now)
 	return grantId != nil && !stands
+}
+
+// The grant component's effect for a kept grant action (the file header's landed and named rows): under a use's key
+// the GrantActivate its spend fixes, done only once this device's engine holds the grant in force, waited on in config
+// within timeout (awaitGrant); under a standing pass's empty key the grant the action's own decision activated, where
+// it stands. detail, runId and agentId are what the action's request binds beside it. config nil waits on nothing, so
+// a grant the engine does not hold as its post answers leaves the use uncertain.
+func (self *AclGrantFiler) keptEffect(action *StoredCanonicalAction, detail *SidecarActionDetail, runId *Id, agentId *Id,
+	config AclGrantConfig, timeout time.Duration) SidecarEffect {
+	return &aclKeptGrantEffect{
+		filer: self,
+		grant: &aclGrantEffect{filer: self, action: action, confirm: func(ctx context.Context, pin *bridge.AuthPin, signed []byte, grantId []byte) error {
+			return self.awaitGrant(ctx, config, timeout, pin, grantId)
+		}},
+		action:  action,
+		detail:  detail,
+		runId:   runId,
+		agentId: agentId,
+	}
+}
+
+// See AclGrantFiler.keptEffect.
+type aclKeptGrantEffect struct {
+	filer   *AclGrantFiler
+	grant   *aclGrantEffect
+	action  *StoredCanonicalAction
+	detail  *SidecarActionDetail
+	runId   *Id
+	agentId *Id
+}
+
+// See SidecarEffect: the grant component's Run under a use's key; under a standing pass's empty key the grant the
+// action's own decision activated while the installed state holds it in force (the file header's named row), and
+// nothing for one a standing grant of the config's covers, nothing having been activated for it.
+func (self *aclKeptGrantEffect) Run(ctx context.Context, effectKey []byte) ([]byte, error) {
+	if 0 < len(effectKey) {
+		return self.grant.Run(ctx, effectKey)
+	}
+	if self.filer.sidecar == nil {
+		return nil, nil
+	}
+	grantId, stands := self.filer.priorGrant(self.action, self.detail, self.runId, self.agentId, self.filer.sidecar.clock.Now())
+	if !stands {
+		return nil, nil
+	}
+	return grantId, nil
+}
+
+// Whether this device's engine holds grantId in force at now.
+func (self *AclGrantFiler) grantStands(grantId []byte, now time.Time) bool {
+	state := self.engine.State()
+	if state == nil {
+		return false
+	}
+	rule := state.grantRule(grantId)
+	return rule != nil && rule.activeAt(now.UnixMilli())
+}
+
+// The landed row (the file header): nil once this device's engine holds grantId in force, at once or once config,
+// waited on within timeout, reaches the position of pin, its GrantActivate's receipt, as the follower installs each
+// state in the engine before its position shows (acl_follow.go). ErrAclGrantUnconfirmed otherwise: no receipt, no
+// config to wait on, a wait that ended first, or a state there that does not hold the grant in force.
+func (self *AclGrantFiler) awaitGrant(ctx context.Context, config AclGrantConfig, timeout time.Duration, pin *bridge.AuthPin, grantId []byte) error {
+	clock := self.sidecar.clock
+	if self.grantStands(grantId, clock.Now()) {
+		return nil
+	}
+	if pin == nil || pin.GetVersion() == 0 {
+		return fmt.Errorf("%w: no receipt for the grant", ErrAclGrantUnconfirmed)
+	}
+	if config == nil {
+		return fmt.Errorf("%w: no verified config to wait on for the grant", ErrAclGrantUnconfirmed)
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	if _, err := config.WaitFor(waitCtx, pin.GetVersion()); err != nil {
+		return fmt.Errorf("%w: waiting for the grant: %w", ErrAclGrantUnconfirmed, err)
+	}
+	if !self.grantStands(grantId, clock.Now()) {
+		return fmt.Errorf("%w: the grant is not in force in this device's engine", ErrAclGrantUnconfirmed)
+	}
+	return nil
 }

@@ -1,7 +1,7 @@
 //go:build !js && !ios && !android && !sdk_mobile_bind && !windows && !sidecar_http && !ios_extension
 
-// Follow-ups to the kept grant actions of listens, publishes and forwards (acl_grant_keep.go), each at §16.6's real
-// gate on the bridge file world's sidecar, config log and ACL engine:
+// Three follow-ups to the kept grant actions of listens, publishes and forwards (acl_grant_keep.go), each at §16.6's
+// real gate on the bridge file world's sidecar, config log and ACL engine:
 //
 //   - Sidecar.Listen's tls/ listen keeps its action in a GrantActionKeeper with the ended check: asked again once the
 //     grant its decision activated has been revoked, it files a new request, where the kept action's spent decision
@@ -12,6 +12,10 @@
 //     member's decision into one GrantActivate ending at that end; a lifetime and an end together and an end not ahead
 //     are refused before anything is filed, and the daemon's bridge.forward hands its expires_ms to the filer as the
 //     end, refusing one beside a lifetime and one below zero.
+//   - MCP's socket_listen (SocketListenGrantAction): an approved listen's use is done only once the engine holds the
+//     grant it activated, its config waited on up to the GrantActivate's receipt; a grant the engine does not hold
+//     within the wait leaves the use uncertain, and the listen asked again once it does passes the gate under that
+//     grant, its effect naming it, with no second GrantActivate; and with no config to wait on the use is uncertain.
 //
 // Synthetic values only.
 
@@ -19,6 +23,7 @@ package sidecar
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"slices"
 	"testing"
@@ -26,6 +31,14 @@ import (
 
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
+
+// action's outcome, nil for no action, for a failure to print.
+func testKeptOutcome(action *SidecarAction) *SidecarOutcome {
+	if action == nil {
+		return nil
+	}
+	return action.Outcome
+}
 
 // A tls/ listen under a requests rule spends the member's decision into its grant; asked again while the grant stands
 // it presents its request's action and passes on the grant, filing nothing; once the grant is revoked, the same
@@ -225,4 +238,105 @@ func TestDaemonBridgeForwardHandsItsEndToTheFiler(t *testing.T) {
 			t.Errorf("a forward asking a lifetime reached the filer as %s and a lifetime of %s", forward.ExpiresAt, forward.Lifetime)
 		}
 	})
+}
+
+// An approved MCP listen's use is done only once the engine holds the grant it activated: while the config's follow
+// has not installed the GrantActivate's position, the use has no answer, and once it has, the use is done with the
+// grant's id.
+func TestSocketListenGrantUseWaitsForItsGrantInTheEngine(t *testing.T) {
+	world := newTestListenGrantWorld(t)
+	world.rule(world.name, true)
+	_, _, err := world.listen()
+	request := world.gate.pendingRequest(t, err)
+	world.gate.approve(t, request, world.laptop, world.member)
+	grantId := AclGrantId(request.ApprovalId(), request.Action.PayloadSha256())
+
+	world.config.hold(true)
+	type answer struct {
+		action *SidecarAction
+		err    error
+	}
+	answered := make(chan answer, 1)
+	go func() {
+		action, _, err := world.listenIn(context.Background())
+		answered <- answer{action: action, err: err}
+	}()
+	var position uint64
+	select {
+	case position = <-world.config.waiting:
+	case got := <-answered:
+		t.Fatalf("the use answered without waiting for its grant: outcome %+v, %v", testKeptOutcome(got.action), got.err)
+	}
+	// the GrantActivate is in the log at the receipt's position and not in the engine: the use has no answer yet
+	if logPin := world.net.log.State().Pin().GetVersion(); position == 0 || logPin < position {
+		t.Fatalf("the use waits for position %d with the log at %d", position, logPin)
+	}
+	if state := world.engine.State(); state.grantRule(grantId[:]) != nil {
+		t.Fatal("the engine held the grant before the wait answered")
+	}
+	select {
+	case got := <-answered:
+		t.Fatalf("the use answered before its grant reached the engine: %v", got.err)
+	default:
+	}
+	world.config.release <- nil
+	got := <-answered
+	if got.err != nil || got.action.Outcome == nil || got.action.Outcome.State != ApprovalOutcomeDone || !bytes.Equal(got.action.Outcome.EffectRef, grantId[:]) {
+		t.Fatalf("the use once its grant reached the engine: %v, outcome %+v", got.err, testKeptOutcome(got.action))
+	}
+	world.config.hold(false)
+	if world.api.postCount() != 1 || world.gate.approvals.filedCount() != 1 {
+		t.Errorf("%d statements posted, %d requests filed", world.api.postCount(), world.gate.approvals.filedCount())
+	}
+}
+
+// A grant the engine does not hold within the wait leaves the approved listen's use uncertain, which MCP's tool answers
+// unavailable; once the engine holds it, the listen asked again passes the gate under that grant as standing, and its
+// effect names the grant, with no second GrantActivate and nothing filed. With no config to wait on at all, the use is
+// uncertain too.
+func TestSocketListenGrantNotInTheEngineIsUncertainThenNamed(t *testing.T) {
+	world := newTestListenGrantWorld(t)
+	world.rule(world.name, true)
+	_, filed, err := world.listen()
+	request := world.gate.pendingRequest(t, err)
+	world.gate.approve(t, request, world.laptop, world.member)
+	grantId := AclGrantId(request.ApprovalId(), request.Action.PayloadSha256())
+
+	world.config.hold(true)
+	world.config.release <- context.DeadlineExceeded
+	action, _, err := world.listen()
+	if err != nil || action.Outcome == nil || action.Outcome.State != ApprovalOutcomeUncertain || !errors.Is(action.Outcome.Err, ErrAclGrantUnconfirmed) {
+		t.Fatalf("a grant not in the engine: %v, outcome %+v", err, testKeptOutcome(action))
+	}
+	<-world.config.waiting
+	if types := world.api.postedTypes(t); !slices.Equal(types, []bridge.SignedType{bridge.SignedType_SIGNED_GRANT_ACTIVATE}) {
+		t.Fatalf("the spend posted %v", types)
+	}
+
+	// the engine catches up: asked again, the listen passes on the grant its approval activated, which it names
+	world.config.hold(false)
+	world.install()
+	world.advance(time.Minute)
+	named, stored, err := world.listen()
+	if err != nil || named.Outcome == nil || named.Outcome.State != ApprovalOutcomeDone || !bytes.Equal(named.Outcome.EffectRef, grantId[:]) {
+		t.Fatalf("the listen asked again on its grant: %v, outcome %+v", err, testKeptOutcome(named))
+	}
+	if !bytes.Equal(stored.Bytes, filed.Bytes) {
+		t.Error("the listen asked again presented another action than its request's")
+	}
+	if world.api.postCount() != 1 || world.gate.approvals.filedCount() != 1 {
+		t.Errorf("%d statements posted, %d requests filed", world.api.postCount(), world.gate.approvals.filedCount())
+	}
+
+	// the awaited grant with no config to wait on: uncertain, the engine not holding it
+	other := newTestListenGrantWorld(t)
+	other.config = nil
+	other.rule(other.name, true)
+	_, _, err = other.listen()
+	otherRequest := other.gate.pendingRequest(t, err)
+	other.gate.approve(t, otherRequest, other.laptop, other.member)
+	action, _, err = other.listen()
+	if err != nil || action.Outcome == nil || action.Outcome.State != ApprovalOutcomeUncertain || !errors.Is(action.Outcome.Err, ErrAclGrantUnconfirmed) {
+		t.Errorf("a grant with no config to wait on: %v, outcome %+v", err, testKeptOutcome(action))
+	}
 }
