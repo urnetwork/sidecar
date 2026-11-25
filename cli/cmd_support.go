@@ -4,6 +4,11 @@
 //	ur support logs [--sent=<client_ref>] [--json]
 //	    the support log's bundle as the next message would carry it, or as a sent message's did, rendered whole (§28.7,
 //	    FB's ur feedback preview), printed only to the terminal
+//	ur support export [<id>] [--out=<file>]
+//	    one archive a person sends by any path (FB section 5's export): an item's messages and replies with the bundles
+//	    and files this device keeps for its messages on it, one message's by its client_ref, or with neither the
+//	    support log's next bundle alone, which needs no conversation, so it works where support cannot be reached.
+//	    Written to a new file, never over one, and refused to a caller under a harness
 //
 // The support log is content-free by construction (support_log.go), and still no agent reads a bundle (§28.7, I-7):
 // the daemon builds one only for a control caller with no harness process among its ancestors, and ur prints it on
@@ -13,11 +18,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -29,7 +36,8 @@ import (
 
 // The control methods ur support calls.
 const (
-	urMethodSupportLogs = "support.logs"
+	urMethodSupportLogs   = "support.logs"
+	urMethodSupportExport = "support.export"
 )
 
 // What support.logs refuses to a caller under a harness: a bundle is the person's to read, never an agent's (§28.7).
@@ -43,6 +51,8 @@ func init() {
 			"  ur support show <id> [--json] [--network=<net>]\n" +
 			"  ur support send <text> [--re=<id>] [--kind=<k>] [--logs] [--attach=<file>...] [--network=<net>]\n" +
 			"  ur support logs [--sent=<client_ref>] [--json] [--network=<net>]\n" +
+			"  ur support export [<id>] [--out=<file>] [--network=<net>]\n" +
+			"  ur support report <code> [--network=<net>]\n" +
 			"  ur support watch [<id>] [--notes] [--network=<net>]\n" +
 			"  ur support delete <id> [--network=<net>]\n" +
 			"  ur support settings [--network=<net>]\n" +
@@ -65,10 +75,22 @@ type urSupportLogsReply struct {
 	Document *sidecar.SupportLogBundleDocument `json:"document"`
 }
 
+// support.export's params: an item's entry, or a message's client_ref, or neither for the next bundle alone.
+type urSupportExportParams struct {
+	Network string `json:"network,omitempty"`
+	Entry   string `json:"entry,omitempty"`
+	Sent    string `json:"sent,omitempty"`
+}
+
+// support.export's reply: the archive, which ur writes to its file.
+type urSupportExportReply struct {
+	Archive []byte `json:"archive"`
+}
+
 // Opens the daemon's ring under <state>/support-log, sets it as every hosted Sidecar's (settings is the one each
-// starts with), records the daemon's start and registers support.logs. An ephemeral daemon keeps no ring and writes
-// nothing. The answer records the daemon's stop, with why and how long it ran, and closes the ring: the daemon's last
-// act.
+// starts with), records the daemon's start and registers support.logs and support.export. An ephemeral daemon keeps no
+// ring and writes nothing. The answer records the daemon's stop, with why and how long it ran, and closes the ring: the
+// daemon's last act.
 func startUrSupportLog(daemon *sidecar.Daemon, stateDirectory string, settings *sidecar.SidecarSettings, ephemeral bool,
 	autoSpawned bool, log sidecar.Logger) (func(reason sidecar.SupportLogStopReason), error) {
 	if ephemeral {
@@ -89,7 +111,7 @@ func startUrSupportLog(daemon *sidecar.Daemon, stateDirectory string, settings *
 	settings.SupportLog = supportLog
 	started := clock.Now()
 	supportLog.Event(sidecar.SupportLogCodeDaemonStarted, sidecar.SupportLogFieldRelease(sidecar.Version), sidecar.SupportLogFieldAutoSpawned(autoSpawned))
-	for _, method := range urSupportMethods(daemon, supportLog) {
+	for _, method := range urSupportMethods(daemon, supportLog, settings.Support, clock) {
 		if err := daemon.RegisterMethod(method); err != nil {
 			supportLog.Close()
 			return nil, err
@@ -135,8 +157,29 @@ func urSupportLogHost() *sidecar.SupportLogBundleHost {
 }
 
 // The support methods over the daemon's ring.
-func urSupportMethods(daemon *sidecar.Daemon, supportLog *sidecar.SupportLog) []*sidecar.DaemonMethod {
+func urSupportMethods(daemon *sidecar.Daemon, supportLog *sidecar.SupportLog, settings *sidecar.SupportSettings, clock sidecar.Clock) []*sidecar.DaemonMethod {
 	return []*sidecar.DaemonMethod{
+		{
+			Name: urMethodSupportExport,
+			Handler: func(ctx context.Context, call *sidecar.DaemonCall) (any, error) {
+				params := &urSupportExportParams{}
+				if err := decodeUrParams(call, params); err != nil {
+					return nil, err
+				}
+				// an archive holds bundles and support's replies: the person's to read, never an agent's (§28.7)
+				if urSupportUnderHarness(ctx, daemon, call) {
+					return nil, errUrSupportUnderHarness
+				}
+				archive := &bytes.Buffer{}
+				if params.Entry == "" && params.Sent == "" {
+					if err := sidecar.SupportExportLog(supportLog, urSupportLogHost(), settings, clock, archive); err != nil {
+						return nil, err
+					}
+					return &urSupportExportReply{Archive: archive.Bytes()}, nil
+				}
+				return urSupportExportConversation(ctx, daemon, params)
+			},
+		},
 		{
 			Name: urMethodSupportLogs,
 			Handler: func(ctx context.Context, call *sidecar.DaemonCall) (any, error) {
@@ -181,9 +224,66 @@ func urSupportSentBundle(daemon *sidecar.Daemon, params *urSupportLogsParams) (*
 	return nil, fmt.Errorf("no bundle sent with message %s is kept on this device", params.Sent)
 }
 
-// ur support: the logs form here, the conversation's in cmd_support_conversation.go.
+// An item's or a message's archive, from the hosted network's support client that holds it: the first whose answer is
+// not not_found.
+func urSupportExportConversation(ctx context.Context, daemon *sidecar.Daemon, params *urSupportExportParams) (*urSupportExportReply, error) {
+	for _, hosted := range daemon.Sidecars() {
+		client, err := hosted.Sidecar.Support()
+		if err != nil {
+			continue
+		}
+		archive := &bytes.Buffer{}
+		err = client.Export(ctx, &sidecar.SupportExportArgs{Entry: params.Entry, ClientRef: params.Sent, Host: urSupportLogHost()}, archive)
+		switch {
+		case sidecar.SupportRefusalOf(err) == sidecar.SupportRefusalNotFound:
+			continue
+		case err != nil:
+			return nil, err
+		}
+		return &urSupportExportReply{Archive: archive.Bytes()}, nil
+	}
+	return nil, errors.New("no item or message of that id is kept on this device")
+}
+
+// ur support export: the archive the daemon builds, written to a new file, never over one; the file goes again where
+// the daemon refuses.
+func runUrSupportExport(ctx context.Context, cli *urCli, options docopt.Opts) error {
+	id := urOptionString(options, "<id>")
+	params := &urSupportExportParams{Network: urOptionString(options, "--network")}
+	name := "log"
+	switch {
+	case id == "":
+	case strings.Trim(id, "0123456789") == "":
+		params.Entry, name = id, id
+	default:
+		params.Sent, name = id, id
+	}
+	out := urOptionString(options, "--out")
+	if out == "" {
+		out = "urnetwork-support-" + name + ".zip"
+	}
+	file, err := createUrRecordOut(out)
+	if err != nil {
+		return err
+	}
+	reply := &urSupportExportReply{}
+	if err := cli.callDaemon(ctx, urMethodSupportExport, params, false, reply); err != nil {
+		file.Close()
+		os.Remove(file.Name())
+		return err
+	}
+	if err := writeUrRecordOut(file, reply.Archive); err != nil {
+		return err
+	}
+	fmt.Fprintf(cli.stderr, "wrote %d bytes to %s; send it to URnetwork's support by any path you choose\n", len(reply.Archive), file.Name())
+	return nil
+}
+
+// ur support: the logs and export forms here, the conversation's in cmd_support_conversation.go.
 func runUrSupport(ctx context.Context, cli *urCli, options docopt.Opts) error {
 	switch {
+	case options["export"] == true:
+		return runUrSupportExport(ctx, cli, options)
 	case options["logs"] == true:
 		jsonOutput, _ := options.Bool("--json")
 		params := &urSupportLogsParams{Network: urOptionString(options, "--network"), Sent: urOptionString(options, "--sent")}

@@ -1,8 +1,11 @@
 package main
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -162,5 +165,69 @@ func TestUrSupportEphemeralDaemonKeepsNoRing(t *testing.T) {
 	}
 	if _, err := os.Stat(sidecar.SupportLogDirectory(directory)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("an ephemeral daemon made %s", sidecar.SupportLogDirectory(directory))
+	}
+}
+
+// ur support export with no id needs no conversation: it writes the support log's next bundle to a new file, with no
+// network hosted, never over a file that is there, and an item no hosted network holds writes nothing.
+func TestUrSupportExportWritesTheNextBundleToANewFile(t *testing.T) {
+	directory := shortTestDirectory(t)
+	started, stop := startTestUrSupportDaemon(t, directory)
+	defer stop(sidecar.SupportLogStopReasonClosed)
+	cli, stdout, stderr := newTestUrCli(started.socketPath)
+	out := filepath.Join(t.TempDir(), "support.zip")
+	if code := cli.main(context.Background(), []string{"ur", "support", "export", "--out=" + out}); code != urExitOk {
+		t.Fatalf("ur support export exited %d: %s", code, stderr.String())
+	}
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	members := map[string][]byte{}
+	for _, file := range reader.File {
+		opened, err := file.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		members[file.Name], err = io.ReadAll(opened)
+		opened.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(members) != 2 || members["README.txt"] == nil {
+		t.Fatalf("the archive holds %d members", len(members))
+	}
+	document, err := sidecar.SupportLogBundleOpen(members["support-log-bundle.json.gz"], sidecar.DefaultSupportSettings().BundleMaxByteCount)
+	if err != nil {
+		t.Fatal(err)
+	}
+	starts := 0
+	for _, event := range document.Events {
+		if event.Component == "daemon" && event.Code == "started" {
+			starts += 1
+		}
+	}
+	if starts != 1 || stdout.Len() != 0 || !strings.Contains(stderr.String(), out) {
+		t.Fatalf("%d daemon.started; stdout %q, stderr %q", starts, stdout.String(), stderr.String())
+	}
+	// never over a file that is there
+	if code := cli.main(context.Background(), []string{"ur", "support", "export", "--out=" + out}); code != urExitFailed {
+		t.Fatalf("an export over a file exited %d", code)
+	}
+	if kept, err := os.ReadFile(out); err != nil || !bytes.Equal(kept, data) {
+		t.Fatal("an export over a file changed it")
+	}
+	// an item no hosted network holds: nothing written
+	other := filepath.Join(t.TempDir(), "item.zip")
+	if code := cli.main(context.Background(), []string{"ur", "support", "export", "100171", "--out=" + other}); code != urExitFailed {
+		t.Fatalf("an item's export with no network exited %d", code)
+	}
+	if _, err := os.Stat(other); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a refused export left %s", other)
 	}
 }

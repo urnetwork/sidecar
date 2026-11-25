@@ -3,6 +3,9 @@
 package mcp
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 
@@ -65,5 +68,38 @@ func TestSupportToolsRegisterAtTheirRowsWithTheSwitchOn(t *testing.T) {
 	}
 	if !slices.Contains(resources.Templates(), mcpSupportResourceUri) {
 		t.Error("the support resource is not listed with the switch on")
+	}
+}
+
+// support_send reads its files beneath the session's worktree: its run's where a hook bound one, else the harness's
+// working directory its hello names, none with neither; a name that leaves the root is refused as the tool answers a
+// refusal, by its code and never a path.
+func TestSupportSendReadsFilesBeneathTheSessionsWorktree(t *testing.T) {
+	worktree := t.TempDir()
+	if err := os.WriteFile(filepath.Join(worktree, "build.log"), []byte("step 3 failed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	call := &McpCall{Session: &McpSession{hello: sidecar.DaemonHello{Cwd: worktree}}}
+	if root := mcpSupportFilesRoot(call, nil); root != worktree {
+		t.Fatalf("an unbound session's root: %q", root)
+	}
+	if root := mcpSupportFilesRoot(call, &sidecar.RunFile{Worktree: "/run/worktree"}); root != "/run/worktree" {
+		t.Fatalf("a bound run's root: %q", root)
+	}
+	if root := mcpSupportFilesRoot(&McpCall{}, nil); root != "" {
+		t.Fatalf("a call with no session: %q", root)
+	}
+	settings := sidecar.DefaultSupportSettings()
+	files, err := sidecar.SupportReadFiles(mcpSupportFilesRoot(call, nil), []string{"build.log"}, settings)
+	if err != nil || len(files) != 1 || string(files[0].Data) != "step 3 failed\n" {
+		t.Fatalf("files %+v, %v", files, err)
+	}
+	_, err = sidecar.SupportReadFiles(mcpSupportFilesRoot(call, nil), []string{"../" + filepath.Base(worktree) + "-elsewhere/key.pem"}, settings)
+	var mcpError *McpError
+	if refused := mcpSupportError(err); !errors.As(refused, &mcpError) || mcpError.Code != McpCodeRefused || mcpError.Message != string(sidecar.SupportRefusalFileRefused) {
+		t.Fatalf("a name that leaves the root: %v", refused)
+	}
+	if _, err := sidecar.SupportReadFiles(mcpSupportFilesRoot(&McpCall{}, nil), []string{"build.log"}, settings); sidecar.SupportRefusalOf(err) != sidecar.SupportRefusalFileRefused {
+		t.Fatalf("a file with no root: %v", err)
 	}
 }

@@ -57,10 +57,17 @@ type supportOutboxItem struct {
 	AgentId *Id         `json:"agent_id,omitempty"`
 	RunId   *Id         `json:"run_id,omitempty"`
 	Tier    SupportTier `json:"tier"`
+	// Who let it go, posted beside the body with its tier (QD-1398): none, or kind 27's decider once its effect ran;
+	// empty while a decision is awaited.
+	Approved string `json:"approved,omitempty"`
 	// whether attachment 0 is the support log's bundle, and how many files follow it
 	Logs      bool     `json:"logs,omitempty"`
 	FileCount int      `json:"file_count,omitempty"`
 	FileTypes []uint32 `json:"file_types,omitempty"`
+	// The bundle's manifest, which the vault's entry carries (§28.12): codes and counts, never an event's fields.
+	Manifest *SupportLogManifest `json:"manifest,omitempty"`
+	// Whether the vault's kind-30 entry of the message as it left is written (§28.12), so a retry writes none again.
+	Recorded bool `json:"recorded,omitempty"`
 	// kind 27's action as stored, and its request's id
 	Canonical  []byte `json:"canonical,omitempty"`
 	ApprovalId *Id    `json:"approval_id,omitempty"`
@@ -192,15 +199,16 @@ func (self *supportState) apply(event *SupportServiceEvent, now time.Time, maxCo
 	return item, true
 }
 
-// Takes a message this device sent into the view as the service acknowledged it.
-func (self *supportState) applySent(answer *supportEntryAnswer, item *supportOutboxItem, body *SupportBody, now time.Time, maxCount int) {
+// Takes a message this device sent into the view as the service acknowledged it. False where the view held it
+// already: a replay's answer, or the member's events that brought it first.
+func (self *supportState) applySent(answer *supportEntryAnswer, item *supportOutboxItem, body *SupportBody, now time.Time, maxCount int) bool {
 	viewed := self.itemOrNew(answer.Id, now, maxCount)
 	if answer.Status != "" {
 		viewed.Status = answer.Status
 	}
 	for _, message := range viewed.Messages {
 		if supportSameClientRef(message.ClientRef, item.ClientRef) || message.Seq == answer.Seq {
-			return
+			return false
 		}
 	}
 	viewed.Messages = append(viewed.Messages, &supportItemMessage{
@@ -210,6 +218,7 @@ func (self *supportState) applySent(answer *supportEntryAnswer, item *supportOut
 	if item.Agent != "" && !slices.Contains(viewed.Agents, item.Agent) {
 		viewed.Agents = append(viewed.Agents, item.Agent)
 	}
+	return true
 }
 
 // Drops the sends past a day, which no limit counts.
