@@ -16,7 +16,7 @@
    "projects": {
 --- a/$HOME/.claude/settings.json
 +++ b/$HOME/.claude/settings.json
-@@ -3,7 +3,16 @@
+@@ -3,7 +3,17 @@
    "permissions": {
      "allow": ["Bash(git status)", "Read"],
      "ask": [
@@ -30,11 +30,12 @@
 +      "mcp__ur__mail_alias_create",
 +      "mcp__ur__mail_alias_delete",
 +      "mcp__ur__socket_listen",
++      "mcp__ur__support_send",
 +      "mcp__ur__tls_publish"
      ]
    },
    "hooks": {
-@@ -12,6 +21,129 @@
+@@ -12,6 +22,129 @@
          "matcher": "Edit|Write",
          "hooks": [
            { "type": "command", "command": "/opt/fmt/bin/format-on-save" }
