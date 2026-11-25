@@ -18,26 +18,32 @@ type testInferProviderHalf struct {
 	efforts  map[InferEffort]string
 }
 
+// Its slug.
 func (self *testInferProviderHalf) Provider() string {
 	return self.provider
 }
 
+// Its table.
 func (self *testInferProviderHalf) Efforts() map[InferEffort]string {
 	return self.efforts
 }
 
+// Refused.
 func (self *testInferProviderHalf) BuildRequest(args *InferProviderRequestArgs) (*InferProviderRequest, error) {
 	return nil, newInferError(InferErrorModelRefused, "a test half builds nothing")
 }
 
+// Refused.
 func (self *testInferProviderHalf) ReadStream(ctx context.Context, answer *InferProviderAnswer, emit InferEmit) (*InferProviderStreamEnd, error) {
 	return nil, newInferError(InferErrorEngineFailed, "a test half reads nothing")
 }
 
+// Refused.
 func (self *testInferProviderHalf) CheckReceipt(args *InferProviderReceiptArgs) (*InferProviderReceipt, error) {
 	return nil, newInferError(InferErrorModelRefused, "a test half checks no receipt")
 }
 
+// None.
 func (self *testInferProviderHalf) Envelope() InferProviderEnvelope {
 	return nil
 }
