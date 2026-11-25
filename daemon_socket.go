@@ -223,7 +223,7 @@ type daemonSocketListener interface {
 	Close() error
 	inflightCount() int
 	// When the grant it registered under ends, zero for none it asked (SocketListener's).
-	grantExpires() time.Time
+	GrantExpires() time.Time
 }
 
 // The production backend: a hosted Sidecar and its sockets component, which answer unavailable until the daemon's
@@ -1192,7 +1192,7 @@ func (self *daemonSocketListen) status() *DaemonSocketStatus {
 		Draining:  draining,
 		Inflight:  self.listener.inflightCount(),
 	}
-	if grantExpires := self.listener.grantExpires(); !grantExpires.IsZero() {
+	if grantExpires := self.listener.GrantExpires(); !grantExpires.IsZero() {
 		status.GrantExpiresMs = grantExpires.UnixMilli()
 	}
 	return status

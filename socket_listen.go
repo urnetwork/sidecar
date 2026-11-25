@@ -708,10 +708,11 @@ func (self *SocketListener) inflightCount() int {
 	return len(self.streams)
 }
 
-// When the grant this tls/ or smtp/ listen registered under ends, as its action asked it: zero for a name whose listen
-// asks no grant, and for one a standing grant passed (SocketComponent.listenGrantExpires). The service ends the
-// registration once the grant ends, as it would at a revocation.
-func (self *SocketListener) grantExpires() time.Time {
+// When the grant this tls/ or smtp/ listen registered under ends, as its action asked it (owner decision 687): zero for
+// a name whose listen asks no grant, and for one a standing grant passed (SocketComponent.listenGrantExpires). The
+// service ends the registration once the grant ends, as it would at a revocation. The daemon's reply and the sdk's
+// GetGrantExpiresMillis read it (QD-1419).
+func (self *SocketListener) GrantExpires() time.Time {
 	return self.grantExpireTime
 }
 

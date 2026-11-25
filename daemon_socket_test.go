@@ -90,7 +90,7 @@ func (self *testSocketListener) inflightCount() int {
 	return 0
 }
 
-func (self *testSocketListener) grantExpires() time.Time {
+func (self *testSocketListener) GrantExpires() time.Time {
 	return self.grantExpireTime
 }
 

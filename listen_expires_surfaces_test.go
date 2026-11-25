@@ -14,7 +14,8 @@
 //   - Sidecar.Listen's listener keeps its grant's end: the approved 3-day listen's, the same listen's asked again once
 //     its grant stands, which the gate passes as standing, the rule's default end where it asks none, and none under a
 //     document's standing rule; its refusal past the maximum carries the AclGrantMaxExpiryError beside ErrSocketDenied;
-//   - ListenTls's Expires reaches the registration, and a negative one is refused before anything is ordered.
+//   - ListenTls's Expires reaches the registration, its listener answers the registration's grant end, and a negative
+//     one is refused before anything is ordered.
 //
 // Synthetic values only.
 
@@ -190,7 +191,7 @@ func TestSocketListenerKeepsItsGrantsEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the approved listen: %v", err)
 	}
-	if got := listener.grantExpires(); !got.Equal(end) {
+	if got := listener.GrantExpires(); !got.Equal(end) {
 		t.Errorf("the approved listen's grant ends %v, not %v", got, end)
 	}
 	if err := listener.Close(); err != nil {
@@ -207,7 +208,7 @@ func TestSocketListenerKeepsItsGrantsEnd(t *testing.T) {
 	if action, _ := world.lastAsked(); action.Outcome == nil || action.Outcome.State != ApprovalOutcomeDone || len(action.Outcome.EffectRef) != 0 {
 		t.Errorf("the listen asked again was not passed as standing: %+v", action.Outcome)
 	}
-	if got := again.grantExpires(); !got.Equal(end) {
+	if got := again.GrantExpires(); !got.Equal(end) {
 		t.Errorf("the listen asked again on its grant: it ends %v, not %v", got, end)
 	}
 	if world.approvals.filedCount() != 1 || world.api.postCount() != 1 {
@@ -220,7 +221,7 @@ func TestSocketListenerKeepsItsGrantsEnd(t *testing.T) {
 		t.Fatalf("a standing rule's listen: %v", err)
 	}
 	defer standing.Close()
-	if got := standing.grantExpires(); !got.IsZero() {
+	if got := standing.GrantExpires(); !got.IsZero() {
 		t.Errorf("a standing rule's listen names an end, %v", got)
 	}
 
@@ -234,7 +235,7 @@ func TestSocketListenerKeepsItsGrantsEnd(t *testing.T) {
 		t.Fatalf("the approved listen asking nothing: %v", err)
 	}
 	defer byDefault.Close()
-	if got := byDefault.grantExpires(); !got.Equal(filedAt.Add(2 * time.Hour)) {
+	if got := byDefault.GrantExpires(); !got.Equal(filedAt.Add(2 * time.Hour)) {
 		t.Errorf("a listen asking nothing: its grant ends %v, not the rule's 2 h from its filing", got)
 	}
 }
@@ -258,8 +259,8 @@ func TestSocketListenPastTheMaxExpiryCarriesTheMaximum(t *testing.T) {
 	}
 }
 
-// ListenTls's Expires reaches the registration as its SocketListenSettings.Expires, and none as none; a negative one is
-// refused before anything is ordered or registered.
+// ListenTls's Expires reaches the registration as its SocketListenSettings.Expires, and none as none, and the app
+// listener answers its registration's grant end; a negative one is refused before anything is ordered or registered.
 func TestTlsComponentListenAsksItsExpires(t *testing.T) {
 	// no api attached: an order would answer offline, so a refusal that names the listen came before any
 	unattached := newTlsCertFixture(t)
@@ -274,12 +275,17 @@ func TestTlsComponentListenAsksItsExpires(t *testing.T) {
 
 	fixture := newAttachedTlsCertFixture(t)
 	fixture.ensureIssued()
-	registrations := &testTlsListenRegistrations{edgeNetworkId: NewId()}
+	end := fixture.clock.Now().Add(3 * 24 * time.Hour)
+	registrations := &testTlsListenRegistrations{edgeNetworkId: NewId(), grantExpireTime: end}
 	component, parts = newTlsListenTestComponent(t, fixture, registrations)
 	for _, expires := range []time.Duration{3 * 24 * time.Hour, 0} {
 		listener, err := component.listen(t.Context(), "tls/443/app", &TlsListenSettings{Weight: 250, Expires: expires}, parts)
 		if err != nil {
 			t.Fatalf("a listen asking %v: %v", expires, err)
+		}
+		// the app listener's grant end is its registration's
+		if got := listener.GrantExpires(); !got.Equal(end) {
+			t.Errorf("a listen asking %v: its grant ends %v, not its registration's %v", expires, got, end)
 		}
 		if err := listener.Close(); err != nil {
 			t.Fatal(err)

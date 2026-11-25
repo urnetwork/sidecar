@@ -641,10 +641,13 @@ type TlsListenSettings struct {
 	Front *TlsFrontSettings
 }
 
-// A registration as an app listener runs on it: what the front accepts from, and its address. *SocketListener is one.
+// A registration as an app listener runs on it: what the front accepts from, its address, and when the grant it
+// registered under ends. *SocketListener is one.
 type tlsListenRegistration interface {
 	tlsFrontListener
 	Addr() net.Addr
+	// Zero for none it asked (SocketListener.GrantExpires).
+	GrantExpires() time.Time
 }
 
 // What an app listener runs on beyond the component: the Sidecar's parts (ListenTls), or a test's.
@@ -937,6 +940,12 @@ func (self *TlsListener) Accept() (net.Conn, error) {
 // See net.Listener: the registration's network and client, as ids (I-13).
 func (self *TlsListener) Addr() net.Addr {
 	return self.registration.Addr()
+}
+
+// When the grant its tls/ registration registered under ends, its registration's (SocketListener.GrantExpires): zero
+// where a standing grant passed the listen (QD-1419).
+func (self *TlsListener) GrantExpires() time.Time {
+	return self.registration.GrantExpires()
 }
 
 // Unlistens at once (§9.9) and ends every visitor's connection: the front's Close, which closes the registration. A
