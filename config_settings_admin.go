@@ -14,6 +14,10 @@
 //	head     the head's ServiceSettings as it stands, every other field kept, the asked fields set, signed as a new
 //	         SIGNED_SERVICE_SETTINGS and saved through the writer, which re-reads the head on a race; a device that runs
 //	         no config writer refuses
+//	features auth_features' bits (DESIGN-COMPUTE §16.6; CACL-M11-03) are set beside the head's and never cleared, and
+//	         only bits this release and every service serving the network implement, as the current core answer says,
+//	         since api refuses a base turning on any other (acl_compute_features_on.go, whose TurnOnAuthFeature files
+//	         through here)
 //
 // Nothing here creates, derives or unwraps a key: the identity key signs through the writer's Sign.
 
@@ -38,15 +42,19 @@ type ServiceSettingsChange struct {
 	MailStrict     *bool
 	RecordCost     *bool
 	RecordRequired *bool
+	// Authorization features to turn on (DESIGN-COMPUTE §16.6): set in the head's auth_features beside those it holds,
+	// never cleared. 0 changes nothing.
+	AuthFeatures AuthFeature
 }
 
 // Whether the change sets anything.
 func (self *ServiceSettingsChange) empty() bool {
-	return self == nil || (self.MailStrict == nil && self.RecordCost == nil && self.RecordRequired == nil)
+	return self == nil || (self.MailStrict == nil && self.RecordCost == nil && self.RecordRequired == nil && self.AuthFeatures == 0)
 }
 
-// settings with the change's fields set: record_cost as its explicit value, on or off.
+// settings with the change's fields set: record_cost as its explicit value, on or off, and auth_features' bits added.
 func (self *ServiceSettingsChange) apply(settings *protocol.ServiceSettings) {
+	settings.AuthFeatures |= uint32(self.AuthFeatures)
 	if self.MailStrict != nil {
 		settings.MailStrict = *self.MailStrict
 	}
@@ -126,7 +134,7 @@ func (self *Sidecar) SaveServiceSettings(ctx context.Context, change *ServiceSet
 		return nil, ErrSidecarActMode
 	}
 	if change.empty() {
-		return nil, errors.New("a settings change sets mail_strict, record_cost or record_required")
+		return nil, errors.New("a settings change sets mail_strict, record_cost, record_required or an authorization feature")
 	}
 	authority, ok := self.authority().(*ConfigAuthority)
 	if !ok {
@@ -142,6 +150,11 @@ func (self *Sidecar) SaveServiceSettings(ctx context.Context, change *ServiceSet
 	}
 	if err := configServiceSettingsSigner(state, identity.SidecarId); err != nil {
 		return nil, err
+	}
+	if change.AuthFeatures != 0 {
+		if err := checkAuthFeaturesFiling(change.AuthFeatures, AuthFeaturesImplemented(), self.authFeatureCore()); err != nil {
+			return nil, err
+		}
 	}
 	writer := authority.client.Writer()
 	if writer == nil {

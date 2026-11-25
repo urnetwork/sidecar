@@ -170,6 +170,18 @@ func DefaultSafetySettings() *SafetySettings {
 	return &SafetySettings{}
 }
 
+// DESIGN-COMPUTE §28's, which these legs do not run (support_settings.go on the others).
+type SupportSettings struct{}
+
+// Nothing: these legs run no such component.
+func DefaultSupportSettings() *SupportSettings {
+	return &SupportSettings{}
+}
+
+// What a component writes the support log through (support_log.go on the others): these legs keep no support log,
+// so nothing here writes one, and a write is refused at compile time.
+type SupportLogWriter interface{}
+
 // Constructs nothing: these legs register no compute component.
 func (self *Sidecar) startComputeComponents() {}
 
