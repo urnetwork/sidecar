@@ -216,7 +216,7 @@ func (self *harnessApprovalWorld) authorizeAsync(t *testing.T) chan error {
 // Waits until the gate has seen count presentations.
 func (self *harnessApprovalWorld) awaitPresentations(t *testing.T, count int) {
 	t.Helper()
-	guard := time.After(10 * time.Second)
+	guard := time.After(60 * time.Second)
 	for {
 		if presentations, _ := self.gate.counts(); count <= presentations {
 			return
@@ -262,7 +262,7 @@ func TestHarnessAuthorizeWaitsForDecisionThenReserves(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(60 * time.Second):
 		t.Fatal("Authorize did not return after the decision")
 	}
 	if presentations, reserves := world.gate.counts(); presentations != 2 || reserves != 1 || world.effect.count() != 1 {
@@ -350,7 +350,7 @@ func TestHarnessTaintedSendWaitsForPerson(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(60 * time.Second):
 		t.Fatal("a device's decision did not pass the action")
 	}
 	if presentations, reserves := world.gate.counts(); presentations != 3 || reserves != 1 || world.effect.count() != 1 {

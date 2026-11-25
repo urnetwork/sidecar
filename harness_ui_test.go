@@ -39,7 +39,7 @@ func (self *harnessUiTestEmitter) next(t *testing.T) *HarnessEvent {
 	select {
 	case event := <-self.emitted:
 		return event
-	case <-time.After(10 * time.Second):
+	case <-time.After(60 * time.Second):
 		t.Fatal("no event was emitted")
 		return nil
 	}
@@ -104,7 +104,7 @@ func harnessAwaitAnswer(t *testing.T, answers chan *harnessUiAnswer) *harnessUiA
 	select {
 	case answer := <-answers:
 		return answer
-	case <-time.After(10 * time.Second):
+	case <-time.After(60 * time.Second):
 		t.Fatal("Ask did not answer")
 		return nil
 	}

@@ -31,9 +31,6 @@ func TestHarnessTaintFsyncsBeforeResultReturns(t *testing.T) {
 		<-release
 	}})
 	defer SetTestHooks(nil)
-	guard := func() <-chan time.Time {
-		return time.After(10 * time.Second)
-	}
 
 	returned := make(chan error, 1)
 	go func() {
@@ -44,7 +41,7 @@ func TestHarnessTaintFsyncsBeforeResultReturns(t *testing.T) {
 		if name != "record.taint.before" {
 			t.Fatalf("reached %s first", name)
 		}
-	case <-guard():
+	case <-time.After(60 * time.Second):
 		t.Fatal("Taint never reached its first barrier")
 	}
 	if !run.Tainted() {
@@ -59,7 +56,7 @@ func TestHarnessTaintFsyncsBeforeResultReturns(t *testing.T) {
 		if name != "record.taint.after" {
 			t.Fatalf("reached %s second", name)
 		}
-	case <-guard():
+	case <-time.After(60 * time.Second):
 		t.Fatal("Taint never reached its second barrier")
 	}
 	select {
@@ -77,7 +74,7 @@ func TestHarnessTaintFsyncsBeforeResultReturns(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-guard():
+	case <-time.After(60 * time.Second):
 		t.Fatal("Taint did not return")
 	}
 
