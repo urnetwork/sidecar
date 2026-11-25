@@ -289,7 +289,7 @@ func newTestSocketToolEnv(t *testing.T, listenAction mcpSocketListenActionFuncti
 	if listenAction == nil {
 		listenAction = newMcpSocketListenAction(env.clock.Now)
 	}
-	addSocketTools(env.catalog, func() McpSockets { return env.sockets }, listenAction)
+	addSocketTools(env.catalog, func() McpSockets { return env.sockets }, listenAction, env.clock.Now)
 	env.catalog.Install(env.server)
 	env.claude = env.harness(sidecartest.FakeHarnessClaudeCode)
 	if err := env.claude.SessionStart("socket session", "startup"); err != nil {
@@ -461,7 +461,7 @@ func TestSocketListenUncoveredWaitsForTheSocketKey(t *testing.T) {
 // Once the action builds, an uncovered listen passes the gate first: a pending gate names its approval and listens on
 // nothing, an allowed one listens.
 func TestSocketListenUncoveredPassesTheGate(t *testing.T) {
-	built := func(ctx context.Context, call *McpCall, name string, localPort int, grantDst string) (*sidecar.SidecarAction, error) {
+	built := func(ctx context.Context, call *McpCall, name string, localPort int, grantDst string, expires time.Time) (*sidecar.SidecarAction, error) {
 		return &sidecar.SidecarAction{Kind: sidecar.SidecarActionListen, Canonical: []byte(name), Risk: sidecar.SidecarRiskNormal}, nil
 	}
 	env := newTestSocketToolEnv(t, built)
