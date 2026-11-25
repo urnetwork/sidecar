@@ -1131,8 +1131,7 @@ func (self *SupportClient) noteItem(update *SupportUpdate, item *supportItem) {
 // A message the service acknowledged: its place in the view and, where the view did not hold it already, the vault's
 // entry of the acknowledgment, after the message's own entry where that was not written as it left.
 func (self *SupportClient) noteSent(item *supportOutboxItem, answer *supportEntryAnswer) {
-	body := &SupportBody{}
-	json.Unmarshal(item.Body, body)
+	body := supportOutboxBody(item)
 	fresh := false
 	self.changeState(func(state *supportState) error {
 		fresh = state.applySent(answer, item, body, self.clock.Now(), self.settings.ConversationMaxItemCount)
@@ -1158,15 +1157,22 @@ func (self *SupportClient) recordLeaving(item *supportOutboxItem) {
 	if err != nil {
 		return
 	}
-	body := &SupportBody{}
-	if err := json.Unmarshal(item.Body, body); err != nil {
-		return
-	}
-	if _, err := records.Append(supportLeavingDraft(item, body)); err != nil {
+	if _, err := records.Append(supportLeavingDraft(item, supportOutboxBody(item))); err != nil {
 		return
 	}
 	item.Recorded = true
 	self.changeOutboxItem(item.ClientRef, func(stored *supportOutboxItem) { stored.Recorded = true })
+}
+
+// An outbox message's body as the view and the vault read it: an enumerated report, which holds no text, read as its
+// one line (support_report.go).
+func supportOutboxBody(item *supportOutboxItem) *SupportBody {
+	body := &SupportBody{}
+	json.Unmarshal(item.Body, body)
+	if item.Tier == SupportTierAuto {
+		body.Text = supportReportSummary(item.Body)
+	}
+	return body
 }
 
 // The vault's entry of item as it leaves.
@@ -1477,22 +1483,7 @@ func (self *SupportClient) Read(ctx context.Context, args *SupportReadArgs) (*Su
 			return nil, fmt.Errorf("support: the run's taint could not be written: %w", err)
 		}
 	}
-	result := &SupportReadResult{Entry: item.Entry, Status: item.Status, FixedIn: item.FixedIn, Final: item.Final, Messages: []*SupportReadMessage{}}
-	for _, message := range item.Messages {
-		if message.Seq <= args.After {
-			continue
-		}
-		from := message.Agent
-		switch {
-		case message.Reply:
-			from = "support"
-		case message.Agent == "":
-			from = "you"
-		}
-		result.Messages = append(result.Messages, &SupportReadMessage{
-			Seq: message.Seq, From: from, Tier: message.Tier, Text: message.Text, Millis: message.Millis, Reply: message.Reply,
-		})
-	}
+	result := supportReadResultOf(item, args.After)
 	self.changeState(func(state *supportState) error {
 		if stored := state.item(args.Entry); stored != nil {
 			stored.markRead(args.AgentName)

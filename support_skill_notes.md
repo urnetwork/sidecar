@@ -39,27 +39,62 @@ Readings, each changing no format the design fixes:
 ## M13b: the support client, the tools and the wire (draft)
 
 Everything here is behind the release's switch, `SupportSettings.ServiceEnabled`, off by default until G-SUP-service
-passes (§28.21): with it off every surface answers `ErrSupportUnavailable`, no MCP session lists the tools or the
-resource, nothing is posted, and `ur support logs` alone works. FB's feedback service is FB's to build; the device side is
-built against FB section 12's API and Appendix J's additions, with a fake in tests (`support_client_test.go`).
+passes (§28.21): with it off sending and reporting answer `ErrSupportUnavailable`, no MCP session lists the tools or the
+resource, nothing is posted, and the conversation stays empty; `ur support logs` and `ur support export` with no id
+need no conversation and work. FB's feedback service is FB's to build; the device side is built against FB section 12's
+API and Appendix J's additions, with a fake in tests (`support_client_test.go`).
 
 | Piece | Where |
 |---|---|
 | Kind 27 `support_send` at CanonicalAction version 5: field 80 `SupportFields` (81-89 reserved), its row and checks, field 70's rules `private_data` (15) and `attachment` (16) | `protocol/record.proto`, `approval_compute_support.go`, edits to `approval_compute_kinds.go`, `record_action_rules.go`, `sidecar_gate.go` |
-| Kind 30 `support_message`, `SupportMessageBody`, its team projection with no V: field | `protocol/record.proto`, `record_kind.go`, `record_body.go` |
+| Kind 30 `support_message`, `SupportMessageBody`, its team projection with no V: field, and its rules in `RecordBodyValidate` (caps in `RecordBodySettings`) | `protocol/record.proto`, `record_kind.go`, `record_body.go` |
 | The client: §28.6's checks in order, the gate (W or kind 27), §28.14's limits, the outbox with its retries under one client_ref, the service's transport over TLS to the policy's host alone, the member's events by a cursor, kind-30 entries, enumerated updates | `support_client.go`, `support_state.go`, `support_service.go`, `support_form.go`, `support_body.go`, `support_sources.go` |
 | The client as a Sidecar's compute component | `support_component.go` |
-| MCP's `support_send` (O), `support_list` (R), `support_read` (R, tainting first) and `ur://support/urnetwork` | `mcp/tools_support.go`; §16.5's rows in `mcp/catalog.go`, listed unbuilt while the switch is off |
-| `ur support`, `show`, `send`, `watch`, `delete`, `settings`, `set`, and `logs --sent` | `cli/cmd_support_conversation.go`, `cli/cmd_support.go` |
-| The apps' `Support()`: Conversation, Send, Delete, Logs, Settings, SetSettings, AddListener | `sdk/sidecar_support_conversation.go` |
+| The files a message names: an agent's beneath one root through `os.Root`, the person's where they name them; the run a caller's ancestry binds | `support_files.go` |
+| `ur support export`'s archive, and FB section 10.3's enumerated report | `support_export.go`, `support_report.go` |
+| MCP's `support_send` (O, with `files`), `support_list` (R), `support_read` (R, tainting first) and `ur://support/urnetwork` | `mcp/tools_support.go`; §16.5's rows in `mcp/catalog.go`, listed unbuilt while the switch is off |
+| `ur support`, `show`, `send`, `watch`, `delete`, `settings`, `set`, `logs --sent`, `export` and `report` | `cli/cmd_support_conversation.go`, `cli/cmd_support.go`; `cli/UI.md`'s section |
+| The apps' `Support()`: Conversation, Send, Delete, Logs, Settings, SetSettings, AddListener, on the local core and, remotely, over ur daemon's support methods | `sdk/sidecar_support_conversation.go`; `sdk/sidecar_backend.go`'s `dialOwn` |
 | The skill's text | `skill/support/SKILL.md`, embedded by `support_skill.go` |
 
 Readings:
 
-- **client_ref under kind 27.** Field 3 hashes the SupportBody posted, which names its client_ref, so the client_ref is
-  fixed when the message is built (the run's for a Harness run, random otherwise) and the use's effect key maps to it in
-  the outbox, rather than being derived from the effect key as §28.6 says for a kind-27 use; question
-  `support-skill-kind27-client-ref.md`.
+- **client_ref under kind 27** (QD-1398, the owner's answer to `support-skill-kind27-client-ref`). Field 3 hashes the
+  SupportBody posted, which names its client_ref, so the client_ref is fixed when the message is built (the run's for a
+  Harness run, random otherwise) and the use's effect key maps to it in the outbox. The decider and its tier are posted
+  beside the body: a kind-27 body names neither, and every post carries `Support-Tier` and `Support-Approved`, which the
+  effect takes from the decisions its use spent: the person's where one is a device's, a presence key's or the harness
+  prompt's, released; the classifier's otherwise, channel 4's and any decision that does not parse, agent, so a
+  person's approval is claimed only where a decision shows one. The effect moves nothing unless the stored action's
+  field 3, and the decided action's where it is kind 27's, hashes the body the outbox holds.
+- **Kind 30 as a message leaves** (§28.6's outbox row, §28.12). The sent entry is written once, before the first post:
+  its entry the item a follow-up continues or none, its seq 0, the bundle's whole manifest; the outbox item keeps that
+  it was, so a retry writes none, and a crash between the write and its mark writes it twice, which its client_ref
+  joins. The post's answer is recorded as a received entry, the acknowledgment the client_ref joins, with no text (the
+  sent entry holds it), only where the view did not hold the message, so a lost answer whose events came first records
+  it once. A received event's label past its cap is cut at a character's edge and a fixed_in past its cap left out,
+  so the service cannot keep an event off the record by its size.
+- **Files.** An agent's are read beneath one root, the MCP session's run's worktree where a hook bound one, else the
+  harness's working directory, and a harness process's run's worktree for `ur support send`, through `os.Root`, so `..`
+  and links cannot leave it; an absolute name is taken only beneath it. `ur support send --attach` names each file by
+  its absolute path and the daemon reads it, since three 10 MiB files cannot ride the daemon's 4 MiB request; a harness
+  process's inline bytes are refused, so an agent's file is always the daemon's read. The apps' files ride the request,
+  within that bound, which the remote backend cannot pass.
+- **Export.** A zip: README, `item.json` and `messages.txt` for an item, and each of this device's messages on it the
+  outbox keeps (`body.json`, its bundle, its files); one message by its client_ref, for one with no entry yet; with
+  neither, the next bundle alone, from the daemon's ring, which needs no network or conversation. At most
+  `ExportMaxByteCount`, 40 MiB, so the control reply stays within ur's 64 MiB answer; ur writes a new file, never over
+  one; refused under a harness, as `logs` is.
+- **Report.** FB section 10.3's closed schema, filled from the registry and the ring, which must hold the code
+  (`not_found` otherwise, a code the registry does not name too): registry version, component, code, severity, FB's
+  occurrence bucket and the first day, ur's format-checked version, OS and arch, the sender and the disclosure version;
+  posted from the outbox, tier auto, on the person's limits. The person's at a terminal, confirmed; an agent's needs
+  FB's `feedback.auto` grant, which nothing builds, so it is refused `grant_required` (registry version 2 adds the
+  value), and the auto tier's own limits wait with the grant. The conversation and the vault show it as one line:
+  code, severity, occurrences and day.
+- **The remote `Support()`** calls the daemon's methods: reads unconfirmed, `send`, `delete` and `set` confirmed (the
+  person's acts in the app's UI); its listener long-polls `support.watch` on a session of its own (`dialOwn`), so the
+  backend's one call session stays free.
 - **The service's routes** beyond FB section 12's: attachments post to `/v1/entries/{id}/attachments` after their entry
   is known, each under the message's client_ref and its place; `DELETE /v1/entries/{id}` removes an item; events carry
   a message's body and sender with `include=note,body`, which `scope=member` reads.

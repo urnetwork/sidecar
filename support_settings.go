@@ -115,6 +115,9 @@ type SupportSettings struct {
 	// How long one call of ur support watch waits for an update before it answers none and is called again: 25 s,
 	// inside a control session's request timeout.
 	WatchWait time.Duration
+	// The most one ur support export archive holds: 40 MiB, so the daemon's reply, base64 in JSON, stays within ur's
+	// 64 MiB answer (DaemonClientSettings.AnswerByteCount); one message's, 3 files of 10 MiB and its bundle, fits.
+	ExportMaxByteCount int64
 }
 
 // The component's defaults, the only place one is set.
@@ -162,5 +165,6 @@ func DefaultSupportSettings() *SupportSettings {
 		ConversationMaxItemCount: 1000,
 		StateMaxByteCount:        64 * 1024 * 1024,
 		WatchWait:                25 * time.Second,
+		ExportMaxByteCount:       40 * 1024 * 1024,
 	}
 }

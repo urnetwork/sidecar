@@ -884,6 +884,11 @@ func init() {
 					}
 					client.Send(context.Background(), args)
 				}
+				// a report's code and the host's version are the caller's: neither reaches the ring
+				client.Report(context.Background(), &SupportReportArgs{Surface: SupportSurfacePerson, Code: text, Host: &SupportLogBundleHost{Version: text}})
+				client.Report(context.Background(), &SupportReportArgs{
+					Surface: SupportSurfaceCliHarness, Sender: &SupportSender{AgentName: text, Where: text}, Code: text,
+				})
 			}
 		},
 	})

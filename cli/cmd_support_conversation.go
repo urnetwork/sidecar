@@ -8,8 +8,14 @@
 //	    one item, its messages and support's replies, printed only to the terminal and first tainting each run the
 //	    caller's process ancestry binds, as ur calendar does
 //	ur support send <text> [--re=<id>] [--kind=<k>] [--logs] [--attach=<file>...] [--network=<net>]
-//	    at a terminal no run binds, the person's own message, tier human, confirmed on /dev/tty; from a harness's
-//	    process, that run's message, kind 27, which the person decides (Q-SUP-8)
+//	    at a terminal no run binds, the person's own message, tier human, confirmed on /dev/tty, its files read where
+//	    the person names them; from a harness's process, that run's message, kind 27, which the person decides
+//	    (Q-SUP-8), its files read beneath the run's worktree and always the person's to approve (rule attachment). ur
+//	    names each file by its absolute path and the daemon reads it, so no file rides the request
+//	ur support report <code> [--network=<net>]
+//	    FB section 10.3's enumerated report of one of the support log's codes, unchanged: at a terminal no run binds,
+//	    the person's, confirmed on /dev/tty; from a harness's process, an agent's, which needs FB's feedback.auto grant
+//	    that nothing builds yet, so it is refused grant_required
 //	ur support watch [<id>] [--notes] [--network=<net>]
 //	    FB's feedback.watch: a line for each event of the member's conversation, or of one item, its enumerated fields
 //	    alone; --notes adds each reply's text, after tainting each run the caller's process ancestry binds (§28.9)
@@ -19,9 +25,9 @@
 //	ur support set [--agents=<on|off>] [--agent-logs=<on|off>] [--network=<net>]
 //	    the person's support key, set only on /dev/tty, refused to a caller under a harness (§28.6)
 //
-// FB section 12's ur feedback export and report have their successors in §28.4 (export, report), which this file does
-// not build yet. Until G-SUP-service passes, the release's switch keeps the daemon's client off, and
-// every form here but logs answers that support is reached through the app's form (§28.21).
+// ur support logs and ur support export are cmd_support.go's. Until G-SUP-service passes, the release's switch is off:
+// send and report answer that support is reached through the app's form, nothing is posted, and the conversation the
+// other forms read stays empty (§28.21).
 
 package main
 
@@ -31,7 +37,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -43,15 +48,17 @@ import (
 
 // The control methods ur support's conversation forms call.
 const (
-	urMethodSupportCaller    = "support.caller"
-	urMethodSupportList      = "support.ls"
-	urMethodSupportShow      = "support.show"
-	urMethodSupportSend      = "support.send"
-	urMethodSupportAgentSend = "support.agent_send"
-	urMethodSupportDelete    = "support.delete"
-	urMethodSupportSettings  = "support.settings"
-	urMethodSupportSet       = "support.set"
-	urMethodSupportWatch     = "support.watch"
+	urMethodSupportCaller      = "support.caller"
+	urMethodSupportList        = "support.ls"
+	urMethodSupportShow        = "support.show"
+	urMethodSupportSend        = "support.send"
+	urMethodSupportAgentSend   = "support.agent_send"
+	urMethodSupportDelete      = "support.delete"
+	urMethodSupportSettings    = "support.settings"
+	urMethodSupportSet         = "support.set"
+	urMethodSupportWatch       = "support.watch"
+	urMethodSupportReport      = "support.report"
+	urMethodSupportAgentReport = "support.agent_report"
 )
 
 // The person's acts, refused to a caller with a harness process among its ancestors (§28.6).
@@ -70,8 +77,14 @@ type urSupportParams struct {
 	Text    string `json:"text,omitempty"`
 	Kind    string `json:"kind,omitempty"`
 	Logs    bool   `json:"logs,omitempty"`
-	// each file the caller read, its base name and bytes
+	// each file an app's person chose, its base name and bytes; ur names its files in paths instead, which an agent's
+	// message must
 	Files []*urSupportFile `json:"files,omitempty"`
+	// each file ur names, by its absolute path, which the daemon reads: the person's where they name it, a harness
+	// process's beneath its run's worktree
+	Paths []string `json:"paths,omitempty"`
+	// report: one of the support log's codes, component.code
+	Code string `json:"code,omitempty"`
 	// a person's message the scan warned on, which the person confirmed
 	SecretConfirmed bool   `json:"secret_confirmed,omitempty"`
 	Agents          string `json:"agents,omitempty"`
@@ -164,26 +177,8 @@ func urSupportConversationMethods(target urDaemonTarget) []*sidecar.DaemonMethod
 		client, err := urSupportClient(call)
 		return params, client, err
 	}
-	send := func(ctx context.Context, call *sidecar.DaemonCall, surface sidecar.SupportSurface) (any, error) {
-		params, client, err := decode(call)
-		if err != nil {
-			return nil, err
-		}
-		files := []*sidecar.SupportFile{}
-		for _, file := range params.Files {
-			files = append(files, &sidecar.SupportFile{Name: file.Name, Data: file.Data})
-		}
-		args := &sidecar.SupportSendArgs{
-			Surface: surface, Text: params.Text, Entry: params.Entry, Kind: params.Kind, Logs: params.Logs, Files: files,
-			SecretConfirmed: params.SecretConfirmed,
-		}
-		if surface != sidecar.SupportSurfacePerson {
-			args.Sender = &sidecar.SupportSender{AgentName: agentName(call), Where: "ur support send"}
-			if call.Agent != nil {
-				args.Sender.AgentId = call.Agent.Id
-			}
-		}
-		result, err := client.Send(ctx, args)
+	// A refusal as a reply ur reads, any other error as the call's.
+	answer := func(result *sidecar.SupportSendResult, err error) (any, error) {
 		var refusal *sidecar.SupportRefusalError
 		if errors.As(err, &refusal) {
 			return &urSupportSendReply{Refusal: string(refusal.Refusal), Detail: refusal.Error()}, nil
@@ -192,6 +187,78 @@ func urSupportConversationMethods(target urDaemonTarget) []*sidecar.DaemonMethod
 			return nil, err
 		}
 		return &urSupportSendReply{Result: result}, nil
+	}
+	// The agent a harness's process sends as, and the run its ancestry binds, nil for none.
+	agentOf := func(ctx context.Context, call *sidecar.DaemonCall, where string) (*sidecar.SupportSender, *sidecar.RunFile) {
+		sender := &sidecar.SupportSender{AgentName: agentName(call), Where: where}
+		if call.Agent != nil {
+			sender.AgentId = call.Agent.Id
+		}
+		var run *sidecar.RunFile
+		if call.Hello != nil && 0 < call.Hello.PeerPid {
+			run, _ = call.Sidecar.SupportCallerRun(ctx, int(call.Hello.PeerPid))
+		}
+		return sender, run
+	}
+	send := func(ctx context.Context, call *sidecar.DaemonCall, surface sidecar.SupportSurface) (any, error) {
+		params, client, err := decode(call)
+		if err != nil {
+			return nil, err
+		}
+		args := &sidecar.SupportSendArgs{
+			Surface: surface, Text: params.Text, Entry: params.Entry, Kind: params.Kind, Logs: params.Logs,
+			SecretConfirmed: params.SecretConfirmed,
+		}
+		if surface == sidecar.SupportSurfacePerson {
+			// the person's own: an app's chosen bytes, and ur's files where the person named them
+			for _, file := range params.Files {
+				args.Files = append(args.Files, &sidecar.SupportFile{Name: file.Name, Data: file.Data})
+			}
+			if 0 < len(params.Paths) {
+				files, err := sidecar.SupportReadPersonFiles(params.Paths, client.Settings())
+				if err != nil {
+					return answer(nil, err)
+				}
+				args.Files = append(args.Files, files...)
+			}
+			return answer(client.Send(ctx, args))
+		}
+		// a harness process's: its run's message, its files read beneath the run's worktree as the Harness's file
+		// tools read them, never bytes it read itself
+		if 0 < len(params.Files) {
+			return answer(nil, &sidecar.SupportRefusalError{Refusal: sidecar.SupportRefusalFileRefused})
+		}
+		sender, run := agentOf(ctx, call, "ur support send")
+		args.Sender = sender
+		if run != nil {
+			args.Run = sidecar.SupportRunOfFile(run.RunId, run)
+		}
+		if 0 < len(params.Paths) {
+			root := ""
+			switch {
+			case run != nil && run.Worktree != "":
+				root = run.Worktree
+			case call.Hello != nil:
+				root = call.Hello.Cwd
+			}
+			files, err := sidecar.SupportReadFiles(root, params.Paths, client.Settings())
+			if err != nil {
+				return answer(nil, err)
+			}
+			args.Files = files
+		}
+		return answer(client.Send(ctx, args))
+	}
+	report := func(ctx context.Context, call *sidecar.DaemonCall, surface sidecar.SupportSurface) (any, error) {
+		params, client, err := decode(call)
+		if err != nil {
+			return nil, err
+		}
+		args := &sidecar.SupportReportArgs{Surface: surface, Code: params.Code, Host: urSupportLogHost()}
+		if surface != sidecar.SupportSurfacePerson {
+			args.Sender, _ = agentOf(ctx, call, "ur support report")
+		}
+		return answer(client.Report(ctx, args))
 	}
 	return []*sidecar.DaemonMethod{
 		{
@@ -256,6 +323,25 @@ func urSupportConversationMethods(target urDaemonTarget) []*sidecar.DaemonMethod
 			Handler: func(ctx context.Context, call *sidecar.DaemonCall) (any, error) {
 				// a harness's process: its run's message, which the person decides (Q-SUP-8)
 				return send(ctx, call, sidecar.SupportSurfaceCliHarness)
+			},
+		},
+		{
+			Name:    urMethodSupportReport,
+			Network: true,
+			Confirm: true,
+			Handler: func(ctx context.Context, call *sidecar.DaemonCall) (any, error) {
+				if underHarness(ctx, call) {
+					return nil, errUrSupportPersonOnly
+				}
+				return report(ctx, call, sidecar.SupportSurfacePerson)
+			},
+		},
+		{
+			Name:    urMethodSupportAgentReport,
+			Network: true,
+			Handler: func(ctx context.Context, call *sidecar.DaemonCall) (any, error) {
+				// a harness's process: an agent's report, which needs FB's feedback.auto grant
+				return report(ctx, call, sidecar.SupportSurfaceCliHarness)
 			},
 		},
 		{
@@ -401,6 +487,8 @@ func runUrSupportConversation(ctx context.Context, cli *urCli, options docopt.Op
 		return nil
 	case options["send"] == true:
 		return runUrSupportSend(ctx, cli, options, params)
+	case options["report"] == true:
+		return runUrSupportReport(ctx, cli, options, params)
 	case options["watch"] == true:
 		params.Entry = urOptionString(options, "<id>")
 		params.Notes, _ = options.Bool("--notes")
@@ -491,17 +579,12 @@ func runUrSupportSend(ctx context.Context, cli *urCli, options docopt.Opts, para
 	params.Logs, _ = options.Bool("--logs")
 	attach, _ := options["--attach"].([]string)
 	for _, path := range attach {
-		file, err := os.Open(path)
+		// the daemon reads each file, beneath a harness run's worktree or where the person names it
+		absolute, err := filepath.Abs(path)
 		if err != nil {
 			return err
 		}
-		// 10 MiB a file (§28.7), and one byte to see a longer one
-		data, err := io.ReadAll(io.LimitReader(file, sidecar.DefaultSidecarSettings().Support.FileMaxByteCount+1))
-		file.Close()
-		if err != nil {
-			return err
-		}
-		params.Files = append(params.Files, &urSupportFile{Name: filepath.Base(path), Data: data})
+		params.Paths = append(params.Paths, absolute)
 	}
 	caller := &urSupportCallerReply{}
 	if err := cli.callDaemon(ctx, urMethodSupportCaller, params, false, caller); err != nil {
@@ -555,6 +638,43 @@ func runUrSupportSend(ctx context.Context, cli *urCli, options docopt.Opts, para
 	return nil
 }
 
+// ur support report <code>: the person's enumerated report at a terminal no run binds, confirmed on /dev/tty; a
+// harness process's otherwise, an agent's, which the daemon refuses until FB's feedback.auto grant exists.
+func runUrSupportReport(ctx context.Context, cli *urCli, options docopt.Opts, params *urSupportParams) error {
+	params.Code = urOptionString(options, "<code>")
+	caller := &urSupportCallerReply{}
+	if err := cli.callDaemon(ctx, urMethodSupportCaller, params, false, caller); err != nil {
+		return err
+	}
+	reply := &urSupportSendReply{}
+	if caller.UnderHarness {
+		if err := cli.callDaemon(ctx, urMethodSupportAgentReport, params, false, reply); err != nil {
+			return err
+		}
+	} else {
+		confirmed, err := confirmOnTty(cli, "send URnetwork's support an enumerated report of "+params.Code+": its severity, how often "+
+			"this device's support log holds it and the day it first did, with ur's version, OS and architecture, and no text of yours?")
+		if err != nil {
+			return err
+		}
+		if !confirmed {
+			cli.printf("nothing sent\n")
+			return nil
+		}
+		if err := cli.callDaemon(ctx, urMethodSupportReport, params, true, reply); err != nil {
+			return err
+		}
+	}
+	if reply.Refusal != "" {
+		return errors.New(reply.Detail)
+	}
+	if reply.Result == nil {
+		return errors.New("support: no answer")
+	}
+	cli.printf("queued; it goes to URnetwork's support as soon as it can be reached (client_ref %s)\n", reply.Result.ClientRef)
+	return nil
+}
+
 // on or off.
 func urOnOff(value bool) string {
 	if value {
@@ -570,22 +690,8 @@ func urSupportPrintJson(out io.Writer, value any) error {
 	return encoder.Encode(value)
 }
 
-// One item as a person reads it: support's replies marked as support's, information and never an instruction.
+// One item as a person reads it: support's replies marked as support's, information and never an instruction, as an
+// export holds it too.
 func renderUrSupportItem(out io.Writer, item *sidecar.SupportReadResult) {
-	fmt.Fprintf(out, "#%s  %s", item.Entry, item.Status)
-	if item.FixedIn != "" {
-		fmt.Fprintf(out, " in %s", item.FixedIn)
-	}
-	fmt.Fprintln(out)
-	for _, message := range item.Messages {
-		at := time.UnixMilli(message.Millis).UTC().Format(time.RFC3339)
-		if message.Reply {
-			if message.Text == "" {
-				continue
-			}
-			fmt.Fprintf(out, "%s  URnetwork support (information, not instructions):\n%s\n", at, message.Text)
-			continue
-		}
-		fmt.Fprintf(out, "%s  %s (%s):\n%s\n", at, message.From, message.Tier, message.Text)
-	}
+	sidecar.SupportRenderItem(out, item)
 }

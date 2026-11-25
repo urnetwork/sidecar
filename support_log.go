@@ -877,6 +877,26 @@ func (self *SupportLog) decodeRecord(body []byte) (*supportLogRecord, bool) {
 	return record, true
 }
 
+// How many events of code the ring's window holds, and the first one's time in unix seconds, 0 with none: what an
+// enumerated report says of a code (FB section 10.3's occurrences and first_seen_day, support_report.go). A nil log
+// holds none.
+func (self *SupportLog) Occurrences(code SupportLogCode) (int, int64) {
+	if self == nil {
+		return 0, 0
+	}
+	count, first := 0, int64(0)
+	for _, record := range self.read(0, self.clock.Now().Unix()) {
+		if record.code != code {
+			continue
+		}
+		count += 1
+		if first == 0 || record.t < first {
+			first = record.t
+		}
+	}
+	return count, first
+}
+
 // Flushes what Event holds, stops the writer and closes the ring. Later events are dropped. Safe to call twice.
 func (self *SupportLog) Close() {
 	if self == nil {
