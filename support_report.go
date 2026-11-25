@@ -12,7 +12,9 @@
 // person's report, at a terminal no run binds and confirmed on /dev/tty, goes on the person's limits. An agent's
 // needs FB section 5's feedback.auto grant, a person's per network or per agent with an expiry, which nothing builds
 // yet (FB's G3): until it is built an agent's report is refused grant_required, failing closed, and the auto tier's
-// own limits (FB section 11: 5 new fingerprints a day per agent, 20 per network) wait with it. Safe for concurrent use.
+// own limits (FB section 11: 5 new fingerprints a day per agent, 20 per network) wait with it, as does its sender,
+// which FB section 3 as amended keeps opaque on the auto tier, keyed under a network-held secret, never the agent's
+// name that its free-text messages carry. Safe for concurrent use.
 
 package sidecar
 
