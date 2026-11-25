@@ -37,18 +37,22 @@ type testSupportService struct {
 	posts       []*testSupportPost
 	attachments []string
 	failNext    int
-	nextEntry   int
-	entries     map[string]string
-	events      []*SupportServiceEvent
-	tokens      []string
+	// the posts whose entry the service makes and whose answer is lost, answered 503
+	loseAnswerNext int
+	nextEntry      int
+	entries        map[string]string
+	events         []*SupportServiceEvent
+	tokens         []string
 	// one signal a post taken, for a test of the run loop
 	posted chan struct{}
 }
 
-// One post as the service took it.
+// One post as the service took it, with the tier and the approver it carried beside the body.
 type testSupportPost struct {
 	path           string
 	idempotencyKey string
+	tier           string
+	approved       string
 	body           *SupportBody
 	raw            []byte
 }
@@ -80,7 +84,10 @@ func (self *testSupportService) client() *http.Client {
 
 func (self *testSupportService) record(request *http.Request) *testSupportPost {
 	raw, _ := io.ReadAll(request.Body)
-	post := &testSupportPost{path: request.URL.Path, idempotencyKey: request.Header.Get("Idempotency-Key"), raw: raw}
+	post := &testSupportPost{
+		path: request.URL.Path, idempotencyKey: request.Header.Get("Idempotency-Key"), tier: request.Header.Get(supportHeaderTier),
+		approved: request.Header.Get(supportHeaderApproved), raw: raw,
+	}
 	body := &SupportBody{}
 	if json.Unmarshal(raw, body) == nil {
 		post.body = body
@@ -114,6 +121,11 @@ func (self *testSupportService) entries_(writer http.ResponseWriter, request *ht
 			entry = fmt.Sprint(self.nextEntry)
 			self.nextEntry += 1
 			self.entries[post.idempotencyKey] = entry
+		}
+		if 0 < self.loseAnswerNext {
+			self.loseAnswerNext -= 1
+			http.Error(writer, "unavailable", http.StatusServiceUnavailable)
+			return
 		}
 		writer.WriteHeader(http.StatusCreated)
 		json.NewEncoder(writer).Encode(map[string]any{"id": entry, "status": "received", "seq": 1, "replayed": replayed})
@@ -224,6 +236,11 @@ type testSupportHost struct {
 	requests  []*SidecarAction
 	lookups   map[SidecarActionKind]SidecarEffectLookup
 	drafts    []*RecordDraft
+	// the decisions an approved use spends, each a Signed as stored, which the effect runs under; nil runs it under no
+	// spend, as a standing grant does
+	spendDecisions [][]byte
+	// the action the spend's decisions hash, nil for the one filed
+	spendAction []byte
 }
 
 // The credential the host holds, which the scan refuses.
@@ -236,13 +253,19 @@ func (self *testSupportHost) SecretMatcher() (*SecretMatcher, error) {
 func (self *testSupportHost) Authorize(ctx context.Context, action *SidecarAction, decision *bridge.Signed) error {
 	self.stateLock.Lock()
 	self.requests = append(self.requests, action)
-	approved, declined := self.approved, self.declined
+	approved, declined, decisions, spendAction := self.approved, self.declined, self.spendDecisions, self.spendAction
 	self.stateLock.Unlock()
 	switch {
 	case declined:
 		return errors.New("declined")
 	case !approved:
 		return &ApprovalPendingError{ApprovalId: Id{0x27}}
+	}
+	if decisions != nil {
+		if spendAction == nil {
+			spendAction = action.Canonical
+		}
+		ctx = withApprovalSpend(ctx, &ApprovalSpend{ApprovalId: Id{0x27}, Decisions: decisions, Action: spendAction})
 	}
 	ref, err := action.Effect.Run(ctx, []byte("effect-key"))
 	if err != nil {
@@ -371,26 +394,43 @@ func TestSupportCleanHarnessRunsMessageGoesWithoutApproval(t *testing.T) {
 		t.Fatalf("posts %+v", posts)
 	}
 	body := posts[0].body
-	if body.Tier != SupportTierAgent || body.Sender.Agent != "release-bot" || body.Sender.Approved != "none" || body.Disclosure != 2 ||
+	if body.Tier != SupportTierAgent || body.Sender.Agent != "release-bot" || body.Sender.Approved != SupportApprovedNone || body.Disclosure != 2 ||
 		body.Product != SupportProductUrnetwork || body.Text != "ur git push fails with an index error" {
 		t.Fatalf("the body reads %+v %+v", body, body.Sender)
+	}
+	if posts[0].tier != string(SupportTierAgent) || posts[0].approved != SupportApprovedNone {
+		t.Fatalf("beside the body: tier %q, approved %q", posts[0].tier, posts[0].approved)
 	}
 	if world.service.tokens[0] != "Bearer test-feedback-token" {
 		t.Fatal("the post carried no token")
 	}
-	// the vault's entry as it leaves, its text there and none in the team's projection
-	if len(world.host.drafts) != 1 || world.host.drafts[0].Kind != RecordKindSupportMessage {
+	// the vault's entry as it left, its entry none until the acknowledgment, which its client_ref joins; its text there
+	// and none in the team's projection
+	if len(world.host.drafts) != 2 || world.host.drafts[0].Kind != RecordKindSupportMessage || world.host.drafts[1].Kind != RecordKindSupportMessage {
 		t.Fatalf("%d drafts", len(world.host.drafts))
 	}
 	message := world.host.drafts[0].Body.(*protocol.SupportMessageBody)
-	if message.GetDirection() != supportDirectionSent || message.GetText() == "" || message.GetEntry() != "100171" || message.GetDisclosureVersion() != 2 {
+	if message.GetDirection() != supportDirectionSent || message.GetText() == "" || message.GetEntry() != "" || message.GetSeq() != 0 ||
+		message.GetDisclosureVersion() != 2 || message.GetTier() != supportTierNumberAgent || message.GetAgentLabel() != "release-bot this device" {
 		t.Fatalf("the entry reads %v", message)
+	}
+	if err := RecordBodyValidate(RecordKindSupportMessage, message); err != nil {
+		t.Fatal(err)
+	}
+	acknowledged := world.host.drafts[1].Body.(*protocol.SupportMessageBody)
+	if acknowledged.GetDirection() != supportDirectionReceived || acknowledged.GetEntry() != "100171" || acknowledged.GetSeq() != 1 ||
+		!bytes.Equal(acknowledged.GetClientRef(), message.GetClientRef()) || acknowledged.GetText() != "" || acknowledged.GetStatus() != 1 {
+		t.Fatalf("the acknowledgment reads %v", acknowledged)
+	}
+	if err := RecordBodyValidate(RecordKindSupportMessage, acknowledged); err != nil {
+		t.Fatal(err)
 	}
 	projection, err := RecordProjectForTeam(RecordKindSupportMessage, message, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if projected := projection.(*protocol.SupportMessageBody); projected.GetText() != "" || projected.GetAgentLabel() != "" || projected.GetEntry() != "100171" {
+	if projected := projection.(*protocol.SupportMessageBody); projected.GetText() != "" || projected.GetAgentLabel() != "" ||
+		!bytes.Equal(projected.GetClientRef(), message.GetClientRef()) || projected.GetTier() != supportTierNumberAgent {
 		t.Fatalf("the team's projection reads %v", projected)
 	}
 	// a resumed run's repeat of the call makes no second message
@@ -573,8 +613,15 @@ func TestSupportOutwardMessagesFileKind27(t *testing.T) {
 			t.Fatalf("%s: %d posts after the approval", c.name, len(posts))
 		}
 		sum := sha256.Sum256(posts[0].raw)
-		if !bytes.Equal(stored.Action.GetBodySha256(), sum[:]) || posts[0].body.Tier != SupportTierReleased {
-			t.Fatalf("%s: field 3 does not hash the body posted, or the tier is %s", c.name, posts[0].body.Tier)
+		if !bytes.Equal(stored.Action.GetBodySha256(), sum[:]) {
+			t.Fatalf("%s: field 3 does not hash the body posted", c.name)
+		}
+		// the body names no tier and no approver, which no one had decided when field 3 hashed it; the post carries the
+		// person's decision beside it (QD-1398)
+		if posts[0].body.Tier != "" || posts[0].body.Sender.Approved != "" || posts[0].tier != string(SupportTierReleased) ||
+			posts[0].approved != SupportApprovedPerson {
+			t.Fatalf("%s: the body's tier %q and approver %q, beside it %q and %q", c.name, posts[0].body.Tier,
+				posts[0].body.Sender.Approved, posts[0].tier, posts[0].approved)
 		}
 		if c.name == "a file's" && len(world.service.attachments) != 1 {
 			t.Fatalf("%s: %d attachments", c.name, len(world.service.attachments))
@@ -681,14 +728,18 @@ func TestSupportEventsAreReceivedOnceRecordedAndNotifiedWithoutText(t *testing.T
 	if bytes.Contains(encoded, []byte("ur doctor")) {
 		t.Fatal("a notice carries the reply's text")
 	}
-	received := 0
+	// one received entry an event: the acknowledgment of seq 1, the reply at 2 and the status at 3
+	receivedSeqs := []uint32{}
 	for _, draft := range world.host.drafts {
 		if body := draft.Body.(*protocol.SupportMessageBody); body.GetDirection() == supportDirectionReceived {
-			received += 1
+			receivedSeqs = append(receivedSeqs, body.GetSeq())
+			if err := RecordBodyValidate(RecordKindSupportMessage, body); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
-	if received != 2 {
-		t.Fatalf("%d received entries", received)
+	if !slices.Equal(receivedSeqs, []uint32{1, 2, 3}) {
+		t.Fatalf("received entries at %v", receivedSeqs)
 	}
 
 	// support_list taints nothing and names no text; support_read taints first
@@ -833,6 +884,11 @@ func init() {
 					}
 					client.Send(context.Background(), args)
 				}
+				// a report's code and the host's version are the caller's: neither reaches the ring
+				client.Report(context.Background(), &SupportReportArgs{Surface: SupportSurfacePerson, Code: text, Host: &SupportLogBundleHost{Version: text}})
+				client.Report(context.Background(), &SupportReportArgs{
+					Surface: SupportSurfaceCliHarness, Sender: &SupportSender{AgentName: text, Where: text}, Code: text,
+				})
 			}
 		},
 	})

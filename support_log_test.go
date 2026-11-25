@@ -5,6 +5,7 @@ package sidecar
 import (
 	"bytes"
 	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -556,5 +557,88 @@ func TestSupportLogCodesNameTheirRegistryRows(t *testing.T) {
 				t.Errorf("code %s names field %d", code, number)
 			}
 		}
+	}
+}
+
+// A deferred ring creates nothing on disk until Start: not its directory, its key or a segment, whatever Event takes
+// and a bundle reads meanwhile; Start writes what it held with the times it was held at, and a second Start does
+// nothing more. One closed before Start writes nothing at all, and one opened over a ring reads its key, so its tokens
+// relate to the ring's earlier ones, and writes none of it again.
+func TestSupportLogDeferredWritesNothingUntilStart(t *testing.T) {
+	clock := newSupportLogTestClock()
+	directory := filepath.Join(t.TempDir(), "support-log")
+	open := func() *SupportLog {
+		log, err := OpenSupportLog(&SupportLogArgs{Directory: directory, Settings: DefaultSupportSettings(), Clock: clock, Deferred: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(log.Close)
+		return log
+	}
+	log := open()
+	held := clock.Now()
+	log.Event(SupportLogCodeAppStarted, SupportLogFieldRelease("2026.11.24-1"))
+	log.flush()
+	if bundle, err := log.Bundle(nil); err != nil || bundle.Document.Header.Events != 0 {
+		t.Fatalf("a bundle before Start: %+v, %v", bundle, err)
+	}
+	if _, err := os.Stat(directory); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a deferred ring made its directory: %v", err)
+	}
+	clock.advance(time.Minute)
+	if err := log.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := log.Start(); err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := log.Bundle(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	codes := map[string]int64{}
+	for _, event := range bundle.Document.Events {
+		codes[event.Component+"."+event.Code] = event.T
+	}
+	if codes["app.started"] != held.Unix() || codes["support_log.opened"] != clock.Now().Unix() {
+		t.Fatalf("after Start the ring holds %v", codes)
+	}
+	key, err := os.ReadFile(filepath.Join(directory, supportLogKeyFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	log.Close()
+
+	// over the ring: its key read, nothing written before Start, nothing at all when closed first
+	before := map[string][]byte{}
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		data, err := os.ReadFile(filepath.Join(directory, entry.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		before[entry.Name()] = data
+	}
+	again := open()
+	if !bytes.Equal(again.key, key) {
+		t.Fatal("a deferred ring over a ring drew a new key")
+	}
+	again.Event(SupportLogCodeAppStopped, SupportLogFieldUptime(time.Hour))
+	again.Close()
+	entries, err = os.ReadDir(directory)
+	if err != nil || len(entries) != len(before) {
+		t.Fatalf("%d files after a closed deferred ring, %d before: %v", len(entries), len(before), err)
+	}
+	for _, entry := range entries {
+		data, err := os.ReadFile(filepath.Join(directory, entry.Name()))
+		if err != nil || !bytes.Equal(data, before[entry.Name()]) {
+			t.Fatalf("a deferred ring closed before Start changed %s", entry.Name())
+		}
+	}
+	if err := again.Start(); err == nil {
+		t.Fatal("a closed ring started")
 	}
 }

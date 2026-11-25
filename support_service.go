@@ -6,7 +6,9 @@
 // Appendix J extends it, a reading where FB names no route:
 //
 //	POST /v1/entries                       a new item: the SupportBody, tier human, released or agent, under
-//	                                       Idempotency-Key: <client_ref>; 201 {id, status, seq}, or 200 with replayed
+//	                                       Idempotency-Key: <client_ref>, its tier and approver beside it in
+//	                                       Support-Tier and Support-Approved (QD-1398: a kind-27 body names neither);
+//	                                       201 {id, status, seq}, or 200 with replayed
 //	POST /v1/entries/{id}/followups        a message continuing an item, the same body and key (Appendix J)
 //	POST /v1/entries/{id}/attachments      a bundle or file of a message, after its entry is known, its key the message's
 //	                                       client_ref and the attachment's place (a reading: FB section 9 names none)
@@ -178,8 +180,9 @@ func supportServiceUrl(host string, path string, query url.Values) (string, erro
 }
 
 // One call: its answer's body, within ResponseMaxByteCount, for a 2xx; a supportServiceError for any other status.
+// headers are set beside the token, the key and the type.
 func (self *supportService) call(ctx context.Context, method string, target string, token string, idempotencyKey string,
-	contentType string, body []byte) ([]byte, int, error) {
+	contentType string, body []byte, headers map[string]string) ([]byte, int, error) {
 	ctx, cancel := context.WithTimeout(ctx, self.settings.PostTimeout)
 	defer cancel()
 	request, err := http.NewRequestWithContext(ctx, method, target, bytes.NewReader(body))
@@ -192,6 +195,9 @@ func (self *supportService) call(ctx context.Context, method string, target stri
 	}
 	if contentType != "" {
 		request.Header.Set("Content-Type", contentType)
+	}
+	for name, value := range headers {
+		request.Header.Set(name, value)
 	}
 	response, err := self.client.Do(request)
 	if err != nil {
@@ -222,8 +228,10 @@ func (self *supportService) call(ctx context.Context, method string, target stri
 	return nil, response.StatusCode, &supportServiceError{result: SupportLogPostResultClientError, status: response.StatusCode}
 }
 
-// Posts a message: a new item, or with entry a follow-up on it, under its client_ref.
-func (self *supportService) postMessage(ctx context.Context, host string, token string, clientRef string, entry string, body []byte) (*supportEntryAnswer, error) {
+// Posts a message: a new item, or with entry a follow-up on it, under its client_ref, its tier and its approver beside
+// the body (QD-1398).
+func (self *supportService) postMessage(ctx context.Context, host string, token string, clientRef string, entry string, body []byte,
+	tier SupportTier, approved string) (*supportEntryAnswer, error) {
 	path := "/v1/entries"
 	if entry != "" {
 		path = "/v1/entries/" + url.PathEscape(entry) + "/followups"
@@ -232,7 +240,8 @@ func (self *supportService) postMessage(ctx context.Context, host string, token 
 	if err != nil {
 		return nil, err
 	}
-	answer, _, err := self.call(ctx, http.MethodPost, target, token, clientRef, "application/json", body)
+	headers := map[string]string{supportHeaderTier: string(tier), supportHeaderApproved: approved}
+	answer, _, err := self.call(ctx, http.MethodPost, target, token, clientRef, "application/json", body, headers)
 	if err != nil {
 		return nil, err
 	}
@@ -249,7 +258,7 @@ func (self *supportService) postAttachment(ctx context.Context, host string, tok
 	if err != nil {
 		return err
 	}
-	_, _, err = self.call(ctx, http.MethodPost, target, token, key, contentType, data)
+	_, _, err = self.call(ctx, http.MethodPost, target, token, key, contentType, data, nil)
 	return err
 }
 
@@ -259,7 +268,7 @@ func (self *supportService) lookup(ctx context.Context, host string, token strin
 	if err != nil {
 		return nil, err
 	}
-	answer, status, err := self.call(ctx, http.MethodGet, target, token, "", "", nil)
+	answer, status, err := self.call(ctx, http.MethodGet, target, token, "", "", nil, nil)
 	if status == http.StatusNotFound {
 		return nil, nil
 	}
@@ -286,7 +295,7 @@ func (self *supportService) deleteEntry(ctx context.Context, host string, token 
 	if err != nil {
 		return err
 	}
-	_, _, err = self.call(ctx, http.MethodDelete, target, token, "", "", nil)
+	_, _, err = self.call(ctx, http.MethodDelete, target, token, "", "", nil, nil)
 	return err
 }
 

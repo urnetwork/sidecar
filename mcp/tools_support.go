@@ -4,10 +4,12 @@
 // support_read, each answered by the network's support client (the root's support_client.go), which alone holds the
 // feedback service's token and the outbox, so no session holds either (I-7, R-CTX-9).
 //
-//   - support_send(text, entry?, kind?, logs?) is O over MCP, always: an MCP session's run counts as tainted for it, so
-//     the classifier, which never saw what the harness read, asks the person, inputs_unknown (Q-SUP-8). It answers at
-//     once, approval_pending with the request's id, or a refusal that fails only the call (§28.14). Files attach
-//     through the Harness or ur support send --attach; this tool takes none yet.
+//   - support_send(text, entry?, kind?, logs?, files?) is O over MCP, always: an MCP session's run counts as tainted
+//     for it, so the classifier, which never saw what the harness read, asks the person, inputs_unknown (Q-SUP-8). Its
+//     files, at most 3, are read as the Harness's file tools read them, beneath the session's worktree (its run's,
+//     where a hook bound one, else the harness's working directory), a name that leaves it refused; a message naming
+//     one carries rule attachment, which only the person decides (§28.7, §28.8). It answers at once, approval_pending
+//     with the request's id, or a refusal that fails only the call (§28.14).
 //   - support_list(status?, scope?) is R and taints nothing: stubs of the session agent's items, never text; scope
 //     member, the whole conversation, only in a run the person is attached to, which no MCP session is.
 //   - support_read(entry, after?) is R, and taints the run before any reply returns: each reply sits between the
@@ -38,20 +40,33 @@ type mcpSupportRuns interface {
 	Runs() (*sidecar.RunStore, error)
 }
 
-// The session's run as kind 27 binds it: counted tainted whatever its file says (Q-SUP-8), its file's reasons where it
-// can be read, and no mark, which only the Harness's runs carry.
-func mcpSupportRun(call *McpCall) *sidecar.SupportRun {
-	run := &sidecar.SupportRun{RunId: call.RunId, Tainted: true, MarksKnown: true}
-	if runs, ok := call.Network.(mcpSupportRuns); ok {
-		if store, err := runs.Runs(); err == nil && store != nil {
-			if file, err := store.Get(call.RunId); err == nil && file != nil {
-				for _, reason := range file.TaintReasons {
-					run.TaintReasons = append(run.TaintReasons, string(reason))
-				}
-			}
-		}
+// The session's run's file, nil where it has none: an unbound session's placeholder run, which no store saw.
+func mcpSupportRunFile(call *McpCall) *sidecar.RunFile {
+	runs, ok := call.Network.(mcpSupportRuns)
+	if !ok {
+		return nil
 	}
-	return run
+	store, err := runs.Runs()
+	if err != nil || store == nil {
+		return nil
+	}
+	file, err := store.Get(call.RunId)
+	if err != nil {
+		return nil
+	}
+	return file
+}
+
+// The root a session's files are read beneath: its run's worktree where a hook bound one, else the harness's working
+// directory the session's hello names; "" for neither, which refuses every file.
+func mcpSupportFilesRoot(call *McpCall, file *sidecar.RunFile) string {
+	if file != nil && file.Worktree != "" {
+		return file.Worktree
+	}
+	if call.Session != nil {
+		return call.Session.Hello().Cwd
+	}
+	return ""
 }
 
 // The tools' refusals beyond a SupportRefusalError's.
@@ -59,7 +74,7 @@ var (
 	errMcpSupportUnavailable = NewMcpError(McpCodeUnavailable,
 		"support cannot be reached from this network now; reach support through the app's form", true)
 	errMcpSupportArguments = NewMcpError(McpCodeInvalidArguments,
-		"support_send takes text, and optionally entry (an item's id), kind (bug, feature, question, praise, security or other) and logs; files attach through the Harness or ur support send --attach", false)
+		"support_send takes text, and optionally entry (an item's id), kind (bug, feature, question, praise, security or other), logs, and files: at most 3 paths beneath your worktree, UTF-8 text, PNG or JPEG", false)
 	errMcpSupportNoAgent = NewMcpError(McpCodeRefused,
 		"support_send needs the session's agent: set it in the harness's hello or the project's .ur", false)
 )
@@ -219,11 +234,12 @@ func addSupportTools(catalog *McpCatalog) {
 		Tier: McpTierOutward,
 		Description: "Sends a message to URnetwork's support team in your person's support conversation, which URnetwork's support " +
 			"and the subprocessors its disclosure names read in full. Continue an open item with entry rather than opening " +
-			"another; logs attaches sidecar's own content-free log. Never include a key, token, password or your person's " +
-			"private data. Outward: it answers approval_pending until your person decides; go on with your work.",
+			"another; logs attaches sidecar's own content-free log; files, at most 3 paths beneath your worktree, attach " +
+			"UTF-8 text, PNG or JPEG, which your person sees whole first. Never include a key, token, password or your " +
+			"person's private data. Outward: it answers approval_pending until your person decides; go on with your work.",
 		Access: func(call *McpCall, in *mcpSupportSendIn) ([]McpAccess, error) { return nil, nil },
 	}, func(ctx context.Context, call *McpCall, in *mcpSupportSendIn, result *McpResult) (*mcpSupportSendOut, error) {
-		if strings.TrimSpace(in.Text) == "" || 0 < len(in.Files) {
+		if strings.TrimSpace(in.Text) == "" {
 			return nil, errMcpSupportArguments
 		}
 		agentName := mcpSupportAgentName(call)
@@ -235,14 +251,20 @@ func addSupportTools(catalog *McpCatalog) {
 			return nil, err
 		}
 		result.SetSource("support:urnetwork")
+		runFile := mcpSupportRunFile(call)
+		files, err := sidecar.SupportReadFiles(mcpSupportFilesRoot(call, runFile), in.Files, client.Settings())
+		if err != nil {
+			return nil, mcpSupportError(err)
+		}
 		answer, err := client.Send(ctx, &sidecar.SupportSendArgs{
 			Surface: sidecar.SupportSurfaceMcp,
 			Sender:  &sidecar.SupportSender{AgentName: agentName, AgentId: mcpCallAgentId(call), Where: "mcp"},
-			Run:     mcpSupportRun(call),
+			Run:     sidecar.SupportRunOfFile(call.RunId, runFile),
 			Text:    in.Text,
 			Entry:   in.Entry,
 			Kind:    in.Kind,
 			Logs:    in.Logs,
+			Files:   files,
 		})
 		if err != nil {
 			return nil, mcpSupportError(err)

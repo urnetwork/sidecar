@@ -16,7 +16,7 @@
 #   SIDECAR_REGENERATE_SUPPORT_LOG=1 go test -tags sidecar_check -run '^TestSupportLogRegistryIsCurrent$' ./check
 # and a reviewer reads both diffs.
 
-version: 1
+version: 2
 
 # How a count, a duration and a size are told: the first bucket whose max the value is at or under, else the last,
 # which has none. Counts are FB section 10.3's occurrences, with 0 before them.
@@ -81,6 +81,7 @@ enums:
     - file_refused
     - not_found
     - no_host
+    - grant_required
   # how a post to the feedback service ended, as a class, never the service's text
   post_result: [accepted, replayed, client_error, rate_limited, server_error, unreachable, tls_failed, timeout, unauthorized]
   # who decided a kind-27 use (§28.8)

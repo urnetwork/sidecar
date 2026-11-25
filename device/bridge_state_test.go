@@ -163,6 +163,97 @@ func (self *stateTest) awaitChange() {
 	}
 }
 
+// Waits until a timer at at stands, which in these tests, with no BridgeHost, only run sets. run sets its timer as a
+// duration from its own read of the clock, so a test that moves the clock between that read and the timer's arm
+// leaves the timer late by the move: a test waits here for run's timer before it moves the clock short of it, as
+// advanceTo waits before moving the clock onto one.
+func (self *stateTest) awaitTimerAt(at time.Time) {
+	self.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	for {
+		pending, added := self.clock.WatchTimers()
+		if slices.ContainsFunc(pending, at.Equal) {
+			return
+		}
+		select {
+		case <-added:
+		case <-ctx.Done():
+			self.t.Fatalf("no timer at %v; pending %v", at, pending)
+		}
+	}
+}
+
+// A fake clock that holds run between its read of the clock and its timer's arm: in this package only run calls
+// After, and while a hold is set the next call waits there until the test releases it, so a test meets that window
+// on every run.
+type stateTestHeldClock struct {
+	*sidecartest.FakeClock
+
+	stateLock sync.Mutex
+	// the next After's hold, nil for none
+	hold *stateTestHold
+}
+
+// One hold of After: held closes once a call waits at it, and release lets the call go on.
+type stateTestHold struct {
+	held    chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+// The bridge's clock in settings, which a test constructor set to a FakeClock, held from here on.
+func newStateTestHeldClock(settings *device.BridgeSettings) *stateTestHeldClock {
+	clock := &stateTestHeldClock{FakeClock: settings.Clock.(*sidecartest.FakeClock)}
+	settings.Clock = clock
+	return clock
+}
+
+// Holds the next After: held closes once it waits, and release, which may be called again, lets it on. A test
+// registers release as a cleanup once its bridge's Close is registered, so a test that fails while run is held lets
+// it on before Close waits for it.
+func (self *stateTestHeldClock) holdNextAfter() (held <-chan struct{}, release func()) {
+	hold := &stateTestHold{held: make(chan struct{}), release: make(chan struct{})}
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.hold = hold
+	}()
+	return hold.held, func() {
+		hold.once.Do(func() {
+			close(hold.release)
+		})
+	}
+}
+
+// sidecartest.FakeClock's After, once a hold set before it is released.
+func (self *stateTestHeldClock) After(timeout time.Duration) <-chan time.Time {
+	hold := func() *stateTestHold {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		hold := self.hold
+		self.hold = nil
+		return hold
+	}()
+	if hold != nil {
+		close(hold.held)
+		<-hold.release
+	}
+	return self.FakeClock.After(timeout)
+}
+
+// Waits for a channel a hold closes; the context is the guard that fails a test it never closes for.
+func (self *stateTest) awaitHeld(held <-chan struct{}) {
+	self.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	select {
+	case <-held:
+	case <-ctx.Done():
+		self.t.Fatal("run never reached its timer's arm")
+	}
+}
+
 // Advances the clock to at, once run waits on a timer for it, and waits for the publish it makes.
 func (self *stateTest) advanceTo(at time.Time) {
 	self.t.Helper()

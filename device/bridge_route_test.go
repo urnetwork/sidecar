@@ -363,7 +363,11 @@ func TestBridgeRouteCarvedAddressTakesTheDefaultRoute(t *testing.T) {
 // An entry whose last advertiser is revoked rejects at once, its pins dropped, for RejectEntryHoldTimeout, then leaves
 // the table: a subnet route outside the block then takes the default route (§17.8's revocation row).
 func TestBridgeRouteRevokedEntryRejectsThenLeaves(t *testing.T) {
-	test := newRouteTest(t, routeTestFixture(), nil)
+	// the link's idle apart from the hold, both 600 s by default, so the timer awaited at the hold's end is run's: run
+	// sets it from its own read of the clock, and a move before it is set leaves it late by the move
+	test := newRouteTest(t, routeTestFixture(), func(settings *device.BridgeSettings) {
+		settings.LinkIdleTimeout = 2 * settings.RejectEntryHoldTimeout
+	})
 	packet := routeTestUdp(routeTestSource, "192.0.2.10", 9)
 	test.awaitLink(packet)
 	if err := test.bridge.Revoke(bridge.SignedType_SIGNED_SIDECAR_REVOKE, sidecartest.BridgeFixtureSidecarId(7), test.bridge.Status().PinN+1); err != nil {
