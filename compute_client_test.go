@@ -40,12 +40,17 @@ type testComputeHost struct {
 	authorize func(action *SidecarAction) error
 }
 
-// A host on transport, with an identity, its events buffered for the test to read.
+// The Checkout host the tests' settings allow, in place of Stripe's own (CODESTYLE's test data rule).
+const testComputeCheckoutHost = "checkout.stripe.example"
+
+// A host on transport, with an identity, its events buffered for the test to read, its api's Checkout host the test's.
 func newTestComputeHost(t *testing.T, transport *scriptedApiTransport) *testComputeHost {
 	t.Helper()
 	networkId := NewId()
+	api := newTestSidecarApi(t, transport)
+	api.settings.Compute.CheckoutHosts = []string{testComputeCheckoutHost}
 	return &testComputeHost{
-		api:       newTestSidecarApi(t, transport),
+		api:       api,
 		networkId: networkId,
 		events:    make(chan SidecarEvent, 64),
 		identity:  &SidecarIdentity{NetworkId: networkId, SidecarId: NewId(), ClientId: NewId(), Generation: 1},
@@ -177,7 +182,7 @@ func TestComputeClientCallsEachRoute(t *testing.T) {
 		},
 		"POST /compute/checkout": func(request *http.Request, body []byte) (int, string) {
 			keep("checkout", request, body)
-			return http.StatusOK, `{"url":"https://checkout.stripe.com/c/pay/cs_test_synthetic","expire_time_ms":1795003600000}`
+			return http.StatusOK, `{"url":"https://` + testComputeCheckoutHost + `/c/pay/cs_test_synthetic","expire_time_ms":1795003600000}`
 		},
 		"GET /compute/auto-renew": func(request *http.Request, body []byte) (int, string) {
 			keep("auto_renew", request, body)
@@ -241,7 +246,7 @@ func TestComputeClientCallsEachRoute(t *testing.T) {
 	}
 
 	checkout, err := client.Checkout(ctx, &ComputeCheckoutArgs{PackCredits: 25, AutoRenew: ComputeAutoRenewThreshold, BelowNanoUsd: 5000000000})
-	if err != nil || checkout.Url != "https://checkout.stripe.com/c/pay/cs_test_synthetic" || !checkout.ExpireTime.Equal(time.UnixMilli(1795003600000)) {
+	if err != nil || checkout.Url != "https://"+testComputeCheckoutHost+"/c/pay/cs_test_synthetic" || !checkout.ExpireTime.Equal(time.UnixMilli(1795003600000)) {
 		t.Errorf("checkout %+v, %v", checkout, err)
 	}
 	autoRenew, err := client.AutoRenew(ctx)
@@ -390,7 +395,7 @@ func TestComputeClientRefusesAnswersOutOfShape(t *testing.T) {
 				_, err := client.Checkout(ctx, &ComputeCheckoutArgs{PackCredits: 10})
 				return err
 			}},
-		{name: "a url over http", route: "POST /compute/checkout", answer: `{"url":"http://checkout.stripe.com/pay","expire_time_ms":1}`,
+		{name: "a url over http", route: "POST /compute/checkout", answer: `{"url":"http://` + testComputeCheckoutHost + `/pay","expire_time_ms":1}`,
 			call: func(client *ComputeClient) error {
 				_, err := client.Checkout(ctx, &ComputeCheckoutArgs{PackCredits: 10})
 				return err
