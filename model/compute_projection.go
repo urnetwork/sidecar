@@ -97,7 +97,8 @@ const (
 type ComputeBudgetLine struct {
 	// The agent, the sidecar, the member or the network the budget binds.
 	SubjectId operator.Id
-	// Which of the subject's budgets: a short name, [a-z0-9_] up to 24, so two budgets of one subject count apart,
+	// Which of the subject's budgets: a short name of [a-z0-9_], at most the settings' ProjectionBudgetNameMaxByteCount,
+	// so two budgets of one subject count apart,
 	// as a device's ceiling across all its calls does beside its budget for calls naming no agent.
 	Budget string
 	// Day or month; a run's budget is the device's to keep, never the broker's.
@@ -158,8 +159,13 @@ func ComputeDefaultBudgetLines(settings *ComputeLedgerSettings, caller *ComputeB
 	return lines, nil
 }
 
-// A budget's name: lowercase letters, digits and _, so it sits in a counter's field between colons.
-var computeBudgetNamePattern = regexp.MustCompile(`^[a-z0-9_]{1,24}$`)
+// A budget's name's letters: lowercase letters, digits and _, so it sits in a counter's field between colons.
+var computeBudgetNamePattern = regexp.MustCompile(`^[a-z0-9_]+$`)
+
+// Whether name is a budget's name: its letters, and no longer than the settings' bound.
+func computeBudgetNameValid(settings *ComputeLedgerSettings, name string) bool {
+	return name != "" && len(name) <= settings.ProjectionBudgetNameMaxByteCount && computeBudgetNamePattern.MatchString(name)
+}
 
 // The period's letter in a script's line: d or m.
 func (self ComputeBudgetPeriod) letter() (string, error) {
@@ -205,8 +211,8 @@ func computeBudgetKeys(networkId operator.Id, subjectIds []operator.Id) []string
 }
 
 // A line's ARGV, subject, budget, period letter and cap, checked.
-func computeLineArgs(line *ComputeBudgetLine) ([]string, error) {
-	if !computeBudgetNamePattern.MatchString(line.Budget) {
+func computeLineArgs(settings *ComputeLedgerSettings, line *ComputeBudgetLine) ([]string, error) {
+	if !computeBudgetNameValid(settings, line.Budget) {
 		return nil, fmt.Errorf("%w: the budget name %q", ErrComputeProjectionArgs, line.Budget)
 	}
 	letter, err := line.Period.letter()
@@ -227,7 +233,7 @@ func computeLinesArgs(settings *ComputeLedgerSettings, lines []*ComputeBudgetLin
 	args := []string{strconv.Itoa(len(lines))}
 	subjectIds := []operator.Id{}
 	for _, line := range lines {
-		lineArgs, err := computeLineArgs(line)
+		lineArgs, err := computeLineArgs(settings, line)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -676,7 +682,7 @@ func ComputeProjectionRebuild(env operator.Env, ctx context.Context, settings *C
 		args = append(args, hex.EncodeToString(hold.OpKey[:]), strconv.Itoa(int(hold.Kind)), strconv.FormatInt(hold.HoldNanoUsd, 10),
 			strconv.FormatInt(hold.ReserveNanoUsd, 10), strconv.FormatInt(startMs, 10), strconv.Itoa(len(hold.Lines)))
 		for _, line := range hold.Lines {
-			lineArgs, err := computeLineArgs(line)
+			lineArgs, err := computeLineArgs(settings, line)
 			if err != nil {
 				return err
 			}
@@ -693,7 +699,7 @@ func ComputeProjectionRebuild(env operator.Env, ctx context.Context, settings *C
 	}
 	args = append(args, strconv.Itoa(len(snapshot.Counters)))
 	for _, counter := range snapshot.Counters {
-		if !computeBudgetNamePattern.MatchString(counter.Budget) {
+		if !computeBudgetNameValid(settings, counter.Budget) {
 			return fmt.Errorf("%w: the budget name %q", ErrComputeProjectionArgs, counter.Budget)
 		}
 		field, err := ComputeBudgetPeriodField(counter.Period, counter.At)

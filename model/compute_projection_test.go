@@ -242,6 +242,7 @@ func TestComputeProjectionRefusesBeforeRedis(t *testing.T) {
 		"past 2^53":        hold(ComputeHoldPathTee, ComputeChargeKindInference, 1<<53, nil),
 		"a negative hold":  hold(ComputeHoldPathTee, ComputeChargeKindInference, -1, nil),
 		"a budget's name":  hold(ComputeHoldPathTee, ComputeChargeKindInference, 1, line("Agent:1", ComputeBudgetPeriodDay, 1)),
+		"a long name":      hold(ComputeHoldPathTee, ComputeChargeKindInference, 1, line(strings.Repeat("a", settings.ProjectionBudgetNameMaxByteCount+1), ComputeBudgetPeriodDay, 1)),
 		"a run's budget":   hold(ComputeHoldPathTee, ComputeChargeKindInference, 1, line("agent", ComputeBudgetPeriodRun, 1)),
 		"a cap past 2^53":  hold(ComputeHoldPathTee, ComputeChargeKindInference, 1, line("agent", ComputeBudgetPeriodDay, 1<<53)),
 		"too many lines":   hold(ComputeHoldPathTee, ComputeChargeKindInference, 1, tooMany),
