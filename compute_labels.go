@@ -243,10 +243,12 @@ func (self *Sidecar) computeConfigHead() (*ConfigState, *ConfigHead, bool) {
 	var head *ConfigHead
 	if held := client.localHead.Load(); held != nil && base.GetConfigVersion() == held.version && bytes.Equal(base.GetConfigHeadSha256(), held.chain[:]) {
 		head = held.head
-	} else if local, ok := client.args.Heads.(interface {
-		CachedConfigHead(uint64, []byte) *ConfigHead
-	}); ok {
-		head = local.CachedConfigHead(base.GetConfigVersion(), base.GetConfigHeadSha256())
+	} else if client.args != nil {
+		if local, ok := client.args.Heads.(interface {
+			CachedConfigHead(uint64, []byte) *ConfigHead
+		}); ok {
+			head = local.CachedConfigHead(base.GetConfigVersion(), base.GetConfigHeadSha256())
+		}
 	}
 	return state, head, head != nil
 }

@@ -21,6 +21,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/urnetwork/connect"
+
 	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
@@ -924,5 +926,51 @@ func TestComputeLowNoticeJsonHoldsIdsAndNumbers(t *testing.T) {
 	slices.Sort(keys)
 	if want := []string{"enclave_ids", "indexer_days_left", "previous", "state", "time", "version"}; !slices.Equal(keys, want) {
 		t.Errorf("keys %v, want %v", keys, want)
+	}
+}
+
+// The client's part of a generation subscribes to the compute topic on the generation's Subprotocol and holds it
+// while the generation runs, so the poll stands down, and a hint on the topic asks a read (QD-1238); a generation
+// without push holds nothing, and its client keeps polling.
+func TestComputeHintComponentHoldsThePushTopic(t *testing.T) {
+	host := newTestComputeHost(t, testComputeApi(nil))
+	client := newTestComputeClient(t, host, nil)
+	fixture := newTestSubprotocol(t, nil)
+	fetches := make(chan struct{}, 16)
+	pushClient, err := newPushClient(t.Context(), &PushClientEnv{
+		Subprotocol: fixture.subprotocol,
+		Store:       newTestPushStore(),
+		Clock:       newTestEnvelopeClock(),
+		Log:         NewNoopLogger(),
+	}, func(ctx context.Context, cursor []byte) (*protocol.PollResponse, error) {
+		fetches <- struct{}{}
+		return &protocol.PollResponse{Reset_: &protocol.PushReset{Epoch: 1, Complete: true}}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pushClient.Close()
+	testAwait(t, fetches, "the first resync")
+
+	component := &computeHintComponent{client: client}
+	if err := checkSidecarComponentName(component.Name()); err != nil {
+		t.Errorf("name %q: %v", component.Name(), err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	if err := component.Attach(&SidecarEnv{Ctx: ctx, Subprotocol: fixture.subprotocol}); err != nil {
+		t.Fatal(err)
+	}
+	if !client.pushHeld() {
+		t.Error("the generation does not hold the compute topic")
+	}
+	fixture.receive(connect.ControlId, testPushFrame(t, protocol.MessageType_PUSH_HINT, &protocol.PushHint{
+		Seq: 1, Topic: PushTopicCompute, Version: 1795000000000,
+	}), connect.Peer{TransportType: connect.TransportTypeH1})
+	testAwait(t, client.asks, "the hint's read")
+
+	other := newTestComputeClient(t, host, nil)
+	if err := (&computeHintComponent{client: other}).Attach(&SidecarEnv{Ctx: ctx}); err != nil || other.pushHeld() {
+		t.Errorf("a generation without push: held %t, %v", other.pushHeld(), err)
 	}
 }

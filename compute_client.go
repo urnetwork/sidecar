@@ -119,9 +119,7 @@ type ComputeClient struct {
 	stateLock sync.Mutex
 	// How many client generations hold the compute push topic now.
 	pushHolders int
-	// Ends the client generations' part.
-	removeHint func()
-	closed     bool
+	closed      bool
 }
 
 // The client on sidecar: its settings, its sources and its clock, and its part of each client generation, which
@@ -138,18 +136,16 @@ func newSidecarComputeClient(sidecar *Sidecar) (*ComputeClient, error) {
 	if err != nil {
 		return nil, err
 	}
-	removeHint, err := sidecar.AddComponent(&computeHintComponent{client: client})
-	if err != nil {
+	// listed as AddComponent lists one, but without its wake: the client constructs before the run loop starts
+	// (compute_sidecar.go), whose first pass attaches every listed component, so a wake would only add a pass. The leg
+	// closes it with the rest as the Sidecar ends, after this client.
+	leg, ok := sidecar.leg.(*sidecarConnectLeg)
+	if !ok {
 		// no client generations, so no push: the poll stands in
-		if sidecar.log.V(1).Enabled() {
-			sidecar.log.Infof("[compute]the balance hint is not subscribed: %s", err)
-		}
-	} else {
-		func() {
-			client.stateLock.Lock()
-			defer client.stateLock.Unlock()
-			client.removeHint = removeHint
-		}()
+		return client, nil
+	}
+	if err := leg.addComponent(&computeHintComponent{client: client}); err != nil && sidecar.log.V(1).Enabled() {
+		sidecar.log.Infof("[compute]the balance hint is not subscribed: %s", err)
 	}
 	return client, nil
 }
@@ -203,19 +199,14 @@ func NewComputeClient(args *ComputeClientArgs) (*ComputeClient, error) {
 	return client, nil
 }
 
-// Ends the loop and the client generations' part, and waits for the loop. Later calls answer ErrComputeClientClosed.
+// Ends the loop and waits for it. Later calls answer ErrComputeClientClosed. The client generations' part ends with the
+// Sidecar's components, and a hint it takes after this asks nothing of the ended loop.
 func (self *ComputeClient) Close() {
-	removeHint := func() func() {
+	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		self.closed = true
-		removeHint := self.removeHint
-		self.removeHint = nil
-		return removeHint
 	}()
-	if removeHint != nil {
-		removeHint()
-	}
 	self.cancel()
 	<-self.done
 }
