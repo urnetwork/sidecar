@@ -137,12 +137,14 @@ func (x *TopicVersion) GetVersion() uint64 {
 }
 
 type PushHint struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Seq           uint64                 `protobuf:"varint,1,opt,name=seq,proto3" json:"seq,omitempty"`    // the INCR value; a gap means hints were lost
-	Topic         string                 `protobuf:"bytes,2,opt,name=topic,proto3" json:"topic,omitempty"` // §6.8's topic registry
-	Version       uint64                 `protobuf:"varint,3,opt,name=version,proto3" json:"version,omitempty"`
-	Kind          uint32                 `protobuf:"varint,4,opt,name=kind,proto3" json:"kind,omitempty"` // the owner's MessageType (§6.11), or 0
-	Hint          []byte                 `protobuf:"bytes,5,opt,name=hint,proto3" json:"hint,omitempty"`  // that message, <= 256 B: ids, kinds, versions; never content; dropped when coalesced
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Seq     uint64                 `protobuf:"varint,1,opt,name=seq,proto3" json:"seq,omitempty"`    // the INCR value; a gap means hints were lost
+	Topic   string                 `protobuf:"bytes,2,opt,name=topic,proto3" json:"topic,omitempty"` // §6.8's topic registry
+	Version uint64                 `protobuf:"varint,3,opt,name=version,proto3" json:"version,omitempty"`
+	Kind    uint32                 `protobuf:"varint,4,opt,name=kind,proto3" json:"kind,omitempty"` // the owner's MessageType (§6.11), or 0
+	// that message, <= 256 B: ids, kinds, versions; never content; dropped when superseded or past its topic's bound
+	// (§6.8; owner decision 782)
+	Hint          []byte `protobuf:"bytes,5,opt,name=hint,proto3" json:"hint,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
