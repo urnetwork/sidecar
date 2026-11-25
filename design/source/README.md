@@ -7,7 +7,7 @@
 | Path | What it is |
 |---|---|
 | `sections/01-CTX.md` … `sections/23-PHASE.md` | DESIGN.md §1-§23, one file per section. The build copies them verbatim, adding only links. |
-| `owner/DECISIONS.md` | The owner's record, entries 1-784. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
+| `owner/DECISIONS.md` | The owner's record, entries 1-789. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
 | `owner/APPLY.md` | The rules for applying the owner's decisions: precedence (§1), supersession, where two decisions disagree (§2), notation (§3), editing rules (§4), and the follow-up decisions 112-136 with the sections each binds (§6-§8). |
 | `CONVENTIONS.md` | The writing conventions every section follows: the owner directive (§0), the owner rules (§1), the section template (§2) and the X registry (§7), which DESIGN.md's X1-X20 table replaced. |
 | `OUTLINE.md` | The original outline: section codes, scope boundaries, and the word budgets that G0's density rule replaced on 2026-11-04. |
@@ -44,7 +44,7 @@ It needs only `python3`; it was built and checked with Python 3.13. The steps, a
 
 The data files are layered. Each `data_*N.py` loads its predecessor with `runpy` and patches it: `data_front10.py` loads `data_front9.py`, back to `data_front3.py`, and the registers, glossary and appendices go the same way. Change the top layer (the `*10` files), or add an `*11` layer that loads them. Comments in the scripts cite working files from the design sessions (the reconcilers' orders, `peer/`, `review/`, `snap/`), which were not imported; they are history.
 
-## Adding owner decision N (785 onward)
+## Adding owner decision N (790 onward)
 
 1. Add entry N to `owner/DECISIONS.md`: the question, the answer, its cost, the options not taken, and what raised it.
 2. In `asm/data_front10.py`, append `(N, "<what it settles>", "<one line>")` to `INDEX`, add `DATES[N]`, and raise the `assert` to `list(range(1, N + 1))`. Update `STATUS` and `DECISIONS_INTRO` where they name a range. `@@OD:k@@` writes a link to decision k.
@@ -1471,3 +1471,31 @@ The design-records track dr20-late-fold (lane slot mail, wave f48m) brings the d
 - **Superseded options.** 320 grep hits, none on a changed line unread, none live.
 - **Text.** No bare placeholders or HTML tags; the one research-sheet id stands; 12,786 section references, with the one unresolved as before. `v7/words.json` was regenerated, and `v7/text_checks.json` regenerated unchanged.
 - **DESIGN-DEFER.md.** 107 entries and 175 pointers, unchanged.
+
+### Owner decisions 785 to 789: the build's answers since the eleventh fold
+
+The answers to the questions the build raised after the eleventh fold, QD-1399 to QD-1404, which the owner answered on 2026-11-24, one at a time, accepting each recommendation under the owner's standing acceptance of recommended options, take numbers here in ledger order, all but QD-1401, a compute answer:
+
+| Ledger id | Owner decision | What it settles |
+|---|---|---|
+| QD-1399 | 785 | api installs its own `hold/` writer, so a hold's renewal from api's staff route writes in an api-only process; placement stays dispatched to the worker. |
+| QD-1400 | 786 | `sidecar_clients` is a hard cap at connect: the nomination's gate counts and adds in one Redis script; enrollment's ZCOUNT stays an early refusal. |
+| QD-1402 | 787 | A store connection held at a client's own pace goes through a second, uncapped transport per host, outside owner decision 780's cap. |
+| QD-1403 | 788 | Where api and taskworker share a process, the worker keeps the `rev/` store and log sequencer api installed. |
+| QD-1404 | 789 | `device.Bridge` publishes again when the device wakes or its clock steps (`Bridge.CheckClock()`), a desktop's wait capped by `BridgeSettings.ClockCheckInterval`. |
+
+- **api's own `hold/` writer (785).** §19.4 takes a bullet on the writers that share a process, and §21.9's preservation holds say who writes a hold's object: the worker at placement, for its GroupForms read, and api at a renewal, both If-Match, the pass that reconciles the object deciding and writing on one read, as api-renew-hold-writer built it (server c73308a29).
+- **`sidecar_clients` at connect (786).** §20.7's row loses "as `concurrent_clients`" and states the gate's script, the release and close rules, the poll's restore and re-admission, the soft window after Redis loses the set, and enrollment's early refusal; §20.14's `{sq_}` row and §2.8's api-13 say the connect gate's script adds to the set, the metadata list moving to v71 with no new value, field, Redis family or ttl, and §22.5's §20 row names the race's test, as sidecar-clients-quota-race built it (server 19fe2fa4c, 4b41a9d88). Outside this folder, QD-216's resolution in .stack/decisions/RESOLUTIONS.md and QUOTA-M1-04's Build line in .stack/plan/QUOTA.md each take a line naming the amendment.
+- **Client-paced connections (787).** §11.15's fan-out paragraph takes the exemption beside owner decision 780, as evs-read-fanout-bounds built it (sidecar 18ae917b, server 2c058aacf); owner decision 780's index row notes it.
+- **One process's stores (788).** §19.4's new bullet, stated as decided ahead of its code: fix track all-process-store-slots builds it.
+- **The bridge's clock (789).** §17.8 takes a paragraph after its disposition table, stated as decided ahead of its code: fix track bridge-wall-clock-wake builds it.
+- **Asked of the compute document.** QD-1401, `ur-engine`'s main built from the cli package under the `ur_engine` tag, amends the plan's reading QD-1247 and DESIGN-COMPUTE.md alone, so it takes no number: DESIGN-COMPUTE-AMENDMENTS.md files it under its §6 as the build's, beside QD-1386, and QD-1247's second reading names it.
+
+`build.sh` on this folder reproduces DESIGN.md (SHA-256 `1189f94b347f8b8f96caa119ea2cace7519eefedd80cfcf6afe04beb44a232f0`) and DESIGN-DEFER.md (SHA-256 `749042be18fd33e2a87c087fe0824b4224b52f37cc5def707e0de03854ac07a3`, unchanged), and the validation shows:
+
+- **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item and no new §2.8 row, so no guard line.
+- **Owner decisions.** All 789 rows are present and cited; APPLY.md's section pairs hold. `MAXD`, the two range checks and `LATE_DATES` take 789, each of 785 to 789 dated 2026-11-24. One open owner question, Q-REPO-6.
+- **Superseded options.** 320 grep hits, none on a changed line unread, none live.
+- **Text.** No bare placeholders or HTML tags; the one research-sheet id stands; 12,796 section references, with the one unresolved as before. `v7/words.json` was regenerated, and `v7/text_checks.json` regenerated unchanged.
+- **DESIGN-DEFER.md.** 107 entries and 175 pointers, unchanged: none of the five defers anything.
+- **The metadata list** is v71, api-13's words; check's `metadataListAdditions` stays empty.

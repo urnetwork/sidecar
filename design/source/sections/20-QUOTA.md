@@ -287,7 +287,7 @@ cost     one Redis script per relayed contract (one per 1-256 MiB moved); no Pos
 | custom domains, mail From included (§14.6) | `custom-host-add` (§12.8) | Team only | web hosts and mail From withheld after 14 days; mail hosts keep MX, TLSA and routing |
 | `config_admissions`, `acl_*` | the writer's validation, api's verifier (§7.9, §8.8); from 90% of `config_admissions`, admins' devices' cleanup list (§7.10's `cleanup` row) | delta or head refused | existing ones stay; new ones must fit |
 | `smtp_*` | smtpedge `{smq_}` script (§14.7) | QUOTA; mail stays queued | next preamble |
-| `sidecar_clients`: connected | enrollment and connect, as `concurrent_clients` (server/connect/resident.go:1170-1187), by one ZCOUNT from now to +inf of `{sq_<network_id>}connected_sidecar`, a sorted set of every marked client scored by its expiry ms, written and refreshed on the resident poll as `{np_}connected` is, its 48 h ttl refreshed at each write | refused; 4001 at connect | connected clients stay |
+| `sidecar_clients`: connected | connect, a hard cap: at the resident's nomination one script under `{sq_<network_id>}` ages out a bounded batch of expired entries of `{sq_<network_id>}connected_sidecar`, a sorted set of every admitted marked client scored by its expiry ms, passes a live entry that is the client's own, a re-nomination, and adds the client's while the live entries are fewer than the limit, two gates of one client keeping distinct expiries; the announce writes none, a nomination that fails after its gate removes the entry only while it holds the gate's expiry, a lost release holding the slot until the entry lapses (`ExchangeResidentTtl`, 300 s), and a resident's close removes it only while it holds the expiry that resident last wrote; the resident poll refreshes a live entry, puts back one lost while its own last write was live, whatever the count, and admits again one that lapsed, a refusal closing the resident; after Redis loses the set the entries return at each connected resident's next poll, within `ExchangeResidentTtl` / 4 (75 s); the key's 48 h ttl refreshed at each write. Enrollment: one ZCOUNT from now to +inf, an early refusal that reserves nothing (owner decision 786) | refused, nothing written; 4001 at connect | connected clients stay |
 | members, SSO (§7.5, §7.6) | §7.5's Team routes, by `NetworkTierOf` | Team only | frozen: sign-in, data kept; invites, roles, IdP, SCIM refused |
 
 **Downgrade clock.** A downgrade's 14 days count from `NetworkDowngradeTime` (20.5): a Team whose cycle invoice never pays keeps `team` for the period `RefreshTeamTransferBalances` granted at its anchor plus the grace, and its 14 days of withholding, and with them DNS's (§12), count from the moment `NetworkTierOf` drops, so day 13 changes nothing for a Team as for Pro (owner decision 523).
@@ -618,8 +618,9 @@ team_subscription(network_id, subscription_id, customer_id,              until i
 Redis {sq_<network_id>}: rates, and each erasing sidecar's closure       48 h
   uploads a minute and closure bytes a UTC day; the closure pacing's
   seats: each asking eraser's seat, the tail, the second's count and
-  the network's clock (20.7); connected_sidecar, every connected marked
-  client by its expiry ms (20.7); verified, network_verified as 0 or 1   60 s
+  the network's clock (20.7); connected_sidecar, every admitted marked
+  client by its expiry ms, which the connect gate's one script counts
+  and adds (20.7); verified, network_verified as 0 or 1                  60 s
   (§21.7)
 ```
 
