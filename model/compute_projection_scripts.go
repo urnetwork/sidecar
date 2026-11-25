@@ -43,7 +43,8 @@ import (
 // cmp_check_balance takes a class: call (a remote call: held down to zero, refused in grace or worse), search (as a
 // call, less the unexpired promotional credit, which pays no search, §9.11) and interval (an enclave interval: down
 // to minus the floor, kept running in grace, refused once suspended); cmp_check_budgets bounds calls and searches,
-// never an enclave's running time (§16.4).
+// never an enclave's running time (§16.4), and answers budget with the index, from 0, of the first line refused, so
+// the refusal names its budget and period (§6.6).
 const computeHoldPrelude = `
 local function cmp_int(value, what)
 	if type(value) ~= 'string' or 16 < #value or not string.match(value, '^%-?%d+$') then
@@ -275,14 +276,14 @@ end
 
 local function cmp_check_budgets(lines, reserve, periods)
 	local held = false
-	for _, line in ipairs(lines) do
+	for i, line in ipairs(lines) do
 		local period = periods[line.letter]
 		local key = cmp_budget_key(line.subject)
 		local charged = cmp_get(key, 'c:' .. line.budget .. ':' .. period)
 		local reserved = cmp_get(key, 'r:' .. line.budget .. ':' .. period) +
 			cmp_get(KEYS[1], 'ur:' .. line.subject .. ':' .. line.budget .. ':' .. period)
 		if line.cap < charged + reserve then
-			return 'budget'
+			return 'budget', i - 1
 		end
 		if line.cap < charged + reserved + reserve then
 			held = true
@@ -340,8 +341,9 @@ var (
 	// ARGV: op, kind, amount, reserve, unconfirmed max age ms, memo ttl ms, held retry ms, rebuild retry ms, the line
 	// count, then per line its subject, budget, period letter (d or m) and cap.
 	// Reply: {outcome, retry ms, time ms}: taken (time is the hold's Redis TIME), held (with its retry: the
-	// projection absent or marked, or open holds or reservations in the way), balance, budget; a repeat answers
-	// taken, or void or dropped once the operation was released or booked.
+	// projection absent or marked, or open holds or reservations in the way), balance, budget, whose reply adds a
+	// fourth value, the index of the line refused; a repeat answers taken, or void or dropped once the operation was
+	// released or booked.
 	computeProjectionHoldScript = &operator.RedisScript{
 		Name: "compute-projection-hold",
 		Source: computeHoldPrelude + `
@@ -363,11 +365,15 @@ if first then
 end
 local periods = cmp_periods(now)
 local refused = cmp_check_balance('call', amount)
+local refusedLine = nil
 if not refused then
-	refused = cmp_check_budgets(lines, reserve, periods)
+	refused, refusedLine = cmp_check_budgets(lines, reserve, periods)
 end
 if refused == 'held' then
 	return {'held', ARGV[7], cmp_str(now)}
+end
+if refused == 'budget' then
+	return {refused, '0', cmp_str(now), cmp_str(refusedLine)}
 end
 if refused then
 	return {refused, '0', cmp_str(now)}

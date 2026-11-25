@@ -315,6 +315,8 @@ type ComputeHoldResult struct {
 	// The Redis TIME of the hold, the operation's start; for a refusal, when it was refused; zero for a repeat whose
 	// hold has settled.
 	Time time.Time
+	// For budget, the request's line that refused, so the refusal names its budget and period (§6.6); nil otherwise.
+	Line *ComputeBudgetLine
 }
 
 // Takes request's hold (see the file header). Only the TEE path is built; the others are refused with
@@ -360,12 +362,16 @@ func ComputeProjectionHold(env operator.Env, ctx context.Context, settings *Comp
 	if err != nil {
 		return nil, err
 	}
-	if len(values) != 3 {
+	// three values, and a budget refusal's fourth, the line it refused on
+	if len(values) < 3 {
 		return nil, fmt.Errorf("%w: a hold answers 3 values", ErrComputeProjectionReply)
 	}
 	outcome := ComputeHoldOutcome(values[0])
 	if !slices.Contains([]ComputeHoldOutcome{ComputeHoldTaken, ComputeHoldHeld, ComputeHoldBalance, ComputeHoldBudget, ComputeHoldVoid, ComputeHoldDropped}, outcome) {
 		return nil, fmt.Errorf("%w: the hold outcome %q", ErrComputeProjectionReply, values[0])
+	}
+	if (outcome == ComputeHoldBudget && len(values) != 4) || (outcome != ComputeHoldBudget && len(values) != 3) {
+		return nil, fmt.Errorf("%w: a hold answering %s with %d values", ErrComputeProjectionReply, outcome, len(values))
 	}
 	retryMs, err1 := strconv.ParseInt(values[1], 10, 64)
 	timeMs, err2 := strconv.ParseInt(values[2], 10, 64)
@@ -375,6 +381,13 @@ func ComputeProjectionHold(env operator.Env, ctx context.Context, settings *Comp
 	result := &ComputeHoldResult{Outcome: outcome, RetryAfter: time.Duration(retryMs) * time.Millisecond}
 	if 0 < timeMs {
 		result.Time = time.UnixMilli(timeMs).UTC()
+	}
+	if outcome == ComputeHoldBudget {
+		index, err := strconv.Atoi(values[3])
+		if err != nil || index < 0 || len(request.Lines) <= index {
+			return nil, fmt.Errorf("%w: a budget refusal's line %q", ErrComputeProjectionReply, values[3])
+		}
+		result.Line = request.Lines[index]
 	}
 	return result, nil
 }
