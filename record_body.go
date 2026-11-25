@@ -726,16 +726,19 @@ var recordKindsProjected = []RecordKind{
 	RecordKindRestore,
 	RecordKindCoverage,
 	RecordKindCost,
+	// DESIGN-COMPUTE.md §28.12: V and T, T's copy holding no text
+	RecordKindSupportMessage,
 }
 
 // record.proto's V: marks, by message and field name: what T's projection leaves empty. record_body_test.go holds this
 // table to record.proto's comments.
 var recordTeamStrippedFields = map[protoreflect.FullName][]protoreflect.Name{
-	"urnetwork.sidecar.ContextBody":     {"branch", "title", "truncations", "prompts"},
-	"urnetwork.sidecar.InstructionFile": {"name"},
-	"urnetwork.sidecar.ChangedPath":     {"path", "blob_entry_id"},
-	"urnetwork.sidecar.PermissionBody":  {"tool_name", "arguments_sha256"},
-	"urnetwork.sidecar.RestoreBody":     {"paths"},
+	"urnetwork.sidecar.ContextBody":        {"branch", "title", "truncations", "prompts"},
+	"urnetwork.sidecar.InstructionFile":    {"name"},
+	"urnetwork.sidecar.ChangedPath":        {"path", "blob_entry_id"},
+	"urnetwork.sidecar.PermissionBody":     {"tool_name", "arguments_sha256"},
+	"urnetwork.sidecar.RestoreBody":        {"paths"},
+	"urnetwork.sidecar.SupportMessageBody": {"text", "agent_label", "bundle", "files"},
 }
 
 // ContextBody.project, which T leaves empty when the run's repo is private (its comment).

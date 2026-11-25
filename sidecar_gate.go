@@ -49,7 +49,7 @@ func (self sidecarGateDeny) Authorize(ctx context.Context, action *SidecarAction
 	return ErrSidecarGateDenied
 }
 
-// §5.4's whole list of outward actions, in SidecarActionKind's order, DESIGN-COMPUTE.md §16.3's 19 to 26 appended: a
+// §5.4's whole list of outward actions, in SidecarActionKind's order, DESIGN-COMPUTE.md §16.3's 19 to 27 appended: a
 // kind Authorize takes is one here. Its length is the list's, so a kind appended to SidecarActionKind needs its row,
 // which TestEveryKindReachesGate holds against record.proto's enum. A kind here reaches the installed gate, which
 // refuses one with no kind row or no effect lookup (record_action_kinds.go, record_effect.go).
@@ -80,6 +80,7 @@ var sidecarGateKinds = [...]SidecarActionKind{
 	SidecarActionTaintedSend,
 	SidecarActionCalendarWrite,
 	SidecarActionServiceWrite,
+	SidecarActionSupportSend,
 }
 
 // Whether kind is one of §5.4's.

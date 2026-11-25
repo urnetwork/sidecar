@@ -1,4 +1,5 @@
-// DESIGN-COMPUTE.md §16.3's outward actions, kinds 19 to 26 appended to §5.4's list (D-CACL-2, D-CACL-5;
+// DESIGN-COMPUTE.md §16.3's outward actions, kinds 19 to 26 appended to §5.4's list, and 27, support_send, beside them
+// (approval_compute_support.go) (D-CACL-2, D-CACL-5;
 // CACL-M11-04), each through Sidecar.Authorize, each at CanonicalAction version 5 alone, which an approver, spender or
 // gate that does not know the version refuses whole. record.proto's SidecarActionKind holds the same values, which
 // record_kind_test.go checks, and sidecarGateKinds lists each, so every kind reaches the gate.
@@ -9,7 +10,7 @@
 //
 //	fields     a version-5 action sets only kind, version and its kind's fields, never 37, 40 or 41, and no field
 //	           past 41 is set at any other version; field 49, took_tainted, only on kind 5 (egress_change), whose
-//	           version 5 it is; field 70 only on kinds 23 to 26
+//	           version 5 it is; field 70 only on kinds 23 to 27
 //	scope      no template: every use of a version-5 action is its own approval
 //	auto       field 70's basis 1 (taint) or 2 (always), its rules nonzero, ascending and among §27.7's rules that
 //	           follow from the action alone, numbered in its table's order (QD-1371): other_member 1, reaches_people 2,
@@ -74,7 +75,7 @@ const (
 
 // Whether kind is one of §16.3's, which CanonicalAction version 5 alone holds.
 func approvalComputeKind(kind SidecarActionKind) bool {
-	return SidecarActionEnclaveCreate <= kind && kind <= SidecarActionServiceWrite
+	return SidecarActionEnclaveCreate <= kind && kind <= SidecarActionSupportSend
 }
 
 // CanonicalAction's field numbers version 5 names (§16.3), beside the rules file's.
@@ -221,6 +222,8 @@ var approvalComputeKindRows = []*CanonicalActionKindFields{
 		Versions: []uint32{canonicalActionVersionCompute},
 		Domains:  []protoreflect.FieldNumber{canonicalActionFieldHost},
 	},
+	// support_send (DESIGN-COMPUTE §28.8), approval_compute_support.go's
+	supportSendActionKindRow,
 }
 
 // Fields no version-5 action sets, whatever its kind's row says at another version: format 2's versioning, a
@@ -303,8 +306,11 @@ func approvalComputeActionCheck(action *protocol.CanonicalAction, setFields []pr
 	if call := action.GetServiceCall(); call != nil {
 		checks = append(checks, approvalComputeServiceCheck(action, call, settings))
 	}
+	if support := action.GetSupport(); support != nil {
+		checks = append(checks, approvalComputeSupportCheck(action, support, settings))
+	}
 	if auto := action.GetAuto(); auto != nil {
-		checks = append(checks, approvalComputeAutoCheck(auto))
+		checks = append(checks, approvalComputeAutoCheck(kind, auto))
 	}
 	for _, err := range checks {
 		if err != nil {
@@ -526,13 +532,13 @@ func approvalComputeServiceCheck(action *protocol.CanonicalAction, call *protoco
 
 // Field 70 (§27.9): basis taint or always, and its rules ascending, each one of §27.7's that follow from the action
 // alone (QD-1371).
-func approvalComputeAutoCheck(auto *protocol.AutoFields) error {
+func approvalComputeAutoCheck(kind SidecarActionKind, auto *protocol.AutoFields) error {
 	if basis := auto.GetBasis(); basis != approvalComputeAutoBasisTaint && basis != approvalComputeAutoBasisAlways {
 		return fmt.Errorf("%w: field 70's basis %d", ErrCanonicalActionInvalid, basis)
 	}
 	rules := auto.GetRules()
 	for i, rule := range rules {
-		if rule < approvalComputeAutoRuleFirst || approvalComputeAutoRuleLast < rule {
+		if !approvalComputeAutoRuleAllowed(kind, rule) {
 			return fmt.Errorf("%w: field 70 names rule %d", ErrCanonicalActionInvalid, rule)
 		}
 		if 0 < i && rule <= rules[i-1] {

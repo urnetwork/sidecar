@@ -23,6 +23,13 @@ import (
 func TestRecordKindsMatchSectionSixThree(t *testing.T) {
 	doc := newRecordMd(t)
 	rows := doc.registry(t)
+	for _, addition := range testRecordKindAdditions {
+		if _, written := rows[addition.name]; written {
+			t.Errorf("section 6.3 now gives %s: drop its line from testRecordKindAdditions (%s)", addition.name, addition.source)
+			continue
+		}
+		rows[addition.name] = recordMdKind{number: addition.number, name: addition.name, class: addition.class}
+	}
 	for name, row := range rows {
 		kind, ok := RecordKindNamed(name)
 		if !ok {
@@ -123,7 +130,24 @@ type testRecordEnumerationAddition struct {
 // The values the compute extension adds to section 6.2's rows, which RECORD.md section 21 leaves to the fold while
 // record.proto takes them with their code (QD-1366, compute-plan-record-registry-fold). A line whose value section 6.2
 // comes to give fails until it leaves.
-var testRecordEnumerationAdditions = []testRecordEnumerationAddition{}
+var testRecordEnumerationAdditions = []testRecordEnumerationAddition{
+	{key: "CanonicalAction.kind", number: 27, name: "support_send", source: "DESIGN-COMPUTE.md §16.3, §28.8 (CO-45; support-skill)"},
+}
+
+// One kind DESIGN-COMPUTE.md adds to section 6.3 ahead of a design-records fold, with the section that writes it.
+type testRecordKindAddition struct {
+	number int
+	name   string
+	class  string
+	source string
+}
+
+// The kinds the compute extension adds to section 6.3's registry, which record_kind.go takes with their code while
+// RECORD.md waits for the fold (QD-1366, compute-plan-record-registry-fold). A line whose kind section 6.3 comes to
+// give fails until it leaves.
+var testRecordKindAdditions = []testRecordKindAddition{
+	{number: 30, name: "support_message", class: "action", source: "DESIGN-COMPUTE.md §28.12 (CO-45; support-skill)"},
+}
 
 // The value and name pairs of one of section 6.2's rows, cut before its parenthesis.
 func testRecordEnumerationRow(t *testing.T, doc *recordMd, key string) map[int]string {
@@ -258,7 +282,7 @@ func TestRecordKindNumbersKeepSectionSixOne(t *testing.T) {
 		t.Error("a kind outside 64 to 79 reads as derived")
 	}
 	// A block's unassigned numbers are kinds this build does not know, kept and shown generically.
-	for _, kind := range []RecordKind{11, 15, 30, 44, 54} {
+	for _, kind := range []RecordKind{11, 15, 31, 44, 54} {
 		if kind.Known() || kind.String() != "kind "+strconv.Itoa(int(kind)) {
 			t.Errorf("unassigned kind %d reads %q, known %v", kind, kind, kind.Known())
 		}
@@ -424,6 +448,8 @@ func TestSidecarActionKindsTakeTheProtoNumbers(t *testing.T) {
 		{kind: SidecarActionTaintedSend, name: "SIDECAR_ACTION_KIND_TAINTED_SEND"},
 		{kind: SidecarActionCalendarWrite, name: "SIDECAR_ACTION_KIND_CALENDAR_WRITE"},
 		{kind: SidecarActionServiceWrite, name: "SIDECAR_ACTION_KIND_SERVICE_WRITE"},
+		// DESIGN-COMPUTE.md §28.8's (support-skill)
+		{kind: SidecarActionSupportSend, name: "SIDECAR_ACTION_KIND_SUPPORT_SEND"},
 	}
 	for _, c := range kindCases {
 		value, ok := protocol.SidecarActionKind_value[c.name]

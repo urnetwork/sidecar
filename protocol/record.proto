@@ -164,8 +164,10 @@ message CanonicalAction {                   // built by the daemon; hashed as st
   reserved 57 to 59;                        // kind 25's
   ServiceCallFields service_call = 60;      // 26 (§25.10)
   reserved 61 to 69;                        // kind 26's
-  AutoFields auto = 70;                     // 23 to 26 (§27.9): daemon-built, rendered on the card
+  AutoFields auto = 70;                     // 23 to 27 (§27.9): daemon-built, rendered on the card
   reserved 71 to 79;
+  SupportFields support = 80;               // 27 (DESIGN-COMPUTE §28.8): the whole message, rendered as untrusted text
+  reserved 81 to 89;                        // kind 27's
 }
 // What field 42 holds: the enclave an action creates, removes, sends into or turns default egress off for.
 message EnclaveFields {
@@ -245,6 +247,34 @@ message ServiceCallFields {
 message AutoFields {
   uint32 basis = 1;                         // 1 taint: outward only because its run is tainted; 2 always
   repeated uint32 rules = 2;                // §27.7's rules that follow from the action alone, by their numbers
+}
+// What field 80 holds (DESIGN-COMPUTE §16.3, §28.8): the whole of a kind-27 message, rendered on the card as
+// untrusted text, which field 3's SHA-256 of the SupportBody posted binds.
+message SupportFields {
+  string product = 1;                       // urnetwork
+  string entry = 2;                         // the item it continues; empty opens one
+  uint32 kind = 3;                          // FB section 4's hint: 1 bug, 2 feature, 3 question, 4 praise, 5 security,
+                                            // 6 other; 0 none
+  string text = 4;                          // whole, at most 16 KiB of UTF-8
+  BundleManifest bundle = 5;                // the support log's bundle's, where the message carries one
+  repeated FileFields files = 6;            // at most 3, each shown whole on the card
+  bytes client_ref = 7;                     // 16 bytes (§28.6)
+}
+// A support log bundle's manifest (§28.7): what an agent and a card learn of it, never an event's fields.
+message BundleManifest {
+  uint32 events = 1;
+  int64 first = 2; int64 last = 3;          // the window's first and last events, unix seconds
+  uint64 bytes = 4;                         // compressed
+  bytes sha256 = 5;
+  repeated BundleCodeCount codes = 6;       // by component and code
+}
+message BundleCodeCount { string component = 1; string code = 2; uint32 count = 3; }
+// One file a support message names (§28.7).
+message FileFields {
+  string name = 1;                          // its base name
+  uint32 type = 2;                          // 1 UTF-8 text, 2 PNG, 3 JPEG
+  uint64 size = 3;
+  bytes sha256 = 4;
 }
 // What sealed_detail opens to at version 5 (§16.3): what the broker's gates, kinds 19 and 21, do not see.
 message CanonicalActionDetail5 {
@@ -361,6 +391,7 @@ enum SidecarActionKind {
   SIDECAR_ACTION_KIND_COMPUTE_BUDGET_RAISE = 21; SIDECAR_ACTION_KIND_ENCLAVE_DELETE = 22;
   SIDECAR_ACTION_KIND_FETCH_UNLISTED_URL = 23; SIDECAR_ACTION_KIND_TAINTED_SEND = 24;
   SIDECAR_ACTION_KIND_CALENDAR_WRITE = 25; SIDECAR_ACTION_KIND_SERVICE_WRITE = 26;
+  SIDECAR_ACTION_KIND_SUPPORT_SEND = 27;    // DESIGN-COMPUTE.md §28.8's
 }
 // ApprovalRequest.risk: numeric order is the max §5.4 takes, and an agent may only raise it.
 enum SidecarRisk { SIDECAR_RISK_UNSPECIFIED = 0; SIDECAR_RISK_NORMAL = 1; SIDECAR_RISK_HIGH = 2; }
@@ -664,4 +695,25 @@ message ModelUsage {
   uint64 calls = 6;
   uint64 reported_micro_usd = 7;            // the sum of what the harness reported, else 0
   bool complete = 8;                        // false where coverage has a gap that may hide calls
+}
+
+// DESIGN-COMPUTE.md §28.12: the support conversation's messages in the vault, the team record's projection holding
+// no V: field.
+message SupportMessageBody {                // support_message (M13b)
+  uint32 direction = 1;                     // 1 sent, 2 received
+  string product = 2;                       // urnetwork
+  string entry = 3;                         // FB's id; empty until the service acknowledges it
+  uint32 seq = 4;                           // FB's event seq; 0 for a message not yet acknowledged
+  uint32 type = 5;                          // FB section 4's event types, in its order; 0 UNSPECIFIED
+  uint32 tier = 6;                          // 1 human, 2 released, 3 agent
+  bytes client_ref = 7;                     // joins a sent message to its acknowledgment
+  string text = 8;                          // V: exactly the text sent, or the reply received
+  string agent_label = 9;                   // V: the sending agent's name and where it ran
+  BundleManifest bundle = 10;               // V: events, window, size, SHA-256, codes by component
+  repeated FileFields files = 11;           // V: name, type, size, SHA-256
+  bytes body_sha256 = 12;                   // of the body sent or received
+  uint64 body_bytes = 13;
+  uint32 status = 14; string fixed_in = 15; // a status event's
+  bytes approval_id = 16;                   // a kind-27 use's
+  uint32 disclosure_version = 17;           // a sent message's support:urnetwork version
 }
