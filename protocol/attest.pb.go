@@ -1,5 +1,3 @@
-//go:build !ios_extension
-
 // Attestation's wire (DESIGN-COMPUTE §5): what a device records of a pass it verified itself, and the policy's
 // freshness tickets. AttestationResult is carried in the record's model_call and enclave entries (§6.8, §11.12) and
 // in events, as the device that holds the plaintext wrote it; no server writes one, and no reader trusts one a server

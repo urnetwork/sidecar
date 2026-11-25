@@ -305,6 +305,24 @@ func joinStrings(parts []string, separator string) string {
 
 func newDiscoveryTestWorld(t *testing.T) *discoveryTestWorld {
 	t.Helper()
+	return newDiscoveryTestWorldOf(t, &discoveryTestWorldOptions{})
+}
+
+// What a world is built with beside its defaults.
+type discoveryTestWorldOptions struct {
+	// where both components log; nil for the default logger
+	log Logger
+	// what A's gatherer holds in place of its own files and the printer, and the host labels A shares in place of the
+	// printer's; nil for the defaults
+	gathered []*BridgeDiscoveryGathered
+	shares   []string
+	// hears each view B hands out, beside the world's own record of it; nil for none
+	onView func(view []*BridgeDiscoveryViewInstance)
+}
+
+// A world as newDiscoveryTestWorld's, with options.
+func newDiscoveryTestWorldOf(t *testing.T, options *discoveryTestWorldOptions) *discoveryTestWorld {
+	t.Helper()
 	world := &discoveryTestWorld{
 		t:            t,
 		clock:        newDiscoveryTestClock(),
@@ -320,6 +338,13 @@ func newDiscoveryTestWorld(t *testing.T) *discoveryTestWorld {
 	own.Own = true
 	printer := discoveryTestGathered("Synthetic Printer", "_ipp._tcp", 631, "printer", "192.168.50.20")
 	world.gatherer = newDiscoveryTestGatherer(own, printer)
+	if options.gathered != nil {
+		world.gatherer = newDiscoveryTestGatherer(options.gathered...)
+	}
+	shares := []string{"printer"}
+	if options.shares != nil {
+		shares = options.shares
+	}
 	hostRoutes := discoveryTestRoutes()
 	var err error
 	world.host, err = NewBridgeDiscoveryComponent(&BridgeDiscoveryArgs{
@@ -333,6 +358,7 @@ func newDiscoveryTestWorld(t *testing.T) *discoveryTestWorld {
 		HostLabel: func() string { return "host-a" },
 		Gatherer:  world.gatherer,
 		Clock:     world.clock,
+		Log:       options.log,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -340,7 +366,10 @@ func newDiscoveryTestWorld(t *testing.T) *discoveryTestWorld {
 	t.Cleanup(world.host.Close)
 	world.host.loadState(newDiscoveryTestStore())
 	if err := world.host.commitState(func(state *bridgeDiscoveryState) {
-		state.Shares = []*bridgeDiscoveryShare{{HostLabel: "printer", State: bridgeDiscoveryShareActive}}
+		state.Shares = nil
+		for _, label := range shares {
+			state.Shares = append(state.Shares, &bridgeDiscoveryShare{HostLabel: label, State: bridgeDiscoveryShareActive})
+		}
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -358,9 +387,13 @@ func newDiscoveryTestWorld(t *testing.T) *discoveryTestWorld {
 		}
 		return routes
 	}
+	// the viewer calls again at once after each answer here, so a test's clock moves only for what it times
+	viewerSettings := DefaultBridgeDiscoverySettings()
+	viewerSettings.WatchMinInterval = 0
 	world.viewer, err = NewBridgeDiscoveryComponent(&BridgeDiscoveryArgs{
 		SidecarId: world.viewerId,
 		Routes:    viewerRoutes,
+		Settings:  viewerSettings,
 		RouteTargets: func(address netip.Addr) []Id {
 			world.stateLock.Lock()
 			defer world.stateLock.Unlock()
@@ -372,8 +405,12 @@ func newDiscoveryTestWorld(t *testing.T) *discoveryTestWorld {
 		Viewing: func() bool { return true },
 		OnView: func(view []*BridgeDiscoveryViewInstance) {
 			world.view.Set(discoveryTestViewString(view))
+			if options.onView != nil {
+				options.onView(view)
+			}
 		},
 		Clock: world.clock,
+		Log:   options.log,
 	})
 	if err != nil {
 		t.Fatal(err)

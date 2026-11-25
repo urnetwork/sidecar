@@ -164,6 +164,8 @@ func (self *urBridgeDaemon) judgeSharedBlocks() {
 		order = self.joinOrder()
 	}
 	shared := urSharedBlocksOf(order, blocks)
+	// the app's VPN component, judged as often (bridge_discovery_app.go)
+	self.judgeAppViewing(networks, tun)
 	var previous []urSharedBlock
 	func() {
 		self.stateLock.Lock()

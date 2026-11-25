@@ -631,6 +631,7 @@ type urTunDarwinInterface struct {
 
 var _ urTunNamedInterface = (*urTunDarwinInterface)(nil)
 var _ urTunCarvedInterface = (*urTunDarwinInterface)(nil)
+var _ urTunTranslatorInterface = (*urTunDarwinInterface)(nil)
 
 // The kernel's utun<n>.
 func (self *urTunDarwinInterface) Name() string {
@@ -971,4 +972,91 @@ func (self *urTunDarwinInterface) Close() error {
 	}()
 	<-self.eventsDone
 	return closeErr
+}
+
+// What §17.5's translator asks of the kernel beside urTunDarwinKernel: an IPv6 /128 of its own on the utun
+// (SIOCAIFADDR_IN6). The device's destruction takes it off.
+type urTunDarwinIpv6Kernel interface {
+	AddIpv6Address(name string, address netip.Addr) error
+}
+
+var _ urTunDarwinIpv6Kernel = (*urTunDarwinSockets)(nil)
+
+// struct in6_addrlifetime (<netinet6/in6_var.h>).
+type urTunDarwinIn6Addrlifetime struct {
+	Expire    int64
+	Preferred int64
+	Vltime    uint32
+	Pltime    uint32
+}
+
+// struct in6_aliasreq (<netinet6/in6_var.h>): the name, three sockaddr_in6s, the flags and the lifetimes, 128 bytes.
+type urTunDarwinIn6Aliasreq struct {
+	Name       [unix.IFNAMSIZ]byte
+	Addr       unix.RawSockaddrInet6
+	Dstaddr    unix.RawSockaddrInet6
+	Prefixmask unix.RawSockaddrInet6
+	Flags      int32
+	Lifetime   urTunDarwinIn6Addrlifetime
+}
+
+// <netinet6/in6_var.h>'s and <netinet6/nd6.h>'s identifiers: SIOCAIFADDR_IN6, _IOW('i', 26, struct in6_aliasreq); an
+// address that skips duplicate address detection, since it is the utun's alone; and a lifetime that never ends.
+const (
+	urTunDarwinSiocaifaddrIn6      = 0x8080691a
+	urTunDarwinIn6IffNodad         = 0x0020
+	urTunDarwinNd6InfiniteLifetime = 0xFFFFFFFF
+)
+
+// A sockaddr_in6 of address.
+func urTunDarwinSockaddr6(address netip.Addr) unix.RawSockaddrInet6 {
+	return unix.RawSockaddrInet6{Len: unix.SizeofSockaddrInet6, Family: unix.AF_INET6, Addr: address.As16()}
+}
+
+// Adds an IPv6 /128 to name, on an IPv6 datagram socket of its own.
+func (self *urTunDarwinSockets) AddIpv6Address(name string, address netip.Addr) error {
+	ifname, err := urTunDarwinIfname(name)
+	if err != nil {
+		return err
+	}
+	request := &urTunDarwinIn6Aliasreq{
+		Name:       ifname,
+		Addr:       urTunDarwinSockaddr6(address),
+		Prefixmask: urTunDarwinSockaddr6(netip.AddrFrom16([16]byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff})),
+		Flags:      urTunDarwinIn6IffNodad,
+		Lifetime:   urTunDarwinIn6Addrlifetime{Vltime: urTunDarwinNd6InfiniteLifetime, Pltime: urTunDarwinNd6InfiniteLifetime},
+	}
+	fd, err := urTunDarwinSocket(unix.AF_INET6, unix.SOCK_DGRAM, 0)
+	if err != nil {
+		return err
+	}
+	defer unix.Close(fd)
+	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), uintptr(urTunDarwinSiocaifaddrIn6), uintptr(unsafe.Pointer(request))); errno != 0 {
+		return errno
+	}
+	return nil
+}
+
+// Puts the translator's own address on the utun as a /128 and routes the instances' /96 through it
+// (urTunTranslatorInterface). The utun's destruction takes both off.
+func (self *urTunDarwinInterface) SetTranslator(own netip.Addr, instances netip.Prefix) error {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.closed {
+		return errUrTunClosed
+	}
+	if !own.Is6() || !instances.IsValid() || !instances.Addr().Is6() {
+		return errors.New("the translator's addresses are not IPv6")
+	}
+	kernel, ok := self.system.kernel.(urTunDarwinIpv6Kernel)
+	if !ok {
+		return errors.New("this kernel takes no IPv6 address on the utun")
+	}
+	if err := kernel.AddIpv6Address(self.name, own); err != nil && !errors.Is(err, unix.EEXIST) {
+		return urTunDarwinError(err)
+	}
+	if err := self.system.kernel.AddRoute(self.index, instances.Masked()); err != nil && !errors.Is(err, unix.EEXIST) {
+		return urTunDarwinError(err)
+	}
+	return nil
 }

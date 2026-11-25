@@ -4,18 +4,21 @@
 // matches, and its errors never echo an input that does (mcp/tool.go). A SecretMatcher matches two things:
 //
 //	credentials  the values the daemon holds that grant something: the client's bearer token (by_jwt), the identity
-//	             key's and the ClientKey's seeds and their Ed25519 private keys, each raw, as hex in either case and
-//	             as base64 in the standard and URL alphabets, padded and not
+//	             key's and the ClientKey's seeds and their Ed25519 private keys, and the connect identity a client
+//	             generation keeps (§5.9's connect_identity): its seed and the keys that derive from it, the sequence
+//	             certificate's key and each provide secret key (record_secret_match_connect.go), each raw, as hex in
+//	             either case and as base64 in the standard and URL alphabets, padded and not
 //	token forms  every rule of the redactor's (record_redact_rules.go), PII aside, which is no credential: the shapes a
 //	             leaked token of any service takes, the daemon's own or not
 //
 // A credential shorter than SecretMatchSettings.CredentialMinByteCount (settings_mcp.go) is skipped, so a short or empty value never
 // matches everything. A match reports the class that matched, "credential" or the redactor's rule, and its offset,
-// never the bytes.
+// never the bytes. What is public is no credential: no public key, and not the connect identity's sequence
+// certificate, which every peer the client reaches is shown.
 //
-// The keys are read where they are made, so each read reaches testHookSecret (identity_keys.go, api_token_manager.go),
-// and a matcher holds copies of them in memory for its life: build one per call, or per credential change. A
-// SecretMatcher is immutable and safe for concurrent use.
+// The keys are read where they are made, so each read reaches testHookSecret (identity_keys.go, api_token_manager.go,
+// identity_connect.go, sidecar_new_connect.go), and a matcher holds copies of them in memory for its life: build one
+// per call, or per credential change. A SecretMatcher is immutable and safe for concurrent use.
 
 package sidecar
 
@@ -111,9 +114,11 @@ func (self *SecretMatcher) FormCount() int {
 	return len(self.forms)
 }
 
-// The credentials this sidecar holds now, as a matcher (I-7): its bearer token and its keys, read from the network's
-// keychain. ErrSidecarStoreLocked's error while Locked and ErrSidecarNoIdentity before enrollment, so a caller that
-// cannot build one refuses rather than answers unchecked. A sidecar holding a key but no token matches the keys.
+// The credentials this sidecar holds now, as a matcher (I-7): its bearer token, its keys and the connect identity its
+// keychain keeps, read from the network's keychain. ErrSidecarStoreLocked's error while Locked, ErrSidecarNoIdentity
+// before enrollment, and ErrSidecarStoreFailed's for a connect identity record that does not decode, so a caller that
+// cannot build one refuses rather than answers unchecked. A sidecar holding a key but no token matches the keys, and
+// one whose keychain keeps no connect identity yet, as before its generation's first start, matches the rest.
 func (self *Sidecar) SecretMatcher() (*SecretMatcher, error) {
 	var state SidecarState
 	var secrets SidecarSecrets
@@ -148,6 +153,11 @@ func (self *Sidecar) SecretMatcher() (*SecretMatcher, error) {
 		}
 		credentials = append(credentials, bytes.Clone(seed), []byte(ed25519.NewKeyFromSeed(seed)))
 	}
+	connectCredentials, err := loadSidecarConnectIdentityCredentials(secrets)
+	credentials = append(credentials, connectCredentials...)
+	if err != nil {
+		return nil, fmt.Errorf("secret matcher: %w", err)
+	}
 	byJwt, err := loadSidecarByJwt(secrets)
 	switch {
 	case err == nil:
@@ -156,4 +166,27 @@ func (self *Sidecar) SecretMatcher() (*SecretMatcher, error) {
 		return nil, fmt.Errorf("secret matcher: %w", err)
 	}
 	return NewSecretMatcher(credentials, settings), nil
+}
+
+// The credentials of the connect identity secrets keeps (identity_connect.go), each a copy the caller clears: its seed
+// and, on a leg that derives the identity, what derives from it (sidecarConnectIdentityCredentials). The record counts
+// whichever generation it was drawn for, where the core's start reads only its own generation's: a predecessor's, which
+// a new generation's first start replaces, is what that predecessor's client holds until the run loop ends it.
+// None when the keychain keeps none, the keychain's own errors as they are, and errSidecarConnectIdentityFormat for a
+// record that does not decode, whose seed no matcher could then hold.
+func loadSidecarConnectIdentityCredentials(secrets SidecarSecrets) ([][]byte, error) {
+	encoded, err := secrets.Get(sidecarConnectIdentityRecordName)
+	if errors.Is(err, ErrSidecarStoreAbsent) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer clear(encoded)
+	record, err := decodeSidecarConnectIdentityRecord(encoded)
+	if err != nil {
+		return nil, err
+	}
+	defer clear(record.seed)
+	return sidecarConnectIdentityCredentials(record.seed)
 }

@@ -42,6 +42,10 @@ type InferCall struct {
 	Name string
 	// The newest verified compute policy the checks read, which a remote path uses as they did; nil for a local call.
 	Policy *ComputePolicy
+	// The lowest label a remote call may run at, the network's floor raised by the person's tee_only, which the TEE path
+	// holds each instance it picks to: an A2 floor admits only instances the policy's custody registry vouches for.
+	// Empty for a local call.
+	Floor ComputeLabel
 }
 
 // A remote path: §6.6's TEE path or direct path.

@@ -202,8 +202,8 @@ func TestComputeKindsReachGateRefusedForWantOfALookup(t *testing.T) {
 			t.Errorf("kind %d's row: %+v", kind, row)
 		}
 	}
-	if !slices.Equal(sidecarGateKinds[18:], testComputeKinds) || approvalComputeKind(SidecarActionMailTlsUnauthenticated) ||
-		approvalComputeKind(SidecarActionServiceWrite+1) {
+	if !slices.Equal(sidecarGateKinds[18:26], testComputeKinds) || approvalComputeKind(SidecarActionMailTlsUnauthenticated) ||
+		approvalComputeKind(SidecarActionSupportSend+1) {
 		t.Errorf("the gate's list ends %v", sidecarGateKinds[18:])
 	}
 

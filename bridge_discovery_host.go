@@ -169,15 +169,8 @@ func (self *BridgeDiscoveryRoutes) inBlocks(address netip.Addr) bool {
 // prefix's, its exposed prefix's with the host bits kept, else a map's at the host's own address; invalid where none
 // reaches it. The port is the one viewers connect to.
 func (self *BridgeDiscoveryRoutes) sharedAddress(device netip.Addr, transport string, port uint16) (netip.Addr, uint16) {
-	for _, served := range self.Served {
-		if !served.Prefix.Contains(device) {
-			continue
-		}
-		if !served.Exposed.IsValid() {
-			return device, port
-		}
-		offset := bridgeDiscoveryAddrValue(device) - bridgeDiscoveryAddrValue(served.Prefix.Masked().Addr())
-		return bridgeDiscoveryAddrOf(bridgeDiscoveryAddrValue(served.Exposed.Masked().Addr()) + offset), port
+	if served := self.servedAddress(device); served.IsValid() {
+		return served, port
 	}
 	for _, rule := range self.Maps {
 		if rule.Transport != transport || rule.Target != device || !self.inBlocks(rule.Address) {
@@ -194,6 +187,25 @@ func (self *BridgeDiscoveryRoutes) sharedAddress(device netip.Addr, transport st
 		}
 	}
 	return netip.Addr{}, 0
+}
+
+// The address a served prefix of this host reaches a LAN device at: an exposed prefix's with the host bits kept, else
+// the device's own; invalid where no served prefix holds it.
+func (self *BridgeDiscoveryRoutes) servedAddress(device netip.Addr) netip.Addr {
+	if self == nil {
+		return netip.Addr{}
+	}
+	for _, served := range self.Served {
+		if !served.Prefix.Contains(device) {
+			continue
+		}
+		if !served.Exposed.IsValid() {
+			return device
+		}
+		offset := bridgeDiscoveryAddrValue(device) - bridgeDiscoveryAddrValue(served.Prefix.Masked().Addr())
+		return bridgeDiscoveryAddrOf(bridgeDiscoveryAddrValue(served.Exposed.Masked().Addr()) + offset)
+	}
+	return netip.Addr{}
 }
 
 // An IPv4 address's value, most significant octet first.

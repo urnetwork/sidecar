@@ -2,12 +2,14 @@
 
 // Sidecar.SecretMatcher (I-7): each credential matches raw, as hex in either case and as base64 in both alphabets,
 // padded and not; a value under the settings' bound and ordinary text match nothing; the redactor's token forms match
-// with no credential; and a match names its class and offset, never the bytes. record_secret_match_sidecar_test.go
-// holds a sidecar's own matcher.
+// with no credential; a match names its class and offset, never the bytes; and on every leg the connect identity seed
+// a keychain keeps is a credential. record_secret_match_sidecar_test.go holds a sidecar's own matcher, and
+// record_secret_match_connect_test.go a connect leg's connect identity.
 
 package sidecar
 
 import (
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
 	"strings"
@@ -65,5 +67,38 @@ func TestSecretMatcherFindsTokenForms(t *testing.T) {
 	}
 	if NewSecretMatcher(nil, nil).Matches([]byte("mail alice@example.com about it")) {
 		t.Error("an address matched as a credential")
+	}
+}
+
+// The connect identity seed a keychain keeps is a credential on every leg, matched in each encoding once kept; a
+// keychain keeping none lists nothing.
+func TestConnectIdentityCredentialsHoldTheKeptSeed(t *testing.T) {
+	_, secrets := newIdentityTestSecrets(t, NewId())
+	if credentials, err := loadSidecarConnectIdentityCredentials(secrets); err != nil || len(credentials) != 0 {
+		t.Fatalf("a keychain keeping no connect identity listed %d credentials, %v", len(credentials), err)
+	}
+	seed, err := newSidecarConnectIdentitySeed(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := &SidecarIdentity{NetworkId: NewId(), SidecarId: NewId(), ClientId: NewId(), Generation: 1}
+	if err := persistSidecarConnectIdentitySeed(secrets, identity, seed); err != nil {
+		t.Fatal(err)
+	}
+	credentials, err := loadSidecarConnectIdentityCredentials(secrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	matcher := NewSecretMatcher(credentials, nil)
+	for name, form := range map[string]string{
+		"raw":            string(seed),
+		"upper hex":      strings.ToUpper(hex.EncodeToString(seed)),
+		"base64":         base64.StdEncoding.EncodeToString(seed),
+		"raw url base64": base64.RawURLEncoding.EncodeToString(seed),
+	} {
+		text := []byte("the seed " + form + " here")
+		if match := matcher.Match(text); match == nil || match.Class != SecretMatchCredential || match.Offset != len("the seed ") {
+			t.Errorf("the seed, %s: %+v", name, match)
+		}
 	}
 }
