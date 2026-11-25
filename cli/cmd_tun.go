@@ -340,6 +340,13 @@ func printUrTunStatus(cli *urCli, status *urTunStatus) {
 	default:
 		cli.printf("  names      not set on this host's resolver; %s\n", status.ResolverStep)
 	}
+	// §17.5's translator, which gives the instances discovery finds an IPv6 address (owner decision 778)
+	switch {
+	case status.Translator != "":
+		cli.printf("  ipv6       discovered instances at %s, this host at %s\n", status.Translator, status.TranslatorAddress)
+	case status.TranslatorError != "":
+		cli.printf("  ipv6       discovered instances take no IPv6 address: %s\n", status.TranslatorError)
+	}
 	cli.printf("  egress     %s\n", status.EgressMode)
 	printUrTunDefault(cli, status)
 	if status.SyncError != "" {
