@@ -48,6 +48,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
@@ -509,6 +510,7 @@ func (self *SupportClient) Send(ctx context.Context, args *SupportSendArgs) (*Su
 		return nil, err
 	}
 	tier := SupportTierAgent
+	approved := SupportApprovedNone
 	sender := &SupportBodySender{}
 	if person {
 		tier = SupportTierHuman
@@ -516,11 +518,11 @@ func (self *SupportClient) Send(ctx context.Context, args *SupportSendArgs) (*Su
 	} else {
 		sender.Agent, sender.Where = args.Sender.AgentName, args.Sender.Where
 		sender.Tainted = outward && args.Surface != SupportSurfaceHarness || (run != nil && run.Tainted)
-		sender.Approved = "none"
+		sender.Approved = SupportApprovedNone
 		if outward {
-			// the decision says who: the tier and approver are written as the effect runs (supportOutboxEffect)
-			sender.Approved = "person"
-			tier = SupportTierReleased
+			// no one has decided when field 3 hashes the body: the decision gives the tier and the approver, which the
+			// effect keeps and the post carries beside the body (QD-1398, supportOutboxEffect)
+			sender.Approved, tier, approved = "", "", ""
 		}
 	}
 	var bundle *SupportLogBundle
@@ -568,6 +570,7 @@ func (self *SupportClient) Send(ctx context.Context, args *SupportSendArgs) (*Su
 		Entry:         args.Entry,
 		Agent:         agentName,
 		Tier:          tier,
+		Approved:      approved,
 		Logs:          bundle != nil,
 		FileCount:     len(args.Files),
 		CreatedMillis: self.clock.Now().UnixMilli(),
@@ -576,6 +579,9 @@ func (self *SupportClient) Send(ctx context.Context, args *SupportSendArgs) (*Su
 	}
 	if args.Sender != nil {
 		item.AgentId = args.Sender.AgentId
+	}
+	if bundle != nil {
+		item.Manifest = bundle.Manifest
 	}
 	attachments := [][]byte{}
 	if bundle != nil {
@@ -653,11 +659,18 @@ func supportBundleManifestFields(manifest *SupportLogManifest) *protocol.BundleM
 	return fields
 }
 
-// The support log's message_queued for item.
-func (self *SupportClient) logQueued(args *SupportSendArgs, item *supportOutboxItem, decider SupportLogDecider) {
-	tier := map[SupportTier]SupportLogTier{
+// The support log's tier of a message's, false for one no decision has given a tier yet.
+func supportLogTierOf(tier SupportTier) (SupportLogTier, bool) {
+	logTier, ok := map[SupportTier]SupportLogTier{
 		SupportTierHuman: SupportLogTierHuman, SupportTierReleased: SupportLogTierReleased, SupportTierAgent: SupportLogTierAgent,
-	}[item.Tier]
+		SupportTierAuto: SupportLogTierAuto,
+	}[tier]
+	return logTier, ok
+}
+
+// The support log's message_queued for item: its tier where it has one, which a message awaiting kind 27's decision
+// has not.
+func (self *SupportClient) logQueued(args *SupportSendArgs, item *supportOutboxItem, decider SupportLogDecider) {
 	outcome := SupportLogOutcomeQueued
 	if item.State == supportOutboxAwaiting {
 		outcome = SupportLogOutcomeApprovalPending
@@ -666,13 +679,21 @@ func (self *SupportClient) logQueued(args *SupportSendArgs, item *supportOutboxI
 	if item.AgentId != nil {
 		agentId = item.AgentId.Bytes()
 	}
-	if args.Run != nil {
+	if args != nil && args.Run != nil {
 		runId = args.Run.RunId.Bytes()
 	}
-	self.log.Event(SupportLogCodeSupportMessageQueued, SupportLogFieldOutcome(outcome), SupportLogFieldTier(tier),
+	tainted := args != nil && args.Run != nil && args.Run.Tainted
+	if tier, ok := supportLogTierOf(item.Tier); ok {
+		self.log.Event(SupportLogCodeSupportMessageQueued, SupportLogFieldOutcome(outcome), SupportLogFieldTier(tier),
+			SupportLogFieldBodyBytes(int64(len(item.Body))), SupportLogFieldWithBundle(item.Logs), SupportLogFieldFiles(int64(item.FileCount)),
+			SupportLogFieldTainted(tainted), SupportLogFieldDecider(decider), SupportLogFieldAgent(agentId), SupportLogFieldRun(runId),
+			SupportLogFieldRequest([]byte(item.ClientRef)))
+		return
+	}
+	self.log.Event(SupportLogCodeSupportMessageQueued, SupportLogFieldOutcome(outcome),
 		SupportLogFieldBodyBytes(int64(len(item.Body))), SupportLogFieldWithBundle(item.Logs), SupportLogFieldFiles(int64(item.FileCount)),
-		SupportLogFieldTainted(args.Run != nil && args.Run.Tainted), SupportLogFieldDecider(decider),
-		SupportLogFieldAgent(agentId), SupportLogFieldRun(runId), SupportLogFieldRequest([]byte(item.ClientRef)))
+		SupportLogFieldTainted(tainted), SupportLogFieldDecider(decider), SupportLogFieldAgent(agentId), SupportLogFieldRun(runId),
+		SupportLogFieldRequest([]byte(item.ClientRef)))
 }
 
 // §28.14's limits for a message of agentName ("" the person's), from what this device sent and holds: the refusal, or
@@ -772,20 +793,39 @@ type supportOutboxEffect struct {
 	clientRef string
 }
 
-// Moves the approved message to pending and wakes the loop; its reference is the client_ref.
+// Moves the approved message to pending, with the tier and the approver its decision gives it, which the post carries
+// beside the body (QD-1398), and wakes the loop; its reference is the client_ref. A decision spends only on the
+// message its approver saw: where the stored action's field 3, or the decided action's, hashes another body than the
+// outbox holds, nothing moves and the use is not done.
 func (self *supportOutboxEffect) Run(ctx context.Context, effectKey []byte) ([]byte, error) {
-	moved := false
+	var spend *ApprovalSpend
+	approved := SupportApprovedPerson
+	if spent, ok := ApprovalSpendFromContext(ctx); ok {
+		spend = spent
+		approved = supportDeciderOf(spent.Decisions)
+	}
+	moved, binds := false, true
 	err := self.client.changeOutboxItem(self.clientRef, func(item *supportOutboxItem) {
-		if item.State == supportOutboxAwaiting {
-			item.State = supportOutboxPending
-			moved = true
+		if item.State != supportOutboxAwaiting {
+			return
 		}
+		if !supportOutboxItemBinds(item, spend) {
+			binds = false
+			return
+		}
+		item.State = supportOutboxPending
+		item.Approved = approved
+		item.Tier = supportTierOfDecider(approved)
+		moved = true
 	})
 	if err != nil {
 		if errors.Is(err, errSupportOutboxItemAbsent) {
 			return nil, fmt.Errorf("%w: no waiting message", ErrSidecarEffectNotDone)
 		}
 		return nil, err
+	}
+	if !binds {
+		return nil, fmt.Errorf("%w: the decision binds another message than the outbox holds", ErrSidecarEffectNotDone)
 	}
 	if moved {
 		if err := self.client.noteWaiting(self.clientRef); err != nil {
@@ -794,6 +834,53 @@ func (self *supportOutboxEffect) Run(ctx context.Context, effectKey []byte) ([]b
 		self.client.poke()
 	}
 	return []byte(self.clientRef), nil
+}
+
+// Who decided a use from the decisions it spent: the person where one of them is a person's, on another device, by a
+// presence key or at the harness prompt; the classifier otherwise, channel 4's decisions (§27.9) and any that does not
+// parse, so a person's approval is claimed only where a decision shows one.
+func supportDeciderOf(decisions [][]byte) string {
+	for _, stored := range decisions {
+		decision, err := ParseStoredApprovalDecision(stored)
+		if err != nil {
+			continue
+		}
+		switch protocol.ApprovalChannel(decision.Decision.GetChannel()) {
+		case protocol.ApprovalChannel_APPROVAL_CHANNEL_DEVICE, protocol.ApprovalChannel_APPROVAL_CHANNEL_PRESENCE,
+			protocol.ApprovalChannel_APPROVAL_CHANNEL_HARNESS:
+			return SupportApprovedPerson
+		}
+	}
+	return SupportApprovedClassifier
+}
+
+// Whether item's stored action binds its body, and the action spend decided does too where it is kind 27's (§28.8):
+// what a decision approved is what the post sends.
+func supportOutboxItemBinds(item *supportOutboxItem, spend *ApprovalSpend) bool {
+	stored, err := ParseStoredCanonicalAction(item.Canonical)
+	if err != nil || !supportSendActionBinds(stored.Action, item.Body) {
+		return false
+	}
+	if spend == nil || len(spend.Action) == 0 {
+		return true
+	}
+	decided, err := ParseStoredCanonicalAction(spend.Action)
+	if err != nil {
+		return false
+	}
+	return SidecarActionKind(decided.Action.GetKind()) != SidecarActionSupportSend || supportSendActionBinds(decided.Action, item.Body)
+}
+
+// Who let item go, as its post says beside the body: what its decision or its sending set, else, for a message stored
+// before the outbox kept it, what its tier says.
+func (self *supportOutboxItem) approved() string {
+	switch {
+	case self.Approved != "":
+		return self.Approved
+	case self.Tier == SupportTierReleased:
+		return SupportApprovedPerson
+	}
+	return SupportApprovedNone
 }
 
 // Kind 27's lookup (record_effect.go): done where the outbox holds the message past awaiting or the service holds its
@@ -908,7 +995,10 @@ func (self *SupportClient) post(item *supportOutboxItem) {
 	host, token, err := self.hostAndToken(self.ctx)
 	var answer *supportEntryAnswer
 	if err == nil {
-		answer, err = self.service.postMessage(self.ctx, host, token, item.ClientRef, item.Entry, item.Body)
+		// the vault's entry as the message first leaves (§28.6's outbox row, §28.12): its entry the item it continues or
+		// none and its seq 0, until the service's acknowledgment, which its client_ref joins
+		self.recordLeaving(item)
+		answer, err = self.service.postMessage(self.ctx, host, token, item.ClientRef, item.Entry, item.Body, item.Tier, item.approved())
 	}
 	if err == nil {
 		err = self.postAttachments(host, token, answer.Id, item)
@@ -1038,31 +1128,60 @@ func (self *SupportClient) noteItem(update *SupportUpdate, item *supportItem) {
 	self.notify(update)
 }
 
-// A message's kind-30 entry as it leaves, and its place in the view, once the service acknowledged it.
+// A message the service acknowledged: its place in the view and, where the view did not hold it already, the vault's
+// entry of the acknowledgment, after the message's own entry where that was not written as it left.
 func (self *SupportClient) noteSent(item *supportOutboxItem, answer *supportEntryAnswer) {
-	body := &SupportBody{}
-	json.Unmarshal(item.Body, body)
+	body := supportOutboxBody(item)
+	fresh := false
 	self.changeState(func(state *supportState) error {
-		state.applySent(answer, item, body, self.clock.Now(), self.settings.ConversationMaxItemCount)
+		fresh = state.applySent(answer, item, body, self.clock.Now(), self.settings.ConversationMaxItemCount)
 		state.prune(self.clock.Now(), self.settings)
 		return nil
 	})
-	self.recordSent(item, body, answer)
+	self.recordLeaving(item)
+	if fresh {
+		self.recordAcknowledged(item, answer)
+	}
 }
 
-// The vault's kind-30 entry of a message sent (§28.12): its text, label, bundle and files there, the team's projection
-// holding none of them.
-func (self *SupportClient) recordSent(item *supportOutboxItem, body *SupportBody, answer *supportEntryAnswer) {
+// The vault's kind-30 entry of a message as it first leaves (§28.6's outbox row, §28.12): direction sent, its entry the
+// item it continues or none, its seq 0, its text, label, bundle's manifest and files there, the team's projection
+// holding none of them. Written once: the outbox item keeps that it was, so a retry writes none again. One that cannot
+// be written is tried again at the next post and once the service acknowledges the message; a crash between the write
+// and its mark writes it twice, which its client_ref joins as one.
+func (self *SupportClient) recordLeaving(item *supportOutboxItem) {
+	if item.Recorded {
+		return
+	}
 	records, err := self.host.supportRecords()
 	if err != nil {
 		return
 	}
+	if _, err := records.Append(supportLeavingDraft(item, supportOutboxBody(item))); err != nil {
+		return
+	}
+	item.Recorded = true
+	self.changeOutboxItem(item.ClientRef, func(stored *supportOutboxItem) { stored.Recorded = true })
+}
+
+// An outbox message's body as the view and the vault read it: an enumerated report, which holds no text, read as its
+// one line (support_report.go).
+func supportOutboxBody(item *supportOutboxItem) *SupportBody {
+	body := &SupportBody{}
+	json.Unmarshal(item.Body, body)
+	if item.Tier == SupportTierAuto {
+		body.Text = supportReportSummary(item.Body)
+	}
+	return body
+}
+
+// The vault's entry of item as it leaves.
+func supportLeavingDraft(item *supportOutboxItem, body *SupportBody) *RecordDraft {
 	sum := sha256.Sum256(item.Body)
 	message := &protocol.SupportMessageBody{
 		Direction:         supportDirectionSent,
 		Product:           SupportProductUrnetwork,
-		Entry:             answer.Id,
-		Seq:               answer.Seq,
+		Entry:             item.Entry,
 		Type:              supportEventTypeNumber("submitted"),
 		Tier:              supportTierNumber(item.Tier),
 		ClientRef:         supportClientRefBytes(item.ClientRef),
@@ -1076,32 +1195,69 @@ func (self *SupportClient) recordSent(item *supportOutboxItem, body *SupportBody
 		message.Type = supportEventTypeNumber("followup")
 	}
 	if body.Sender != nil && body.Sender.Agent != "" {
-		message.AgentLabel = strings.TrimSpace(body.Sender.Agent + " " + body.Sender.Where)
+		message.AgentLabel = supportCut(strings.TrimSpace(body.Sender.Agent+" "+body.Sender.Where), DefaultRecordBodySettings().SupportAgentLabelByteCount)
 	}
 	for i, file := range body.Files {
 		fileSha, _ := hex.DecodeString(file.Sha256)
-		message.Files = append(message.Files, &protocol.FileFields{Name: file.Name, Type: item.FileTypes[i], Size: uint64(file.Bytes), Sha256: fileSha})
+		fileType := uint32(0)
+		if i < len(item.FileTypes) {
+			fileType = item.FileTypes[i]
+		}
+		message.Files = append(message.Files, &protocol.FileFields{Name: file.Name, Type: fileType, Size: uint64(file.Bytes), Sha256: fileSha})
 	}
-	if body.Bundle != nil {
+	switch {
+	case item.Manifest != nil:
+		message.Bundle = supportBundleManifestFields(item.Manifest)
+	case body.Bundle != nil:
 		bundleSha, _ := hex.DecodeString(body.Bundle.Sha256)
 		message.Bundle = &protocol.BundleManifest{Bytes: uint64(body.Bundle.Bytes), Sha256: bundleSha}
 	}
 	source := RecordSourceObserved
 	if item.Tier == SupportTierHuman {
+		// the person's own message, typed in an app or confirmed on /dev/tty
 		source = RecordSourceApprover
 	}
-	records.Append(&RecordDraft{
-		Kind: RecordKindSupportMessage, Source: source, RunId: item.RunId, NoSession: item.RunId == nil, AgentId: item.AgentId,
-		Body: message,
-	})
+	return &RecordDraft{
+		Kind: RecordKindSupportMessage, Source: source, RunId: item.RunId, NoSession: item.RunId == nil, AgentId: item.AgentId, Body: message,
+	}
 }
 
-// The vault's kind-30 entry of an event received.
+// The vault's kind-30 entry of the service's acknowledgment of a message this device sent: direction received, the
+// entry and seq it was given and its status, joined to the message's own entry by its client_ref, whose text that one
+// holds.
+func (self *SupportClient) recordAcknowledged(item *supportOutboxItem, answer *supportEntryAnswer) {
+	records, err := self.host.supportRecords()
+	if err != nil {
+		return
+	}
+	settings := DefaultRecordBodySettings()
+	message := &protocol.SupportMessageBody{
+		Direction: supportDirectionReceived,
+		Product:   SupportProductUrnetwork,
+		Entry:     answer.Id,
+		Seq:       answer.Seq,
+		Type:      supportEventTypeNumber("submitted"),
+		Tier:      supportTierNumber(item.Tier),
+		ClientRef: supportClientRefBytes(item.ClientRef),
+		Status:    supportStatusNumber(answer.Status),
+	}
+	if item.Entry != "" {
+		message.Type = supportEventTypeNumber("followup")
+	}
+	if len(answer.FixedIn) <= settings.SupportFixedInByteCount {
+		message.FixedIn = answer.FixedIn
+	}
+	records.Append(&RecordDraft{Kind: RecordKindSupportMessage, Source: RecordSourceObserved, NoSession: true, Body: message})
+}
+
+// The vault's kind-30 entry of an event received: a label past its bound cut at a character's edge and a fixed_in past
+// its bound left out, so the service cannot keep an event off the record by its size.
 func (self *SupportClient) recordReceived(event *SupportServiceEvent) {
 	records, err := self.host.supportRecords()
 	if err != nil {
 		return
 	}
+	settings := DefaultRecordBodySettings()
 	text := event.Note
 	if text == "" {
 		text = event.Body
@@ -1114,31 +1270,39 @@ func (self *SupportClient) recordReceived(event *SupportServiceEvent) {
 		Type:      supportEventTypeNumber(event.Type),
 		Tier:      supportTierNumber(event.Tier),
 		ClientRef: supportClientRefBytes(event.ClientRef),
-		Text:      text,
+		Text:      supportCut(text, settings.SupportTextByteCount),
 		Status:    supportStatusNumber(event.Status),
-		FixedIn:   event.FixedIn,
+	}
+	if len(event.FixedIn) <= settings.SupportFixedInByteCount {
+		message.FixedIn = event.FixedIn
 	}
 	if event.Agent != "" {
-		message.AgentLabel = event.Agent
+		message.AgentLabel = supportCut(event.Agent, settings.SupportAgentLabelByteCount)
 	}
 	records.Append(&RecordDraft{Kind: RecordKindSupportMessage, Source: RecordSourceObserved, NoSession: true, Body: message})
 }
 
-// SupportMessageBody.direction.
-const (
-	supportDirectionSent     uint32 = 1
-	supportDirectionReceived uint32 = 2
-)
+// text within maxByteCount bytes, cut at the last character's edge that fits.
+func supportCut(text string, maxByteCount int) string {
+	if len(text) <= maxByteCount {
+		return text
+	}
+	cut := text[:maxByteCount]
+	for !utf8.ValidString(cut) && 0 < len(cut) {
+		cut = cut[:len(cut)-1]
+	}
+	return cut
+}
 
 // SupportMessageBody.tier: 1 human, 2 released, 3 agent, and 0 for the auto tier and none.
 func supportTierNumber(tier SupportTier) uint32 {
 	switch tier {
 	case SupportTierHuman:
-		return 1
+		return supportTierNumberHuman
 	case SupportTierReleased:
-		return 2
+		return supportTierNumberReleased
 	case SupportTierAgent:
-		return 3
+		return supportTierNumberAgent
 	}
 	return 0
 }
@@ -1319,22 +1483,7 @@ func (self *SupportClient) Read(ctx context.Context, args *SupportReadArgs) (*Su
 			return nil, fmt.Errorf("support: the run's taint could not be written: %w", err)
 		}
 	}
-	result := &SupportReadResult{Entry: item.Entry, Status: item.Status, FixedIn: item.FixedIn, Final: item.Final, Messages: []*SupportReadMessage{}}
-	for _, message := range item.Messages {
-		if message.Seq <= args.After {
-			continue
-		}
-		from := message.Agent
-		switch {
-		case message.Reply:
-			from = "support"
-		case message.Agent == "":
-			from = "you"
-		}
-		result.Messages = append(result.Messages, &SupportReadMessage{
-			Seq: message.Seq, From: from, Tier: message.Tier, Text: message.Text, Millis: message.Millis, Reply: message.Reply,
-		})
-	}
+	result := supportReadResultOf(item, args.After)
 	self.changeState(func(state *supportState) error {
 		if stored := state.item(args.Entry); stored != nil {
 			stored.markRead(args.AgentName)

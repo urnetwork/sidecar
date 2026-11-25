@@ -2,7 +2,7 @@
 
 //go:build !ios_extension && !sidecar_http
 
-// The support log's registry, version 1 (DESIGN-COMPUTE §28.7): its components, codes, enums and fields, and a
+// The support log's registry, version 2 (DESIGN-COMPUTE §28.7): its components, codes, enums and fields, and a
 // constructor for each field, which is the only way to give Event a field. support/registry.yml is the source;
 // regenerate this file with
 //
@@ -15,7 +15,7 @@ import (
 )
 
 // The registry's version, which every bundle's header names.
-const SupportLogRegistryVersion = 1
+const SupportLogRegistryVersion = 2
 
 // The registry's components.
 const (
@@ -124,6 +124,7 @@ const (
 	SupportLogRefusalFileRefused        SupportLogRefusal = 10
 	SupportLogRefusalNotFound           SupportLogRefusal = 11
 	SupportLogRefusalNoHost             SupportLogRefusal = 12
+	SupportLogRefusalGrantRequired      SupportLogRefusal = 13
 )
 
 // The registry's enum stop_reason.
@@ -327,7 +328,7 @@ func SupportLogFieldSidecar(id []byte) SupportLogField {
 
 // The registry as tables, which Event and a bundle read.
 var supportLogRegistry = &supportLogRegistryTable{
-	version: 1,
+	version: 2,
 	countBuckets: []supportLogBucket{
 		{label: "0", max: 0, bounded: true},
 		{label: "1", max: 1, bounded: true},
@@ -366,7 +367,7 @@ var supportLogRegistry = &supportLogRegistryTable{
 		"outcome":           {"sent", "queued", "approval_pending", "declined", "not_sent"},
 		"post_result":       {"accepted", "replayed", "client_error", "rate_limited", "server_error", "unreachable", "tls_failed", "timeout", "unauthorized"},
 		"prune_reason":      {"age", "size"},
-		"refusal":           {"disclosure_required", "secret_in_message", "hidden_text", "support_off", "rate_limited", "support_queue_full", "support_paused", "too_long", "not_text", "file_refused", "not_found", "no_host"},
+		"refusal":           {"disclosure_required", "secret_in_message", "hidden_text", "support_off", "rate_limited", "support_queue_full", "support_paused", "too_long", "not_text", "file_refused", "not_found", "no_host", "grant_required"},
 		"stop_reason":       {"idle", "signal", "closed", "failed"},
 		"stream_state":      {"opened", "closed", "failed"},
 		"tier":              {"human", "released", "agent", "auto"},

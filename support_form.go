@@ -48,6 +48,9 @@ const (
 	SupportRefusalNoHost SupportRefusal = "no_host"
 	// A person's message the scan warned on, which the person has not confirmed.
 	SupportRefusalSecretWarned SupportRefusal = "secret_warned"
+	// An agent's enumerated report, which needs FB section 5's feedback.auto grant, a person's per network or per agent,
+	// that nothing builds yet (FB's G3): refused until it is (support_report.go).
+	SupportRefusalGrantRequired SupportRefusal = "grant_required"
 )
 
 // The support log's word for each refusal, which its registry enumerates.
@@ -65,6 +68,7 @@ var supportRefusalLogValues = map[SupportRefusal]SupportLogRefusal{
 	SupportRefusalFileRefused:        SupportLogRefusalFileRefused,
 	SupportRefusalNotFound:           SupportLogRefusalNotFound,
 	SupportRefusalNoHost:             SupportLogRefusalNoHost,
+	SupportRefusalGrantRequired:      SupportLogRefusalGrantRequired,
 }
 
 // What a refused call answers: the refusal, and where it applies the secret's class and where it starts, the file it

@@ -39,7 +39,10 @@ func TestUrSupportFormsNeedAHostedNetwork(t *testing.T) {
 	defer stop(sidecar.SupportLogStopReasonClosed)
 	cli, stdout, _ := newTestUrCli(started.socketPath)
 	cli.openTty = func() (urTty, error) { return &testTty{lines: []string{"yes"}}, nil }
-	for _, args := range [][]string{{"ur", "support"}, {"ur", "support", "show", "100171"}, {"ur", "support", "settings"}} {
+	for _, args := range [][]string{
+		{"ur", "support"}, {"ur", "support", "show", "100171"}, {"ur", "support", "settings"},
+		{"ur", "support", "report", "support.token_failed"}, {"ur", "support", "send", "hello", "--attach=build.log"},
+	} {
 		if code := cli.main(context.Background(), args); code != urExitFailed {
 			t.Fatalf("%v exited %d", args, code)
 		}
