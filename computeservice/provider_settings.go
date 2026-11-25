@@ -57,7 +57,7 @@ type ComputeProviderSettings struct {
 	StatusMaxAge time.Duration
 	// How long one adapter's catalog read may take at the hourly read: 60 s. A provider slower than it is skipped for
 	// the hour, its last read standing, and the others are read regardless (§4.7: one failing does not stop the rest).
-	// Non-positive reads nothing.
+	// It must be positive.
 	CatalogReadTimeout time.Duration
 	// The most models and shapes one catalog read may hold: 1024, some fifteen times the largest provider catalog of
 	// 2026-11-23 (67 models), so a hostile answer bounds the work and the rows it writes. A larger read is refused
