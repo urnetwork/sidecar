@@ -41,15 +41,17 @@ func (self *testSocketNet) dialerSidecarId(conn *SocketConn) (Id, bool) {
 	return sidecarId, ok
 }
 
-// One listener on the network: its accepted conns, and what the daemon set on it.
+// One listener on the network: its accepted conns, what the daemon set on it, and the grant end its listen came to,
+// zero for none.
 type testSocketListener struct {
-	net      *testSocketNet
-	name     string
-	accepted chan *SocketConn
-	closed   chan struct{}
-	once     sync.Once
-	serving  chan bool
-	drains   chan struct{}
+	net             *testSocketNet
+	name            string
+	accepted        chan *SocketConn
+	closed          chan struct{}
+	once            sync.Once
+	serving         chan bool
+	drains          chan struct{}
+	grantExpireTime time.Time
 }
 
 func (self *testSocketListener) AcceptSocket(ctx context.Context) (*SocketConn, error) {
@@ -86,6 +88,10 @@ func (self *testSocketListener) Close() error {
 
 func (self *testSocketListener) inflightCount() int {
 	return 0
+}
+
+func (self *testSocketListener) grantExpires() time.Time {
+	return self.grantExpireTime
 }
 
 // Hands conn to the listener's accept, false once it closed.
