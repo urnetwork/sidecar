@@ -8,7 +8,7 @@
 // is refused before the agent starts.
 //
 // Tokens are estimated as Pi does, bytes over HarnessSettings.TokenEstimateByteCount, over each tool's name,
-// description and schema and the skill's text.
+// description and schema, the recURd skill's text, and once each, the text of a skill the tools come with (§28.4).
 
 package sidecar
 
@@ -56,6 +56,8 @@ type harnessToolSet struct {
 	names []string
 	tools []HarnessTool
 	specs []*HarnessToolSpec
+	// the skills the tools come with, each once, in the order their first tool is declared
+	skills []*HarnessToolSkill
 	// whether the profile's whole set did not fit and the small set was taken
 	small bool
 }
@@ -68,6 +70,7 @@ func newHarnessToolSet(settings *HarnessSettings, registry *HarnessToolRegistry,
 		set := &harnessToolSet{}
 		tokens := skillTokens
 		seen := map[string]bool{}
+		skills := map[string]bool{}
 		for _, name := range names {
 			if seen[name] {
 				continue
@@ -84,6 +87,11 @@ func newHarnessToolSet(settings *HarnessSettings, registry *HarnessToolRegistry,
 			set.tools = append(set.tools, tool)
 			set.specs = append(set.specs, spec)
 			tokens += harnessToolTokens(settings, tool)
+			if spec.Skill != nil && !skills[spec.Skill.Name] {
+				skills[spec.Skill.Name] = true
+				set.skills = append(set.skills, spec.Skill)
+				tokens += harnessEstimateTokens(settings, len(spec.Skill.Text))
+			}
 		}
 		return set, tokens, nil
 	}

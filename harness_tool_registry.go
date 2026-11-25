@@ -6,8 +6,9 @@
 // enclave_*, SSH's ssh_exec, LSTN's listeners_list, INFER's models_list, BAL's compute_*, and the Harness's own.
 //
 // A registration names the tool, the profiles it serves (§7.5's local and enclave columns), whether it is built in
-// (only a built-in may mark keep: false, §24.9), and a constructor taking the Harness, which builds the tool once per
-// Harness. A second registration of a name panics at start. The local profile is §7.5's local column: no bash, no host
+// (only a built-in may mark keep: false, §24.9), the skill it comes with, if any, and a constructor taking the Harness,
+// which builds the tool once per Harness, or answers ErrHarnessToolOff where its feature is off on that host. A second
+// registration of a name panics at start. The local profile is §7.5's local column: no bash, no host
 // path and no process (CO-6, IC-7); the enclave profile its enclave column, wired by HARN-M14-05.
 //
 // HarnessToolRegistry is one Harness's tools, built from the registrations; safe for concurrent use once built.
@@ -15,10 +16,22 @@
 package sidecar
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"sort"
 )
+
+// What a tool's constructor answers where its feature is off on the Harness's host, as the release's support switch
+// leaves the support tools out (§28.21): the tool is left out quietly, as a failing constructor is not.
+var ErrHarnessToolOff = errors.New("the tool's feature is off on this host")
+
+// A skill a tool comes with (§28.4's support): its SKILL.md, which the system message of an agent whose tools hold any
+// of its tools lists after recURd's, once, and which the tool budget counts once.
+type HarnessToolSkill struct {
+	Name string
+	Text string
+}
 
 // A tool profile (§7.5).
 type HarnessProfile string
@@ -37,6 +50,8 @@ type HarnessToolSpec struct {
 	Profiles []HarnessProfile
 	// Whether it is built into sidecar, the only kind whose keep: false details are honored (§24.9).
 	BuiltIn bool
+	// The skill it comes with, nil for none; the tools of one skill share one.
+	Skill *HarnessToolSkill
 	// Builds the tool for one Harness. An error leaves the tool out of that Harness, logged.
 	New func(harness *Harness) (HarnessTool, error)
 }
@@ -80,11 +95,15 @@ type HarnessToolRegistry struct {
 	nameTools map[string]*harnessRegisteredTool
 }
 
-// The registry of specs built for harness: each tool constructed once, one whose constructor fails left out and logged.
+// The registry of specs built for harness: each tool constructed once, one whose constructor fails left out and logged,
+// and one whose feature is off left out quietly.
 func newHarnessToolRegistry(harness *Harness, specs map[string]*HarnessToolSpec) *HarnessToolRegistry {
 	registry := &HarnessToolRegistry{nameTools: map[string]*harnessRegisteredTool{}}
 	for name, spec := range specs {
 		tool, err := spec.New(harness)
+		if errors.Is(err, ErrHarnessToolOff) {
+			continue
+		}
 		if err != nil || tool == nil {
 			if harness != nil && harness.log != nil {
 				harness.log.Warningf("[harness]tool %s is left out: %v", name, err)

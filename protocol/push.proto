@@ -22,7 +22,9 @@ message PushHint {
   string topic = 2;      // §6.8's topic registry
   uint64 version = 3;
   uint32 kind = 4;       // the owner's MessageType (§6.11), or 0
-  bytes hint = 5;        // that message, <= 256 B: ids, kinds, versions; never content; dropped when coalesced
+  // that message, <= 256 B: ids, kinds, versions; never content; dropped when superseded or past its topic's bound
+  // (§6.8; owner decision 782)
+  bytes hint = 5;
 }
 
 message PollResponse {   // GET /sidecar/sync/poll's 200 body, application/octet-stream
