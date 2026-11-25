@@ -39,7 +39,7 @@
   "num": 5,
   "code": "CORE",
   "words": 11234,
-  "code_words": 8701,
+  "code_words": 8694,
   "ceiling": 3500,
   "over": 7734,
   "over_pct": 221.0
@@ -101,11 +101,11 @@
  {
   "num": 12,
   "code": "DNS",
-  "words": 7676,
-  "code_words": 2514,
+  "words": 7709,
+  "code_words": 2646,
   "ceiling": 3000,
-  "over": 4676,
-  "over_pct": 155.9
+  "over": 4709,
+  "over_pct": 157.0
  },
  {
   "num": 13,
@@ -137,11 +137,11 @@
  {
   "num": 16,
   "code": "MCP",
-  "words": 16968,
-  "code_words": 23327,
+  "words": 17011,
+  "code_words": 23572,
   "ceiling": 3500,
-  "over": 13468,
-  "over_pct": 384.8
+  "over": 13511,
+  "over_pct": 386.0
  },
  {
   "num": 17,

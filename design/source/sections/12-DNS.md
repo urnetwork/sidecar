@@ -350,29 +350,42 @@ _<service>._tcp, _<service>._udp, <sub>._sub.<type> PTR each instance of the typ
 <instance>.<type>                                   SRV 0 0 <port> <target>; TXT the instance's
 <label>.<client-name>                               A the address the view holds; NODATA for AAAA and the rest
 another name of these forms                         NXDOMAIN, or NODATA where the name exists
-every answer and denial                             TTL 10 s, RFC 8766 §5.5.1's cap for clients without push
+every answer and denial                             TTL 10 s, RFC 8766 §5.5.1's cap for clients without push;
+                                                    a denial carries the zone's SOA, every interval 10 s and
+                                                    its serial 1, since the device keeps no zone file, so a
+                                                    resolver caches it no longer (RFC 2308 §3)
 ```
 
 The reverse zone of the overlay block answers on the device too: `b._dns-sd._udp` and `db._dns-sd._udp` under the name RFC 6763 §11 derives from the tun's address and mask point at the zone, an assigned address's PTR names its private name, and every other name there is NXDOMAIN, so no reverse query for an overlay address leaves the device. `ur tun` sends the zones and the block's reverse zone to its resolver at `<block>.0.53` by the platform's split DNS: systemd-resolved's route-only domains (`~<net>.<root>`), a supplemental resolver per domain on macOS, NRPT rules on Windows. It never adds the zone to the search list, from which mDNSResponder learns its automatic browse domains (mDNSResponder's mDNSCore/uDNS.c), so a default browse never shows an instance twice. A client that names the zone browses it: `dns-sd -B _ipp._tcp <net>.<root>` on macOS, `avahi-browse -d <net>.<root>` where Avahi's wide-area browsing is on (avahi-daemon.conf's `enable-wide-area`), or `resolvectl query --type=PTR` on systemd-resolved.
 
-A viewer's discovery view comes from §17.7.1's watches, whose messages are `DNS_SD_WATCH` (0x1B02) and `DNS_SD_WATCH_RESULT` (0x1B03) in §6.11's catalog, which types.proto and `sidecar/protocol/dns.proto` declare:
+A viewer's discovery view comes from §17.7.1's watches, whose messages are `DNS_SD_WATCH` (0x1B02) and `DNS_SD_WATCH_RESULT` (0x1B03) in §6.11's catalog, which types.proto and `sidecar/protocol/dns.proto` declare. The limits both ends share, `InstanceCount`, `AnswerByteCount`, `TxtByteCount`, the name's 63 octets and `WatchHoldTimeout`, are fields of protocol's `DnsSdWireSettings`, which §17.7.1's `BridgeDiscoverySettings` carries as its `Wire`, so their defaults stay in one place:
 
-```text
-DnsSdWatch        since uint64 = 1      the host's view version the viewer holds; 0 for none
-                  hold_ms uint32 = 2    at most WatchHoldTimeout (§17.7.1)
-DnsSdWatchResult  version uint64 = 1
-                  serving bool = 2      false where the host publishes nothing
-                  instances = 3         repeated DnsSdInstance
-                  truncated bool = 4    past InstanceCount or AnswerByteCount
-DnsSdInstance     name string = 1       one label, at most 63 octets
-                  service string = 2    _<service>._tcp or _udp
-                  subtypes = 3          repeated string
-                  port uint32 = 4
-                  txt bytes = 5         at most TxtByteCount
-                  host_label string = 6 the target's own label, as an LDH label (<label> above)
-                  ipv4 fixed32 = 7      where this viewer reaches the instance
-                  own bool = 8          the host's own service
-                  ttl uint32 = 9        seconds left
+```proto
+// sidecar/protocol/dns.proto (owner decision 778): DNS_SD_WATCH's and DNS_SD_WATCH_RESULT's bodies, peer to peer
+// over a Required session on the pair's Network contract of class data, so no server reads a field
+message DnsSdWatch {
+  uint64 since = 1;                   // the host's view version the viewer holds; 0 for none
+  uint32 hold_ms = 2;                 // at most WatchHoldTimeout (§17.7.1)
+}
+message DnsSdWatchResult {
+  uint64 version = 1;
+  bool serving = 2;                   // false where the host's settings publish nothing; a host whose own inputs,
+                                      // its sealed settings and its device role's state, have not settled
+                                      // answers UNAVAILABLE instead, which a viewer asks again soon
+  repeated DnsSdInstance instances = 3;
+  bool truncated = 4;                 // past InstanceCount or AnswerByteCount
+}
+message DnsSdInstance {               // each field the host's word, never trusted, and no MCP tool reads one
+  string name = 1;                    // one label, at most 63 octets
+  string service = 2;                 // _<service>._tcp or _udp
+  repeated string subtypes = 3;
+  uint32 port = 4;
+  bytes txt = 5;                      // the TXT record's rdata, at most TxtByteCount
+  string host_label = 6;              // the target's own label, as an LDH label (<label> above)
+  fixed32 ipv4 = 7;                   // where this viewer reaches the instance, most significant octet first
+  bool own = 8;                       // the host's own service
+  uint32 ttl = 9;                     // seconds left
+}
 ```
 
 Between hosts the watch delivers each change within a round trip; on the device the advertising proxy's registrations change at once, and unicast clients ask again within 10 s. [DNS Push](DESIGN-DEFER.md#dns-push-notifications) (RFC 8765) is Later: it runs only over TLS whose server the client authenticates under DNS over TLS's Strict Privacy profile, by DANE where it can (RFC 8765 §7), and a resolver answering a private zone on the device has no identity a client can check that way; mDNSResponder, which without push polls a long-lived unicast browse every 15 minutes (mDNSResponder's mDNSCore/uDNS.h), sets up its push TLS in a library Apple does not publish.
