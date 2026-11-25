@@ -13,7 +13,7 @@ The owner asked for this: anyone submits feedback; it gets an id and joins a fee
 The trust spine says recURd never sees code, sessions, or approvals in the clear. Feedback is the one thing recURd does read, so the design holds two lines:
 
 1. A person's message reaches recURd only because that person chose to send it, after being told who will read it.
-2. The auto tier keeps its closed schema, so no automatic report has a field that can hold session content. An agent also sends free text, tier `agent`: without a person from a clean run, one that has read nothing untrusted, carries no `private` mark, and names no file; and from a tainted run when the device's safety classifier approves. Otherwise the person decides, and the message goes as tier `released` (CO-45; DESIGN-COMPUTE.md §28.5, §28.8).
+2. The auto tier keeps its closed schema, so no automatic report has a field that can hold session content. An agent also sends free text, tier `agent`: without a person from a clean run, one that has read nothing untrusted, carries no `private` mark, and names no file; and from a tainted run when the device's safety classifier approves. Otherwise the person decides, and a message they approve goes as tier `released` (CO-45; DESIGN-COMPUTE.md §28.5, §28.8).
 
 ```
 person: dock, phone, web form, CLI on /dev/tty ┐
