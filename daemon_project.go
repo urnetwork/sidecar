@@ -21,6 +21,8 @@
 // it fails with §5.8's FAILED_PRECONDITION naming the networks. A name resolves by §12's ResolveNetworkLabel: a label,
 // an alias or a retiring alias, and a legacy network_name only as a person's typed input, a control-mode argument,
 // never from `.ur` or a git remote, whose name another network may later hold. A network id names its network too.
+// Names resolve under DaemonSettings.LabelRoot through each hosted network's own label table, unless the host gives a
+// resolver of its own (daemon_labels.go).
 
 package sidecar
 
@@ -560,10 +562,7 @@ func (self *Daemon) resolveNetworkName(name string, interactive bool, idAllowed 
 			return Id{}, unknown()
 		}
 	}
-	if self.settings.Labels == nil {
-		return Id{}, unknown()
-	}
-	networkId, _, err := self.settings.Labels.ResolveNetworkLabel(self.settings.LabelRoot, name, interactive)
+	networkId, _, err := self.labels().ResolveNetworkLabel(self.settings.LabelRoot, name, interactive)
 	if err != nil {
 		var ambiguous *NetworkLabelAmbiguousError
 		if errors.As(err, &ambiguous) {
@@ -581,7 +580,7 @@ func (self *Daemon) resolveNetworkName(name string, interactive bool, idAllowed 
 // alias, else its id.
 func (self *Daemon) hostedNetworkNames() []string {
 	rows := map[Id]NetworkLabelRow{}
-	if table, ok := self.settings.Labels.(interface{ Networks() []NetworkLabelRow }); ok {
+	if table, ok := self.labels().(interface{ Networks() []NetworkLabelRow }); ok {
 		root := canonicalNetworkLabelRoot(self.settings.LabelRoot)
 		for _, row := range table.Networks() {
 			if row.Root == root {

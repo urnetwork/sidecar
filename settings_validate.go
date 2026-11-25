@@ -46,6 +46,10 @@ func (self *SidecarSettings) validate() error {
 	if !isSidecarInstanceName(self.Instance) {
 		return fmt.Errorf("%w: Instance is not [a-z0-9][a-z0-9-]{0,31}", errInvalidSettings)
 	}
+	// empty is a host that names no user root, which resolves no <net> by name
+	if self.UserRoot != "" && !isNetworkLabelRoot(self.UserRoot) {
+		return fmt.Errorf("%w: UserRoot is not a domain name of lowercase labels with no trailing dot", errInvalidSettings)
+	}
 	if self.Connect == nil {
 		return fmt.Errorf("%w: Connect is nil", errInvalidSettings)
 	}

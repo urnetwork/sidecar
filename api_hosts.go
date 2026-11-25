@@ -16,6 +16,12 @@
 // with remote models, enclaves and web searches: ComputeUrl is its base, empty for a list that names none, which still
 // applies.
 //
+// The table carries §12.4's user root too, dns.yml's, beside its hosts (QD-1407): ApplyServiceUrls fills
+// SidecarSettings.UserRoot from it, so ur resolves the <net> of `.ur`, a git remote and an address, and files GET
+// /sidecar/label's answer, under it from M2, before any zone names a root. It is no host a sidecar reaches, so it is
+// ur's own, as a host's service and requirement are, and PublishedJson leaves it out. A release keeps it equal to
+// dns.yml's root.
+//
 // The issuer SPKIs are data the release supplies (§18.9). Until it does an entry has none, and a probe cannot tell
 // an intercepted chain from a real one, which ur status says rather than guesses.
 //
@@ -154,13 +160,17 @@ func (self *SidecarHostListEntry) IssuerSpkiDigests() ([][sha256.Size]byte, erro
 
 // §18.9's table.
 type SidecarHostList struct {
-	Version int                    `json:"version"`
-	Hosts   []SidecarHostListEntry `json:"hosts"`
+	Version int `json:"version"`
+	// §12.4's user root, dns.yml's, lowercase with no trailing dot: what ApplyServiceUrls fills
+	// SidecarSettings.UserRoot with (QD-1407). Empty for a list that names none, which applies all the same, and a
+	// host given it resolves no <net> by name.
+	UserRoot string                 `json:"user_root,omitempty"`
+	Hosts    []SidecarHostListEntry `json:"hosts"`
 }
 
 // A copy sharing no slice.
 func (self *SidecarHostList) clone() *SidecarHostList {
-	clone := &SidecarHostList{Version: self.Version, Hosts: slices.Clone(self.Hosts)}
+	clone := &SidecarHostList{Version: self.Version, UserRoot: self.UserRoot, Hosts: slices.Clone(self.Hosts)}
 	for i := range clone.Hosts {
 		clone.Hosts[i].IssuerSpkiSha256 = slices.Clone(self.Hosts[i].IssuerSpkiSha256)
 	}
@@ -198,14 +208,18 @@ func SidecarHostListV1() (*SidecarHostList, error) {
 	return list.clone(), nil
 }
 
-// The format's rules: version 1, at least one host, each a lowercase DNS name once, a port, words for its need, a
-// known requirement, a service at most once and only a known one, and issuer digests of 32 bytes.
+// The format's rules: version 1, a user root that is a domain name of lowercase labels where one is named, at least
+// one host, each a lowercase DNS name once, a port, words for its need, a known requirement, a service at most once
+// and only a known one, and issuer digests of 32 bytes.
 func (self *SidecarHostList) validate() error {
 	refuse := func(format string, args ...any) error {
 		return fmt.Errorf("%w: %s", ErrSidecarHostList, fmt.Sprintf(format, args...))
 	}
 	if self.Version != sidecarHostListVersion {
 		return refuse("version %d", self.Version)
+	}
+	if self.UserRoot != "" && !isNetworkLabelRoot(self.UserRoot) {
+		return refuse("the user root is not a domain name of lowercase labels with no trailing dot")
 	}
 	if len(self.Hosts) == 0 {
 		return refuse("no hosts")
@@ -299,7 +313,8 @@ func (self *SidecarHostList) ServiceLabel(service SidecarHostService) (string, e
 }
 
 // Sets every service url of settings from the list: https://<host>, wss://<host> for the platform, with :<tcp> unless
-// it is 443. A list missing a service changes nothing and refuses, so a host never runs on half a list.
+// it is 443; and its user root, empty where the list names none (QD-1407). A list missing a service changes nothing
+// and refuses, so a host never runs on half a list.
 func (self *SidecarHostList) ApplyServiceUrls(settings *SidecarSettings) error {
 	urls := map[SidecarHostService]string{}
 	for _, service := range sidecarHostServices {
@@ -324,6 +339,7 @@ func (self *SidecarHostList) ApplyServiceUrls(settings *SidecarSettings) error {
 	settings.GkmUrl = urls[SidecarHostServiceGkm]
 	settings.SocketsUrl = urls[SidecarHostServiceSockets]
 	settings.DnsUrl = urls[SidecarHostServiceDns]
+	settings.UserRoot = self.UserRoot
 	if settings.Tls != nil {
 		api, _ := self.ServiceEntry(SidecarHostServiceApi)
 		_, domain, _ := strings.Cut(api.Host, ".")

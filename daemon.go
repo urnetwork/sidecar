@@ -56,10 +56,12 @@ type DaemonSettings struct {
 	// --listen: the addresses the local services bind, each an IP literal (DaemonLocalListen). Empty: every interface,
 	// 0.0.0.0 and :: (owner decision 84), plaintext staying on loopback all the same (owner decision 130).
 	Listen []string
-	// §12's ResolveNetworkLabel over the networks this client belongs to, which `.ur`, a call's network argument and a
-	// git session's <net> resolve through. Nil: only a network id or the only network names one.
+	// §12's ResolveNetworkLabel over the networks this client belongs to, which `.ur`, a call's network argument, a
+	// git session's <net> and a socket address's resolve through. Nil: each hosted network's own label table, which
+	// its DnsClient and its label refresh feed (daemon_labels.go), as ur daemon resolves.
 	Labels NetworkLabelResolver
-	// The user root those labels sit under, such as dns.yml names.
+	// The user root those labels sit under, such as dns.yml names: ur daemon's SidecarSettings.UserRoot. Empty: the
+	// hosted networks' tables resolve no name, so only a network id or the only network names one.
 	LabelRoot string
 	// $HOME, which bounds the search for `.ur` (§5.8). Empty: the OS's.
 	Home string
