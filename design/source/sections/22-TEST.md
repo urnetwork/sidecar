@@ -887,7 +887,8 @@ real        T3 runs each T3 row through server's real handlers and stores (api, 
             Blobs wrapper records each key's write on the schedule's clock and returns it as LastModified, Advance
             shortens by PEXPIRE the Redis TTLs of the families a row names, and api takes the clock through a test
             seam beside DenyPostgresForTest; once an Advance has moved the Net's clock past a threshold since its
-            last reread, a sidecart3.Settings field defaulting to the file clusters' CheckInterval (30 s), the Net
+            last reread, sidecart3.Settings' AdminInfoRereadAfter, by default the file clusters' CheckInterval
+            (30 s), and refused at their CheckStaleAfter, the Net
             rereads its file clusters' admin info once, holding every later blob request until that reread has
             finished, so none after such a move goes on with stale admin info, whatever their order, to a 503 and
             a retry on a clock no one moves, while a clock following real time in small steps rereads about once
