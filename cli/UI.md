@@ -211,9 +211,11 @@ and 305; QD-204). §7.9 names no command; this one is the owner's answer to ques
 service-settings-7-9-admin-settings-command (QD-1131), in the shape `ur admin directory` has.
 
 ```text
-ur admin settings [--network=<name>]    the three as this device honors them
+ur admin settings [--network=<name>]    the three as this device honors them, and the authorization features
 ur admin settings [--mail-strict=on|off] [--record-cost=on|off] [--record-required=on|off] [--network=<name>]
                                         sign the options given into the config head, after a yes on /dev/tty
+ur admin settings --feature=<feature> [--network=<name>]
+                                        turn an authorization feature on, after a yes on /dev/tty
 ```
 
 - `mail_strict` is §15.4's `mail.strict`, off by default. `record_cost` says whether per-run cost totals go to the
@@ -227,6 +229,14 @@ ur admin settings [--mail-strict=on|off] [--record-cost=on|off] [--record-requir
   `ur install-harness` reads `record_required` from its running daemon and writes the fail-closed form while it is
   set; while it is set, the daemon reads a fail-open install as changed, so its runs taint until the install runs
   again.
+- `--feature` turns on one of DESIGN-COMPUTE §16.6's authorization features, `agent_repos`, `compute_policy`,
+  `listeners` or `enclaves` (CACL-M11-03), and no command turns one off. With no option the command prints each with
+  whether this device may turn it on and, where not, why: this release does not implement it, the services serving
+  the network do not yet (as api's core state says), or only the network's Owners and Admins can, named by member id.
+  `--feature` refuses such a feature before it asks anything; otherwise its question names the network's sidecars
+  that would pause until they update, and on a yes the Confirm method `admin.settings.feature` files the bit into the
+  head's ServiceSettings, which the daemon refuses as it refuses the other options, a harness ancestor included. The
+  apps' prompt calls the same method in remote mode.
 
 ## ur admin scopes (§7.9, §12.5, §13.8)
 
