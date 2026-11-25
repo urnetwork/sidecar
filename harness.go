@@ -193,6 +193,10 @@ type HarnessArgs struct {
 	// Called with each event as it is emitted, on the emitting goroutine, before any subscriber has it: a recorder's or a
 	// test's view in the loop's own order. It must not block. Nil for none.
 	Observer func(agentId Id, event *HarnessEvent)
+	// The network's support client (DESIGN-COMPUTE §28.4), read at use: on a Sidecar its compute component, which
+	// constructs after the Harness. Nil while the release's support switch is off, which leaves the support tools,
+	// their skill and support_update out (§28.21; harness_support.go).
+	Support func() (*SupportClient, error)
 }
 
 // One subscriber: its queue and its goroutine.
@@ -338,8 +342,14 @@ type Harness struct {
 	ui              *HarnessUiBroker
 	stamper         *harnessEventStamper
 	subscribers     *harnessSubscribers
+	support         func() (*SupportClient, error)
 	// held across one emission: never stateLock
 	emitLock sync.Mutex
+
+	// held across the support listener's add and removal, never with stateLock
+	supportLock sync.Mutex
+	// removes the support listener; nil until one is added
+	supportUnlisten func()
 
 	stateLock sync.Mutex
 	agents    map[Id]*harnessAgent
@@ -384,6 +394,7 @@ func NewHarness(args *HarnessArgs) (*Harness, error) {
 		workspaceParent: workspaceParent,
 		workspaceCap:    workspaceCap,
 		observer:        args.Observer,
+		support:         args.Support,
 		stamper:         newHarnessEventStamper(),
 		subscribers:     newHarnessSubscribers(settings, log),
 		agents:          map[Id]*harnessAgent{},
@@ -476,7 +487,7 @@ func (self *Harness) Agent(id Id) (HarnessAgent, bool) {
 	return agent, ok
 }
 
-// Closes every agent, ending its run and removing its workspace, and the subscribers.
+// Closes every agent, ending its run and removing its workspace, the support listener and the subscribers.
 func (self *Harness) Close() {
 	agents := func() []*harnessAgent {
 		self.stateLock.Lock()
@@ -488,6 +499,8 @@ func (self *Harness) Close() {
 		}
 		return agents
 	}()
+	// after closed is set, so no agent's start listens again
+	self.unlistenSupport()
 	for _, agent := range agents {
 		agent.Close()
 	}
