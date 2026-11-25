@@ -15,7 +15,7 @@ track folds CO-45 and CO-46, and RECORD.md's kind 30, into the design documents.
 | The vet analyzer: every write passes a code constant and that code's constructors, directly | `check/support_log_test.go` (sidecar), `sdk/sidecar_support_log_vet_test.go` (sdk) |
 | The canary corpus, driven through every field of every code and the bundle's header, scanning rings, bundles and their JSON | `support_log_canary_test.go`; a component adds its driver to `testSupportLogCanaryDrivers` |
 | The daemon's ring, `<state>/support-log`, with `daemon.started` and `daemon.stopped` | `cli/cmd_support.go`'s `startUrSupportLog`, called from `cli/cmd_daemon.go` |
-| The app's ring, under the sdk Sidecar's state directory, with `app.started` and `app.stopped` | `sdk/sidecar_support.go` |
+| The app's ring, under the sdk Sidecar's state directory, with `app.started` and `app.stopped`, opened deferred (`SupportLogArgs.Deferred`) and started once the instance opens, so a locked or failed key store's sidecar creates nothing there | `sdk/sidecar_support.go` |
 | `ur support logs [--json]`, printed on /dev/tty alone, refused to a caller under a harness | `cli/cmd_support.go` |
 | Settings | `support_settings.go`, `SidecarSettings.Support`; the process's ring is `SidecarSettings.SupportLog` |
 
