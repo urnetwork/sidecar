@@ -496,6 +496,25 @@ var failsOnRows = []failsOnRow{
 		checkoutTest: "TestHygieneGovulncheck",
 		plantedTests: []string{"TestHygieneFailsOnAVulnerableCallOnALeg", "TestHygieneFailsOnAnUnreachableVulnDatabase"},
 	},
+	{
+		row: "hygiene", item: "DESIGN-COMPUTE §28.7's support log registry malformed, or support_log_registry.go not what it generates",
+		checkoutTest: "TestSupportLogRegistryIsCurrent",
+		plantedTests: []string{
+			"TestSupportLogRegistryFailsOnAPlantedRepeatedNumber", "TestSupportLogRegistryFailsOnAPlantedUndeclaredField",
+			"TestSupportLogRegistryFailsOnAPlantedFreeTextType", "TestSupportLogRegistryFailsOnAPlantedStaleGeneratedFile",
+			"TestSupportLogRegistryFailsOnAGeneratedFileWithoutItsRegistry",
+		},
+	},
+	{
+		row: "hygiene", item: "DESIGN-COMPUTE §28.7's analyzer: a support log write passing a field that is no constructor its code declares",
+		checkoutTest: "TestSupportLogEventsAreDeclared",
+		plantedTests: []string{
+			"TestSupportLogEventsFailOnAFieldTheCodeDoesNotDeclare", "TestSupportLogEventsFailOnAFieldThatIsNoConstructor",
+			"TestSupportLogEventsFailOnASpread", "TestSupportLogEventsFailOnACodeTheRegistryDoesNotDeclare",
+			"TestSupportLogEventsFailOnAFieldBuiltAwayFromItsWrite", "TestSupportLogEventsFailOnAFieldLiteral",
+			"TestSupportLogEventsFailOnAnInternalBuilder",
+		},
+	},
 
 	{
 		row: "x9", item: "a connect shape §4.6 rejects, defers or leaves for later (C1, C2, C4, C6b, C7, C10, C17)",

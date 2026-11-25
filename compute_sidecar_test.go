@@ -47,6 +47,7 @@ var testComputeSettingsComponents = []struct {
 	{field: "Oauth", typeName: "OauthSettings", file: "oauth_settings.go"},
 	{field: "Listeners", typeName: "ListenersSettings", file: "listeners_settings.go"},
 	{field: "Safety", typeName: "SafetySettings", file: "safety_settings.go"},
+	{field: "Support", typeName: "SupportSettings", file: "support_settings.go"},
 }
 
 // Every compute component's settings is a field of the defaults, set, of its own type, and survives a JSON round trip
