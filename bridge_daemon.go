@@ -352,8 +352,11 @@ type DaemonBridgeForwardParams struct {
 	// else every interface (owner decision 84).
 	LocalPort uint32   `json:"local_port,omitempty"`
 	Listen    []string `json:"listen,omitempty"`
-	// The grant's lifetime in seconds; 0 takes the requests rule's.
+	// The grant's lifetime in seconds; 0 takes the requests rule's, or ExpiresMs.
 	LifetimeSeconds uint32 `json:"lifetime_seconds,omitempty"`
+	// When the grant ends, in ms, as a tool's call names it, so the same call made again asks the same end and spends
+	// the decision on it (BridgeForwardRequest.ExpiresAt); 0 takes LifetimeSeconds. Both set is refused.
+	ExpiresMs int64 `json:"expires_ms,omitempty"`
 }
 
 // bridge.close's params: a forward's id, or a rule's or a grant's, hex.

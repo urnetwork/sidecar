@@ -7,6 +7,11 @@
 //     grant its decision activated has been revoked, it files a new request, where the kept action's spent decision
 //     answered done from its record and the listen registered on a grant that no longer stands; while the grant stands
 //     the kept action is presented and passes on it, filing nothing.
+//   - A forward asking an end, as bridge_forward's expires reaches the filer, is kept by that end: asked again a minute
+//     on, the same end, written in another zone, presents the action its request was filed with and spends the
+//     member's decision into one GrantActivate ending at that end; a lifetime and an end together and an end not ahead
+//     are refused before anything is filed, and the daemon's bridge.forward hands its expires_ms to the filer as the
+//     end, refusing one beside a lifetime and one below zero.
 //
 // Synthetic values only.
 
@@ -14,6 +19,7 @@ package sidecar
 
 import (
 	"bytes"
+	"errors"
 	"slices"
 	"testing"
 	"time"
@@ -92,4 +98,131 @@ func TestSocketListenAsksAfreshOnceItsGrantIsRevoked(t *testing.T) {
 	if types := world.api.postedTypes(t); !slices.Equal(types, want) {
 		t.Errorf("posted %v", types)
 	}
+}
+
+// A forward asking an end waits for a person; asked again a minute on with the same end, written in another zone, it
+// presents the action its request was filed with, whose expiry is that end, so the member's decision is what the
+// forward asked again spends, into one GrantActivate ending at the end asked. A lifetime and an end together, and an
+// end not ahead, are refused before anything is filed.
+func TestBridgeForwardAskedAgainWithTheSameEndSpendsItsApproval(t *testing.T) {
+	world := newTestBridgeEffectWorld(t)
+	world.net.log.settings.AclSpendCheck = NewSpendCheck(nil)
+	ctx := t.Context()
+	origin := world.mcp()
+	// an end with part of a ms, which the grant rounds up so it never ends before the time asked
+	end := world.clock.Now().Add(90*time.Minute + 250*time.Microsecond).UTC()
+	endMs := end.Truncate(time.Millisecond).Add(time.Millisecond).UnixMilli()
+	request := &BridgeForwardRequest{Target: world.laptop.sidecarId, Port: 22, LocalPort: 2222, ExpiresAt: end}
+	pending := func(request *BridgeForwardRequest) Id {
+		t.Helper()
+		_, err := world.filer.Forward(ctx, origin, request)
+		var waiting *ApprovalPendingError
+		if !errors.As(err, &waiting) {
+			t.Fatalf("waiting for a forward approval: %v", err)
+		}
+		return waiting.ApprovalId
+	}
+	approvalId := pending(request)
+	entry, err := world.ledgerRows.State(approvalId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approved, err := ParseStoredApprovalRequest(entry.Request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expiresMs := approved.Action.Action.GetExpiresMillis(); expiresMs != endMs {
+		t.Fatalf("the request asks an end of %d ms, not %d", expiresMs, endMs)
+	}
+
+	// a minute on, the same end, written in another zone, finds the same request
+	world.clock.advance(time.Minute)
+	world.net.tickAt(world.clock.Now().UnixMilli())
+	sameEnd := *request
+	sameEnd.ExpiresAt = end.In(time.FixedZone("a synthetic zone", 5*60*60))
+	if again := pending(&sameEnd); again != approvalId {
+		t.Fatalf("the forward asked again with the same end filed %s beside %s", again, approvalId)
+	}
+	if posted := world.api.postCount(); posted != 0 {
+		t.Fatalf("the pending forward posted %d statements", posted)
+	}
+
+	world.approve(approved)
+	world.clock.advance(30 * time.Second)
+	world.net.tickAt(world.clock.Now().UnixMilli())
+	world.install()
+	filed, err := world.filer.Forward(ctx, origin, request)
+	wantGrant := AclGrantId(approvalId, approved.Action.PayloadSha256())
+	if err != nil || filed.ApprovalId != approvalId || !bytes.Equal(filed.GrantId, wantGrant[:]) {
+		t.Fatalf("the approved forward: %+v, %v", filed, err)
+	}
+	if types := world.api.postedTypes(t); !slices.Equal(types, []bridge.SignedType{bridge.SignedType_SIGNED_GRANT_ACTIVATE}) {
+		t.Fatalf("the spend posted %v", types)
+	}
+	acl, err := world.net.log.State().Acl()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rule := acl.grantRule(wantGrant[:]); rule == nil || rule.expiresMs != endMs {
+		t.Errorf("the log's grant: %+v, its end %d ms", rule, endMs)
+	}
+
+	// refused before anything is filed
+	filedCount := world.approvals.filedCount()
+	both := *request
+	both.Lifetime = time.Hour
+	past := *request
+	past.ExpiresAt = world.clock.Now()
+	for name, refused := range map[string]*BridgeForwardRequest{"a lifetime and an end": &both, "an end not ahead": &past} {
+		if _, err := world.filer.Forward(ctx, origin, refused); !errors.Is(err, ErrBridgeFileRefused) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if world.approvals.filedCount() != filedCount || world.api.postCount() != 1 {
+		t.Errorf("a refused forward filed %d requests and posted %d statements", world.approvals.filedCount()-filedCount, world.api.postCount()-1)
+	}
+}
+
+// The daemon's bridge.forward hands expires_ms to the filer as the end itself, as bridge_forward sends it, so a call
+// made again with the same params asks the same end; a lifetime asks a lifetime; and an end beside a lifetime, or one
+// below zero, is refused before anything is filed.
+func TestDaemonBridgeForwardHandsItsEndToTheFiler(t *testing.T) {
+	world := newTestDaemonBridges(t)
+	approvalId := NewId()
+	world.backend.set(func() { world.backend.pending = &approvalId })
+	origin := &BridgeFileOrigin{Act: SidecarActMcp}
+	endMs := world.clock.Now().Add(90 * time.Minute).UnixMilli()
+	params := &DaemonBridgeForwardParams{Target: "peer", Port: 5000, LocalPort: 15000, Listen: []string{"127.0.0.1"}, ExpiresMs: endMs}
+	for range 2 {
+		if reply, err := world.bridges.Forward(t.Context(), world.networkId, nil, origin, params); err != nil || reply.ApprovalPendingId == nil {
+			t.Fatalf("a forward asking an end: %+v, %v", reply, err)
+		}
+		world.clock.Advance(time.Minute)
+	}
+	lifetime := &DaemonBridgeForwardParams{Target: "peer", Port: 5000, LocalPort: 15000, Listen: []string{"127.0.0.1"}, LifetimeSeconds: 900}
+	if _, err := world.bridges.Forward(t.Context(), world.networkId, nil, origin, lifetime); err != nil {
+		t.Fatal(err)
+	}
+	for name, refused := range map[string]*DaemonBridgeForwardParams{
+		"an end and a lifetime": {Target: "peer", Port: 5000, ExpiresMs: endMs, LifetimeSeconds: 900},
+		"an end below zero":     {Target: "peer", Port: 5000, ExpiresMs: -1},
+	} {
+		if _, err := world.bridges.Forward(t.Context(), world.networkId, nil, origin, refused); !errors.Is(err, ErrDaemonBridgeParams) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	world.backend.set(func() {
+		forwards := world.backend.forwards
+		if len(forwards) != 3 {
+			t.Fatalf("%d forwards reached the filer", len(forwards))
+		}
+		for _, forward := range forwards[:2] {
+			if forward.ExpiresAt.UnixMilli() != endMs || forward.Lifetime != 0 {
+				t.Errorf("a forward asking an end reached the filer as %s and a lifetime of %s", forward.ExpiresAt, forward.Lifetime)
+			}
+		}
+		if forward := forwards[2]; !forward.ExpiresAt.IsZero() || forward.Lifetime != 900*time.Second {
+			t.Errorf("a forward asking a lifetime reached the filer as %s and a lifetime of %s", forward.ExpiresAt, forward.Lifetime)
+		}
+	})
 }
