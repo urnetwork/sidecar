@@ -1,11 +1,11 @@
 //go:build !ios_extension
 
 // A grant's action asked again (§16.6's retry row and its grant component, §8.6's requests; I-8, AU4, AD2): what a
-// caller that builds a grant-backed action outside the socket component keeps between its calls, so the call made
-// again after a person's decision presents the bytes the decision names. MCP's socket_listen (socket_listen_grant.go)
-// and §13.10's publish (tls_publish.go) keep theirs in a GrantActionKeeper; Sidecar.Listen's tls/ and smtp/ listen
-// keeps its own (socket_listen.go's keptListenAction), and a share's activation keeps its action in its invite's
-// record (bridge_share_invite.go), which asks priorGrant as these do.
+// caller that builds a grant-backed action keeps between its calls, so the call made again after a person's decision
+// presents the bytes the decision names. Sidecar.Listen's tls/ and smtp/ listen (socket_listen.go), MCP's
+// socket_listen (socket_listen_grant.go) and §13.10's publish (tls_publish.go) keep theirs in a GrantActionKeeper, and
+// a share's activation keeps its action in its invite's record (bridge_share_invite.go), which asks priorGrant as
+// these do.
 //
 //	kept      the expiry a requests rule gives moves with the clock, so an action built afresh asks another action,
 //	          and a decision on the first is never spent: GrantActionKeeper keeps each action as its request was filed,
