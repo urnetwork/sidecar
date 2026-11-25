@@ -138,6 +138,11 @@ const (
 // validated before it waits, and its step 7 past the window reruns 4 and 5 (FS-91 (b)).
 const BarrierDropFence = "evs.drop.fence"
 
+// QD-1394 (owner decision 780; read_fanout.go): a store read of a push attempt, a read request or a GET .../refs that
+// finds every one of its attempt's EvsSettings.EntryReadConcurrency slots taken, as it starts to wait for one, keyed
+// by the repo.
+const BarrierReadSlotWait = "evs.read.slot_wait"
+
 // EVS1-M6-01: the streams read (§11.9's streams row), keyed by the repo.
 const (
 	// Around its heads' reads, before its first frame.
