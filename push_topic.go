@@ -13,6 +13,9 @@
 //	gkm             §10   gkm's clock in µs, raised past the stored value
 //	gkm:<group_id>  §10   epoch x 2^24 + generation: durable
 //	evs:<repo_id>   §11   the repo's push sequence, a clock created at its master's TIME
+//	compute         DESIGN-COMPUTE §9.9   the network's compute state changed: the writer's clock in ms, raised past
+//	                      the stored value; the device reads the balance route on it (compute-plan-compute-low-delivery,
+//	                      QD-1238)
 //
 // Only topics that gate access are durable, and a durable version never falls (I-16): a reset that shows
 // one lower sends the client to versions, whose page alarms if it shows the fall too (QD-1044). A clock
@@ -37,6 +40,9 @@ const (
 	PushTopicDns  = "dns"
 	// gkm's per-client topic: pending, wrap-pending, welcome and key-packages-low work (§10).
 	PushTopicGkm = "gkm"
+	// The network's compute state changed (DESIGN-COMPUTE §9.9; QD-1238): a hint carries no state, and each member
+	// device reads the balance route on it (compute_events.go).
+	PushTopicCompute = "compute"
 )
 
 // The families' prefixes: gkm:<group_id> and evs:<repo_id>, each id in its UUID form.
@@ -92,7 +98,7 @@ func PushTopicClassOf(topic string) PushTopicClass {
 	switch topic {
 	case PushTopicTeam, PushTopicDns:
 		return PushTopicDurable
-	case PushTopicCore, PushTopicSock, PushTopicMail, PushTopicTls, PushTopicGkm:
+	case PushTopicCore, PushTopicSock, PushTopicMail, PushTopicTls, PushTopicGkm, PushTopicCompute:
 		return PushTopicClock
 	}
 	if idText, found := strings.CutPrefix(topic, PushTopicGkmGroupPrefix); found {
@@ -116,13 +122,14 @@ func pushTopicIdValid(idText string) bool {
 }
 
 // Whether the hint script raises topic's version past the stored value when the writer's is not above
-// it: the clocks of core, sock, mail, tls and gkm, as gkm's was first (§6.8). Several writers' clocks
+// it: the clocks of core, sock, mail, tls, gkm and compute, as gkm's was first (§6.8). Several writers' clocks
 // share each, a hint written at a version not above the stored one would carry the stored one, and a
 // client ignores a hint at or below the version it holds: of two sock hints for one listener in one
-// millisecond, the second never reached it until sock was raised too (QD-1212).
+// millisecond, the second never reached it until sock was raised too (QD-1212). compute's writers are the
+// taskworkers that run compute_suspend, any of which may change a network's state (QD-1238).
 func PushTopicRaisesClock(topic string) bool {
 	switch topic {
-	case PushTopicCore, PushTopicSock, PushTopicMail, PushTopicTls, PushTopicGkm:
+	case PushTopicCore, PushTopicSock, PushTopicMail, PushTopicTls, PushTopicGkm, PushTopicCompute:
 		return true
 	}
 	return false
