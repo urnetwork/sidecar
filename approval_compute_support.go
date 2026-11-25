@@ -71,8 +71,27 @@ const (
 // The product every agent's message goes to (§28.5, Q-SUP-1).
 const SupportProductUrnetwork = "urnetwork"
 
+// FB section 5's other product, recURd's dock thread, which kind 30 may name though this client writes only urnetwork's.
+const supportProductRecurd = "recurd"
+
 // FB section 3's entry id on the wire: six digits from 100001, room left for the counter to grow.
 var supportEntryPattern = regexp.MustCompile(`^[1-9][0-9]{5,11}$`)
+
+// SupportMessageBody's numbered values (§28.12), on every leg for the record's checks (record_body.go).
+const (
+	// direction
+	supportDirectionSent     uint32 = 1
+	supportDirectionReceived uint32 = 2
+	// type runs from 1, submitted, to FB section 4's last event type, deleted; 0 is none
+	supportEventTypeLast uint32 = 9
+	// status runs from 1, received, to FB section 6's last status, closed; 0 is none
+	supportStatusLast uint32 = 5
+	// tier: 1 human, 2 released, 3 agent; 0 for the auto tier and none
+	supportTierNumberHuman    uint32 = 1
+	supportTierNumberReleased uint32 = 2
+	supportTierNumberAgent    uint32 = 3
+	supportTierNumberLast            = supportTierNumberAgent
+)
 
 // support_send's row, version 5's alone: the body's hash, field 70 and field 80, and the run's taint reasons where it
 // is tainted. No server path takes it: the message goes to FB's service, which reads no CanonicalAction.

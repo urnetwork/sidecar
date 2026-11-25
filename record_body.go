@@ -23,6 +23,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -111,6 +112,29 @@ type RecordBodySettings struct {
 	BlobByteCount int
 	// The paths a tool call names: 256.
 	ToolPathCount int
+	// DESIGN-COMPUTE §28.12's support_message: a message's or a reply's text, in bytes: 64 KiB, the most of one event
+	// the support client reads (SupportSettings.EventMaxByteCount), past a message's 16 KiB and room for a reply support
+	// wrote.
+	SupportTextByteCount int
+	// A support_message's agent label, the agent's registered name and where it ran, in bytes: 192, a 64-byte name and
+	// its place.
+	SupportAgentLabelByteCount int
+	// A support_message's files: 3 (§28.7), CanonicalActionSettings' SupportFileMaxCount, which field 80 holds to.
+	SupportFileCount int
+	// One file's base name, in bytes: 255, a file system's.
+	SupportFileNameByteCount int
+	// One file's bytes: 10 MiB (§28.7, FB section 9).
+	SupportFileByteCount uint64
+	// A bundle's compressed bytes: 4 MiB (§28.7).
+	SupportBundleByteCount uint64
+	// A bundle manifest's codes by component: 256, past every code the support log's registry declares.
+	SupportBundleCodeCount int
+	// A component's or a code's name in a bundle manifest, in bytes: 64.
+	SupportCodeNameByteCount int
+	// A status event's fixed_in, a version or next, in bytes: 32 (SupportSettings.VersionMaxByteCount's).
+	SupportFixedInByteCount int
+	// A message's body as sent or received, in bytes: 64 KiB, the bound a body's text and fields sit within.
+	SupportBodyByteCount uint64
 }
 
 // RECORD.md's values, the only source of their defaults. A fresh value each call.
@@ -151,6 +175,17 @@ func DefaultRecordBodySettings() *RecordBodySettings {
 		CaptureByteCount:          1024 * 1024,
 		BlobByteCount:             8 * 1024 * 1024,
 		ToolPathCount:             256,
+
+		SupportTextByteCount:       64 * 1024,
+		SupportAgentLabelByteCount: 192,
+		SupportFileCount:           DefaultCanonicalActionSettings().SupportFileMaxCount,
+		SupportFileNameByteCount:   255,
+		SupportFileByteCount:       10 * 1024 * 1024,
+		SupportBundleByteCount:     4 * 1024 * 1024,
+		SupportBundleCodeCount:     256,
+		SupportCodeNameByteCount:   64,
+		SupportFixedInByteCount:    32,
+		SupportBodyByteCount:       64 * 1024,
 	}
 }
 
@@ -384,8 +419,61 @@ func RecordBodyValidate(kind RecordKind, body proto.Message) error {
 		return recordLogCheckpointValidate(typed)
 	case *protocol.DisclosureBody:
 		return recordDisclosureValidate(typed)
+	case *protocol.SupportMessageBody:
+		return recordSupportMessageValidate(typed)
 	}
 	return nil
+}
+
+// support_message (DESIGN-COMPUTE §28.12): a direction, one of FB's products, an entry in FB's form or none and a seq
+// only with an entry, an event type, a tier and a status among those numbered, a 16-byte client_ref or none, the text,
+// the label, the bundle's manifest and the files within their caps, the hashes and ids at their lengths, a sent
+// message's support:urnetwork version and no approval on an event received.
+func recordSupportMessageValidate(body *protocol.SupportMessageBody) error {
+	settings := DefaultRecordBodySettings()
+	direction := body.GetDirection()
+	checks := []error{
+		recordBodyRule(direction == supportDirectionSent || direction == supportDirectionReceived, "support direction %d", direction),
+		recordBodyRule(body.GetProduct() == SupportProductUrnetwork || body.GetProduct() == supportProductRecurd, "a support product of %d bytes", len(body.GetProduct())),
+		recordBodyRule(body.GetEntry() == "" || supportEntryPattern.MatchString(body.GetEntry()), "a support entry outside FB's form"),
+		recordBodyRule(body.GetEntry() != "" || body.GetSeq() == 0, "a support seq with no entry"),
+		recordBodyRule(body.GetType() <= supportEventTypeLast, "support event type %d", body.GetType()),
+		recordBodyRule(body.GetTier() <= supportTierNumberLast, "support tier %d", body.GetTier()),
+		recordBodyRule(recordBodyLength(body.GetClientRef(), supportClientRefByteCount, true), "a client_ref of %d bytes", len(body.GetClientRef())),
+		recordBodyRule(len(body.GetText()) <= settings.SupportTextByteCount && utf8.ValidString(body.GetText()), "support text of %d bytes", len(body.GetText())),
+		recordBodyRule(len(body.GetAgentLabel()) <= settings.SupportAgentLabelByteCount, "a support agent label of %d bytes", len(body.GetAgentLabel())),
+		recordBodyRule(len(body.GetFiles()) <= settings.SupportFileCount, "%d support files", len(body.GetFiles())),
+		recordBodyRule(recordBodyLength(body.GetBodySha256(), recordHashByteCount, true), "a support body_sha256 of %d bytes", len(body.GetBodySha256())),
+		recordBodyRule(body.GetBodyBytes() <= settings.SupportBodyByteCount, "a support body of %d bytes", body.GetBodyBytes()),
+		recordBodyRule(body.GetStatus() <= supportStatusLast, "support status %d", body.GetStatus()),
+		recordBodyRule(len(body.GetFixedIn()) <= settings.SupportFixedInByteCount, "a fixed_in of %d bytes", len(body.GetFixedIn())),
+		recordBodyRule(recordBodyLength(body.GetApprovalId(), recordIdByteCount, true), "a support approval_id of %d bytes", len(body.GetApprovalId())),
+		recordBodyRule(direction != supportDirectionSent || 0 < body.GetDisclosureVersion(), "a sent support message with no disclosure version"),
+		recordBodyRule(direction != supportDirectionReceived || len(body.GetApprovalId()) == 0, "a received support event naming an approval"),
+	}
+	if bundle := body.GetBundle(); bundle != nil {
+		checks = append(checks,
+			recordBodyRule(bundle.GetFirst() <= bundle.GetLast(), "a support bundle whose window ends before it starts"),
+			recordBodyRule(bundle.GetBytes() <= settings.SupportBundleByteCount, "a support bundle of %d bytes", bundle.GetBytes()),
+			recordBodyRule(recordBodyLength(bundle.GetSha256(), recordHashByteCount, true), "a support bundle sha256 of %d bytes", len(bundle.GetSha256())),
+			recordBodyRule(len(bundle.GetCodes()) <= settings.SupportBundleCodeCount, "%d support bundle codes", len(bundle.GetCodes())),
+		)
+		for _, code := range bundle.GetCodes() {
+			component, name := code.GetComponent(), code.GetCode()
+			checks = append(checks, recordBodyRule(
+				0 < len(component) && len(component) <= settings.SupportCodeNameByteCount && 0 < len(name) && len(name) <= settings.SupportCodeNameByteCount,
+				"a support bundle code's names of %d and %d bytes", len(component), len(name)))
+		}
+	}
+	for _, file := range body.GetFiles() {
+		checks = append(checks,
+			recordBodyRule(0 < len(file.GetName()) && len(file.GetName()) <= settings.SupportFileNameByteCount, "a support file name of %d bytes", len(file.GetName())),
+			recordBodyRule(supportFileTypeText <= file.GetType() && file.GetType() <= supportFileTypeJpeg, "support file type %d", file.GetType()),
+			recordBodyRule(file.GetSize() <= settings.SupportFileByteCount, "a support file of %d bytes", file.GetSize()),
+			recordBodyRule(recordBodyLength(file.GetSha256(), recordHashByteCount, false), "a support file sha256 of %d bytes", len(file.GetSha256())),
+		)
+	}
+	return errors.Join(checks...)
 }
 
 // ModelField.evidence (RECORD.md section 12): how a manifest's field is known.
