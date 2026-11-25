@@ -10,13 +10,13 @@
 //	              card shows each whole
 //	the person's  read where they name them, an absolute path each: their own act at a terminal or in an app
 //
-// SupportCallerRun names the run a caller's process ancestry binds, whose worktree and taint reasons ur support send
-// from a harness's process carries. Package-level functions are safe for concurrent use.
+// SupportCallerRun (support_files_daemon.go, on the legs that read process ancestry) names the run a caller's process
+// ancestry binds, whose worktree and taint reasons ur support send from a harness's process carries. Package-level
+// functions are safe for concurrent use.
 
 package sidecar
 
 import (
-	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -127,38 +127,6 @@ func supportReadRegular(file *os.File, maxByteCount int64) ([]byte, error) {
 		return nil, errSupportFileUnread
 	}
 	return data, nil
-}
-
-// The run the process pid's ancestry binds: the run file whose harness process is pid's nearest ancestor, nil where
-// none is. Its worktree is where ur support send from a harness's process reads its files, and its taint reasons go on
-// the message's action (§28.8).
-func (self *Sidecar) SupportCallerRun(ctx context.Context, pid int) (*RunFile, error) {
-	runs, err := self.Runs()
-	if err != nil {
-		return nil, err
-	}
-	return supportCallerRunOn(ctx, runs, SystemProcessTable(), self.settings.Ingest, pid)
-}
-
-// SupportCallerRun on a run store and a process table.
-func supportCallerRunOn(ctx context.Context, runs *RunStore, table ProcessTable, ingest *SidecarIngestSettings, pid int) (*RunFile, error) {
-	ancestors, err := ProcessAncestors(table, pid, ingest.AncestorDepthCount)
-	if err != nil {
-		return nil, err
-	}
-	files, err := runs.List(ctx)
-	if err != nil {
-		return nil, err
-	}
-	for _, ancestor := range ancestors {
-		for _, file := range files {
-			process := ProcessIdentity{Pid: file.ProcessId, StartMillis: file.ProcessStartMillis}
-			if process.Known() && process == ancestor.Identity {
-				return file, nil
-			}
-		}
-	}
-	return nil, nil
 }
 
 // A run file as support's gate reads it for an external harness's message: counted tainted whatever its file says

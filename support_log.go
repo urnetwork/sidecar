@@ -19,6 +19,11 @@
 // it encodes the event and appends it to a bounded buffer that one writer goroutine flushes every FlushInterval, and
 // past the buffer's bound it drops and counts. A bundle (support_log_bundle.go) flushes first.
 //
+// A deferred ring (SupportLogArgs.Deferred) creates nothing on disk until Start: it reads a key and segments that are
+// there, holds what Event takes within its bound, and writes none of it until then, so an app's sidecar writes nothing
+// into its state directory while its key store is locked or failed, as the key store's rule asks; one closed before
+// Start writes nothing at all.
+//
 // A SupportLog is safe for concurrent use, and a nil *SupportLog takes every Event and writes nothing.
 
 package sidecar
@@ -278,6 +283,9 @@ type SupportLogArgs struct {
 	Clock Clock
 	// Where the ring's own failures are logged, by code and never by content. Nil logs nothing.
 	Log Logger
+	// Create nothing on disk until Start, holding events meanwhile: an app's sidecar, whose state directory stays
+	// untouched while its key store is locked.
+	Deferred bool
 }
 
 // A process's support log ring. Open with OpenSupportLog; Close flushes and stops its writer.
@@ -301,6 +309,10 @@ type SupportLog struct {
 	segments    []*supportLogSegment
 	current     *os.File
 	unreadables map[string]bool
+	// guarded by fileLock: whether the ring writes to disk, false for a deferred one until Start; and whether its key
+	// was drawn and is not on disk yet
+	started    bool
+	keyUnsaved bool
 
 	stateLock sync.Mutex
 	// guarded by stateLock
@@ -328,7 +340,8 @@ func (self *SupportLog) path(name string) string {
 }
 
 // Opens, or creates, the ring in args.Directory, prunes what has passed its bounds, and starts the writer. A key file
-// that cannot be read is replaced, which leaves earlier tokens unrelated to later ones and nothing else.
+// that cannot be read is replaced, which leaves earlier tokens unrelated to later ones and nothing else. A deferred
+// ring reads what is there and writes nothing until Start.
 func OpenSupportLog(args *SupportLogArgs) (*SupportLog, error) {
 	if args == nil || args.Settings == nil {
 		return nil, errors.New("a support log needs its settings")
@@ -336,8 +349,10 @@ func OpenSupportLog(args *SupportLogArgs) (*SupportLog, error) {
 	if !filepath.IsAbs(args.Directory) {
 		return nil, errors.New("a support log's directory must be absolute")
 	}
-	if err := os.MkdirAll(args.Directory, 0o700); err != nil {
-		return nil, fmt.Errorf("support log: %w", err)
+	if !args.Deferred {
+		if err := os.MkdirAll(args.Directory, 0o700); err != nil {
+			return nil, fmt.Errorf("support log: %w", err)
+		}
 	}
 	log := args.Log
 	if log == nil {
@@ -356,53 +371,118 @@ func OpenSupportLog(args *SupportLogArgs) (*SupportLog, error) {
 		runDone:     make(chan struct{}),
 		unreadables: map[string]bool{},
 	}
-	key, err := self.loadKey()
+	key, saved, err := self.loadKey()
 	if err != nil {
 		cancel()
 		return nil, err
 	}
 	self.key = key
-	if err := self.scanSegments(); err != nil {
+	segments, err := self.readSegments()
+	if err != nil && !(args.Deferred && errors.Is(err, os.ErrNotExist)) {
 		cancel()
 		return nil, err
 	}
-	segmentCount, byteCount := func() (int, int64) {
-		self.fileLock.Lock()
-		defer self.fileLock.Unlock()
-		self.pruneWithFileLock(self.clock.Now().Unix())
-		return len(self.segments), self.byteCountWithFileLock()
-	}()
+	self.segments = segments
+	self.keyUnsaved = !saved
 	go self.run()
-	self.Event(SupportLogCodeSupportLogOpened, SupportLogFieldSegments(int64(segmentCount)), SupportLogFieldRingBytes(byteCount))
+	if args.Deferred {
+		return self, nil
+	}
+	if err := self.Start(); err != nil {
+		self.Close()
+		return nil, err
+	}
 	return self, nil
 }
 
-// The ring's key, read or drawn and written 0600.
-func (self *SupportLog) loadKey() ([]byte, error) {
-	keyPath := self.path(supportLogKeyFileName)
-	key, err := os.ReadFile(keyPath)
+// Starts writing to disk: creates the ring's directory, writes its key where it was drawn, prunes, records that the
+// ring opened, and from then on flushes the held events, which keep their times. What OpenSupportLog does at once
+// for a ring that is not deferred. A no-op on a nil log and a started one; an error on a closed one.
+func (self *SupportLog) Start() error {
+	if self == nil {
+		return nil
+	}
+	closed := func() bool {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		return self.closed
+	}()
+	if closed {
+		return errors.New("support log: closed")
+	}
+	segmentCount, byteCount, err := func() (int, int64, error) {
+		self.fileLock.Lock()
+		defer self.fileLock.Unlock()
+		if self.started {
+			return 0, 0, errSupportLogStarted
+		}
+		if err := os.MkdirAll(self.directory, 0o700); err != nil {
+			return 0, 0, fmt.Errorf("support log: %w", err)
+		}
+		if self.keyUnsaved {
+			if err := self.saveKey(self.key); err != nil {
+				return 0, 0, err
+			}
+			self.keyUnsaved = false
+		}
+		segments, err := self.readSegments()
+		if err != nil {
+			return 0, 0, err
+		}
+		self.segments = segments
+		self.started = true
+		self.pruneWithFileLock(self.clock.Now().Unix())
+		return len(self.segments), self.byteCountWithFileLock(), nil
+	}()
+	if errors.Is(err, errSupportLogStarted) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	self.Event(SupportLogCodeSupportLogOpened, SupportLogFieldSegments(int64(segmentCount)), SupportLogFieldRingBytes(byteCount))
+	select {
+	case self.flushSignal <- struct{}{}:
+	default:
+	}
+	return nil
+}
+
+// Start's answer to itself for a ring started already.
+var errSupportLogStarted = errors.New("support log: started")
+
+// The ring's key: the one on disk, saved; else one drawn, which a ring that is not deferred saves at once and a
+// deferred one at Start.
+func (self *SupportLog) loadKey() ([]byte, bool, error) {
+	key, err := os.ReadFile(self.path(supportLogKeyFileName))
 	if err == nil && len(key) == self.settings.RingKeyByteCount {
-		return key, nil
+		return key, true, nil
 	}
 	key = make([]byte, self.settings.RingKeyByteCount)
 	if _, err := rand.Read(key); err != nil {
-		return nil, fmt.Errorf("support log: %w", err)
+		return nil, false, fmt.Errorf("support log: %w", err)
 	}
-	temporaryPath := keyPath + ".tmp"
-	if err := os.WriteFile(temporaryPath, key, 0o600); err != nil {
-		return nil, fmt.Errorf("support log: %w", err)
-	}
-	if err := os.Rename(temporaryPath, keyPath); err != nil {
-		return nil, fmt.Errorf("support log: %w", err)
-	}
-	return key, nil
+	return key, false, nil
 }
 
-// Reads the directory's segments into the ring's list, oldest first. A file of another name is left alone.
-func (self *SupportLog) scanSegments() error {
+// Writes key as the ring's, 0600, whole or not at all.
+func (self *SupportLog) saveKey(key []byte) error {
+	keyPath := self.path(supportLogKeyFileName)
+	temporaryPath := keyPath + ".tmp"
+	if err := os.WriteFile(temporaryPath, key, 0o600); err != nil {
+		return fmt.Errorf("support log: %w", err)
+	}
+	if err := os.Rename(temporaryPath, keyPath); err != nil {
+		return fmt.Errorf("support log: %w", err)
+	}
+	return nil
+}
+
+// The directory's segments, oldest first. A file of another name is left alone.
+func (self *SupportLog) readSegments() ([]*supportLogSegment, error) {
 	entries, err := os.ReadDir(self.directory)
 	if err != nil {
-		return fmt.Errorf("support log: %w", err)
+		return nil, fmt.Errorf("support log: %w", err)
 	}
 	segments := []*supportLogSegment{}
 	for _, entry := range entries {
@@ -424,10 +504,7 @@ func (self *SupportLog) scanSegments() error {
 		}
 		return a.sequence - b.sequence
 	})
-	self.fileLock.Lock()
-	defer self.fileLock.Unlock()
-	self.segments = segments
-	return nil
+	return segments, nil
 }
 
 // Writes one event, if code is the registry's and declares each field. A field the code does not declare, a second
@@ -563,8 +640,12 @@ func (self *SupportLog) flush() {
 	self.flushWithFileLock()
 }
 
-// flush's work, its caller holding fileLock: a bundle flushes so it reads every event written before it.
+// flush's work, its caller holding fileLock: a bundle flushes so it reads every event written before it. A deferred
+// ring not yet started keeps what it holds.
 func (self *SupportLog) flushWithFileLock() {
+	if !self.started {
+		return
+	}
 	now := self.clock.Now().Unix()
 	var pending []byte
 	var droppedCount, refusedCount, writeFailedCount int64
@@ -752,7 +833,7 @@ func (self *SupportLog) read(from int64, to int64) []*supportLogRecord {
 				records = append(records, record)
 			}
 		}
-		if reason != 0 && !self.unreadables[segment.name] {
+		if reason != 0 && self.started && !self.unreadables[segment.name] {
 			self.unreadables[segment.name] = true
 			unreadable = append(unreadable, reason)
 		}

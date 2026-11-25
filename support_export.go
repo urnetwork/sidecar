@@ -49,6 +49,7 @@ type supportBoundedWriter struct {
 	remaining int64
 }
 
+// Writes data whole, or nothing of it past the bound.
 func (self *supportBoundedWriter) Write(data []byte) (int, error) {
 	if self.remaining < int64(len(data)) {
 		return 0, ErrSupportExportTooLarge
