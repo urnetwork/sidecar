@@ -27,8 +27,10 @@
 // not_done refuses the listen, and an uncertain one answers unavailable, which the same listen asked again completes
 // under its key (AU4). The expiry asked moves with the clock, a rule's default as much as Expires from now, so each
 // listen's action is kept as its request was filed, by name, weight and the lifetime asked, until that expiry, and the
-// listen asked again presents the bytes a decision names
-// (keptListenAction); the copy is in memory alone, so a request filed before a restart is filed again after it.
+// listen asked again presents the bytes a decision names (GrantActionKeeper, acl_grant_keep.go). A kept action whose
+// decision activated a grant that has since been revoked or ended is asked afresh, filing a new request: presented, its
+// spent decision would answer done for a grant that no longer stands (AU4), and the sockets service would refuse the
+// registration. The copy is in memory alone, so a request filed before a restart is filed again after it.
 //
 // smtp/ is a receiver's (§15.5; SOCK-M7-01): smtp/25/mx, or a Team scope's smtp/25/mx.<scope>, protocol smtp-starttls,
 // 16 streams unless the settings say otherwise. A receiver listens not serving, so its lease takes no ticket until §15
@@ -62,8 +64,6 @@ import (
 	"sync"
 	"syscall"
 	"time"
-
-	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/connect"
 	connectprotocol "github.com/urnetwork/connect/protocol"
@@ -726,9 +726,9 @@ func (self *SocketComponent) PolicyChanged() {
 	}
 }
 
-// The key a listen's action is kept under (keptListenAction): its name, the weight its request binds and the lifetime
-// it asks, 0 for the rule's default, so a listen asking another lifetime files its own request rather than presenting
-// one filed for another.
+// The key a listen's action is kept under (SocketComponent.listenActions): its name, the weight its request binds and
+// the lifetime it asks, 0 for the rule's default, so a listen asking another lifetime files its own request rather than
+// presenting one filed for another.
 type socketListenActionKey struct {
 	name    string
 	weight  int32
@@ -776,9 +776,10 @@ func (self *SocketComponent) listenGrantFiler() *AclGrantFiler {
 // (SocketListenGrantDst), and beside it the name and the weight it registers with, the format's default for none, as
 // the request's socket_name and weight (QD-740), and the expiry settings' Expires asks, from now, or none for the
 // rule's expiresDefault (owner decision 687). This listener accepts in process and binds no local port, so the request
-// carries none. ErrSocketDenied where no requests rule takes the listen and no standing grant covers it, or a requests
-// rule takes it but gives no grant as long as Expires asks, which the error says (socketListenDeniedError), and
-// ErrSocketUnavailable with no verified ACL state to judge it on.
+// carries none. The action a requests rule takes is kept as its request was filed until its expiry, and given up once
+// the grant its decision activated has ended (the file header). ErrSocketDenied where no requests rule takes the
+// listen and no standing grant covers it, or a requests rule takes it but gives no grant as long as Expires asks,
+// which the error says (socketListenDeniedError), and ErrSocketUnavailable with no verified ACL state to judge it on.
 func (self *SocketComponent) socketListenAction(ctx context.Context, generation *socketGeneration, name string, settings *SocketListenSettings) (*SidecarAction, error) {
 	grants := self.listenGrantFiler()
 	if grants == nil || grants.engine == nil || grants.engine.State() == nil || generation == nil || generation.identity == nil {
@@ -798,6 +799,8 @@ func (self *SocketComponent) socketListenAction(ctx context.Context, generation 
 	}
 	subject := generation.identity.SidecarId
 	now := self.clock.Now()
+	// what the request binds beside the action, by which the gate finds a decision on it and priorGrant its grant
+	detail := &SidecarActionDetail{SocketName: name, Weight: int32(weight)}
 	base := &protocol.CanonicalAction{Kind: uint32(SidecarActionListen)}
 	ask := &AclGrantRequest{Subject: subject, GrantDst: []string{grantDst}, GrantAllow: []string{socketListenGrantAllow}}
 	if 0 < expires {
@@ -808,7 +811,12 @@ func (self *SocketComponent) socketListenAction(ctx context.Context, generation 
 	var effect SidecarEffect
 	switch {
 	case err == nil:
-		stored = self.keptListenAction(socketListenActionKey{name: name, weight: int32(weight), expires: expires}, stored, now)
+		// the action its request was filed with, given up once the grant its decision activated no longer stands, since
+		// that spent decision would answer done to it (the file header); this listen binds no run and no agent
+		stored = self.listenActions.Keep(socketListenActionKey{name: name, weight: int32(weight), expires: expires}, stored, now,
+			func(kept *StoredCanonicalAction) bool {
+				return grants.grantEnded(kept, detail, nil, nil, now)
+			})
 		effect = grants.Effect(stored)
 	case errors.Is(err, ErrAclRequestNoMatch):
 		// no requests rule takes it, or none for as long as it asks, so no decision could activate its grant: a standing
@@ -830,7 +838,7 @@ func (self *SocketComponent) socketListenAction(ctx context.Context, generation 
 	if err != nil {
 		return nil, err
 	}
-	action.Detail = &SidecarActionDetail{SocketName: name, Weight: int32(weight)}
+	action.Detail = detail
 	action.Effect = effect
 	return action, nil
 }
@@ -865,32 +873,6 @@ func socketListenDeniedError(ctx context.Context, grants *AclGrantFiler, base *p
 		return denied
 	}
 	return fmt.Errorf("%w: the expiry asked is past the requests rule's maxExpiry, %v", denied, time.Duration(maxMs)*time.Millisecond)
-}
-
-// The action a listen's request was filed with, by name, weight and the lifetime asked, while its expiry is ahead,
-// else fresh, which is kept in its place: the expiry asked, the rule's default or Expires from now, moves with the
-// clock, so fresh, built now, asks another action, and a decision on the first would never be spent (the file header).
-// fresh replaces a kept action that has expired, that asks a longer grant than the rule now gives, or that differs from
-// fresh in anything but its expiry, a changed rule's id say. Expired actions are dropped as each is asked for, so the
-// map holds one per name, weight and lifetime listened on within a rule's lifetime.
-func (self *SocketComponent) keptListenAction(key socketListenActionKey, fresh *StoredCanonicalAction, now time.Time) *StoredCanonicalAction {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	nowMs := now.UnixMilli()
-	for keptKey, kept := range self.listenActions {
-		if kept.Action.GetExpiresMillis() <= nowMs {
-			delete(self.listenActions, keptKey)
-		}
-	}
-	if kept := self.listenActions[key]; kept != nil {
-		freshAtKeptExpiry := proto.Clone(fresh.Action).(*protocol.CanonicalAction)
-		freshAtKeptExpiry.ExpiresMillis = kept.Action.GetExpiresMillis()
-		if kept.Action.GetExpiresMillis() <= fresh.Action.GetExpiresMillis() && proto.Equal(kept.Action, freshAtKeptExpiry) {
-			return kept
-		}
-	}
-	self.listenActions[key] = fresh
-	return fresh
 }
 
 // The listen kind's Lookup (§16.6's grant row), which the host's gate reconciles a reserved use by: the grant

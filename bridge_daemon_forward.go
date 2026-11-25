@@ -106,6 +106,9 @@ func (self *DaemonBridges) Forward(ctx context.Context, networkId Id, running *S
 	if params.Port == 0 || 65535 < params.Port || 65535 < params.LocalPort || params.Target == "" {
 		return nil, fmt.Errorf("%w: a forward names a target, its port and a local port", ErrDaemonBridgeParams)
 	}
+	if params.ExpiresMs < 0 || (params.ExpiresMs != 0 && params.LifetimeSeconds != 0) {
+		return nil, fmt.Errorf("%w: a forward's grant asks a lifetime or an end, not both", ErrDaemonBridgeParams)
+	}
 	for _, address := range params.Listen {
 		if _, err := netip.ParseAddr(address); err != nil {
 			return nil, fmt.Errorf("%w: a listen address is an ip", ErrDaemonBridgeParams)
@@ -129,6 +132,10 @@ func (self *DaemonBridges) Forward(ctx context.Context, networkId Id, running *S
 		Port:      params.Port,
 		LocalPort: params.LocalPort,
 		Lifetime:  time.Duration(params.LifetimeSeconds) * time.Second,
+	}
+	if params.ExpiresMs != 0 {
+		// the end as the call named it, which keys the forward asked again (BridgeFiler.forwardApprovalAction)
+		request.ExpiresAt = time.UnixMilli(params.ExpiresMs)
 	}
 	filing, err := backend.Forward(ctx, origin, request)
 	reply, err := daemonBridgeFilingReply(filing, err)

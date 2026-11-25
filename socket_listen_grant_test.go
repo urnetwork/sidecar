@@ -2,7 +2,8 @@
 
 // A listen's grant-backed action beside the socket component, as MCP's socket_listen asks it on an application name's
 // token path (socket_listen_grant.go; §16.6's grant row, QD-772), at §16.6's real gate on the bridge file world's
-// sidecar, config log and ACL engine, under the world's run and agent:
+// sidecar, config log and ACL engine, under the world's run and agent, its use waiting on a config that installs the
+// log's state in the world's engine as the follower does (testGrantLandConfig):
 //
 //   - a standing grant, a document's rule on the token path, passes the listen with nothing filed and nothing posted,
 //     its action naming no rule and no expiry;
@@ -24,13 +25,73 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
+
+// A world's verified config as a grant's use waits on it (AclGrantConfig): at a position the log holds, the log's
+// state is installed in the world's engine, as the follower installs it before the position shows (acl_follow.go).
+// Held, it first sends the position it waits for on waiting and takes its answer from release.
+type testGrantLandConfig struct {
+	world   *testBridgeFileWorld
+	waiting chan uint64
+	release chan error
+
+	stateLock sync.Mutex
+	held      bool
+}
+
+func newTestGrantLandConfig(world *testBridgeFileWorld) *testGrantLandConfig {
+	return &testGrantLandConfig{world: world, waiting: make(chan uint64, 1), release: make(chan error, 1)}
+}
+
+// Whether WaitFor waits for the test before it answers.
+func (self *testGrantLandConfig) hold(held bool) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.held = held
+}
+
+func (self *testGrantLandConfig) WaitFor(ctx context.Context, n uint64) (*ConfigState, error) {
+	held := func() bool {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		return self.held
+	}()
+	if held {
+		select {
+		case self.waiting <- n:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		select {
+		case err := <-self.release:
+			if err != nil {
+				return nil, err
+			}
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	state := self.world.net.log.State()
+	if state.Pin().GetVersion() < n {
+		return nil, fmt.Errorf("the log holds %d, not %d", state.Pin().GetVersion(), n)
+	}
+	acl, err := state.Acl()
+	if err != nil {
+		return nil, err
+	}
+	if err := self.world.engine.Install(acl, nil); err != nil {
+		return nil, err
+	}
+	return state, nil
+}
 
 // The world's network's K_sock ring from a synthetic key, as a daemon's MCP tool blinds an application name with it.
 func testListenGrantRing(t *testing.T, networkId Id) *SocketKeyRing {
@@ -50,6 +111,7 @@ type testListenGrantWorld struct {
 	ring      *SocketKeyRing
 	grants    *AclGrantFiler
 	keeper    *GrantActionKeeper[string]
+	config    *testGrantLandConfig
 	name      string
 	tokenPath []byte
 	grantDst  string
@@ -65,6 +127,7 @@ func newTestListenGrantWorld(t *testing.T) *testListenGrantWorld {
 		ring:                testListenGrantRing(t, fileWorld.net.networkId),
 		grants:              NewAclGrantFiler(fileWorld.sidecar, fileWorld.engine),
 		keeper:              NewGrantActionKeeper[string](),
+		config:              newTestGrantLandConfig(fileWorld),
 		name:                "db/primary",
 	}
 	world.detail = &SidecarActionDetail{SocketName: world.name, LocalPort: 15432}
@@ -109,19 +172,30 @@ func (self *testListenGrantWorld) rule(name string, requests bool) []byte {
 // The listen's action as MCP's tool builds it now, and the answer of §5.4's gate on it.
 func (self *testListenGrantWorld) listen() (*SidecarAction, *StoredCanonicalAction, error) {
 	self.t.Helper()
+	return self.listenIn(self.t.Context())
+}
+
+// listen under ctx, which a test running it on its own goroutine gives. A world whose config a test took away waits on
+// none.
+func (self *testListenGrantWorld) listenIn(ctx context.Context) (*SidecarAction, *StoredCanonicalAction, error) {
 	runId, agentId := self.runId, self.agentId
-	stored, effect, err := SocketListenGrantAction(self.t.Context(), &SocketListenGrantArgs{
+	var config AclGrantConfig
+	if self.config != nil {
+		config = self.config
+	}
+	stored, effect, err := SocketListenGrantAction(ctx, &SocketListenGrantArgs{
 		Grants: self.grants, Subject: self.hostId, GrantDst: self.grantDst, Detail: self.detail, RunId: &runId, AgentId: &agentId,
+		Config: config,
 	}, self.keeper, self.name, self.clock.Now())
 	if err != nil {
 		return nil, nil, err
 	}
 	action, err := NewSidecarAction(stored, SidecarRiskNormal, SidecarRiskNormal, &runId, &agentId)
 	if err != nil {
-		self.t.Fatal(err)
+		return nil, nil, fmt.Errorf("the listen's action: %w", err)
 	}
 	action.Detail, action.Effect = self.detail, effect
-	return action, stored, self.sidecar.Authorize(self.t.Context(), action, nil)
+	return action, stored, self.sidecar.Authorize(ctx, action, nil)
 }
 
 // Under a standing grant on the token path the listen passes the gate with nothing filed and nothing posted: its

@@ -8,7 +8,10 @@
 //	ExposeMap     a BridgeMap of a port of this host's overlay address, under the gate; its effect files the host's
 //	              own BridgeAddress first where the ledger holds none for it (§17.4), then the map
 //	Forward       a requested dial grant to a target's port, its GrantActivate through ACL-M4-02's grant component,
-//	              the requests rule's lifetime unless asked otherwise, 1 h by default (owner decision 74)
+//	              the requests rule's lifetime unless asked otherwise, 1 h by default (owner decision 74), as a lifetime
+//	              or as an end; the action its request was filed with is presented again to the same forward asked
+//	              again, keyed by the end as asked, so a tool's end named again spends the decision
+//	              (forwardApprovalAction)
 //	Close         bridge_close: a GrantRevoke of a dial or route grant whose subject this sidecar is, or a
 //	              BridgeWithdraw of a rule the ledger holds as its own; it narrows reach, so it takes no approval
 //	ClaimAddress  this host's BridgeAddress at an address a person chose (ur tun ip <ip>) or the allocator's, for a
@@ -1693,8 +1696,26 @@ type BridgeForwardRequest struct {
 	Port     uint32
 	// The local port the forward listens on, which the request binds (QD-740); 0 for none.
 	LocalPort uint32
-	// How long the grant lives; 0 takes the requests rule's lifetime, 1 h by default (owner decision 74).
+	// How long the grant lives; 0 takes the requests rule's lifetime, 1 h by default (owner decision 74), or ExpiresAt.
 	Lifetime time.Duration
+	// When the grant ends, as a tool's call names it (RFC 3339), so the call made again asks the same end where a
+	// lifetime from now would ask a later one each call, and finds the action its request was filed with
+	// (forwardApprovalAction). In ms, any part of a ms rounded up so the grant never ends before the time asked. Zero
+	// takes Lifetime; both set is refused, and so is an end not ahead.
+	ExpiresAt time.Time
+}
+
+// The ms a forward's grant asks to end at, ExpiresAt's with any part of a ms rounded up, so the grant never ends
+// before the time asked; 0 for none.
+func bridgeForwardEndMs(expiresAt time.Time) int64 {
+	if expiresAt.IsZero() {
+		return 0
+	}
+	endMs := expiresAt.UnixMilli()
+	if time.UnixMilli(endMs).Before(expiresAt) {
+		endMs += 1
+	}
+	return endMs
 }
 
 // Files a forward's GrantActivate under the gate (the file's Forward row): its grant_id, or none under a standing grant
@@ -1720,8 +1741,13 @@ func (self *BridgeFiler) Forward(ctx context.Context, origin *BridgeFileOrigin, 
 		return nil, fmt.Errorf("%w: a forward's protocol or port", ErrBridgeFileRefused)
 	}
 	now := self.clock.Now()
-	expiresMs := int64(0)
-	if 0 < request.Lifetime {
+	expiresMs := bridgeForwardEndMs(request.ExpiresAt)
+	switch {
+	case expiresMs != 0 && request.Lifetime != 0:
+		return nil, fmt.Errorf("%w: a forward's grant asks a lifetime or an end, not both", ErrBridgeFileRefused)
+	case expiresMs != 0 && expiresMs <= now.UnixMilli():
+		return nil, fmt.Errorf("%w: a forward's end that is not ahead", ErrBridgeFileRefused)
+	case 0 < request.Lifetime:
 		expiresMs = now.Add(request.Lifetime).UnixMilli()
 	}
 	destination := "sidecar:" + hex.EncodeToString(request.Target.Bytes())
@@ -1809,7 +1835,12 @@ func (self *BridgeFiler) confirmForwardGrant(ctx context.Context, pin *bridge.Au
 
 // Reuses a matching forward request's sealed action until its deadline passes or a matching grant is withdrawn.
 func (self *BridgeFiler) forwardApprovalAction(gate *ApprovalGate, origin *BridgeFileOrigin, request *BridgeForwardRequest, fresh *StoredCanonicalAction, detail *protocol.CanonicalActionDetail, now time.Time) (*StoredCanonicalAction, error) {
-	// Separate origins, users, run bindings, local listeners and requested durations, even when a remote port matches.
+	// Separate origins, users, run bindings, local listeners and requested lifetimes or ends, even when a remote port
+	// matches. An end is keyed as the instant it names, in ms, so the same end named again finds this record whatever
+	// zone it was written in, as a lifetime asked again does; a lifetime the caller worked out from an end would differ
+	// at each call.
+	keyed := *request
+	keyed.ExpiresAt = time.Time{}
 	intent, err := json.Marshal(struct {
 		Subject        []byte
 		Act            SidecarActOrigin
@@ -1817,6 +1848,7 @@ func (self *BridgeFiler) forwardApprovalAction(gate *ApprovalGate, origin *Bridg
 		Risk           SidecarRisk
 		Summary        string
 		Request        BridgeForwardRequest
+		EndMs          int64 `json:",omitempty"`
 	}{
 		Subject: fresh.Action.GetSubject(),
 		Act:     origin.Act,
@@ -1824,7 +1856,8 @@ func (self *BridgeFiler) forwardApprovalAction(gate *ApprovalGate, origin *Bridg
 		AgentId: origin.AgentId,
 		Risk:    origin.AgentRisk,
 		Summary: origin.Summary,
-		Request: *request,
+		Request: keyed,
+		EndMs:   bridgeForwardEndMs(request.ExpiresAt),
 	})
 	if err != nil {
 		return nil, err

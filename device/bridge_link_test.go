@@ -12,6 +12,7 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"runtime/pprof"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -206,23 +207,84 @@ func (self *linkTest) await(what string, done func() bool) {
 	}
 }
 
-// Waits until the manager's run has a timer at at, so moving the clock there fires it.
-func (self *linkTest) awaitTimerAt(at time.Time) {
+// A fake clock that holds the manager's run where it arms its timer. run sets the timer as a duration from its own
+// read of the clock, so a move between that read and the arm leaves the timer late by the move, and a wake just before
+// a move, a build's end or a link's first packet, sends run there: under load a test moved the clock while run was
+// between the two, and the timer it awaited never fired. A test that moves the clock only while run is held at the arm
+// it times the move by, and lets it go after, never lands there: every wake waits behind the held run, and the timer
+// counts from the clock run read, as with no move between, firing at once when the move passed it.
+type linkTestHeldClock struct {
+	*sidecartest.FakeClock
+
+	stateLock sync.Mutex
+	// the holds no arm has reached yet, in the order set
+	holds []*linkTestHold
+}
+
+// One hold of an arm: held closes once run waits at it, and released lets it arm its timer.
+type linkTestHold struct {
+	at       time.Time
+	held     chan struct{}
+	released chan struct{}
+	once     sync.Once
+}
+
+// The manager's clock in settings, which newLinkTest set to a FakeClock, held from here on.
+func newLinkTestHeldClock(settings *device.BridgeSettings) *linkTestHeldClock {
+	clock := &linkTestHeldClock{FakeClock: settings.Clock.(*sidecartest.FakeClock)}
+	settings.Clock = clock
+	return clock
+}
+
+// Holds the next arm of a timer for at. A test registers its release as a cleanup, which runs before the manager's
+// Close, so a test that fails while run is held lets it on before Close waits for it.
+func (self *linkTestHeldClock) holdArmAt(at time.Time) *linkTestHold {
+	hold := &linkTestHold{at: at, held: make(chan struct{}), released: make(chan struct{})}
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.holds = append(self.holds, hold)
+	return hold
+}
+
+// Lets the held arm on; it may be called again.
+func (self *linkTestHold) release() {
+	self.once.Do(func() {
+		close(self.released)
+	})
+}
+
+// sidecartest.FakeClock's AfterFunc, held where a hold names its time. The time is read as the call enters, before it
+// waits, so a move while it is held leaves the timer at that time.
+func (self *linkTestHeldClock) AfterFunc(timeout time.Duration, function func()) (stop func() bool) {
+	at := self.FakeClock.Now().Add(timeout)
+	hold := func() *linkTestHold {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		for i, hold := range self.holds {
+			if hold.at.Equal(at) {
+				self.holds = slices.Delete(self.holds, i, i+1)
+				return hold
+			}
+		}
+		return nil
+	}()
+	if hold == nil {
+		return self.FakeClock.AfterFunc(timeout, function)
+	}
+	close(hold.held)
+	<-hold.released
+	return self.FakeClock.AfterFunc(at.Sub(self.FakeClock.Now()), function)
+}
+
+// Waits until run is held at the hold's arm; the context is the guard that fails a test it never reaches.
+func (self *linkTest) awaitHeld(hold *linkTestHold) {
 	self.t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	for {
-		pending, added := self.clock.WatchTimers()
-		for _, timer := range pending {
-			if timer.Equal(at) {
-				return
-			}
-		}
-		select {
-		case <-added:
-		case <-ctx.Done():
-			self.t.Fatalf("no timer at %v; pending %v", at, pending)
-		}
+	select {
+	case <-hold.held:
+	case <-ctx.Done():
+		self.t.Fatalf("run never armed a timer for %v", hold.at)
 	}
 }
 
@@ -439,21 +501,47 @@ func TestBridgeLinkSignErrorFailsClosed(t *testing.T) {
 }
 
 // A link that carried nothing for 600 s closes, one that carried a packet since stays open until 600 s after it, and
-// a closed link builds again at its next packet.
+// a closed link builds again at its next packet. The clock moves only while run is held at the arm that times the move
+// (linkTestHeldClock), and the first packet goes once run is held at the build's arm, so its wake is the last before
+// the clock moves.
 func TestBridgeLinkIdlesOutAt600Seconds(t *testing.T) {
-	test := newLinkTest(t, nil)
+	var clock *linkTestHeldClock
+	test := newLinkTest(t, func(settings *device.BridgeSettings) {
+		clock = newLinkTestHeldClock(settings)
+	})
 	start := test.clock.Now()
+	idleAt := start.Add(600 * time.Second)
+	// the build's arm and the first packet's, each for 600 s from the start, then the arm at 600 s, which finds the
+	// packet at 300 s
+	built := clock.holdArmAt(idleAt)
+	t.Cleanup(built.release)
+	routed := clock.holdArmAt(idleAt)
+	t.Cleanup(routed.release)
+	kept := clock.holdArmAt(start.Add(900 * time.Second))
+	t.Cleanup(kept.release)
 	link := test.link(4)
-	first := test.open(link)
-	test.awaitTimerAt(start.Add(600 * time.Second))
+	if _, route := test.manager.RouteForTest(link); route != "wait" {
+		t.Fatalf("the first packet routes %s", route)
+	}
+	test.awaitHeld(built)
+	test.manager.SealForTest(link)
+	client, route := test.manager.RouteForTest(link)
+	if route != "client" {
+		t.Fatalf("link %d routes %s once built", link, route)
+	}
+	first := client.(*sidecartest.FakeBridgeLink)
+	built.release()
+	test.awaitHeld(routed)
 	test.clock.Advance(300 * time.Second)
 	test.manager.RouteForTest(link)
-	test.clock.AdvanceTo(start.Add(600 * time.Second))
-	test.awaitTimerAt(start.Add(900 * time.Second))
+	test.clock.AdvanceTo(idleAt)
+	routed.release()
+	test.awaitHeld(kept)
 	if first.Closed() {
 		t.Fatal("a link that carried a packet 300 s ago closed")
 	}
 	test.clock.AdvanceTo(start.Add(900 * time.Second))
+	kept.release()
 	test.await("the idle close", func() bool { return first.Closed() && !test.manager.LinkBuiltForTest(link) })
 	second := test.open(link)
 	if second == first || test.host.BuildCount(linkTestTarget(4).ClientId) != 2 {
@@ -462,23 +550,34 @@ func TestBridgeLinkIdlesOutAt600Seconds(t *testing.T) {
 }
 
 // At 6 days a link is replaced: the new one takes new pairs while the old one drains until its window clients'
-// strict_exp, then closes and leaves its target.
+// strict_exp, then closes and leaves its target. The clock moves only while run is held at the arm that times the move
+// (linkTestHeldClock): the first packet's wake and the new link's build end each send run to arm again, and a move
+// between its read of the clock and that arm left the drain's timer a day late, at 8 days.
 func TestBridgeLinkRebuildsAfterSixDaysAndDrainsUntilStrictExp(t *testing.T) {
+	var clock *linkTestHeldClock
 	test := newLinkTest(t, func(settings *device.BridgeSettings) {
 		settings.LinkIdleTimeout = 8 * 24 * time.Hour
+		clock = newLinkTestHeldClock(settings)
 	})
 	start := test.clock.Now()
+	rebuildAt := start.Add(6 * 24 * time.Hour)
+	strictExp := start.Add(7 * 24 * time.Hour)
+	// the built link's arm, for its rebuild, and the replacement's, for the old link's drain end
+	rebuild := clock.holdArmAt(rebuildAt)
+	t.Cleanup(rebuild.release)
+	drainEnd := clock.holdArmAt(strictExp)
+	t.Cleanup(drainEnd.release)
 	link := test.link(4)
 	old := test.open(link)
-	test.awaitTimerAt(start.Add(6 * 24 * time.Hour))
-	test.clock.AdvanceTo(start.Add(6 * 24 * time.Hour))
+	test.awaitHeld(rebuild)
+	test.clock.AdvanceTo(rebuildAt)
+	rebuild.release()
 	test.await("the replacement", func() bool {
 		uses := test.manager.Retain([]device.BridgeLinkTarget{linkTestTarget(4)})[linkTestTarget(4)]
 		return len(uses) == 2
 	})
 	uses := test.manager.Retain([]device.BridgeLinkTarget{linkTestTarget(4)})[linkTestTarget(4)]
-	if uses[0].Link != link || !uses[0].DrainingSince.Equal(start.Add(6*24*time.Hour)) ||
-		!uses[0].DrainUntil.Equal(start.Add(7*24*time.Hour)) {
+	if uses[0].Link != link || !uses[0].DrainingSince.Equal(rebuildAt) || !uses[0].DrainUntil.Equal(strictExp) {
 		t.Fatalf("the old link's use %+v", uses[0])
 	}
 	successor := uses[1].Link
@@ -489,8 +588,9 @@ func TestBridgeLinkRebuildsAfterSixDaysAndDrainsUntilStrictExp(t *testing.T) {
 	if client, route := test.manager.RouteForTest(link); route != "client" || client != old || old.Closed() {
 		t.Fatal("the old link stopped serving its pairs while it drains")
 	}
-	test.awaitTimerAt(start.Add(7 * 24 * time.Hour))
-	test.clock.AdvanceTo(start.Add(7 * 24 * time.Hour))
+	test.awaitHeld(drainEnd)
+	test.clock.AdvanceTo(strictExp)
+	drainEnd.release()
 	test.await("the drain's end", func() bool { return old.Closed() })
 	uses = test.manager.Retain([]device.BridgeLinkTarget{linkTestTarget(4)})[linkTestTarget(4)]
 	if len(uses) != 1 || uses[0].Link != successor {
