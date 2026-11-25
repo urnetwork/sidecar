@@ -1,9 +1,11 @@
 //go:build ur_engine && !ios_extension && !sidecar_http
 
 // LiteRT-LM's C API through purego (DESIGN-COMPUTE §6.5, D-INFER-2): the backend the ur-engine helper drives, and the
-// helper's main. Only the ur_engine build tag builds this file, which cli/ur-engine/main.go sets, so ur and the sdk link
-// no binding and no LiteRT-LM symbol, and nothing here runs with the daemon's keys. There is no cgo: purego loads the C
-// library and calls it, and one callback, made once, carries every stream's chunks by an integer key.
+// helper's main. Only the ur_engine build tag builds this file, which the helper's executable sets, so ur and the sdk
+// link no binding and no LiteRT-LM symbol, and nothing here runs with the daemon's keys. Where that executable's main
+// lives waits on question infer-m11-02-ur-engine-main-location: QD-1247 put it in cli/ur-engine/, which check's §4.9
+// rule refuses, so no build makes the helper until it is answered. There is no cgo: purego loads the C library and
+// calls it, and one callback, made once, carries every stream's chunks by an integer key.
 //
 // What it holds to (§6.5):
 //
@@ -380,8 +382,8 @@ func (self *inferEngineLiteRtConversation) close() {
 	self.model.api.conversationDelete(self.conversation)
 }
 
-// The ur-engine helper's main (cli/ur-engine): serves the protocol on its stdio over LiteRT-LM until its input ends, and
-// answers the process's exit code. Its settings are the defaults, whose protocol bounds the daemon's share.
+// The ur-engine helper's main: serves the protocol on its stdio over LiteRT-LM until its input ends, and answers the
+// process's exit code. Its settings are the defaults, whose protocol bounds the daemon's share.
 func InferEngineHelperMain() int {
 	settings := DefaultInferSettings()
 	err := inferEngineHelperServe(context.Background(), os.Stdin, os.Stdout, newInferEngineLiteRt(), inferEngineMethods, settings)
