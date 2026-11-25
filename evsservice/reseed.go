@@ -300,7 +300,7 @@ func (self *EvsEngine) newReseedAttempt(request *EvsRequest, body *protocol.EvsR
 		cancel:         cancel,
 		arrival:        request.started,
 		repoId:         request.RepoId,
-		cluster:        request.Cluster,
+		cluster:        self.attemptCluster(request),
 		payloadBytes:   body.GetPayload(),
 		tokenNetworkId: networkIdOf(request.Principal),
 		// step 6 writes no slot: slots come last, stripped (serveReseedSlot)

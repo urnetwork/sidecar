@@ -384,6 +384,7 @@ barrier evs.read.entries.after evsservice/read.go
 barrier evs.read.entries.before evsservice/read.go
 barrier evs.read.head.after evsservice/read.go
 barrier evs.read.head.before evsservice/read.go
+barrier evs.read.slot_wait evsservice/read_fanout.go
 barrier evs.read.streams.after evsservice/read_streams.go
 barrier evs.read.streams.before evsservice/read_streams.go
 barrier evs.repo.cas.after evsservice/repo_state.go

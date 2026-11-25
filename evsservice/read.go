@@ -6,7 +6,10 @@
 //	         served above this head: a folded version above its v sends evs to a newer head from the cluster
 //	round 1  every path's entry by §11.6's read rule (its source copies while the head lists sources), and the
 //	         records of the window versions after folded_through, or after an older pin_version, whose digest may
-//	         touch a path, which §11.7's newest rule and a directory's listing then read from this process's cache
+//	         touch a path, which §11.7's newest rule and a directory's listing then read from this process's cache; at
+//	         most EvsSettings.EntryReadConcurrency of the request's store reads in flight, this round's and the
+//	         next's, a read past it waiting for a slot under the request's ctx (read_fanout.go; §11.15's fan-out,
+//	         owner decision 780)
 //	round 2  the statements after pin_version from the window's places, any statement that wrote a served version
 //	         below the pin, the records the proofs need, the log page an older version's statement sits in, and the
 //	         slots, maps, log pages, push records and segment ranges the request names
@@ -230,7 +233,7 @@ func (self *EvsEngine) newReadAttempt(request *EvsRequest, body *protocol.EvsRea
 		request:  request,
 		settings: settings,
 		ctx:      request.Ctx,
-		cluster:  request.Cluster,
+		cluster:  self.attemptCluster(request),
 		repoId:   request.RepoId,
 		refId:    refId,
 		body:     body,

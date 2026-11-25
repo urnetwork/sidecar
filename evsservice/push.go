@@ -253,7 +253,7 @@ func (self *EvsEngine) newPushAttempt(request *EvsRequest, body *protocol.EvsPus
 		cancel:         cancel,
 		arrival:        request.started,
 		repoId:         request.RepoId,
-		cluster:        request.Cluster,
+		cluster:        self.attemptCluster(request),
 		payloadBytes:   body.GetPayload(),
 		receipts:       body.GetReceipts(),
 		tokenNetworkId: networkIdOf(request.Principal),

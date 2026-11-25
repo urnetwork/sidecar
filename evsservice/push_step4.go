@@ -12,7 +12,9 @@
 //	        record, its signer's key from that state, every changed path's entry by §11.6's read rule (its source
 //	        copies included while the head lists sources), each reuse source's ref head and entry, and the records
 //	        of the window versions after folded_through whose digest may touch a changed path, which the newest rule
-//	        then reads from this process's cache
+//	        then reads from this process's cache; at most EvsSettings.EntryReadConcurrency of its store reads in
+//	        flight, the attempt's cluster making each read past it wait for a slot under the attempt's ctx
+//	        (read_fanout.go; §11.15's fan-out, owner decision 780)
 //	view    §11.7's newest per changed path, each entry combined only with the head read before it; a directory's
 //	        listing where the push writes its table; for a creates-only stream's directory delta, the directory's
 //	        newest version, a folded table's read from its delta at names_through (QD-722); the flags of the head's
