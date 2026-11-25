@@ -1,6 +1,7 @@
 // GET /evs/v1/repos/<id>/refs (§11.9; EVS1-M2-14): the repo's refs as their heads stand, with repo/'s format and the
-// repo's push sequence. One LIST of head/<repo>/ pages the keys, each head read from the cluster together, a
-// placeholder head (version 0, no kind or mode) left out as absent, and each ref's push sequence from {evsh_}
+// repo's push sequence. One LIST of head/<repo>/ pages the keys, each head read from the cluster together, at most
+// EvsSettings.EntryReadConcurrency of them in flight (read_fanout.go), a placeholder head (version 0, no kind or
+// mode) left out as absent, and each ref's push sequence from {evsh_}
 // where it holds one. The ?moved_after= form reads and keeps only the refs past the value, or every ref with all set
 // where the sequence cannot place it (refs_moved.go; EVS1-M6-01).
 
@@ -19,7 +20,7 @@ import (
 // See the file header.
 func (self *EvsEngine) serveRefs(request *EvsRequest) {
 	ctx := request.Ctx
-	cluster := request.Cluster
+	cluster := self.attemptCluster(request)
 	repoId := request.RepoId
 	query := request.Http.URL.Query()
 	moved := query.Has(evsMovedAfterParameter)

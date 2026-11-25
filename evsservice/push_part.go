@@ -98,7 +98,7 @@ func (self *EvsEngine) newPartAttempt(request *EvsRequest, body *protocol.EvsPar
 		cancel:         cancel,
 		arrival:        request.started,
 		repoId:         request.RepoId,
-		cluster:        request.Cluster,
+		cluster:        self.attemptCluster(request),
 		receipts:       body.GetReceipts(),
 		tokenNetworkId: networkIdOf(request.Principal),
 	}
