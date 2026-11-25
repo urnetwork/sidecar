@@ -229,6 +229,13 @@ type EvsSettings struct {
 	// §11.8's lease row: the longest seal lease a push may ask for, 120 s. At most 120 s; positive.
 	LeaseMaxDuration time.Duration
 
+	// §11.15's fan-out (owner decision 780; QD-1394): the store reads one push attempt (a one-part push, a part, a
+	// seal, a re-seed or a slots delete), one read request or one GET .../refs has in flight at once, 64. Step 4's
+	// round issues a read for each changed entry, window place and reuse together, and a read's first round one for
+	// each path it names, so on a quiet store a part's 1,024 entries take about 16 round trips rather than one. A read
+	// past it waits for a slot under its attempt's ctx (read_fanout.go). Positive.
+	EntryReadConcurrency int
+
 	// §11.9's request bounds (EVS1-M2-14): the paths one read names, 64; its ranges, 64, and their bytes in all, 32
 	// MiB; and the slots, maps, log pages and push records it names, each 64. Positive.
 	ReadPathMaxCount      int
@@ -455,6 +462,8 @@ func DefaultEvsSettings() *EvsSettings {
 		GroupFormCacheCount:         4096,
 		LeaseMaxDuration:            evsLeaseMaxDuration,
 
+		EntryReadConcurrency: 64,
+
 		ReadPathMaxCount:                64,
 		ReadRangeMaxCount:               64,
 		ReadRangeMaxByteCount:           32 * 1024 * 1024,
@@ -623,6 +632,9 @@ func (self *EvsSettings) Validate() error {
 	}
 	if self.LeaseMaxDuration <= 0 || evsLeaseMaxDuration < self.LeaseMaxDuration {
 		return fmt.Errorf("%w: a lease bound %s, outside (0, %s]", ErrEvsSettings, self.LeaseMaxDuration, evsLeaseMaxDuration)
+	}
+	if self.EntryReadConcurrency <= 0 {
+		return fmt.Errorf("%w: an attempt's store reads in flight, %d, not positive", ErrEvsSettings, self.EntryReadConcurrency)
 	}
 	if self.ReadPathMaxCount <= 0 || self.ReadRangeMaxCount <= 0 || self.ReadRangeMaxByteCount <= 0 || self.ReadObjectMaxCount <= 0 ||
 		self.ReadSegmentWholeByteCount <= 0 || self.ReadSegmentRangeAlign <= 0 || self.ReadHeadRetryCount <= 0 || self.ReadCollectedAfter <= 0 || self.RefsListPageCount <= 0 {

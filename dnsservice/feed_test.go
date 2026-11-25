@@ -143,11 +143,22 @@ func awaitWritten(t testing.TB, loop *dnsservice.FeedLoop, serial uint64) {
 // second at a time whenever bare flags read parked, and they read so from a wake until the goroutine
 // ran; on a loaded machine it spent every move before a woken goroutine got to run. Fails once done
 // has not held within 200,000 s of fake time.
+//
+// Each turn takes where the loop and the writer are parked and the timers set, each with the channel
+// that closes on its next change, and reads done only after, so a change done's read misses closes a
+// channel the turn holds: the turn waits on those channels, and moves the clock only while none has
+// closed. It used to read done first. A loop that answered its held poll and parked again between
+// that read and the snapshot then left it waiting, with no timer set, on channels nothing would close,
+// or moving the clock to a timer set elsewhere though done already held (feed_advance_race_test.go).
 func advanceUntil(t testing.TB, clock *sidecartest.FakeClock, loop *dnsservice.FeedLoop, what string, done func() bool) {
 	t.Helper()
 	deadline := clock.Now().Add(200 * 1000 * time.Second)
-	for !done() {
+	for {
 		loopIdle, loopChanged, writerIdle, writerChanged := loop.IdleForTest(edgeTestRoot)
+		pending, added := clock.WatchTimers()
+		if done() {
+			return
+		}
 		if !loopIdle || !writerIdle {
 			select {
 			case <-loopChanged:
@@ -157,7 +168,6 @@ func advanceUntil(t testing.TB, clock *sidecartest.FakeClock, loop *dnsservice.F
 			}
 			continue
 		}
-		pending, added := clock.WatchTimers()
 		if len(pending) == 0 {
 			select {
 			case <-added:
@@ -167,6 +177,16 @@ func advanceUntil(t testing.TB, clock *sidecartest.FakeClock, loop *dnsservice.F
 				t.Fatalf("%s: no timer to move the clock to", what)
 			}
 			continue
+		}
+		// a change since the snapshot, while done read, is taken again before the clock moves on it
+		select {
+		case <-loopChanged:
+			continue
+		case <-writerChanged:
+			continue
+		case <-added:
+			continue
+		default:
 		}
 		if deadline.Before(pending[0]) {
 			t.Fatalf("%s never held", what)

@@ -12,6 +12,10 @@
 //	          ranges covering what was asked, each range over frames past 1 MiB, offset naming each frame's first byte;
 //	          a staged segment a path of the request stages, from its push's record or seg/ (read_staged.go)
 //
+// A slot, a map part and a segment range go to the client as their store bodies arrive, so each such GET holds its
+// store connection at the client's pace: it goes on a ctx sidecar.WithBlobClientPaced marks, outside the file
+// clusters' cap on a host's connections (QD-1402). Pages, records and staged segments are read whole first.
+//
 // A path goes in one frame, but for a directory's deltas, which follow its path frame one a frame, each a path frame
 // of the same token path with continues set, carrying that delta alone with its delta_proofs entry beside it (QD-662,
 // QD-681; question evs1-m2-40-unfolded-listing-frame): so a directory at its 448 KiB bound lists in
@@ -217,7 +221,7 @@ func (self *readAttempt) streamObjects(stream *readStream) bool {
 		}
 	}
 	for _, readMap := range body.GetMaps() {
-		object, err := self.cluster.Get(self.ctx, PathMapKey(self.repoId, self.refId, readMap.GetPathEpoch(), readMap.GetMapSha256(), readMap.GetPart()))
+		object, err := self.cluster.Get(sidecar.WithBlobClientPaced(self.ctx), PathMapKey(self.repoId, self.refId, readMap.GetPathEpoch(), readMap.GetMapSha256(), readMap.GetPart()))
 		if !self.streamObject(stream, protocol.EvsReadObjectKind_EVS_READ_OBJECT_MAP_PART, readMap.GetMapSha256(), uint64(readMap.GetPart()), object, err) {
 			return false
 		}
@@ -263,7 +267,7 @@ func (self *readAttempt) streamSlot(stream *readStream, slotId []byte) bool {
 	case withheld:
 		return stream.missing(kind, slotId, 0)
 	}
-	object, err := self.cluster.Get(self.ctx, SlotKey(self.repoId, id))
+	object, err := self.cluster.Get(sidecar.WithBlobClientPaced(self.ctx), SlotKey(self.repoId, id))
 	return self.streamObject(stream, kind, slotId, 0, object, err)
 }
 
@@ -346,7 +350,7 @@ func (self *readAttempt) streamRange(stream *readStream, readRange *protocol.Evs
 			byteCount = (end - from + align - 1) / align * align
 		}
 	}
-	object, err := self.engine.segments.OpenSegment(self.ctx, self.cluster, self.repoId, segmentId, from, byteCount)
+	object, err := self.engine.segments.OpenSegment(sidecar.WithBlobClientPaced(self.ctx), self.cluster, self.repoId, segmentId, from, byteCount)
 	switch {
 	case errors.Is(err, sidecar.ErrBlobNotFound), errors.Is(err, sidecar.ErrBlobRange):
 		return stream.missing(kind, segmentId[:], 0)
