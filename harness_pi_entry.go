@@ -308,6 +308,7 @@ func (self *HarnessPiEntry) Json() ([]byte, error) {
 	return self.MarshalJSON()
 }
 
+// The entry in Pi's member order.
 func (self *HarnessPiEntry) MarshalJSON() ([]byte, error) {
 	return self.object.MarshalJSON()
 }

@@ -173,10 +173,12 @@ func (self *HarnessPiBlock) clone() *HarnessPiBlock {
 	return &HarnessPiBlock{object: self.object.clone()}
 }
 
+// The block in Pi's member order.
 func (self *HarnessPiBlock) MarshalJSON() ([]byte, error) {
 	return self.object.MarshalJSON()
 }
 
+// Reads a block, keeping every member as written.
 func (self *HarnessPiBlock) UnmarshalJSON(data []byte) error {
 	return self.object.UnmarshalJSON(data)
 }
@@ -403,11 +405,12 @@ func (self *HarnessPiMessage) Usage() *HarnessPiUsage {
 	return usage
 }
 
-// A tool result's call id and tool.
+// A tool result's call id.
 func (self *HarnessPiMessage) ToolCallId() string {
 	return self.object.str("toolCallId")
 }
 
+// A tool result's tool.
 func (self *HarnessPiMessage) ToolName() string {
 	return self.object.str("toolName")
 }
@@ -446,6 +449,7 @@ func (self *HarnessPiMessage) clone() *HarnessPiMessage {
 	return &HarnessPiMessage{object: self.object.clone()}
 }
 
+// The message in Pi's member order.
 func (self *HarnessPiMessage) MarshalJSON() ([]byte, error) {
 	return self.object.MarshalJSON()
 }

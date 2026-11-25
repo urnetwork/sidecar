@@ -106,10 +106,12 @@ func (self *HarnessUiRequest) object() harnessPiObject {
 	return object
 }
 
+// The request in Pi's member order.
 func (self *HarnessUiRequest) MarshalJSON() ([]byte, error) {
 	return self.object().MarshalJSON()
 }
 
+// Reads a request.
 func (self *HarnessUiRequest) UnmarshalJSON(data []byte) error {
 	object := harnessPiObject{}
 	if err := object.UnmarshalJSON(data); err != nil {
@@ -160,10 +162,12 @@ func (self *HarnessUiResponse) object() harnessPiObject {
 	return object
 }
 
+// The answer in Pi's member order.
 func (self *HarnessUiResponse) MarshalJSON() ([]byte, error) {
 	return self.object().MarshalJSON()
 }
 
+// Reads an answer, refusing a value or confirmation of the wrong type.
 func (self *HarnessUiResponse) UnmarshalJSON(data []byte) error {
 	object := harnessPiObject{}
 	if err := object.UnmarshalJSON(data); err != nil {

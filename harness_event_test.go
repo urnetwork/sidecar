@@ -139,15 +139,15 @@ func TestHarnessAssistantMessageEventsFollowPi(t *testing.T) {
 		nested *HarnessAssistantMessageEvent
 		want   string
 	}{
-		{&HarnessAssistantMessageEvent{Type: HarnessAssistantEventTextStart, ContentIndex: 0}, `{"type":"text_start","contentIndex":0}`},
-		{&HarnessAssistantMessageEvent{Type: HarnessAssistantEventTextEnd, ContentIndex: 0, Content: "Hello"}, `{"type":"text_end","contentIndex":0,"content":"Hello"}`},
-		{&HarnessAssistantMessageEvent{Type: HarnessAssistantEventThinkingStart, ContentIndex: 1}, `{"type":"thinking_start","contentIndex":1}`},
-		{&HarnessAssistantMessageEvent{Type: HarnessAssistantEventThinkingDelta, ContentIndex: 1, Delta: "hm"}, `{"type":"thinking_delta","contentIndex":1,"delta":"hm"}`},
-		{&HarnessAssistantMessageEvent{Type: HarnessAssistantEventThinkingEnd, ContentIndex: 1, Content: "hm"}, `{"type":"thinking_end","contentIndex":1,"content":"hm"}`},
-		{&HarnessAssistantMessageEvent{Type: HarnessAssistantEventToolCallStart, ContentIndex: 2, Id: "call_1", ToolName: "read"}, `{"type":"toolcall_start","contentIndex":2,"id":"call_1","toolName":"read"}`},
-		{&HarnessAssistantMessageEvent{Type: HarnessAssistantEventToolCallDelta, ContentIndex: 2, Delta: `{"pa`}, `{"type":"toolcall_delta","contentIndex":2,"delta":"{\"pa"}`},
-		{&HarnessAssistantMessageEvent{Type: HarnessAssistantEventToolCallEnd, ContentIndex: 2, ToolCall: &HarnessPiToolCall{Id: "call_1", Name: "read", Arguments: json.RawMessage(`{"path":"a.txt"}`)}},
-			`{"type":"toolcall_end","contentIndex":2,"toolCall":{"type":"toolCall","id":"call_1","name":"read","arguments":{"path":"a.txt"}}}`},
+		{nested: &HarnessAssistantMessageEvent{Type: HarnessAssistantEventTextStart, ContentIndex: 0}, want: `{"type":"text_start","contentIndex":0}`},
+		{nested: &HarnessAssistantMessageEvent{Type: HarnessAssistantEventTextEnd, ContentIndex: 0, Content: "Hello"}, want: `{"type":"text_end","contentIndex":0,"content":"Hello"}`},
+		{nested: &HarnessAssistantMessageEvent{Type: HarnessAssistantEventThinkingStart, ContentIndex: 1}, want: `{"type":"thinking_start","contentIndex":1}`},
+		{nested: &HarnessAssistantMessageEvent{Type: HarnessAssistantEventThinkingDelta, ContentIndex: 1, Delta: "hm"}, want: `{"type":"thinking_delta","contentIndex":1,"delta":"hm"}`},
+		{nested: &HarnessAssistantMessageEvent{Type: HarnessAssistantEventThinkingEnd, ContentIndex: 1, Content: "hm"}, want: `{"type":"thinking_end","contentIndex":1,"content":"hm"}`},
+		{nested: &HarnessAssistantMessageEvent{Type: HarnessAssistantEventToolCallStart, ContentIndex: 2, Id: "call_1", ToolName: "read"}, want: `{"type":"toolcall_start","contentIndex":2,"id":"call_1","toolName":"read"}`},
+		{nested: &HarnessAssistantMessageEvent{Type: HarnessAssistantEventToolCallDelta, ContentIndex: 2, Delta: `{"pa`}, want: `{"type":"toolcall_delta","contentIndex":2,"delta":"{\"pa"}`},
+		{nested: &HarnessAssistantMessageEvent{Type: HarnessAssistantEventToolCallEnd, ContentIndex: 2, ToolCall: &HarnessPiToolCall{Id: "call_1", Name: "read", Arguments: json.RawMessage(`{"path":"a.txt"}`)}},
+			want: `{"type":"toolcall_end","contentIndex":2,"toolCall":{"type":"toolCall","id":"call_1","name":"read","arguments":{"path":"a.txt"}}}`},
 	}
 	for _, c := range cases {
 		event := NewHarnessMessageUpdateEvent(nil, c.nested)

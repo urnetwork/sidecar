@@ -579,6 +579,7 @@ type harnessEventStamper struct {
 	agentSeqs map[Id]uint64
 }
 
+// A stamper with every agent at seq 0.
 func newHarnessEventStamper() *harnessEventStamper {
 	return &harnessEventStamper{agentSeqs: map[Id]uint64{}}
 }

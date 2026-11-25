@@ -257,14 +257,17 @@ func newHarnessGateApprovals(sidecar *Sidecar) (HarnessApprovals, error) {
 	return &harnessGateApprovals{gate: gate}, nil
 }
 
+// The inbox's update callbacks.
 func (self *harnessGateApprovals) AddUpdateCallback(callback ApprovalUpdateFunction) func() {
 	return self.gate.Inbox().AddUpdateCallback(callback)
 }
 
+// The inbox's status of the approval.
 func (self *harnessGateApprovals) Status(approvalId Id) (*ApprovalStatus, error) {
 	return self.gate.Inbox().Status(approvalId)
 }
 
+// The ledger's request for the approval, rendered as an approver's device shows it.
 func (self *harnessGateApprovals) Render(approvalId Id) (*ApprovalRender, error) {
 	state, err := self.gate.args.Ledger.State(approvalId)
 	if err != nil {

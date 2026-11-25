@@ -18,18 +18,18 @@ func TestHarnessSendIsOutwardTable(t *testing.T) {
 		target  *HarnessSendTarget
 		want    bool
 	}{
-		{"egress auto", true, &HarnessSendTarget{Kind: HarnessSendEnclave, EnclaveEgress: "auto"}, true},
-		{"egress exits", true, &HarnessSendTarget{Kind: HarnessSendEnclave, EnclaveEgress: "exits"}, true},
-		{"egress none", true, &HarnessSendTarget{Kind: HarnessSendEnclave, EnclaveEgress: HarnessEnclaveEgressNone}, false},
-		{"egress none with a listener grant", true, &HarnessSendTarget{Kind: HarnessSendEnclave, EnclaveEgress: HarnessEnclaveEgressNone, DialsServices: true}, true},
-		{"egress unknown", true, &HarnessSendTarget{Kind: HarnessSendEnclave}, true},
-		{"another member's agent", true, &HarnessSendTarget{Kind: HarnessSendMemberAgent}, true},
-		{"another member's egress-none enclave", true, &HarnessSendTarget{Kind: HarnessSendMemberEnclave, EnclaveEgress: HarnessEnclaveEgressNone}, true},
-		{"the member's local agent", true, &HarnessSendTarget{Kind: HarnessSendLocalAgent}, false},
-		{"an unknown kind", true, &HarnessSendTarget{Kind: "somewhere"}, true},
-		{"no target", true, nil, true},
-		{"an untainted run into egress auto", false, &HarnessSendTarget{Kind: HarnessSendEnclave, EnclaveEgress: "auto"}, false},
-		{"an untainted run to another member's agent", false, &HarnessSendTarget{Kind: HarnessSendMemberAgent}, false},
+		{name: "egress auto", tainted: true, target: &HarnessSendTarget{Kind: HarnessSendEnclave, EnclaveEgress: "auto"}, want: true},
+		{name: "egress exits", tainted: true, target: &HarnessSendTarget{Kind: HarnessSendEnclave, EnclaveEgress: "exits"}, want: true},
+		{name: "egress none", tainted: true, target: &HarnessSendTarget{Kind: HarnessSendEnclave, EnclaveEgress: HarnessEnclaveEgressNone}, want: false},
+		{name: "egress none with a listener grant", tainted: true, target: &HarnessSendTarget{Kind: HarnessSendEnclave, EnclaveEgress: HarnessEnclaveEgressNone, DialsServices: true}, want: true},
+		{name: "egress unknown", tainted: true, target: &HarnessSendTarget{Kind: HarnessSendEnclave}, want: true},
+		{name: "another member's agent", tainted: true, target: &HarnessSendTarget{Kind: HarnessSendMemberAgent}, want: true},
+		{name: "another member's egress-none enclave", tainted: true, target: &HarnessSendTarget{Kind: HarnessSendMemberEnclave, EnclaveEgress: HarnessEnclaveEgressNone}, want: true},
+		{name: "the member's local agent", tainted: true, target: &HarnessSendTarget{Kind: HarnessSendLocalAgent}, want: false},
+		{name: "an unknown kind", tainted: true, target: &HarnessSendTarget{Kind: "somewhere"}, want: true},
+		{name: "no target", tainted: true, target: nil, want: true},
+		{name: "an untainted run into egress auto", tainted: false, target: &HarnessSendTarget{Kind: HarnessSendEnclave, EnclaveEgress: "auto"}, want: false},
+		{name: "an untainted run to another member's agent", tainted: false, target: &HarnessSendTarget{Kind: HarnessSendMemberAgent}, want: false},
 	}
 	for _, c := range cases {
 		if got := HarnessSendIsOutward(c.tainted, c.target); got != c.want {
