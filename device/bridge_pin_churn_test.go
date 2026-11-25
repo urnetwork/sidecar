@@ -81,6 +81,11 @@ func TestPinChurnCellOnTheMobileSender(t *testing.T) {
 	test := newRouteTest(t, routeTestFixture(), func(settings *device.BridgeSettings) {
 		settings.PinSlotCount = mobile.PinSlotCount
 		settings.LinkCountMax = mobile.LinkCountMax
+		// the fake host seals no session, so at the default connect timeout the idle wait below would have the link
+		// manager's run mark both links down, one after the other, while the churn round routes: a pair routed between
+		// the two took the one still up, and one marked as the clock moved could stay down alone. Nothing times out
+		// within the cell, so its rounds meet both links up
+		settings.LinkConnectTimeout = 2 * mobile.PinIdleTimeout
 	})
 	pinChurnAwaitLinks(t, test)
 	links := []connect.Id{sidecartest.BridgeFixtureClientId(5), sidecartest.BridgeFixtureClientId(6)}

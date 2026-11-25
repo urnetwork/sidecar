@@ -13,6 +13,13 @@
 // taint (plan-MCP-taint-new-session), is MCP-M3-15's to decide. A nil run id means no harness at all, an app or a typed
 // ur command, which this store never sees. record.taint.before and record.taint.after sit around a taint's fsync,
 // outside the run's lock, so a held barrier stalls no other run (testhook.go).
+//
+// Marks (DESIGN-COMPUTE §7.8's private, §25.10's limited_use; HARN-M11-02, CONTRACTS C-32) are kept the same way: Mark
+// sets the mark in memory first, then fsyncs it into the run's file before it returns, so the data that gave it leaves
+// the daemon only after (§8.9's rule); a mark never clears, every rewrite keeps it, and Marks answers an error for a run
+// whose file is missing or unreadable, which its readers take as every mark (the router refuses the call, a container
+// tool refuses), so a restart cannot lose one. One store holds them for INFER's router, GW's run handle, CONN's
+// limited_use and the Harness's private mark. record.mark.before and record.mark.after sit around a mark's fsync.
 
 package sidecar
 
@@ -33,9 +40,6 @@ import (
 const (
 	runDirectoryName = "runs"
 	runClass         = "run"
-	// The most a run file's JSON may hold, a bound on what a read takes: its lists grow by a session id, a gap code
-	// or a reason, each deduplicated, so a real file stays far below this.
-	runFileMaxByteCount = 1024 * 1024
 )
 
 var (
@@ -45,6 +49,10 @@ var (
 	ErrRunUnknown = errors.New("run unknown")
 	// A rewrite that would clear a run's taint, which only a bug asks for.
 	errRunUntaint = errors.New("a run's taint never clears")
+	// A rewrite that would clear one of a run's marks, which only a bug asks for.
+	errRunUnmark = errors.New("a run's marks never clear")
+	// The run's marks do not read: its file is missing or unreadable, so a reader takes it as carrying every mark.
+	ErrRunMarksUnread = errors.New("the run's marks do not read")
 )
 
 // Why a run was tainted (§16.6's taint row). Callers may add codes; none carries a path or text.
@@ -77,6 +85,8 @@ type RunFile struct {
 	Tainted    bool     `json:"tainted"`
 	// Each reason once, in the order first given.
 	TaintReasons []RunTaintReason `json:"taint_reasons"`
+	// The run's marks (DESIGN-COMPUTE §7.8, §25.10), each once, in the order first given: never cleared.
+	Marks []string `json:"marks,omitempty"`
 	// RECORD.md section 6.4's codes, each "code" or "code:count".
 	Gaps     []string `json:"gaps"`
 	FirstSeq uint64   `json:"first_seq"`
@@ -94,6 +104,7 @@ func (self *RunFile) clone() *RunFile {
 	cloned := *self
 	cloned.SessionIds = slices.Clone(self.SessionIds)
 	cloned.TaintReasons = slices.Clone(self.TaintReasons)
+	cloned.Marks = slices.Clone(self.Marks)
 	cloned.Gaps = slices.Clone(self.Gaps)
 	return &cloned
 }
@@ -128,6 +139,8 @@ type RunStore struct {
 	stateLock sync.Mutex
 	// runs tainted in this process, with their reasons, set before their file is written: never cleared
 	taintedRunIdReasons map[Id][]RunTaintReason
+	// runs marked in this process, with their marks, set before their file is written: never cleared
+	markedRunIdMarks map[Id][]string
 	// one rewrite of a run's file at a time
 	runIdLocks map[Id]*sync.Mutex
 }
@@ -143,6 +156,7 @@ func NewRunStore(localStore SidecarStore, settings *SidecarMcpSettings, clock Cl
 		settings:            settings,
 		clock:               clockOrReal(clock),
 		taintedRunIdReasons: map[Id][]RunTaintReason{},
+		markedRunIdMarks:    map[Id][]string{},
 		runIdLocks:          map[Id]*sync.Mutex{},
 	}, nil
 }
@@ -188,6 +202,38 @@ func (self *RunStore) markTainted(runId Id, reasons ...RunTaintReason) {
 	self.taintedRunIdReasons[runId] = kept
 }
 
+// The marks this process gave runId.
+func (self *RunStore) marksInMemory(runId Id) []string {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return slices.Clone(self.markedRunIdMarks[runId])
+}
+
+// Marks runId in memory, for good, with marks each once.
+func (self *RunStore) markInMemory(runId Id, marks ...string) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	kept := self.markedRunIdMarks[runId]
+	if kept == nil {
+		kept = []string{}
+	}
+	for _, mark := range marks {
+		if !slices.Contains(kept, mark) {
+			kept = append(kept, mark)
+		}
+	}
+	self.markedRunIdMarks[runId] = kept
+}
+
+// Writes into run the marks memory holds for it, which a failed write left out of the file.
+func (self *RunStore) applyMemoryMarks(run *RunFile) {
+	for _, mark := range self.marksInMemory(run.RunId) {
+		if !slices.Contains(run.Marks, mark) {
+			run.Marks = append(run.Marks, mark)
+		}
+	}
+}
+
 // Writes into run the taint memory holds for it, which a failed write left out of the file.
 func (self *RunStore) applyMemoryTaint(run *RunFile) {
 	tainted, reasons := self.taintedInMemory(run.RunId)
@@ -209,11 +255,11 @@ func (self *RunStore) Get(runId Id) (*RunFile, error) {
 		return nil, err
 	}
 	defer reader.Close()
-	encoded, err := io.ReadAll(io.LimitReader(reader, runFileMaxByteCount+1))
+	encoded, err := io.ReadAll(io.LimitReader(reader, int64(self.settings.RunFileByteCount)+1))
 	if err != nil {
 		return nil, err
 	}
-	if runFileMaxByteCount < len(encoded) {
+	if self.settings.RunFileByteCount < len(encoded) {
 		return nil, fmt.Errorf("%w: a run file over its bound", ErrSidecarStoreFailed)
 	}
 	run := &RunFile{}
@@ -229,7 +275,7 @@ func (self *RunStore) write(run *RunFile) error {
 	if err != nil {
 		return err
 	}
-	if runFileMaxByteCount < len(encoded) {
+	if self.settings.RunFileByteCount < len(encoded) {
 		return fmt.Errorf("%w: a run file over its bound", ErrSidecarStoreFailed)
 	}
 	writer, err := self.store.Create(runFileName(run.RunId))
@@ -267,6 +313,10 @@ func (self *RunStore) Create(ctx context.Context, run *RunFile) error {
 	if created.Tainted {
 		self.markTainted(run.RunId, created.TaintReasons...)
 	}
+	self.applyMemoryMarks(created)
+	if 0 < len(created.Marks) {
+		self.markInMemory(run.RunId, created.Marks...)
+	}
 	return self.write(created)
 }
 
@@ -291,7 +341,13 @@ func (self *RunStore) update(ctx context.Context, runId Id, edit func(run *RunFi
 	if run.Tainted && !edited.Tainted {
 		return errRunUntaint
 	}
+	for _, mark := range run.Marks {
+		if !slices.Contains(edited.Marks, mark) {
+			return errRunUnmark
+		}
+	}
 	self.applyMemoryTaint(edited)
+	self.applyMemoryMarks(edited)
 	return self.write(edited)
 }
 
@@ -350,6 +406,7 @@ func (self *RunStore) Taint(ctx context.Context, runId Id, reason RunTaintReason
 		}
 		tainted := run.clone()
 		self.applyMemoryTaint(tainted)
+		self.applyMemoryMarks(tainted)
 		return self.write(tainted)
 	}()
 	testHookBarrier("record.taint.after", key)
@@ -371,6 +428,79 @@ func (self *RunStore) Tainted(runId Id) bool {
 		return true
 	}
 	return false
+}
+
+// Why the run is tainted, each reason once: those this process gave it and those its file holds. Empty for a run that
+// is not tainted, and for one that reads tainted only because its file is missing or unreadable.
+func (self *RunStore) TaintReasons(runId Id) []RunTaintReason {
+	_, reasons := self.taintedInMemory(runId)
+	run, err := self.Get(runId)
+	if err != nil {
+		return reasons
+	}
+	for _, reason := range run.TaintReasons {
+		if !slices.Contains(reasons, reason) {
+			reasons = append(reasons, reason)
+		}
+	}
+	return reasons
+}
+
+// Marks the run for good, write-ahead (§8.9's rule, as Taint is): the mark in memory first, then fsynced into the
+// run's file before this returns, so the caller lets the data that gave it leave only after. An error means the file
+// may not say so, and the caller fails the call that marks; the run reads marked here all the same. A run with no
+// file answers ErrRunUnknown, since writing one would read the run untainted. A file that already holds the mark is not
+// written again.
+func (self *RunStore) Mark(ctx context.Context, runId Id, mark string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if runId == (Id{}) || mark == "" {
+		return errors.New("a mark needs a run and a name")
+	}
+	self.markInMemory(runId, mark)
+	key := runId.String()
+	testHookBarrier("record.mark.before", key)
+	err := func() error {
+		lock := self.runLock(runId)
+		lock.Lock()
+		defer lock.Unlock()
+		run, err := self.Get(runId)
+		if errors.Is(err, ErrSidecarStoreAbsent) {
+			return ErrRunUnknown
+		} else if err != nil {
+			return err
+		}
+		if slices.Contains(run.Marks, mark) {
+			return nil
+		}
+		marked := run.clone()
+		self.applyMemoryTaint(marked)
+		self.applyMemoryMarks(marked)
+		return self.write(marked)
+	}()
+	testHookBarrier("record.mark.after", key)
+	return err
+}
+
+// The run's marks: those this process gave it and those its file holds, each once. ErrRunMarksUnread, with the marks
+// memory holds, where its file is missing or unreadable, an id this store never saw included: a reader takes that as
+// every mark, so fails closed.
+func (self *RunStore) Marks(runId Id) ([]string, error) {
+	marks := self.marksInMemory(runId)
+	run, err := self.Get(runId)
+	if err != nil {
+		return marks, fmt.Errorf("%w: %w", ErrRunMarksUnread, err)
+	}
+	for _, mark := range run.Marks {
+		if !slices.Contains(marks, mark) {
+			marks = append(marks, mark)
+		}
+	}
+	if 0 < len(run.Marks) {
+		self.markInMemory(runId, run.Marks...)
+	}
+	return marks, nil
 }
 
 // Removes each run file RunFileRetention past its newest Coverage (§16.6's retention row). A run with no Coverage yet,
