@@ -406,6 +406,28 @@ func (self *bridgeFileView) ownRule(ruleId []byte) (*BridgeLedgerRule, error) {
 	return rule, nil
 }
 
+// Whether address, of block, lies in the exposed prefix of one of this host's subnet routes the ledger holds, read into
+// block.
+func (self *bridgeFileView) exposedHolds(block bridgePrefix, address uint32) bool {
+	if self.ledger == nil {
+		return false
+	}
+	for _, rule := range self.ledger.Rules(bridge.SignedType_SIGNED_BRIDGE_ROUTE) {
+		exposed := rule.Route.GetExposedPrefix()
+		if rule.Owner != self.self || exposed == nil {
+			continue
+		}
+		first, _, err := bridgeUpperRangeOf(exposed)
+		if err != nil {
+			continue
+		}
+		if (bridgePrefix{address: bridgeCompileInBlock(block, first), length: exposed.GetLength()}).containsAddress(address) {
+			return true
+		}
+	}
+	return false
+}
+
 // This host's overlay address in the block in force, invalid where it holds none or no block is known.
 func (self *bridgeFileView) address() netip.Addr {
 	return self.addressOf(self.self)
@@ -643,7 +665,8 @@ type BridgeMapRequest struct {
 	// The ports of this host's address the map answers, first to last; LastPort 0 is FirstPort.
 	FirstPort uint32
 	LastPort  uint32
-	// Where the map dials, never an address of the block: 127.0.0.1 when invalid (§17.6's ':5432' -> 127.0.0.1:5432).
+	// Where the map dials, never an address of the block but one of this host's exposed prefixes, which the hook dials
+	// at its served address (§17.6's exposed prefixes): 127.0.0.1 when invalid (§17.6's ':5432' -> 127.0.0.1:5432).
 	Target netip.Addr
 	// The port it dials, 0 for the port matched; with a range, the range maps by offset onto it.
 	TargetPort uint32
@@ -721,8 +744,11 @@ func (self *BridgeFiler) mapPlan(view *bridgeFileView, request *BridgeMapRequest
 		}
 		if ipv4, ok := bridgeIpv4Of(target); ok {
 			for _, block := range blocks {
-				if (bridgePrefix{address: block.GetAddress(), length: block.GetLength()}).containsAddress(ipv4) {
-					return nil, fmt.Errorf("%w: a map onto an address of the network's block", ErrBridgeFileRefused)
+				blockPrefix := bridgePrefix{address: block.GetAddress(), length: block.GetLength()}
+				// one of this host's exposed prefixes dials its served address at the hook (§17.6's exposed prefixes;
+				// owner decision 778); any other address of the block is another host's or a hop away (rule 2)
+				if blockPrefix.containsAddress(ipv4) && !view.exposedHolds(blockPrefix, ipv4) {
+					return nil, fmt.Errorf("%w: a map onto an address of the network's block outside this host's exposed prefixes", ErrBridgeFileRefused)
 				}
 			}
 		}

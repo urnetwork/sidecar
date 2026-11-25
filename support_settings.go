@@ -63,6 +63,58 @@ type SupportSettings struct {
 	// The most times a bundle halves its events to fit BundleMaxByteCount before it gives up: 24, past the ring's
 	// most events.
 	BundleFitAttemptCount int
+
+	// The support client (§28.6, §28.14). The release's support switch, off until G-SUP-service passes (§28.21): while
+	// it is off every surface answers ErrSupportUnavailable, no MCP session lists the tools, and nothing is posted. A
+	// test turns it on.
+	ServiceEnabled bool
+	// A message's text, in bytes: the format's 16 KiB, whose one default is CanonicalActionSettings'
+	// SupportTextMaxByteCount, since field 80 carries the same text.
+	MessageMaxByteCount int
+	// A message's files: 3, CanonicalActionSettings' SupportFileMaxCount (§28.7).
+	FileMaxCount int
+	// One file's bytes: 10 MiB (§28.7, FB section 9).
+	FileMaxByteCount int64
+	// An agent's messages: 5 an hour and 20 a day (§28.14).
+	AgentHourMaxCount int
+	AgentDayMaxCount  int
+	// The network's agents' messages a day, as this device counts them: 50 (§28.14); the service counts the network's
+	// across its devices.
+	NetworkDayMaxCount int
+	// The person's messages: FB's 10 an hour and 50 a day (§28.14).
+	PersonHourMaxCount int
+	PersonDayMaxCount  int
+	// Messages waiting in the outbox: 10 an agent and 50 the device (§28.14), past which a send is support_queue_full.
+	OutboxAgentMaxCount  int
+	OutboxDeviceMaxCount int
+	// One bundle a network every 5 minutes, the server's rule today (§28.14).
+	BundleMinInterval time.Duration
+	// The outbox's retries: after 1 minute, then twice as long each time up to an hour, for 7 days, FB's retry window,
+	// under one client_ref; then it gives up (§28.14).
+	RetryFirstInterval time.Duration
+	RetryMaxInterval   time.Duration
+	RetryWindow        time.Duration
+	// How long a sent message's bundle and files stay on the device for the person to read: 7 days (§28.7).
+	SentBundleRetention time.Duration
+	// How often the client's loop looks at its outbox and the member's events with no wake: 30 s.
+	LoopInterval time.Duration
+	// One call to the feedback service: 30 s.
+	PostTimeout time.Duration
+	// The most of one answer the client reads: 1 MiB, past any entry or lookup the service answers.
+	ResponseMaxByteCount int64
+	// The most of one event stream the client reads before it reads again from its cursor: 16 MiB.
+	EventStreamMaxByteCount int64
+	// One event's data: 64 KiB, a note or body of 16 KiB with room for its fields.
+	EventMaxByteCount int
+	// The most events one read takes: 1,000.
+	EventsMaxCount int
+	// The conversation's items this device keeps in its view: 1,000, the oldest updated first out.
+	ConversationMaxItemCount int
+	// The client's state file, and one outbox message's: 64 MiB, a full view of 16 KiB messages.
+	StateMaxByteCount int64
+	// How long one call of ur support watch waits for an update before it answers none and is called again: 25 s,
+	// inside a control session's request timeout.
+	WatchWait time.Duration
 }
 
 // The component's defaults, the only place one is set.
@@ -85,5 +137,30 @@ func DefaultSupportSettings() *SupportSettings {
 		BundleTokenByteCount:  8,
 		BundleSaltByteCount:   32,
 		BundleFitAttemptCount: 24,
+
+		MessageMaxByteCount:      DefaultCanonicalActionSettings().SupportTextMaxByteCount,
+		FileMaxCount:             DefaultCanonicalActionSettings().SupportFileMaxCount,
+		FileMaxByteCount:         10 * 1024 * 1024,
+		AgentHourMaxCount:        5,
+		AgentDayMaxCount:         20,
+		NetworkDayMaxCount:       50,
+		PersonHourMaxCount:       10,
+		PersonDayMaxCount:        50,
+		OutboxAgentMaxCount:      10,
+		OutboxDeviceMaxCount:     50,
+		BundleMinInterval:        5 * time.Minute,
+		RetryFirstInterval:       1 * time.Minute,
+		RetryMaxInterval:         1 * time.Hour,
+		RetryWindow:              7 * 24 * time.Hour,
+		SentBundleRetention:      7 * 24 * time.Hour,
+		LoopInterval:             30 * time.Second,
+		PostTimeout:              30 * time.Second,
+		ResponseMaxByteCount:     1024 * 1024,
+		EventStreamMaxByteCount:  16 * 1024 * 1024,
+		EventMaxByteCount:        64 * 1024,
+		EventsMaxCount:           1000,
+		ConversationMaxItemCount: 1000,
+		StateMaxByteCount:        64 * 1024 * 1024,
+		WatchWait:                25 * time.Second,
 	}
 }

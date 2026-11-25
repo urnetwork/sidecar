@@ -839,6 +839,8 @@ type urTunLinuxInterface struct {
 }
 
 var _ urTunCarvedInterface = (*urTunLinuxInterface)(nil)
+var _ urTunTranslatorInterface = (*urTunLinuxInterface)(nil)
+var _ urTunMdnsInterface = (*urTunLinuxInterface)(nil)
 
 // wireguard's read: a batch dropped past the slots given is errUrTunSegmentsDropped, which goes on.
 func (self *urTunLinuxInterface) Read(bufs [][]byte, sizes []int, offset int) (int, error) {
@@ -1412,4 +1414,53 @@ func (self *urTunLinuxInterface) Close() error {
 	}()
 	<-self.eventsDone
 	return closeErr
+}
+
+// The address message of an IPv6 /128 on index, its duplicate address detection skipped (IFA_F_NODAD), since the
+// address is the tun's alone.
+func urTunLinuxIpv6AddressBody(index int, address netip.Addr) []byte {
+	octets := address.As16()
+	body := make([]byte, unix.SizeofIfAddrmsg)
+	body[0] = unix.AF_INET6
+	body[1] = 128
+	body[2] = unix.IFA_F_NODAD
+	body[3] = unix.RT_SCOPE_UNIVERSE
+	binary.NativeEndian.PutUint32(body[4:8], uint32(index))
+	return append(body, urNetlinkAttribute(unix.IFA_ADDRESS, octets[:])...)
+}
+
+// Puts the translator's own address on the device as a /128 and routes the instances' /96 through it in the main
+// table (urTunTranslatorInterface): a kernel or a device with IPv6 off refuses, and the translator stays off. The
+// device's deletion takes both off.
+func (self *urTunLinuxInterface) SetTranslator(own netip.Addr, instances netip.Prefix) error {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.closed {
+		return errUrTunClosed
+	}
+	if !own.Is6() || !instances.IsValid() || !instances.Addr().Is6() {
+		return errors.New("the translator's addresses are not IPv6")
+	}
+	if err := self.system.request(unix.RTM_NEWADDR, unix.NLM_F_CREATE|unix.NLM_F_REPLACE, urTunLinuxIpv6AddressBody(self.index, own)); err != nil {
+		return urTunLinuxError(err)
+	}
+	route := urTunLinuxRouteBody(self.index, instances.Masked(), unix.RT_TABLE_MAIN, self.system.settings.RouteMetric, true)
+	if err := self.system.request(unix.RTM_NEWROUTE, unix.NLM_F_CREATE|unix.NLM_F_REPLACE, route); err != nil {
+		return urTunLinuxError(err)
+	}
+	return nil
+}
+
+// Turns systemd-resolved's mDNS on the device's link on or off (urTunMdnsInterface), so §17.7.1's advertising proxy
+// answers what resolved asks there. The resolver's revert at close takes it off with the rest of the link's settings.
+func (self *urTunLinuxInterface) SetMulticastDns(on bool) error {
+	closed := func() bool {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		return self.closed
+	}()
+	if closed {
+		return errUrTunClosed
+	}
+	return urTunLinuxSetMulticastDns(self.index, on, self.system.settings.PlatformTimeout)
 }

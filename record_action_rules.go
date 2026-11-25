@@ -97,6 +97,11 @@ type CanonicalActionSettings struct {
 	// A kind-25 action's events, field 53's, each a card with its switch and one write of the use's effect: 20
 	// (DESIGN-COMPUTE §23.9, §16.3). An action holds at least one.
 	CalendarEventMaxCount int
+	// A kind-27 message's text, field 80's, which its card shows whole: 16 KiB of UTF-8, FB section 11's bound on a
+	// message, which the support client's form check reads too (DESIGN-COMPUTE §28.6).
+	SupportTextMaxByteCount int
+	// A kind-27 message's files, field 80's: 3 (§28.7).
+	SupportFileMaxCount int
 }
 
 // §16.8's values, and DESIGN-COMPUTE.md's for version 5. A fresh value each call.
@@ -106,6 +111,8 @@ func DefaultCanonicalActionSettings() *CanonicalActionSettings {
 		SendStdinMaxByteCount:   32 * 1024,
 		ServiceBodyMaxByteCount: 32 * 1024,
 		CalendarEventMaxCount:   20,
+		SupportTextMaxByteCount: 16 * 1024,
+		SupportFileMaxCount:     3,
 	}
 }
 

@@ -142,6 +142,8 @@ type McpServerSettings struct {
 	Search *sidecar.SidecarSearchSettings
 	// The search tools' bounds, whose wait a session's search admission waits within (tools_search.go).
 	SearchTools *sidecar.SearchToolSettings
+	// DESIGN-COMPUTE §28's support skill, whose switch decides whether its tools are registered (tools_support.go).
+	Support *sidecar.SupportSettings
 	// The longest line a session reads, the daemon's request bound (SidecarLocalSettings.RequestByteCount): a line
 	// past it closes the session, as a control session's does.
 	RequestByteCount int64
@@ -165,6 +167,7 @@ func NewMcpServerSettings(settings *sidecar.SidecarSettings, version string) *Mc
 		Ingest:           &ingest,
 		Search:           &search,
 		SearchTools:      sidecar.DefaultSearchToolSettings(),
+		Support:          settings.Support,
 		RequestByteCount: settings.LocalSettings.RequestByteCount,
 		Version:          version,
 		Clock:            settings.Clock,

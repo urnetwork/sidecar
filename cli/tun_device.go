@@ -53,6 +53,17 @@
 // and Windows, kept in step through urTunCarvedInterface beside IPv4's (tun_carve.go), while a link-local one and one
 // the host's own routes reach take none; the tun hands the platform the carve of both families as it reads it.
 //
+// §17.5's IPv6 translator runs while the tun carries the network (tun_translator.go; owner decision 778): the tun turns
+// the bridge's translator on over the network's ULA /48, drawn once and kept, and the platform puts the tun's own
+// address of the /48 on the device and routes the instances' /96 into it, so the host's IPv6 to an instance's
+// translated address reaches the bridge, which sends it as IPv4 from <block>.0.46; each reply to <block>.0.46 a link or
+// the bridge writes back is translated to IPv6 on its way into the device. Where the bridge, the platform or the /48's
+// store cannot, the translator stays off and the status says why. The tun's close turns it off before the device goes.
+//
+// Where §17.7.1's advertising proxy answers on the tun's own link (Linux's, discovery_proxy_mdns.go), the read loop
+// hands it each mDNS packet the host sends there from its own addresses, without waiting, instead of the bridge, and
+// the proxy's answers are written into the device as any reply is.
+//
 // A block of the network's that this device routes to another network, one it joined first holding the same block
 // (§17.4; bridge_shared_block.go), is withheld: each sync leaves the addresses, routes and names inside it off the
 // device, and the read loop drops anything bound into it, so a packet sent there under the exits' default route or a
@@ -285,6 +296,13 @@ type urTunNamedInterface interface {
 	Name() string
 }
 
+// An open tun whose platform runs the host's mDNS on the device's link on request: systemd-resolved's MulticastDNS for
+// the link on Linux, so §17.7.1's advertising proxy answers what resolved asks there.
+type urTunMdnsInterface interface {
+	urTunInterface
+	SetMulticastDns(on bool) error
+}
+
 // An open tun whose platform passes the bridge's carved addresses back to the host's own route under exits, as Linux's
 // exits table does by a throw route each (tun_linux.go; QD-808) and macOS's and Windows' main table by a host route
 // for each one a half would take (tun_host_routes.go; QD-869), IPv6's carve beside IPv4's (QD-971), so the host's own
@@ -352,6 +370,8 @@ type urTunArgs struct {
 	Choices *urTunChoices
 	// The connect client's destination under auto, nil for none, which is the daemon's today.
 	Destination urTunDestination
+	// The network's translator /48, drawn once and kept (tun_translator.go); nil leaves the translator off.
+	Translator func() (netip.Prefix, error)
 	// Called once the tun has closed, on whichever path, with why; nil for none.
 	OnClose func(tun *urTun, reason error)
 	// Called after each sync has applied, with its error; nil for none. A test's barrier.
@@ -413,6 +433,14 @@ type urTunStatus struct {
 	WriteErrorCount   uint64 `json:"write_error_count,omitempty"`
 	// Why the last sync failed, when it did; it is tried again.
 	SyncError string `json:"sync_error,omitempty"`
+	// §17.5's translator while it runs (tun_translator.go): the instances' /96 and the tun's own IPv6 address on the
+	// device, and the packets it translated out and back and dropped; or why it stays off.
+	Translator            string `json:"translator,omitempty"`
+	TranslatorAddress     string `json:"translator_address,omitempty"`
+	TranslatorError       string `json:"translator_error,omitempty"`
+	TranslatedOutCount    uint64 `json:"translated_out_count,omitempty"`
+	TranslatedBackCount   uint64 `json:"translated_back_count,omitempty"`
+	TranslateDroppedCount uint64 `json:"translate_dropped_count,omitempty"`
 }
 
 // A block the tun leaves off, as its status shows it: the block, and the network that routes it on this device.
@@ -453,6 +481,11 @@ type urTun struct {
 	removeDestinationChange func()
 	// sendRun as a value, made once so a burst allocates no closure
 	send func(client connect.UserNatClient, packets [][]byte)
+	// the bridge's translator while it runs, nil while off, and why it stays off: set once before the loops start
+	translator    urTunTranslatorBridge
+	translatorErr error
+	// the advertising proxy's hand-off for the mDNS packets the host sends on the link, nil for none
+	mdnsReceiver atomic.Pointer[func(packet []byte)]
 	// the connect client's destination under auto, nil for none, and the client a nil route's run goes to while the
 	// plan sends default traffic there, nil while it does not
 	destination       urTunDestination
@@ -572,6 +605,8 @@ func startUrTun(ctx context.Context, args *urTunArgs) (*urTun, error) {
 		return nil, err
 	}
 	self.readLocal()
+	// before anything is written into the device, so each reply to the translator's address is translated
+	self.startTranslator(args.Translator)
 	self.bridge.SetReceivePacket(self.write)
 	self.links.setReceive(self.write)
 	self.removeChange = self.bridge.AddChangeCallback(self.wantSync)
@@ -585,6 +620,38 @@ func startUrTun(ctx context.Context, args *urTunArgs) (*urTun, error) {
 	// a change between the first sync and the callback's install is carried by one more
 	self.wantSync()
 	return self, nil
+}
+
+// Turns §17.5's translator on for the tun's life where the bridge has one, the platform carries its IPv6 and the
+// network's /48 reads (the file's comment); anything that fails leaves it off, with why kept for the status.
+func (self *urTun) startTranslator(prefixOf func() (netip.Prefix, error)) {
+	translatorBridge, ok := self.bridge.(urTunTranslatorBridge)
+	if !ok || prefixOf == nil {
+		return
+	}
+	translatorIface, ok := self.iface.(urTunTranslatorInterface)
+	if !ok {
+		self.translatorErr = errors.New("this platform's tun carries no IPv6 for the translator")
+		return
+	}
+	prefix, err := prefixOf()
+	if err == nil {
+		err = translatorBridge.SetTranslator(prefix, self.settings.Mtu)
+	}
+	if err == nil {
+		instances, own := translatorBridge.TranslatorAddresses()
+		if err = translatorIface.SetTranslator(own, instances); err != nil {
+			translatorBridge.SetTranslator(netip.Prefix{}, 0)
+		}
+	}
+	if err != nil {
+		self.translatorErr = err
+		if self.log.V(1).Enabled() {
+			self.log.Infof("[tun]%s the translator stays off: %v", self.networkId, err)
+		}
+		return
+	}
+	self.translator = translatorBridge
 }
 
 // Wakes sync, coalescing with a wake already pending. Never blocks: the bridge's change callback.
@@ -636,6 +703,9 @@ func (self *urTun) runRead() {
 			if withheld := self.withheldPrefixes.Load(); withheld != nil {
 				packets = self.dropWithheld(packets, *withheld)
 			}
+			if receive := self.mdnsReceiver.Load(); receive != nil {
+				packets = self.handMdns(packets, *receive)
+			}
 			// takes every packet: each run's send owns its packets as the route it reaches says
 			if 0 < len(packets) {
 				self.bridge.RouteBurst(packets, self.send)
@@ -668,6 +738,64 @@ func (self *urTun) dropWithheld(packets [][]byte, withheld []netip.Prefix) [][]b
 		kept = append(kept, packet)
 	}
 	return kept
+}
+
+// Hands each mDNS packet the host sends on the tun's link from its own addresses to receive, the advertising proxy's,
+// and returns it to the pool; answers the rest in their order, in packets' own array. The addresses are read only for
+// a packet to mDNS's group.
+func (self *urTun) handMdns(packets [][]byte, receive func(packet []byte)) [][]byte {
+	var addresses []netip.Addr
+	kept := packets[:0]
+	for _, packet := range packets {
+		if _, _, ok := urMdnsProxyUdpPayload(packet); ok {
+			if addresses == nil {
+				func() {
+					self.stateLock.Lock()
+					defer self.stateLock.Unlock()
+					addresses = slices.Clone(self.addresses)
+				}()
+			}
+			if urMdnsProxyQueryFrom(packet, addresses) {
+				receive(packet)
+				connect.MessagePoolReturn(packet)
+				continue
+			}
+		}
+		kept = append(kept, packet)
+	}
+	return kept
+}
+
+// urDiscoveryProxyLink: the advertising proxy's hand-off, nil for none.
+func (self *urTun) SetMdnsReceiver(receive func(packet []byte)) {
+	if receive == nil {
+		self.mdnsReceiver.Store(nil)
+		return
+	}
+	self.mdnsReceiver.Store(&receive)
+}
+
+// urDiscoveryProxyLink: writes one of the advertising proxy's answers into the device.
+func (self *urTun) WritePacket(packet []byte) {
+	self.write(connect.TransferPath{}, protocol.ProvideMode_Network, nil, packet)
+}
+
+// urDiscoveryProxyLink: <block>.0.53 of the block in force, invalid before one.
+func (self *urTun) ResolverAddress() netip.Addr {
+	block := self.bridge.Status().Block
+	if !block.IsValid() || !block.Addr().Is4() {
+		return netip.Addr{}
+	}
+	return urTunResolverAddr(block)
+}
+
+// urDiscoveryProxyLink: the platform's mDNS on the device's link, on or off.
+func (self *urTun) SetLinkMulticastDns(on bool) error {
+	mdnsIface, ok := self.iface.(urTunMdnsInterface)
+	if !ok {
+		return errors.New("this platform runs no mDNS on the tun's link")
+	}
+	return mdnsIface.SetMulticastDns(on)
 }
 
 // Whether packet is an IPv4 packet bound into one of withheld. The overlay is IPv4 alone (§17.4), so no IPv6 packet
@@ -738,13 +866,28 @@ func (self *urTun) write(source connect.TransferPath, provideMode protocol.Provi
 	if self.writeClosed {
 		return
 	}
-	byteCount := headroom + len(packet)
+	// room for a reply to the translator's address, which grows by IPv6's larger header on its way back
+	byteCount := headroom + len(packet) + device.BridgeTranslateReplyGrowth
 	if cap(self.writeBuffer) < byteCount {
 		self.writeBuffer = make([]byte, byteCount)
 	}
 	buffer := self.writeBuffer[:byteCount]
-	copy(buffer[headroom:], packet)
-	self.writeBufs[0] = buffer
+	packetByteCount := len(packet)
+	translated := false
+	if self.translator != nil {
+		// a reply that does not translate is dropped, and the bridge counts it
+		translatedByteCount, isReply := self.translator.TranslateReply(buffer[headroom:], packet)
+		if isReply && translatedByteCount == 0 {
+			return
+		}
+		if isReply {
+			packetByteCount, translated = translatedByteCount, true
+		}
+	}
+	if !translated {
+		copy(buffer[headroom:], packet)
+	}
+	self.writeBufs[0] = buffer[:headroom+packetByteCount]
 	if _, err := self.iface.Write(self.writeBufs, headroom); err != nil {
 		self.writeErrorCount.Add(1)
 		return
@@ -1094,6 +1237,15 @@ func (self *urTun) status() *urTunStatus {
 	if self.syncErr != nil {
 		status.SyncError = self.syncErr.Error()
 	}
+	if self.translator != nil {
+		instances, own := self.translator.TranslatorAddresses()
+		if instances.IsValid() {
+			status.Translator, status.TranslatorAddress = instances.String(), own.String()
+		}
+		status.TranslatedOutCount, status.TranslatedBackCount, status.TranslateDroppedCount = self.translator.TranslatorCounts()
+	} else if self.translatorErr != nil {
+		status.TranslatorError = self.translatorErr.Error()
+	}
 	return status
 }
 
@@ -1171,6 +1323,11 @@ func (self *urTun) closeAt(reason error, started bool) {
 			defer self.writeLock.Unlock()
 			self.writeClosed = true
 		}()
+		// the translator goes before the device that carries its IPv6
+		if self.translator != nil {
+			self.translator.SetTranslator(netip.Prefix{}, 0)
+		}
+		self.mdnsReceiver.Store(nil)
 		// after a sync a change of the choices runs, which then finds the context ended and puts nothing on
 		func() {
 			self.syncLock.Lock()

@@ -650,7 +650,23 @@ message DnsSdInstance {
 // record-m2-01-canonical-action-detail's answer (QD-740): what CanonicalAction.sealed_detail opens to, a dial or
 // route grant's prefixes and ports and a version-3 access request's, with the numbers the answer gives.
 message CanonicalActionDetail { repeated string cidrs = 1; uint32 target_port = 2; repeated string grant_dst = 3; }
+// DESIGN-COMPUTE.md §16.3's field 80, which its text fence writes as a field list with numbers, and the manifest and
+// files §28.12's SupportMessageBody names (support-skill).
+message SupportFields {
+  string product = 1; string entry = 2; uint32 kind = 3; string text = 4; BundleManifest bundle = 5;
+  repeated FileFields files = 6; bytes client_ref = 7;
+}
+message BundleManifest {
+  uint32 events = 1; int64 first = 2; int64 last = 3; uint64 bytes = 4; bytes sha256 = 5;
+  repeated BundleCodeCount codes = 6;
+}
+message BundleCodeCount { string component = 1; string code = 2; uint32 count = 3; }
+message FileFields { string name = 1; uint32 type = 2; uint64 size = 3; bytes sha256 = 4; }
 `
+
+// Where the support skill's wire comes from: DESIGN-COMPUTE.md §16.3's kind 27 and field 80 and §28.12's kind 30, the
+// owner's CO-45 and CO-46, which design-records folds into DESIGN.md and RECORD.md.
+const testSupportSource = "DESIGN-COMPUTE.md §16.3, §28.8, §28.12 (CO-45, CO-46; support-skill)"
 
 // Fields the owner's answers add to messages the design fences, ahead of design-records' fold, each with the question
 // that holds its answer. Each joins the fence it extends, so both directions stay exact, and one the design comes to
@@ -660,6 +676,8 @@ var testFenceAdditions = []struct {
 	field    testFenceField
 	question string
 }{
+	// DESIGN-COMPUTE.md §16.3's field 80, kind 27's (§28.8), which DESIGN.md's fence takes at design-records' fold
+	{message: "CanonicalAction", field: testFenceField{name: "support", number: 80, typeName: "SupportFields"}, question: testSupportSource},
 }
 
 // Numbers an owner's answer reserves in a message the design fences, ahead of design-records' fold, each with the
@@ -674,6 +692,8 @@ type testFenceReservedAddition struct {
 // reservations of the fence it extends, as testFenceAdditions' fields join its fields, and one the design comes to
 // write or reserve fails until its line here leaves.
 var testFenceReservedAdditions = []testFenceReservedAddition{
+	// field 80's 81 to 89, kind 27's (DESIGN-COMPUTE.md §16.3)
+	{message: "CanonicalAction", numbers: []int32{81, 82, 83, 84, 85, 86, 87, 88, 89}, question: testSupportSource},
 }
 
 // One field an owner's answer takes out of a message the design fences, its number reserved.
@@ -703,6 +723,8 @@ type testFenceValueAddition struct {
 // that holds its answer. Each joins the fence it extends, as testFenceAdditions' fields do, and one the design comes
 // to write fails until its line here leaves.
 var testFenceValueAdditions = []testFenceValueAddition{
+	// support_send, DESIGN-COMPUTE.md §16.3's kind 27
+	{enum: "SidecarActionKind", name: "SIDECAR_ACTION_KIND_SUPPORT_SEND", number: 27, question: testSupportSource},
 }
 
 // One value an owner's answer takes out of an enum the design fences, its number reserved.
