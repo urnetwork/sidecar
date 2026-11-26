@@ -3,7 +3,8 @@
 // only the steps a schedule relies on, and T3 reruns the same schedules on server's real routes (Q-TEST-1): a
 // divergence fails. fake_api_config.go adds §7.9's authorization log, fake_api_exchange.go §7.8's token exchange,
 // fake_api_core.go enrollment, a client's mint and removal, the identity binding and its lookups, and refresh,
-// fake_api_sync.go §6.8's poll and versions routes, and http_page.go §18.8's lease, its reap and POST /sidecar/close.
+// fake_api_sync.go §6.8's poll and versions routes, http_page.go §18.8's lease, its reap and POST /sidecar/close, and
+// fake_api_label.go §12.5's GET /sidecar/label.
 //
 // Requests reach it through Transport, an http.RoundTripper that serves in process, so a client of api built with it
 // (SidecarApi's transport, a gate's source) sends real requests with no socket. It answers at two origins, api's and
@@ -82,6 +83,9 @@ type FakeApiSettings struct {
 	// The most bindings one page of GET /sidecar/identity/<sidecar_id> lists: 64, a format value of the route
 	// (plan-CORE-client-to-sidecar-lookup).
 	IdentityBindingPageCount int
+	// How many labels a network's first GET /sidecar/label draws, each one the reserved or brand rule refuses or
+	// another network holds drawn again, before the read answers 503: 16, as server's DnsLabelSettings.DrawCount.
+	LabelDrawCount int
 }
 
 func DefaultFakeApiSettings() *FakeApiSettings {
@@ -101,6 +105,7 @@ func DefaultFakeApiSettings() *FakeApiSettings {
 		LeaseReapAfter:                35 * time.Minute,
 		MaxCloseByteCount:             64,
 		IdentityBindingPageCount:      64,
+		LabelDrawCount:                16,
 	}
 }
 
@@ -161,6 +166,8 @@ type FakeApi struct {
 	sync fakeApiSyncState
 	// http_page.go's leases, connections and reaps
 	lease fakeApiLeaseState
+	// fake_api_label.go's names
+	labels fakeApiLabelState
 	// §7.4's allowlist, which a strict_exp bearer's request is held to when set (SetRouteGate), and each route it
 	// refused, as "METHOD /path"
 	routeGate     func(method string, path string) bool
@@ -243,6 +250,7 @@ func newFakeApi(ctx context.Context, clock Clock, faults *FaultQueue, barriers *
 		exchange:         newFakeApiExchangeState(),
 		core:             newFakeApiCoreState(),
 		lease:            newFakeApiLeaseState(),
+		labels:           newFakeApiLabelState(),
 		mints:            sidecar.NewMonitorValue[uint64](0),
 	}
 	self.addConfigRoutes()
@@ -250,6 +258,7 @@ func newFakeApi(ctx context.Context, clock Clock, faults *FaultQueue, barriers *
 	self.addCoreRoutes()
 	self.addSyncRoutes()
 	self.addLeaseRoutes()
+	self.addLabelRoutes()
 	return self
 }
 

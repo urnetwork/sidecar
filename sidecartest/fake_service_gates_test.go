@@ -252,3 +252,69 @@ func TestFakeServiceGatesOpensOneService(t *testing.T) {
 		t.Fatal("opening gkm opened evs")
 	}
 }
+
+// An add keeps every network the gate lists, by the file or an earlier open or add, and an enabled gate's writes switch
+// and percent, where OpenService writes the list anew: opening a service with none darkens what it listed, and an add
+// after that starts from what the open left. On the code before, a world opening its networks one at a time had only
+// OpenService, so each opening closed the service to every network opened before it.
+func TestFakeServiceGatesAddsNetworksBesideTheListedOnes(t *testing.T) {
+	gates := NewFakeServiceGates(nil)
+	listed, first, second := connect.NewId(), connect.NewId(), connect.NewId()
+	if err := gates.Set("sidecar:\n  evs: {enabled: true, writes: false, networks: [" + listed.String() + "]}\n  dns: {enabled: true, percent: 100}\n"); err != nil {
+		t.Fatal(err)
+	}
+	gates.AddServiceNetworks(sidecar.ServiceGateEvs, first)
+	gates.AddServiceNetworks(sidecar.ServiceGateEvs, second, first)
+	evs := gates.Service(sidecar.ServiceGateEvs)
+	for _, networkId := range []connect.Id{listed, first, second} {
+		if !evs.Admits(networkId) {
+			t.Errorf("evs refuses %s after the adds", networkId)
+		}
+	}
+	if evs.Writes() {
+		t.Error("an add turned the file's writes switch back on")
+	}
+	gates.AddServiceNetworks(sidecar.ServiceGateDns, first)
+	if dns := gates.Service(sidecar.ServiceGateDns); dns.Percent() != 100 || !dns.Admits(second) {
+		t.Errorf("an add dropped the dns gate's percent: %d", dns.Percent())
+	}
+
+	// a gate the file leaves closed opens as OpenService opens one, and no other service with it
+	gates.AddServiceNetworks(sidecar.ServiceGateGkm, first)
+	if gkm := gates.Service(sidecar.ServiceGateGkm); !gkm.Admits(first) || gkm.Admits(second) || !gkm.Writes() || gkm.Percent() != 0 {
+		t.Fatal("an add to a closed gate opened it otherwise than OpenService")
+	}
+	if gates.Service(sidecar.ServiceGateSockets).Admits(first) {
+		t.Fatal("an add to gkm opened sockets")
+	}
+	gates.AddServiceNetworks(sidecar.ServiceGateGkm, second)
+	if gkm := gates.Service(sidecar.ServiceGateGkm); !gkm.Admits(first) || !gkm.Admits(second) {
+		t.Fatal("a second add closed gkm to the first network")
+	}
+
+	// OpenService writes the list anew
+	gates.OpenService(sidecar.ServiceGateGkm, second)
+	if gkm := gates.Service(sidecar.ServiceGateGkm); gkm.Admits(first) || !gkm.Admits(second) {
+		t.Fatal("OpenService kept a network it does not list")
+	}
+	gates.OpenService(sidecar.ServiceGateGkm)
+	if gates.Service(sidecar.ServiceGateGkm).Admits(second) {
+		t.Fatal("OpenService with no network kept one")
+	}
+	gates.AddServiceNetworks(sidecar.ServiceGateGkm, first)
+	if gkm := gates.Service(sidecar.ServiceGateGkm); !gkm.Admits(first) || gkm.Admits(second) {
+		t.Fatal("an add after OpenService did not start from what it left")
+	}
+
+	// a Set writes every list anew, and a later add starts from the file's
+	if err := gates.Set("sidecar:\n  gkm: {enabled: true, networks: [" + listed.String() + "]}\n"); err != nil {
+		t.Fatal(err)
+	}
+	gates.AddServiceNetworks(sidecar.ServiceGateGkm, second)
+	if gkm := gates.Service(sidecar.ServiceGateGkm); !gkm.Admits(listed) || !gkm.Admits(second) || gkm.Admits(first) {
+		t.Fatal("an add after a Set did not start from the file's list")
+	}
+	if gates.Service(sidecar.ServiceGateEvs).Admits(first) {
+		t.Fatal("a Set kept a list its text does not hold")
+	}
+}

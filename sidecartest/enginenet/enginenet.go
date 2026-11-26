@@ -177,11 +177,13 @@ func (self *Engines) Gate() *sidecar.AclGateCache {
 	return self.cache
 }
 
-// Opens evs and gkm to networkId (sidecar.yml's dark gates) and funds its storage.
+// Opens evs and gkm to networkId beside every network their gates list already, as sidecar.yml's dark gates list each
+// network a test runs, and funds its storage. So a world that opens a second network, as a second Bootstrap does, keeps
+// evs and gkm open to the first, and to any network a test opened through the gates itself.
 func (self *Engines) OpenNetwork(networkId sidecar.Id) {
 	fakes := self.net.Fakes()
-	fakes.Gates.OpenService(sidecar.ServiceGateEvs, connect.Id(networkId))
-	fakes.Gates.OpenService(sidecar.ServiceGateGkm, connect.Id(networkId))
+	fakes.Gates.AddServiceNetworks(sidecar.ServiceGateEvs, connect.Id(networkId))
+	fakes.Gates.AddServiceNetworks(sidecar.ServiceGateGkm, connect.Id(networkId))
 	fakes.Quota.SetBalance(connect.Id(networkId), self.settings.NetworkBalanceByteCount)
 }
 

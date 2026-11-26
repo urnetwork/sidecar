@@ -69,7 +69,8 @@ type BootstrapResult struct {
 
 // The bootstrap (the file's comment): base 1 landed and the gate holding it, the config group formed and the first
 // head committed. configRepoId names the config repo, nil to draw one; a retry of a bootstrap cut short passes the
-// same.
+// same. It opens evs and gkm to the network beside every network opened before (OpenNetwork), so one world bootstraps
+// several networks and reads each.
 func (self *Engines) Bootstrap(ctx context.Context, args *BootstrapArgs, configRepoId *sidecar.Id) (*BootstrapResult, error) {
 	if args == nil || args.Sidecar == nil || args.Gkm == nil {
 		return nil, errors.New("enginenet: a bootstrap needs a Sidecar and its key client")
