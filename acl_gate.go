@@ -15,6 +15,11 @@
 // one load per network at a time, and a trigger during it causes exactly one more. LoadConcurrency bounds loads across
 // networks (§8.18's fan-out risk).
 //
+// One entry can reach Changed more than once: api's script INCRs {acl_}v and then EXPIREs it, two keyspace events
+// under notify-keyspace-events Kg$sx. A second trigger that lands after the load took its due owes that one more load,
+// which reads the log as it then stands, an entry appended since included. It installs, and so tells the install
+// callbacks, only a state newer than the one held, after that state is installed, and at most once.
+//
 // A load checks every entry's chain from this process's own pin, wherever the source read it (ConfigLog.ApplyRun): a
 // run that breaks a link, a lower n, or a second A_n at a position the cache holds is refused with an alarm, and the
 // old state keeps serving; a cold start is held to the pin the cache last held for the network. The cache writes
@@ -26,6 +31,10 @@
 // What follows the cache rather than asking it (acl_gate_networks.go; QD-718): Networks lists the networks it holds
 // a loaded state of, SidecarNetwork answers which of them holds a sidecar's row, and AddInstallCallback's callbacks
 // run after each new snapshot is installed, so a follower woken by one reads the new state and never the one before.
+//
+// Close stops the poll and the loads and starts no load after; CloseAndWait also waits for every goroutine the cache
+// started, the poll and each network's loader, so nothing the cache calls (OnLoad, an install callback, the source)
+// runs once it returns. An owner that tears down what those touch, a test's world among them, waits there first.
 //
 // Safe for concurrent use. The install of a new snapshot is this cache's linearization point, between the
 // acl_gate.install barriers. Nothing here creates, derives or unwraps a key, so nothing calls testHookSecret.
@@ -117,6 +126,12 @@ type AclGateCache struct {
 	// bounds loads across networks
 	loadSlots chan struct{}
 
+	// whether Close ran, and the goroutines the cache started, the poll and each loader: one is counted only under
+	// lifecycleLock while the cache is open, so CloseAndWait's wait never meets one counted after it began
+	lifecycleLock sync.Mutex
+	closed        bool
+	goroutines    sync.WaitGroup
+
 	// which loaded networks hold a row of each sidecar (acl_gate_networks.go)
 	sidecars *aclGateSidecarIndex
 	// what runs after each install: read with no lock, replaced whole under stateLock
@@ -157,13 +172,31 @@ func NewAclGateCache(ctx context.Context, source AclGateSource, clock Clock, set
 	installCallbacks := []*aclGateInstallCallback{}
 	self.installCallbacks.Store(&installCallbacks)
 	self.epoch.Store(1)
-	go self.run()
+	self.goroutines.Add(1)
+	go func() {
+		defer self.goroutines.Done()
+		self.run()
+	}()
 	return self
 }
 
-// Stops the poll and every load at its next step. Snapshots already installed stay readable.
+// Stops the poll and every load at its next step, and starts no load after. Snapshots already installed stay
+// readable. Returns at once, with a load perhaps still finishing; CloseAndWait waits for it.
 func (self *AclGateCache) Close() {
+	func() {
+		self.lifecycleLock.Lock()
+		defer self.lifecycleLock.Unlock()
+		self.closed = true
+	}()
 	self.cancel()
+}
+
+// Close, then waits until the poll and every loader have returned, so no OnLoad or install callback runs after it.
+// What the cache calls (OnLoad, an install callback, the source) must not call it: the goroutine it runs on is one the
+// wait is for.
+func (self *AclGateCache) CloseAndWait() {
+	self.Close()
+	self.goroutines.Wait()
 }
 
 // The network's verified state and what the cache says of it: one map read, no lock, no I/O and no allocation.
@@ -254,7 +287,7 @@ func (self *AclGateCache) track(networkId Id) *aclGateNetwork {
 	return network
 }
 
-// Marks a load due and starts the network's loader when none runs.
+// Marks a load due and starts the network's loader when none runs. A closed cache starts none.
 func (self *AclGateCache) trigger(network *aclGateNetwork) {
 	start := func() bool {
 		network.stateLock.Lock()
@@ -266,9 +299,33 @@ func (self *AclGateCache) trigger(network *aclGateNetwork) {
 		network.loading = true
 		return true
 	}()
-	if start {
-		go self.loader(network)
+	if !start {
+		return
 	}
+	if !self.addGoroutine() {
+		// closed: no loader runs to clear the mark
+		func() {
+			network.stateLock.Lock()
+			defer network.stateLock.Unlock()
+			network.loading = false
+		}()
+		return
+	}
+	go func() {
+		defer self.goroutines.Done()
+		self.loader(network)
+	}()
+}
+
+// Counts one more goroutine for CloseAndWait to wait for, or false once the cache is closed.
+func (self *AclGateCache) addGoroutine() bool {
+	self.lifecycleLock.Lock()
+	defer self.lifecycleLock.Unlock()
+	if self.closed {
+		return false
+	}
+	self.goroutines.Add(1)
+	return true
 }
 
 // Loads the network while triggers keep coming, one load at a time, each holding one of the process's load slots, and
