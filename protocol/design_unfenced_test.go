@@ -735,8 +735,6 @@ type testFenceValueAddition struct {
 // that holds its answer. Each joins the fence it extends, as testFenceAdditions' fields do, and one the design comes
 // to write fails until its line here leaves.
 var testFenceValueAdditions = []testFenceValueAddition{
-	// DESIGN-COMPUTE.md §28.9's support topic, whose hint §6.11 gives no MessageType (support-push-topic)
-	{enum: "MessageType", name: "SUPPORT_HINT", number: 0x1801, question: "support-push-topic-hint-bytes"},
 }
 
 // One value an owner's answer takes out of an enum the design fences, its number reserved.

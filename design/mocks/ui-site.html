@@ -511,6 +511,14 @@ mark{background:rgba(237,143,255,.28);color:var(--ink);border-radius:3px;padding
 .bigmeter .l{display:flex;justify-content:space-between;font-size:13.5px;color:var(--ink-2)}
 .bigmeter .l b{color:var(--ink);font-weight:600}
 .bigmeter .meter{height:8px;border-radius:4px;margin-top:9px}
+/* web search (UI-17) */
+.sres{padding:4px 10px 2px;font-family:var(--f-text)}
+.sr{padding:7px 0;border-top:1px solid #1d1d1d}
+.sr:first-child{border-top:none}
+.sr .t{font-size:13.5px;color:var(--blue)}
+.sr .h{font-size:11.5px;color:var(--muted);margin-top:1px}
+.sr .x{font-size:12.5px;color:var(--ink-2);margin-top:2px;line-height:1.4}
+.sfoot{padding:7px 10px;border-top:1px solid #1d1d1d;font:11.5px var(--f-text);color:var(--muted)}
 /* compute */
 .hero{background:var(--card);border-radius:18px;padding:16px}
 .hero .lb{font-size:13px;color:var(--muted)}
@@ -1099,7 +1107,7 @@ footer.end{max-width:1180px;margin:0 auto;padding:0 24px 60px;color:var(--muted)
           <li><svg class="i"><use href="#i-check"/></svg>Every VPN feature, 1 TB of data a month</li>
           <li><svg class="i"><use href="#i-check"/></svg>100 MB of encrypted, versioned storage</li>
           <li><svg class="i"><use href="#i-check"/></svg>Burner: as many addresses as you want, the password manager</li>
-          <li><svg class="i"><use href="#i-check"/></svg>Bot: local models free; remote ones from your compute balance</li>
+          <li><svg class="i"><use href="#i-check"/></svg>Bot: local models free; remote models and private web search from your compute balance</li>
           <li><svg class="i"><use href="#i-check"/></svg>The CLI: storage, IPs, forwarding, the TLS edge, email, the model router</li>
         </ul>
         <span class="s-btn o pbtn">Get Connected</span>
@@ -1233,7 +1241,7 @@ ur login</pre>
       <div>
         <span class="s-kick lime">Burner</span>
         <h1 class="s-h1">Email only<br>you can read</h1>
-        <p class="s-sub">Burner is fully encrypted email whose mail server runs on your own device. As many addresses as you want, a fresh one for every site, and a password manager that keeps each one's login.</p>
+        <p class="s-sub">Burner is fully encrypted, fully searchable email whose mail server runs on your own device. As many addresses as you want, a fresh one for every site, and a password manager that keeps each one's login.</p>
         <div class="s-cta"><span class="s-btn">Open Burner<svg class="i"><use href="#i-arrow"/></svg></span><span class="s-btn o">Get the app</span></div>
         <p class="s-hint">On a computer, opens Burner in your browser at ur.io/app/burner. On a phone, opens the app, or its store if it isn't installed.</p>
       </div>
@@ -1302,7 +1310,7 @@ ur login</pre>
       <div>
         <span class="s-kick mag">Bot</span>
         <h1 class="s-h1">A fully<br>private bot</h1>
-        <p class="s-sub">Run models on your own device, or remote ones sealed inside TEEs. Give your agents encrypted enclaves of their own. And see everything they do, in one place only you can see.</p>
+        <p class="s-sub">Run models on your own device, or remote ones sealed inside TEEs. Search the web privately. Give your agents encrypted enclaves of their own. And see everything they do, in one place only you can see.</p>
         <div class="s-cta"><span class="s-btn">Open Bot<svg class="i"><use href="#i-arrow"/></svg></span><span class="s-btn o">Install the CLI</span></div>
         <p class="s-hint">On a computer, opens Bot at ur.io/app/bot; on a phone, the app. Or run <span class="mono" style="color:var(--s-white)">ur harness</span> in a terminal.</p>
       </div>
@@ -1333,6 +1341,7 @@ ur login</pre>
         <div class="fc"><span class="fic blue"><svg class="i"><use href="#i-shield"/></svg></span><h3>TEE models</h3><p>Larger models run inside TEEs whose hardware proves what is running before your prompt is sent, and every answer carries that proof.</p></div>
         <div class="fc"><span class="fic mag"><svg class="i"><use href="#i-chip"/></svg></span><h3>Encrypted enclaves</h3><p>Start a remote harness in a confidential VM. Its keys are made inside it, it keeps working while your phone sleeps, and you attach from any device.</p></div>
         <div class="fc"><span class="fic yel"><svg class="i"><use href="#i-users"/></svg></span><h3>Every agent in view</h3><p>One feed shows each agent's status, summaries, approvals and messages to other agents. Mention one with @, or message them all.</p></div>
+        <div class="fc" style="grid-column:1 / -1"><span class="fic coral"><svg class="i"><use href="#i-search"/></svg></span><h3>Private web search</h3><p>You and your agents search the web through Parallel, with no account and no address of yours. Parallel never learns who asked, and no URnetwork server sees a search. Parallel may keep searches and train on them, so never search for passwords or personal details. Each search costs about a cent from your compute balance.</p></div>
       </div>
     </div>
     <div class="s-sec">
@@ -1342,7 +1351,8 @@ ur login</pre>
         <div class="r"><b>On your device</b><span>Stays on the device that runs the model.</span><span class="ok">No one else</span></div>
         <div class="r"><b>In a TEE</b><span>Sealed to hardware that proved what it runs. The provider is trusted not to attack its own machine.</span><span class="mid">Only the provider, by attacking its hardware</span></div>
         <div class="r"><b>Direct</b><span>Labeled "not in a TEE"; Bot asks before the first use.</span><span class="bad">The model's provider</span></div>
-        <div class="r"><b>URnetwork</b><span>Routes and bills each call without seeing its content.</span><span class="ok">Never</span></div>
+        <div class="r"><b>Web search</b><span>Goes through URnetwork's network to Parallel, which may keep it and train on it, never knowing who asked. Your history keeps what you searched for, not the results.</span><span class="mid">Parallel, and Vercel, which hosts its gateway</span></div>
+        <div class="r"><b>URnetwork</b><span>Routes and bills each call and search without seeing its content.</span><span class="ok">Never</span></div>
       </div>
     </div>
     <div class="s-sec" style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:40px;align-items:center">
@@ -1361,7 +1371,7 @@ ur login</pre>
   </div>
   <div class="s-foot"></div>
 </div></div>
-<p class="note"><b>Notes.</b> UI-2 widens "Agents talk in the open" to every agent action, visible only to the person; in a team network, admins also read actions and approvals (DESIGN R-KEYS-9; Q-UI-24). The table follows DESIGN-COMPUTE §2.3 and §4.3's labels (local; a TEE at AP, where the provider company is inside the boundary; none). Browsers run local models on desktops with WebGPU (CO-47, CO-48). Chats live in encrypted storage and continue on the person's other devices (DESIGN-COMPUTE §7.7, §24.7).</p>
+<p class="note"><b>Notes.</b> UI-2 widens "Agents talk in the open" to every agent action, visible only to the person; in a team network, admins also read actions and approvals (DESIGN R-KEYS-9; Q-UI-24). The table follows DESIGN-COMPUTE §2.3 and §4.3's labels (local; a TEE at AP, where the provider company is inside the boundary; none). Browsers run local models on desktops with WebGPU (CO-47, CO-48). Chats live in encrypted storage and continue on the person's other devices (DESIGN-COMPUTE §7.7, §24.7). Web search is DESIGN-COMPUTE §21's: Parallel's keyless gateway, paid per search, $0.012, with no URnetwork server in the query's path (UI-17).</p>
 </section>
 
 <!-- ============================== FOOTER ============================== -->
@@ -1501,7 +1511,7 @@ FAIL  3 of 20 runs</pre></div>
     <div class="m-hero">
       <span class="s-kick lime">Burner</span>
       <h1 class="s-h1">Email only you can read</h1>
-      <p class="s-sub">As many addresses as you want, fully encrypted, with the mail server on your own device and a password manager built in.</p>
+      <p class="s-sub">As many addresses as you want, fully encrypted and fully searchable, with the mail server on your own device and a password manager built in.</p>
       <div class="s-cta"><span class="s-btn">Open Burner<svg class="i"><use href="#i-arrow"/></svg></span></div>
       <p class="s-hint">Opens the app, or the App Store if it isn't installed.</p>
     </div>
