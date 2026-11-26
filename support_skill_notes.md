@@ -127,4 +127,34 @@ Waiting on others (each failing closed meanwhile):
 - SKILL (SKILL-M11-05, -M11-06): inbox notices and wakes for an agent whose run is closed, and `ur install-harness`
   writing the skill beside recurd's.
 - CACL (§16.4's compute block): the network's `support` settings; until then the block's defaults.
-- The push service: the `support` topic's hint and its wake.
+- FB's feedback service: the `support` topic's publisher, which calls `NewSupportClientHint` and `Push.HintSidecars`
+  for each of the member's sidecars when the conversation gains an event (below); until then nothing hints the topic,
+  and the loop's interval reads.
+
+## M13b: the `support` push topic (draft)
+
+Track `support-push-topic`, §28.9 and FB section 7 as Appendix J amends them; dark with the rest of the skill.
+
+| Piece | Where |
+|---|---|
+| The topic in §6.8's registry: `support`, a clock the hint script raises past the stored value, as mail's and compute's | `push_topic.go` (`PushTopicSupport`) |
+| The hint: `SupportHint {product, entry, seq}` under `SUPPORT_HINT` (0x1801), never content (§2.8's support-2) | `protocol/support.proto`, `protocol/types.proto`; question `support-push-topic-hint-bytes` |
+| The publisher's half: the hint the feedback service passes to `Push.HintSidecars` | `support_push_topic.go` (`NewSupportClientHint`) |
+| A wake class, `t: support`, as mail's (§18.7, WK4) | `pushservice/wake_enqueue.go`, `sidecartest/privacy_wake.go` |
+| Who is told: a sidecar's client; a forwarding device client gets team alone (owner decision 197), so support's hint goes to it as its seq | `server/connect`'s `sidecarPublisherTopics`, unchanged; `pushservice/support_topic_test.go` |
+| The device: each client generation's push holds the topic for the support client (`support-hint`, only with the release's switch on); a hint or a resync notice wakes the loop, which reads the member's events and tells its listeners (the watch, MCP's `resources/updated`, the apps) | `support_push_topic.go`, `support_component.go` |
+| `SupportClient.Wake`: read now, answering after a pass that began after the call | `support_client.go` |
+| The apps' hook: `SupportNotificationOf` keeps support's replies (note) and moves (status, fixed_in, linked, merged); `UnreadReplies` for the badge; the sdk's `Support().Wake`, `AddNotificationListener` and `Unread` | `support_push_topic.go`; `sdk/sidecar_support_notify.go` |
+
+Readings:
+
+- **The hint's bytes.** §28.9 gives `{product, entry, seq}` with no MessageType or numbers: the draft builds the
+  question's recommendation, a message numbered in the order written under a new `SUPPORT_HINT` at §16's service byte,
+  off the forwarding leg (`support-push-topic-hint-bytes`, until the owner answers).
+- **What the device reads of a hint.** Only its product: a hint on recURd's thread asks nothing of this client; any
+  other notice of the topic, a hint whose bytes a resident dropped or that does not decode included, wakes the loop,
+  since a hint is a prompt and the read is the service's answer.
+- **A raised clock.** Appendix D calls `support` a clock topic; the feedback service's instances may append a member's
+  events in one millisecond, so the script raises it past the stored value, as every multi-writer clock since QD-1212.
+- **A wake class.** "waking the apps as mail does" (§28.9, Appendix D): §18.7's classes gain `support`, the payload a
+  class and a version alone; api-6's text lists the classes as (mail, team, evs, core), for a fold to extend.

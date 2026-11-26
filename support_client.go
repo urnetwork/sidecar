@@ -202,7 +202,9 @@ type SupportClient struct {
 	service    *supportService
 	wake       chan struct{}
 	runDone    chan struct{}
-	closeOnce  sync.Once
+	// the loop's passes, each counted as it begins and ends, so Wake can wait for one that began after it
+	passes    *MonitorValue[supportPasses]
+	closeOnce sync.Once
 	// kind 27's lookup, removed at Close
 	unregisterLookup func()
 
@@ -219,6 +221,14 @@ type SupportClient struct {
 	// guarded by stateLock
 	listeners      map[int]func(update *SupportUpdate)
 	nextListenerId int
+	// what the newest pass to end answered: nil once it read the member's events
+	lastPassErr error
+}
+
+// The loop's passes so far: those begun, and those ended.
+type supportPasses struct {
+	begun uint64
+	ended uint64
 }
 
 // A client on args, its run loop started; Close stops it. Its store is read at use, never here.
@@ -243,6 +253,7 @@ func NewSupportClient(args *SupportClientArgs) (*SupportClient, error) {
 		service:    newSupportService(args.HttpClient, args.Settings),
 		wake:       make(chan struct{}, 1),
 		runDone:    make(chan struct{}),
+		passes:     NewMonitorValue(supportPasses{}),
 		sources:    sources,
 		listeners:  map[int]func(update *SupportUpdate){},
 	}
@@ -933,11 +944,24 @@ func (self *SupportClient) hostAndToken(ctx context.Context) (string, string, er
 }
 
 // The loop: posts what is due, spends decisions on what awaits one, reads the member's events, and prunes, each wake or
-// interval.
+// interval, counting each pass as it begins and ends for Wake.
 func (self *SupportClient) run() {
 	defer close(self.runDone)
 	for {
-		self.pass()
+		self.passes.Update(func(passes supportPasses) supportPasses {
+			passes.begun += 1
+			return passes
+		})
+		err := self.pass()
+		func() {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			self.lastPassErr = err
+		}()
+		self.passes.Update(func(passes supportPasses) supportPasses {
+			passes.ended += 1
+			return passes
+		})
 		select {
 		case <-self.ctx.Done():
 			return
@@ -947,19 +971,50 @@ func (self *SupportClient) run() {
 	}
 }
 
-// One pass of the loop.
-func (self *SupportClient) pass() {
+// Reads the member's events now: wakes the loop and answers once a pass that began after the call has ended, with that
+// pass's read's error, or a later pass's. The app's support wake calls it (the sdk's Support().Wake, for §18.7's
+// payload of class support), holding its OS background window until it answers, so the notifications the read raises
+// reach the app's listeners before the window closes. ErrSupportUnavailable with the release's switch off or once the
+// client has closed, and ctx's error when it ends first.
+func (self *SupportClient) Wake(ctx context.Context) error {
 	if !self.settings.ServiceEnabled {
-		return
+		return ErrSupportUnavailable
+	}
+	// a pass begun before this read may have read before the event the wake announces, so the pass after it counts
+	testHookBarrier("support_client.wake.before", "")
+	target := self.passes.Value().begun + 1
+	self.poke()
+	testHookBarrier("support_client.wake.after", "")
+	for {
+		passes, changed := self.passes.Get()
+		if target <= passes.ended {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			return self.lastPassErr
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-self.runDone:
+			return ErrSupportUnavailable
+		case <-changed:
+		}
+	}
+}
+
+// One pass of the loop: nil once it read the member's events, else why it did not.
+func (self *SupportClient) pass() error {
+	if !self.settings.ServiceEnabled {
+		return ErrSupportUnavailable
 	}
 	items, err := self.outboxItems()
 	if err != nil {
-		return
+		return err
 	}
 	now := self.clock.Now()
 	for _, item := range items {
 		if self.ctx.Err() != nil {
-			return
+			return self.ctx.Err()
 		}
 		switch item.State {
 		case supportOutboxAwaiting:
@@ -985,7 +1040,7 @@ func (self *SupportClient) pass() {
 			}
 		}
 	}
-	self.readEvents()
+	return self.readEvents()
 }
 
 // Posts one message, its attachments after it, and records what came of it: posted, retried later, or given up.
@@ -1071,15 +1126,16 @@ func (self *SupportClient) postAttachments(host string, token string, entry stri
 	return nil
 }
 
-// Reads the member's events from the cursor, each into the conversation's view, a kind-30 entry and a notice.
-func (self *SupportClient) readEvents() {
+// Reads the member's events from the cursor, each into the conversation's view, a kind-30 entry and a notice: nil once
+// the read answered, else why it did not, the events it took before a failure applied either way.
+func (self *SupportClient) readEvents() error {
 	host, token, err := self.hostAndToken(self.ctx)
 	if err != nil {
-		return
+		return err
 	}
 	state, err := self.loadState()
 	if err != nil {
-		return
+		return err
 	}
 	events := []*SupportServiceEvent{}
 	cursor, err := self.service.events(self.ctx, host, token, state.Cursor, func(event *SupportServiceEvent) {
@@ -1093,11 +1149,14 @@ func (self *SupportClient) readEvents() {
 		self.receive(event)
 	}
 	if cursor != state.Cursor {
-		self.changeState(func(state *supportState) error {
+		if changeErr := self.changeState(func(state *supportState) error {
 			state.Cursor = cursor
 			return nil
-		})
+		}); changeErr != nil && err == nil {
+			err = changeErr
+		}
 	}
+	return err
 }
 
 // One event received: the view takes it, unless it holds its entry and seq already, as a second device's copy would;
