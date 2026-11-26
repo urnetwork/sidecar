@@ -197,10 +197,11 @@ func fs21Personal() *fs21Scenario {
 // What FS-21's steps share.
 type fs21World struct {
 	*fsTeamWorld
-	settings    *Fs21Settings
-	scenario    *fs21Scenario
-	tier        *AclExchangeTier
-	devices     map[string]*fs21Device
+	settings *Fs21Settings
+	scenario *fs21Scenario
+	tier     *AclExchangeTier
+	devices  map[string]*fs21Device
+	// on the Net's context, closed at the last step, which waits for its loaders
 	cache       *sidecar.AclGateCache
 	loads       chan *bridge.AuthPin
 	restoreGate func()
@@ -1026,7 +1027,9 @@ func fs21DataTwin(world *fs21World) []*Step {
 }
 
 // The last step: every exchange and act still running joins, then the world's dispatchers, providers, gate and
-// writer stop.
+// writer stop. The gate cache closes once server's contract gate no longer reads it, and the step waits for its
+// loaders, so none reads server's stores or reaches the Net's hooks after the schedule. A schedule that fails at an
+// earlier step runs no later one, so its cache ends with the Net's context, unwaited for.
 func fs21Close(world *fs21World) *Step {
 	return &Step{Actor: "setup", Action: func(ctx context.Context, net *Net) error {
 		if world.headCheck != nil {
@@ -1061,6 +1064,10 @@ func fs21Close(world *fs21World) *Step {
 		if world.restoreGate != nil {
 			world.restoreGate()
 			world.restoreGate = nil
+		}
+		if world.cache != nil {
+			// its loaders may be reading server's stores: the wait gives up the baton, as every real wait here does
+			net.Barriers().Blocking(world.cache.CloseAndWait)
 		}
 		return fsTeamClose(world.fsTeamWorld).Action(ctx, net)
 	}}
