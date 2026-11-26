@@ -53,6 +53,11 @@ type ComputeLedgerSettings struct {
 	// §9.11's daily load: at most $1,500 a UTC day for each network and each payer, across markets, promotion codes
 	// counted with purchases (Q-BAL-15).
 	DailyLoadNanoUsd int64
+	// The most uncovered charges a credit or a reversal draws an overrun for (§9.4's "drawn from the next lot
+	// credited"), oldest first within the charges' retention: 500, past any overrun the floor and the direct-call
+	// exposure leave. An overrun no charge found within it stays in settled's negative, for the next lot. Not
+	// positive draws none. A reading: §9.4 names no figure.
+	OverrunDrawMaxChargeCount int
 	// §9.11: 3-D Secure is requested on a first purchase above this: $50.
 	ThreeDSecureAboveNanoUsd int64
 
@@ -254,12 +259,13 @@ func DefaultComputeLedgerSettings() *ComputeLedgerSettings {
 		StoreSubscriptionCredits: []int64{10, 25, 50, 100},
 		MonthlyPlanCredits:       []int64{10, 25, 50, 100, 250},
 
-		BalanceCapNanoUsd:        usd(10_000),
-		NewAccountDayNanoUsd:     usd(100),
-		NewAccountWindowNanoUsd:  usd(200),
-		NewAccountWindow:         7 * day,
-		DailyLoadNanoUsd:         usd(1_500),
-		ThreeDSecureAboveNanoUsd: usd(50),
+		BalanceCapNanoUsd:         usd(10_000),
+		NewAccountDayNanoUsd:      usd(100),
+		NewAccountWindowNanoUsd:   usd(200),
+		NewAccountWindow:          7 * day,
+		DailyLoadNanoUsd:          usd(1_500),
+		OverrunDrawMaxChargeCount: 500,
+		ThreeDSecureAboveNanoUsd:  usd(50),
 
 		ThresholdBelowNanoUsd:      usd(5),
 		ThresholdPackCredits:       20,

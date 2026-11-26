@@ -14,7 +14,9 @@
 //	                         network and kind, in the one statement that deletes them
 //	drops       each charge partition whose whole day ended past the settings' 90 days, in a transaction of its own
 //	            with a short lock wait: the operation rows kept once booked that name its charges (a search's, a
-//	            refund's, an adjustment's), its charges' lot draws, then the partition, detached and dropped
+//	            refund's, an adjustment's), its charges' lot draws, then the partition, detached and dropped; then
+//	            the payers' rows past compute-2's retention, a payer's day sums past 30 days and a payer past 2 years
+//	            (BAL-M12-07's rows, whose retention no other job of §14.5 keeps: a reading the report names)
 //
 // Each difference is an alarm: urnetwork_compute_alarms_total, by the check (rollup_day, rollup_total), counted once a
 // pass for each network and kind, which §14.7's page reads (CSRV C§14.7), and the result's mismatches, which name the
@@ -142,6 +144,9 @@ type ComputeRollupResult struct {
 	PrunedRowCount int64
 	// Charge partitions dropped, with what went with them.
 	Dropped []*model.ComputeChargePartitionDropped
+	// Payer day sums and payers deleted past their retention.
+	PrunedPayerDayCount int64
+	PrunedPayerCount    int64
 }
 
 // Makes compute_charge's partitions for now's UTC day and the settings' days ahead where none stands, each bounded at
@@ -237,25 +242,53 @@ func ComputeRollupDay(env operator.Env, ctx context.Context, settings *model.Com
 		if err != nil {
 			return result, err
 		}
+		result.PrunedPayerDayCount, result.PrunedPayerCount, err = computeRollupPayerPrune(env, ctx, settings, now)
+		if err != nil {
+			return result, err
+		}
 		position.Phase = ComputeRollupPhaseDone
 	}
 	return result, nil
 }
 
-// What raises one mismatch's alarm: the counter, where the env holds metrics. A process without them still answers
-// the mismatches in its result.
-func computeRollupAlarm(env operator.Env) func(mismatch *ComputeRollupMismatch) {
+// The payers' rows past compute-2's retention: day sums before the settings' 30 days, payers whose first purchase
+// day is before its 2 years.
+func computeRollupPayerPrune(env operator.Env, ctx context.Context, settings *model.ComputeLedgerSettings, now time.Time) (int64, int64, error) {
+	db, err := env.Db()
+	if err != nil {
+		return 0, 0, err
+	}
+	days, payers := int64(0), int64(0)
+	err = db.Tx(ctx, func(tx operator.DbTx) error {
+		var err error
+		days, payers, err = model.ComputePayerPruneInTx(env, ctx, tx, now.Add(-settings.PayerDayRetention), now.Add(-settings.PayerRetention))
+		return err
+	}, operator.DbIsolationReadCommitted)
+	return days, payers, err
+}
+
+// What raises one of the ledger's alarms by its kind: the counter, where the env holds metrics. A process without
+// them raises nothing here, and each caller still answers what it found.
+func computeAlarm(env operator.Env) func(kind string) {
 	metrics, err := env.Metrics()
 	if err != nil {
-		return func(mismatch *ComputeRollupMismatch) {}
+		return func(kind string) {}
 	}
 	counter := metrics.Counter(computeAlarmsMetric, "compute faults that alarm, by kind", "kind")
+	return func(kind string) {
+		counter.Add(1, kind)
+	}
+}
+
+// What raises one mismatch's alarm.
+func computeRollupAlarm(env operator.Env) func(mismatch *ComputeRollupMismatch) {
+	alarm := computeAlarm(env)
 	return func(mismatch *ComputeRollupMismatch) {
 		switch mismatch.Check {
 		case ComputeRollupCheckDay:
-			counter.Add(1, ComputeAlarmRollupDay)
+			alarm(ComputeAlarmRollupDay)
 		case ComputeRollupCheckTotal:
-			counter.Add(1, ComputeAlarmRollupTotal)
+			alarm(ComputeAlarmRollupTotal)
 		}
 	}
 }
