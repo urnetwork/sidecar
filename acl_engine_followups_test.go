@@ -108,14 +108,38 @@ func newTestAclFollowupsWorld(t *testing.T) *testAclFollowupsWorld {
 	self.laptop = world.device("followups laptop", owner)
 	self.desk = world.device("followups desk", owner)
 	self.phone = world.device("followups phone", member)
-	world.setPolicy(t, `{
-  "requests": [
-    { "src": ["autogroup:member"], "dst": ["autogroup:member"], "allow": ["dial", "route"], "approver": ["autogroup:admin"] },
-  ],
-}`)
+	self.setTests(t, "")
 	phoneAtom := AclDerivedAtom(AclDerivedAtomSidecar, self.phone.Bytes())
 	world.statements.Atoms = append(world.statements.Atoms, &protocol.AclAtom{Atom: phoneAtom.Bytes(), SidecarIds: [][]byte{self.phone.Bytes()}})
 	return self
+}
+
+// Sets the document: its one requests rule, whose id stays the same whatever tests follow it, and tests, a "tests" key
+// with its list, or "" for none.
+func (self *testAclFollowupsWorld) setTests(t *testing.T, tests string) {
+	t.Helper()
+	self.world.setPolicy(t, `{
+  "requests": [
+    { "src": ["autogroup:member"], "dst": ["autogroup:member"], "allow": ["dial", "route"], "approver": ["autogroup:admin"] },
+  ],
+  `+tests+`
+}`)
+}
+
+// The save's run of the document's tests over the world, its grants opened through details, nil opening none, and its
+// failures as lines, sorted.
+func (self *testAclFollowupsWorld) runTests(t *testing.T, details AclGrantDetails) (*AclPolicyTestReport, []string) {
+	t.Helper()
+	report, err := AclPolicyTestRun(&AclPolicyTestInput{Compile: self.world.input(), View: self.world.view(), Now: aclTestNow, GrantDetails: details})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := []string{}
+	for _, failure := range report.Failures {
+		lines = append(lines, failure.String())
+	}
+	slices.Sort(lines)
+	return report, lines
 }
 
 // Activates a grant of the phone's on targets for actions, an hour from the head's time, port-limited where sealed, as
@@ -565,6 +589,107 @@ func TestAclEngineAllowInboundThroughAnActivatedDialGrantWithoutAllocating(t *te
 		if allocs := testing.AllocsPerRun(100, func() { engine.AllowInbound(inbound, aclTestNow) }); allocs != 0 {
 			t.Errorf("port %d: %v allocations", inbound.Port, allocs)
 		}
+	}
+}
+
+// The tests a save runs against the phone's dial grant to the laptop: an accept and a deny of the port its detail names,
+// a deny of another, an accept of a range past it, and a deny of the desk's dial, which no grant takes.
+func testAclFollowupsDialTests(world *testAclFollowupsWorld) string {
+	phone, laptop, desk := "sidecar:"+world.phone.String(), "sidecar:"+world.laptop.String(), "sidecar:"+world.desk.String()
+	return `"tests": [
+    { "src": "` + phone + `", "accept": ["` + laptop + `#dial:tcp:22"] },
+    { "src": "` + phone + `", "deny": ["` + laptop + `#dial:tcp:22"] },
+    { "src": "` + phone + `", "deny": ["` + laptop + `#dial:tcp:80"] },
+    { "src": "` + phone + `", "accept": ["` + laptop + `#dial:tcp:21-22"] },
+    { "src": "` + desk + `", "deny": ["` + laptop + `#dial:tcp:22"] },
+  ]`
+}
+
+// A save's dial checks with ports judge a port-limited activated dial grant by its sealed detail, as AllowInbound and the
+// compile read it (QD-1428): with the detail open, an accept of the port it names passes and one of a range past it
+// fails, a deny of that port fails naming the grant, and a deny of another passes; with the detail unread, or no opener,
+// the grant may open any port, so every check of the phone's fails, each naming the grant by id, the denies as
+// indeterminate, while the desk's deny, which the grant does not take, passes. Before this change the grant opened no
+// port at the save: the accept failed and the deny of its own port passed.
+func TestAclPolicyTestRunJudgesAnActivatedDialGrantsPortsByItsDetail(t *testing.T) {
+	world := newTestAclFollowupsWorld(t)
+	grantId := world.grant(t, "save dial", []*protocol.AclTarget{{SidecarId: world.laptop.Bytes()}},
+		[]protocol.AclAction{protocol.AclAction_ACL_ACTION_DIAL}, true)
+	world.setTests(t, testAclFollowupsDialTests(world))
+	grant := "grant " + hex.EncodeToString(grantId)
+
+	opened := newTestAclFollowupsDetails()
+	opened.set(grantId, &protocol.CanonicalActionDetail{GrantDst: []string{testAclFollowupsDst(world.laptop) + ":tcp:22"}}, nil)
+	report, lines := world.runTests(t, opened)
+	want := []string{
+		"tests[1].deny[0]: allowed by " + grant + " at port 22",
+		"tests[3].accept[0]: refused: no_grant at port 21",
+	}
+	if !slices.Equal(lines, want) {
+		t.Errorf("with the detail open, failures %q", lines)
+	}
+	for _, failure := range report.Failures {
+		if failure.GrantId != nil {
+			t.Errorf("a definite failure names a grant whose detail opened as unread: %v", failure)
+		}
+	}
+
+	missing := newTestAclFollowupsDetails()
+	missing.set(grantId, nil, ErrConfigSealGenerationMissing)
+	for _, c := range []struct {
+		name    string
+		details AclGrantDetails
+		unread  aclGrantRouteUnread
+	}{
+		{name: "a missing key", details: missing, unread: aclGrantRouteUnreadGeneration},
+		{name: "no opener", details: nil, unread: aclGrantRouteUnreadNoOpener},
+	} {
+		report, lines := world.runTests(t, c.details)
+		noAccept := grant + " may dial it, but its sealed detail " + c.unread.String() + ", so it establishes no accept"
+		indeterminate := "indeterminate: " + grant + " may let its source dial it, but its sealed detail " + c.unread.String() +
+			": restore this device's config keys, remove the test or wait for the grant to end"
+		want := []string{
+			"tests[0].accept[0]: refused: no_grant at port 22; " + noAccept,
+			"tests[1].deny[0]: " + indeterminate,
+			"tests[2].deny[0]: " + indeterminate,
+			"tests[3].accept[0]: refused: no_grant at port 21; " + noAccept,
+		}
+		if !slices.Equal(lines, want) {
+			t.Errorf("%s: failures %q", c.name, lines)
+		}
+		for _, failure := range report.Failures {
+			if !bytes.Equal(failure.GrantId, grantId) {
+				t.Errorf("%s: a failure names grant %x", c.name, failure.GrantId)
+			}
+		}
+	}
+}
+
+// A dial grant whose action seals no detail limits no ports at the save as at the engine and the compile: the phone's
+// accepts pass and its denies fail on the grant at any port, no failure is indeterminate, and the opener is never
+// asked.
+func TestAclPolicyTestRunJudgesAnUnsealedDialGrantAtEveryPort(t *testing.T) {
+	world := newTestAclFollowupsWorld(t)
+	grantId := world.grant(t, "save unsealed dial", []*protocol.AclTarget{{SidecarId: world.laptop.Bytes()}},
+		[]protocol.AclAction{protocol.AclAction_ACL_ACTION_DIAL}, false)
+	world.setTests(t, testAclFollowupsDialTests(world))
+	grant := "grant " + hex.EncodeToString(grantId)
+	details := newTestAclFollowupsDetails()
+	report, lines := world.runTests(t, details)
+	want := []string{
+		"tests[1].deny[0]: allowed by " + grant + " at port 22",
+		"tests[2].deny[0]: allowed by " + grant + " at port 80",
+	}
+	if !slices.Equal(lines, want) {
+		t.Errorf("failures %q", lines)
+	}
+	for _, failure := range report.Failures {
+		if failure.GrantId != nil {
+			t.Errorf("an unsealed grant left a check indeterminate: %v", failure)
+		}
+	}
+	if count := details.count(grantId); count != 0 {
+		t.Errorf("a grant sealing no detail was opened %d times", count)
 	}
 }
 
