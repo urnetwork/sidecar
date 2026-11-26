@@ -10,7 +10,9 @@
 //	                     PostgreSQL that cannot take the row voids the hold and answers capacity with a retry, so
 //	                     nothing reaches a provider without its row; a caller stopped between the hold and its row
 //	                     strands no room, since a hold unconfirmed past the settings' 60 s is dropped by the
-//	                     network's next script
+//	                     network's next script. A projection lost or marked after a failover is rebuilt first, under
+//	                     the network's fence, where the caller gives its budget lines (ComputeRebuild); until then
+//	                     its calls answer held with the settings' one-second retry
 //	ComputeSettle        the outcome committed to the row, open to settled, then the hold turned into an unsettled
 //	                     charge; compute_settle books the row from PostgreSQL and drops the charge after (BAL-M12-04)
 //	ComputeRelease       the row moved open to void, then the hold dropped
@@ -108,6 +110,9 @@ type ComputeHoldRequest struct {
 	ReserveNanoUsd int64
 	// The budget lines the call is checked and reserved against.
 	Lines []*model.ComputeBudgetLine
+	// What resolves every row's lines where the network's projection is lost and this call rebuilds it
+	// (ComputeRebuild, BAL-M12-04); nil leaves a lost projection as it is, and the call answers held.
+	Budgets ComputeBudgetLines
 	// The provider's capacity check; nil admits.
 	Capacity ComputeProviderCapacity
 }
@@ -235,6 +240,18 @@ func ComputeHold(env operator.Env, ctx context.Context, settings *model.ComputeL
 	result, err := computeHoldScript(env, ctx, settings, request, opKey)
 	if err != nil {
 		return nil, err
+	}
+	if result.Outcome == model.ComputeHoldHeld && request.Budgets != nil {
+		// a lost or marked projection admits nothing until it is rebuilt (D-BAL-13): rebuild it here, under the
+		// network's fence, and ask once more; where the rebuild cannot run, the call stays held with its retry
+		projection, err := model.ComputeProjectionRead(env, ctx, request.NetworkId)
+		if err == nil && (!projection.Present || projection.Marked) {
+			if _, err := ComputeRebuild(env, ctx, settings, request.NetworkId, request.Budgets); err == nil {
+				if again, err := computeHoldScript(env, ctx, settings, request, opKey); err == nil {
+					result = again
+				}
+			}
+		}
 	}
 	switch result.Outcome {
 	case model.ComputeHoldHeld:
