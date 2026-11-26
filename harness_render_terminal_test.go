@@ -1,4 +1,4 @@
-//go:build !ios_extension && !sidecar_http
+//go:build !ios_extension && !sidecar_http && !js
 
 package sidecar
 
@@ -22,6 +22,7 @@ type testHarnessDisclosures struct {
 	texts map[string]string
 }
 
+// id's line, or the unavailable error.
 func (self *testHarnessDisclosures) Line(ctx context.Context, id string) (string, error) {
 	line, ok := self.lines[id]
 	if !ok {
@@ -30,6 +31,7 @@ func (self *testHarnessDisclosures) Line(ctx context.Context, id string) (string
 	return line, nil
 }
 
+// id's text at version, or the unavailable error.
 func (self *testHarnessDisclosures) Text(ctx context.Context, id string, version uint32) (string, error) {
 	text, ok := self.texts[fmt.Sprintf("%s@%d", id, version)]
 	if !ok {
@@ -45,6 +47,7 @@ type testHarnessAcker struct {
 	err       error
 }
 
+// Records id at version, or answers the acker's error.
 func (self *testHarnessAcker) Ack(ctx context.Context, id string, version uint32) error {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()

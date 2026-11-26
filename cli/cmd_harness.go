@@ -19,7 +19,8 @@
 // /abort ends the turn, /model <name> changes the model at the next call, /close ends the run, and /quit or the end of
 // input leaves the view, the run open. While a dialog waits, the next line answers it (HarnessTerminalRenderer.Answer):
 // a disclosure's "I understand" goes through CTRUST's acknowledgment (urHarnessDisclosureEntry), never as a reply to
-// the model. With --json, stdout holds the events alone and the view's own lines go to stderr.
+// the model. With --json, stdout holds the events alone and the view's own lines go to stderr; such a view answers no
+// dialog, which the person answers in another view or the app.
 
 package main
 
@@ -314,8 +315,9 @@ func (self *urHarnessView) events(ctx context.Context) error {
 		for _, raw := range reply.Events {
 			self.show(ctx, raw)
 		}
-		if self.renderer != nil {
-			// a dialog raised before this view read its event still asks
+		if self.renderer != nil && (after == 0 || reply.Gap) {
+			// a dialog raised before this view read its event still asks; past the first poll the view reads its event,
+			// and one answered meanwhile is not raised again
 			for _, request := range reply.Pending {
 				self.renderer.Render(ctx, sidecar.NewHarnessUiRequestEvent(request))
 			}

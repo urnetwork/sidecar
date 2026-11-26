@@ -137,15 +137,18 @@ type testUrHarnessTty struct {
 	lines chan string
 }
 
+// Takes what ur writes to the terminal, which no test reads.
 func (self *testUrHarnessTty) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// The next line, as a secret one.
 func (self *testUrHarnessTty) readSecretLine() ([]byte, error) {
 	line, err := self.readLine()
 	return []byte(line), err
 }
 
+// The next line the test feeds, waiting for it; io.EOF once the test closes the lines.
 func (self *testUrHarnessTty) readLine() (string, error) {
 	line, ok := <-self.lines
 	if !ok {
@@ -154,6 +157,7 @@ func (self *testUrHarnessTty) readLine() (string, error) {
 	return line, nil
 }
 
+// Nothing to close.
 func (self *testUrHarnessTty) Close() error {
 	return nil
 }
