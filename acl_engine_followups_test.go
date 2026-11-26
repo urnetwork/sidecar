@@ -2,16 +2,20 @@
 
 // AclEngine's activated grants past acl-engine-route-grants (acl_engine.go; owner decisions 220 and 679; QD-003, QD-740,
 // QD-1164): AllowInbound opens a port-limited activated dial grant's ports by its sealed detail, the ports it names at
-// this sidecar, as the host's compile serves them (grantPortRule), and nothing where the detail does not read; and
-// Check's dial or route to a sidecar counts an activated grant only where its detail reaches that sidecar. Each test
-// that accepts fails before this change. Synthetic values only.
+// this sidecar, as the host's compile serves them (grantPortRule), and nothing where the detail does not read; Check's
+// dial or route to a sidecar counts an activated grant only where its detail reaches that sidecar; and a grant whose
+// detail waited on a config key generation is read again when the key arrives, by ReadWaitingGrants, which the acl
+// follower runs on the keychain's signal, armed before its read. Each test that accepts fails before this change.
+// Synthetic values only.
 
 package sidecar
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"net/netip"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -22,13 +26,14 @@ import (
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
-// An opener over details by grant id, which answers a grant's error where errs holds one and counts what it is asked.
-// Safe for concurrent use.
+// An opener over details by grant id, which answers a grant's error where errs holds one, counts what it is asked, and
+// at the next ask runs onAsk once, outside its lock, before it answers. Safe for concurrent use.
 type testAclFollowupsDetails struct {
 	stateLock sync.Mutex
 	details   map[string]*protocol.CanonicalActionDetail
 	errs      map[string]error
 	asked     map[string]int
+	onAsk     func()
 }
 
 func newTestAclFollowupsDetails() *testAclFollowupsDetails {
@@ -36,9 +41,19 @@ func newTestAclFollowupsDetails() *testAclFollowupsDetails {
 }
 
 func (self *testAclFollowupsDetails) GrantDetail(grantId []byte) (*protocol.CanonicalActionDetail, error) {
+	onAsk := func() func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.asked[string(grantId)] += 1
+		onAsk := self.onAsk
+		self.onAsk = nil
+		return onAsk
+	}()
+	if onAsk != nil {
+		onAsk()
+	}
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
-	self.asked[string(grantId)] += 1
 	if err := self.errs[string(grantId)]; err != nil {
 		return nil, err
 	}
@@ -47,6 +62,13 @@ func (self *testAclFollowupsDetails) GrantDetail(grantId []byte) (*protocol.Cano
 		return nil, ErrAclGrantActionNotHeld
 	}
 	return proto.Clone(detail).(*protocol.CanonicalActionDetail), nil
+}
+
+// What the next ask runs first, once.
+func (self *testAclFollowupsDetails) setOnAsk(onAsk func()) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.onAsk = onAsk
 }
 
 // Sets a grant's detail, or with detail nil its error.
@@ -411,6 +433,97 @@ func TestAclEngineCheckRoutesThroughASubjectByAnActivatedGrantsDetail(t *testing
 	}
 }
 
+// A grant whose detail waits on its generation's key reaches nothing until the key arrives, and then
+// ReadWaitingGrants reads it, and it alone, at the same pin, state and local policy, where before this change it stayed
+// closed until the next install: a route grant and a dial grant, each sealed to a generation not held, while a grant
+// whose detail read at the install is kept and not opened again. A read with the key still missing changes nothing
+// and says the grants still wait; one with nothing waiting reads nothing.
+func TestAclEngineReadsWaitingGrantsWhenTheirKeyArrives(t *testing.T) {
+	world := newTestAclFollowupsWorld(t)
+	routeId := world.grant(t, "waiting route", []*protocol.AclTarget{{SidecarId: world.desk.Bytes()}},
+		[]protocol.AclAction{protocol.AclAction_ACL_ACTION_ROUTE}, true)
+	dialId := world.grant(t, "waiting dial", []*protocol.AclTarget{{SidecarId: world.laptop.Bytes()}},
+		[]protocol.AclAction{protocol.AclAction_ACL_ACTION_DIAL}, true)
+	keptId := world.grant(t, "kept route", []*protocol.AclTarget{{SidecarId: world.desk.Bytes()}},
+		[]protocol.AclAction{protocol.AclAction_ACL_ACTION_ROUTE}, true)
+	details := newTestAclFollowupsDetails()
+	details.set(routeId, nil, ErrConfigSealGenerationMissing)
+	details.set(dialId, nil, ErrConfigSealGenerationMissing)
+	details.set(keptId, &protocol.CanonicalActionDetail{Cidrs: []string{"198.51.100.0/24"}}, nil)
+	engine := world.engine(t, world.laptop, details)
+	pin, state := engine.Pin(), engine.State()
+	phone := AclSidecarSubject(world.phone)
+	routes := func() (bool, bool) {
+		waiting := engine.Check(phone, protocol.AclAction_ACL_ACTION_ROUTE, AclResource{Kind: AclResourceIp, Cidr: netip.MustParsePrefix("203.0.113.0/28")}, aclTestNow)
+		kept := engine.Check(phone, protocol.AclAction_ACL_ACTION_ROUTE, AclResource{Kind: AclResourceIp, Cidr: netip.MustParsePrefix("198.51.100.0/28")}, aclTestNow)
+		return waiting.Allowed && bytes.Equal(waiting.GrantId, routeId), kept.Allowed && bytes.Equal(kept.GrantId, keptId)
+	}
+	dials := func() bool {
+		return engine.AllowInbound(&AclInbound{Source: phone, IpProtocol: aclIpProtocolTcp, Port: 22}, aclTestNow).Allowed
+	}
+	if waiting, kept := routes(); waiting || !kept || dials() || !engine.grantsWaitForKey() {
+		t.Fatalf("at the install: the waiting route %t, the kept one %t, the dial %t, waits %t", waiting, kept, dials(), engine.grantsWaitForKey())
+	}
+
+	// the key still missing: nothing reads, and the grants still wait
+	if !engine.ReadWaitingGrants() {
+		t.Error("a read without the key says nothing waits")
+	}
+	if waiting, _ := routes(); waiting || dials() {
+		t.Error("a grant stands without its key")
+	}
+
+	// the key arrives: before the read nothing changes, after it both grants stand
+	details.set(routeId, &protocol.CanonicalActionDetail{Cidrs: []string{"203.0.113.0/28"}}, nil)
+	details.set(dialId, &protocol.CanonicalActionDetail{GrantDst: []string{testAclFollowupsDst(world.laptop) + ":tcp:22"}}, nil)
+	if waiting, _ := routes(); waiting || dials() {
+		t.Fatal("a grant stood before the read: the engine reads details at a check")
+	}
+	if engine.ReadWaitingGrants() {
+		t.Error("the read says a grant still waits")
+	}
+	if waiting, kept := routes(); !waiting || !kept || !dials() {
+		t.Errorf("after the read: the waiting route %t, the kept one %t, the dial %t", waiting, kept, dials())
+	}
+	if engine.Pin() != pin || engine.State() != state || engine.grantsWaitForKey() {
+		t.Error("the read changed the installed pin or state, or still waits")
+	}
+	if details.count(routeId) != 3 || details.count(dialId) != 3 || details.count(keptId) != 1 {
+		t.Errorf("the opener was asked %d, %d and %d times, want 3, 3 and 1", details.count(routeId), details.count(dialId), details.count(keptId))
+	}
+	if engine.ReadWaitingGrants() || details.count(routeId) != 3 {
+		t.Error("a read with nothing waiting read again")
+	}
+}
+
+// An install landing while ReadWaitingGrants reads is never undone: the read goes round again on the newer install,
+// which read its grants before the key arrived, and the grant stands there, at the newer pin.
+func TestAclEngineReadWaitingGrantsYieldsToAConcurrentInstall(t *testing.T) {
+	world := newTestAclFollowupsWorld(t)
+	grantId := world.grant(t, "raced dial", []*protocol.AclTarget{{SidecarId: world.laptop.Bytes()}},
+		[]protocol.AclAction{protocol.AclAction_ACL_ACTION_DIAL}, true)
+	details := newTestAclFollowupsDetails()
+	details.set(grantId, nil, ErrConfigSealGenerationMissing)
+	engine := world.engine(t, world.laptop, details)
+	newer := world.state(t, aclTestEnginePin(2, "followups"))
+	details.setOnAsk(func() {
+		// the read's ask: an install lands first, reading the grant while its key is missing, and then the key arrives
+		if err := engine.InstallWithGrants(newer, nil, details); err != nil {
+			t.Error(err)
+		}
+		details.set(grantId, &protocol.CanonicalActionDetail{GrantDst: []string{testAclFollowupsDst(world.laptop) + ":tcp:22"}}, nil)
+	})
+	if engine.ReadWaitingGrants() {
+		t.Error("the read says the grant still waits")
+	}
+	if engine.Pin().GetVersion() != 2 || engine.State() != newer {
+		t.Fatalf("the installed pin is %d: the read undid the newer install", engine.Pin().GetVersion())
+	}
+	if decision := engine.AllowInbound(&AclInbound{Source: AclSidecarSubject(world.phone), IpProtocol: aclIpProtocolTcp, Port: 22}, aclTestNow); !decision.Allowed {
+		t.Errorf("the grant does not stand at the newer install: %+v", decision)
+	}
+}
+
 // A grant allowing dial and route opens its detail once an install, and not again at the next install of a state
 // holding it.
 func TestAclEngineOpensAGrantAllowingDialAndRouteOnce(t *testing.T) {
@@ -452,5 +565,171 @@ func TestAclEngineAllowInboundThroughAnActivatedDialGrantWithoutAllocating(t *te
 		if allocs := testing.AllocsPerRun(100, func() { engine.AllowInbound(inbound, aclTestNow) }); allocs != 0 {
 			t.Errorf("port %d: %v allocations", inbound.Port, allocs)
 		}
+	}
+}
+
+// A keychain of the config repo's generation keys that signals each generation it takes, as GkmGroupClient's
+// RepoKeyHeld does: one channel armed at a time, made at an arm and closed at the next generation taken. onArm runs once,
+// at the next arm, before the channel is made. Safe for concurrent use.
+type testAclFollowupsKeychain struct {
+	stateLock    sync.Mutex
+	configRepoId Id
+	keys         []*EvsRepoKey
+	armed        chan struct{}
+	onArm        func()
+	// the repos asked for, by RepoKeyHeld and held alike
+	askedRepoIds []Id
+}
+
+func (self *testAclFollowupsKeychain) held(repoId Id, generation uint64) *EvsRepoKey {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.askedRepoIds = append(self.askedRepoIds, repoId)
+	if repoId != self.configRepoId {
+		return nil
+	}
+	return testConfigSealKeyAt(self.keys...)(generation)
+}
+
+func (self *testAclFollowupsKeychain) repoKeyHeld(repoId Id) (bool, <-chan struct{}) {
+	onArm := func() func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		onArm := self.onArm
+		self.onArm = nil
+		return onArm
+	}()
+	if onArm != nil {
+		onArm()
+	}
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.askedRepoIds = append(self.askedRepoIds, repoId)
+	if self.armed == nil {
+		self.armed = make(chan struct{})
+	}
+	return len(self.keys) != 0, self.armed
+}
+
+// Takes a key, closing the armed channel if one is armed.
+func (self *testAclFollowupsKeychain) take(key *EvsRepoKey) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.keys = append(self.keys, key)
+	if self.armed != nil {
+		close(self.armed)
+		self.armed = nil
+	}
+}
+
+// Whether every repo asked for was the config repo.
+func (self *testAclFollowupsKeychain) askedConfigRepoAlone() bool {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return 0 < len(self.askedRepoIds) && !slices.ContainsFunc(self.askedRepoIds, func(repoId Id) bool { return repoId != self.configRepoId })
+}
+
+// A follower of the net's tip on the laptop's engine over the keychain, waking on its signal where watch says.
+func testAclFollowupsFollower(t *testing.T, net *testBridgeGrantNet, source *aclTestFollowSource, keychain *testAclFollowupsKeychain, watch bool) (*AclFollower, *AclEngine) {
+	t.Helper()
+	settings := DefaultAclSettings()
+	settings.Clock = newTestConfigClock()
+	settings.Log = NewNoopLogger()
+	engine := NewAclEngine(net.host.sidecarId, nil, nil, nil)
+	args := &AclFollowerArgs{Source: source, Engine: engine, HeldRepoKey: keychain.held, Settings: settings}
+	if watch {
+		args.RepoKeyHeld = keychain.repoKeyHeld
+	}
+	follower, err := NewAclFollower(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(follower.Close)
+	return follower, engine
+}
+
+// Waits until the follower's state holds no grant waiting on a key, failing the test after a minute of none.
+func testAclFollowupsWaitKeys(t *testing.T, follower *AclFollower) {
+	t.Helper()
+	for {
+		waits, changed := follower.keyWaits.Get()
+		if !waits {
+			return
+		}
+		select {
+		case <-changed:
+		case <-time.After(time.Minute):
+			t.Fatal("the follower's grants still wait on a key a minute on")
+		}
+	}
+}
+
+// The acl follower reads a grant that waited on its generation's key again when the keychain takes the key, with no
+// entry, base or install: before, the grant stayed closed at the engine until the next one, as a follower with no
+// keychain signal still leaves it, even when its source calls back with the same state.
+func TestAclFollowerReadsWaitingGrantsWhenTheKeychainTakesAGeneration(t *testing.T) {
+	net := newTestBridgeGrantNet(t)
+	grantId := net.portedGrant("follower key", net.timeMs+60*60*1000)
+	state := net.log.State()
+	configRepoId, ok := aclFollowerConfigRepoId(state)
+	if !ok {
+		t.Fatal("the net's genesis names no config repo")
+	}
+	laptop := AclSidecarSubject(net.host.sidecarId)
+	now := time.UnixMilli(state.TimeMs())
+	routes := func(engine *AclEngine) bool {
+		result := engine.Check(laptop, protocol.AclAction_ACL_ACTION_ROUTE, AclResource{Kind: AclResourceIp, Cidr: netip.MustParsePrefix("192.168.7.0/26")}, now)
+		return result.Allowed && bytes.Equal(result.GrantId, grantId)
+	}
+
+	keychain := &testAclFollowupsKeychain{configRepoId: configRepoId}
+	source := &aclTestFollowSource{state: state}
+	follower, engine := testAclFollowupsFollower(t, net, source, keychain, true)
+	if routes(engine) || !follower.keyWaits.Value() {
+		t.Fatalf("before the key: the grant stands %t, the follower sees it wait %t", routes(engine), follower.keyWaits.Value())
+	}
+	keychain.take(testConfigSealKey(testActionDetailGeneration))
+	testAclFollowupsWaitKeys(t, follower)
+	if !routes(engine) {
+		t.Error("the grant does not stand once its key is taken")
+	}
+	if stats := follower.Stats(); stats.InstallCount != 1 {
+		t.Errorf("%d installs: the key's read is no install", stats.InstallCount)
+	}
+	if !keychain.askedConfigRepoAlone() {
+		t.Error("the follower asked the keychain for another repo than the config repo")
+	}
+
+	// with no keychain signal the grant stays closed after the key arrives, the same state called back included
+	unwatched := &testAclFollowupsKeychain{configRepoId: configRepoId}
+	unwatchedSource := &aclTestFollowSource{state: state}
+	_, unwatchedEngine := testAclFollowupsFollower(t, net, unwatchedSource, unwatched, false)
+	unwatched.take(testConfigSealKey(testActionDetailGeneration))
+	unwatchedSource.applied(state)
+	if routes(unwatchedEngine) {
+		t.Error("a follower with no keychain signal read the grant again")
+	}
+}
+
+// The key watch arms the keychain's signal before it reads: a key taken just before the arm, when no channel is armed to
+// close, is in the read that follows it, so the grant stands with no further signal.
+func TestAclFollowerReadsAKeyTakenBeforeItsWatchArms(t *testing.T) {
+	net := newTestBridgeGrantNet(t)
+	grantId := net.portedGrant("follower arm", net.timeMs+60*60*1000)
+	state := net.log.State()
+	configRepoId, ok := aclFollowerConfigRepoId(state)
+	if !ok {
+		t.Fatal("the net's genesis names no config repo")
+	}
+	keychain := &testAclFollowupsKeychain{configRepoId: configRepoId}
+	keychain.onArm = func() {
+		keychain.take(testConfigSealKey(testActionDetailGeneration))
+	}
+	follower, engine := testAclFollowupsFollower(t, net, &aclTestFollowSource{state: state}, keychain, true)
+	testAclFollowupsWaitKeys(t, follower)
+	result := engine.Check(AclSidecarSubject(net.host.sidecarId), protocol.AclAction_ACL_ACTION_ROUTE,
+		AclResource{Kind: AclResourceIp, Cidr: netip.MustParsePrefix("192.168.7.0/26")}, time.UnixMilli(state.TimeMs()))
+	if !result.Allowed || !bytes.Equal(result.GrantId, grantId) {
+		t.Errorf("the grant does not stand: %+v", result)
 	}
 }

@@ -42,11 +42,13 @@
 //	         grant only where its detail reads
 //
 // A grant whose detail does not read here, or a route grant whose action seals none, reaches nothing, the closed
-// direction. In-daemon agents share their sidecar's grants (§5.5): the caller narrows, never widens. A client allows
-// AclEngineSettings.ClockSkew against the gates' server time (§8.6).
+// direction. One whose detail waited on a config key generation this device did not hold is read again when the
+// keychain takes one (ReadWaitingGrants, which the acl follower calls on the keychain's signal), so it stands from then
+// rather than from the next entry or base. In-daemon agents share their sidecar's grants (§5.5): the caller narrows,
+// never widens. A client allows AclEngineSettings.ClockSkew against the gates' server time (§8.6).
 //
-// Safe for concurrent use. The root file carries no connect type; an install opens grants' details, where
-// testHookSecret runs inside OpenConfigBody, and no check creates or unwraps a key.
+// Safe for concurrent use. The root file carries no connect type; an install and ReadWaitingGrants open grants'
+// details, where testHookSecret runs inside OpenConfigBody, and no check creates or unwraps a key.
 
 package sidecar
 
@@ -116,7 +118,7 @@ func (self *aclConfigLogStates) AclStateAt(pin *bridge.AuthPin) (*AclState, erro
 	return state.Acl()
 }
 
-// One installed state and what the checks read beside it.
+// One installed state and what the checks read beside it, never changed once stored: ReadWaitingGrants stores another.
 type aclEngineInstall struct {
 	state *AclState
 	local *AclLocalPolicy
@@ -130,7 +132,11 @@ type aclEngineInstall struct {
 	grantDials []*aclEngineGrantRead
 	// the readings the next install may keep, by grant id: those no later opener can change (aclEngineGrantRead.kept)
 	grantReads map[string]*aclEngineGrantRead
-	self       AclSubject
+	// the opener the grants were read through, nil for none, which ReadWaitingGrants asks again
+	grants AclGrantDetails
+	// how many grants' details wait on a config key generation the opener did not hold
+	keyWaitCount int
+	self         AclSubject
 }
 
 // One activated grant as an install read it: its sealed detail opened once (aclOpenGrantDetail), then read as a route
@@ -166,9 +172,11 @@ func (self *aclEngineGrantRead) kept() bool {
 // where it stands.
 func (self *aclEngineInstall) readGrants(previous *aclEngineInstall, grants AclGrantDetails) {
 	rules := self.state.rules
+	self.grants = grants
 	self.grantRoutes = make([]*AclLocalRule, len(rules))
 	self.grantDials = make([]*aclEngineGrantRead, len(rules))
 	self.grantReads = map[string]*aclEngineGrantRead{}
+	self.keyWaitCount = 0
 	for i := range rules {
 		rule := &rules[i]
 		routes := rule.allows(protocol.AclAction_ACL_ACTION_ROUTE)
@@ -187,6 +195,9 @@ func (self *aclEngineInstall) readGrants(previous *aclEngineInstall, grants AclG
 		}
 		if read.kept() {
 			self.grantReads[string(grantId)] = read
+		}
+		if read.opened == aclGrantRouteUnreadGeneration {
+			self.keyWaitCount += 1
 		}
 		if routes {
 			self.grantRoutes[i] = read.route.local
@@ -251,7 +262,8 @@ func (self *AclEngine) Install(state *AclState, local *AclLocalPolicy) error {
 // once for both, never at a check, by the readers the save's tests and the bridge compile read it by
 // (aclReadGrantRoute and its dial counterpart), and AllowRoute, AllowInbound and Check count it by its detail. A
 // reading that stands is kept for the next install of a state holding the same grant, so an install opens only the
-// grants it has not read; one whose action or key was missing is read again. grants nil opens none.
+// grants it has not read; one whose action or key was missing is read again, and one whose key generation was missing
+// also at ReadWaitingGrants. grants nil opens none.
 func (self *AclEngine) InstallWithGrants(state *AclState, local *AclLocalPolicy, grants AclGrantDetails) error {
 	if state == nil || state.Pin() == nil {
 		return fmt.Errorf("%w: no state", ErrAclRowsInvalid)
@@ -287,6 +299,46 @@ func (self *AclEngine) InstallWithGrants(state *AclState, local *AclLocalPolicy,
 		self.alarm(*alarm)
 	}
 	return err
+}
+
+// Reads again, through the opener the installed state was installed with, each activated grant whose sealed detail did
+// not read there, and swaps the state in again with what now reads, its pin, local policy and every reading that stood
+// unchanged: what the acl follower calls when the keychain takes a generation of the config repo, since a detail sealed
+// to a generation this device did not hold opens once the key is held, and the grant then stands at once rather than at
+// the next install. Nothing is read where no grant waits on a key. An install landing meanwhile is read again in its
+// turn, since it may have read its grants before the key was held, so this goes round again only past a concurrent
+// install. Answers whether a grant's detail still waits on a key generation. Never on a check's path.
+func (self *AclEngine) ReadWaitingGrants() bool {
+	for {
+		current := self.installed.Load()
+		if current == nil || current.grants == nil || current.keyWaitCount == 0 {
+			return false
+		}
+		next := &aclEngineInstall{state: current.state, local: current.local, localRules: current.localRules, self: current.self}
+		// outside the lock, which is never held across the opener's key reads
+		next.readGrants(current, current.grants)
+		testHookBarrier("acl_engine.read_waiting.before", self.sidecarId.String())
+		swapped := func() bool {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			if self.installed.Load() != current {
+				return false
+			}
+			self.installed.Store(next)
+			return true
+		}()
+		testHookBarrier("acl_engine.read_waiting.after", self.sidecarId.String())
+		if swapped {
+			return 0 < next.keyWaitCount
+		}
+	}
+}
+
+// Whether the installed state holds an activated grant whose sealed detail waits on a config key generation its opener
+// did not hold, which ReadWaitingGrants reads again.
+func (self *AclEngine) grantsWaitForKey() bool {
+	installed := self.installed.Load()
+	return installed != nil && installed.grants != nil && 0 < installed.keyWaitCount
 }
 
 // Swaps in the subnet routes in force by advertiser, which AllowRoute and Check's ip ranges read for a route rule that
