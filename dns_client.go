@@ -303,6 +303,7 @@ func (self *DnsClient) fetchZone(ctx context.Context) (*DnsZone, error) {
 // A copy that shares nothing with zone.
 func cloneDnsZone(zone *DnsZone) *DnsZone {
 	copied := *zone
+	copied.RetiringAliases = slices.Clone(zone.RetiringAliases)
 	copied.CustomHosts = slices.Clone(zone.CustomHosts)
 	for index := range copied.CustomHosts {
 		copied.CustomHosts[index].PendingInterfaces = slices.Clone(copied.CustomHosts[index].PendingInterfaces)
@@ -549,9 +550,9 @@ func (self *DnsClient) isSidecarDnsClient() {}
 // The network's label table (DNS-M2-01; §12.5's label row) in its dns/ directory, the one its DnsClient feeds: opened
 // at the first call and fed to the client, so every zone fetched from then on writes this network's row, and every
 // later call answers the same table, or the one a host fed the client in its place (FeedLabels). Its rows outlive a
-// restart, the retiring aliases among them that a writer's network: label read takes (acl_writer_subjects.go).
-// ErrSidecarStoreLocked before enrollment and while the keychain is locked; a call that fails opens nothing, and a
-// later one tries again.
+// restart, the retiring aliases among them that a writer's network: label read takes (acl_writer_subjects.go), each
+// bounded by its tombstone time on the Sidecar's clock (dns_resolve.go). ErrSidecarStoreLocked before enrollment and
+// while the keychain is locked; a call that fails opens nothing, and a later one tries again.
 func (self *Sidecar) NetworkLabels() (*NetworkLabelTable, error) {
 	client, err := self.Dns()
 	if err != nil {
@@ -566,7 +567,7 @@ func (self *Sidecar) NetworkLabels() (*NetworkLabelTable, error) {
 	if err != nil {
 		return nil, err
 	}
-	labels, err := OpenNetworkLabelTable(store)
+	labels, err := OpenNetworkLabelTableWithSettings(store, nil, clockOrReal(self.clock))
 	if err != nil {
 		return nil, err
 	}

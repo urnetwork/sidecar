@@ -126,6 +126,9 @@ type DnsZone struct {
 	Alias string `json:"alias,omitempty"`
 	// A certificate names the live alias, so it answers the label's records (reading 11).
 	AliasCertified bool `json:"alias_certified,omitempty"`
+	// The aliases the network changed or released, in their 90 days of retiring (§12.5), each with when it
+	// tombstones, as GET /sidecar/label names them: absent while there is none.
+	RetiringAliases []NetworkLabelRetiringAlias `json:"retiring_aliases,omitempty"`
 	// The serial of the zone's last write, zero before any.
 	Version    uint64             `json:"version"`
 	RecordSets []DnsZoneRecordSet `json:"record_sets"`
