@@ -120,6 +120,39 @@ type HarnessSettings struct {
 	// A management link's reconnect waits: 1 second at first, doubling to 60 seconds. Non-positive reconnects at once.
 	ManageLinkReconnectBase time.Duration
 	ManageLinkReconnectMax  time.Duration
+
+	// §7.11's terminal renderer (HARN-M11-09). The last lines of a tool's output its card shows: 6. Non-positive
+	// shows none.
+	TerminalToolOutputLineCount int
+	// The lines of a thinking block shown, dimmed, before the rest folds: 3. Non-positive folds it whole.
+	TerminalThinkingLineCount int
+	// The most characters a one-line summary (a tool card's, a status line's part) shows before it is cut: 120.
+	// Non-positive shows the tool's name alone.
+	TerminalSummaryCharCount int
+	// The most lines of a diff a card shows, colored: 40. Non-positive shows none.
+	TerminalDiffLineCount int
+	// The longest URL the renderer puts in an OSC 8 link, after it checks it: 2048 bytes. A longer one prints as text.
+	// Non-positive links none.
+	TerminalLinkUrlByteCount int
+
+	// The daemon's view of its Harness (`ur harness`, §5.8's remote mode, HARN-M11-09): the events kept for each
+	// agent, so a view that reattaches or polls late reads what it missed: the newest 4096 events and at most 16 MiB of
+	// them. A seq older than what is kept answers a gap. Non-positive keeps none.
+	DaemonViewEventCount     int
+	DaemonViewEventByteCount int64
+	// The largest event kept whole: 4 MiB. A larger one is kept as a stub naming its type, seq and size. Non-positive
+	// stubs every event.
+	DaemonViewEventMaxByteCount int
+	// What one harness.events reply carries at most: 512 events and 4 MiB, one event always whatever its size. Below 1
+	// carries one.
+	DaemonViewReplyEventCount int
+	DaemonViewReplyByteCount  int
+	// The longest a harness.events call waits for an event: 25 seconds, under ur's 35-second call bound, so the
+	// daemon's answer comes first. Non-positive answers at once.
+	DaemonViewWait time.Duration
+	// The closed agents whose events the view still keeps, the oldest dropped past it, so a view sees a closed run's
+	// last events: 64. Non-positive keeps none once an agent closes.
+	DaemonViewClosedAgentCount int
 }
 
 // The component's defaults, the only place one is set.
@@ -171,5 +204,19 @@ func DefaultHarnessSettings() *HarnessSettings {
 		RpcReplayByteCount:      64 * 1024 * 1024,
 		ManageLinkReconnectBase: 1 * time.Second,
 		ManageLinkReconnectMax:  60 * time.Second,
+
+		TerminalToolOutputLineCount: 6,
+		TerminalThinkingLineCount:   3,
+		TerminalSummaryCharCount:    120,
+		TerminalDiffLineCount:       40,
+		TerminalLinkUrlByteCount:    2048,
+
+		DaemonViewEventCount:        4096,
+		DaemonViewEventByteCount:    16 * 1024 * 1024,
+		DaemonViewEventMaxByteCount: 4 * 1024 * 1024,
+		DaemonViewReplyEventCount:   512,
+		DaemonViewReplyByteCount:    4 * 1024 * 1024,
+		DaemonViewWait:              25 * time.Second,
+		DaemonViewClosedAgentCount:  64,
 	}
 }
