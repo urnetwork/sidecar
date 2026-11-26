@@ -446,5 +446,13 @@ func ComputeLedgerMigrations() []*operator.Migration {
 				)
 			`,
 		},
+		{
+			// compute_promo_lapse's run (BAL-M12-13): the promotions with something left, by expiry, so the hourly run
+			// reads the ones past it and no other lot
+			Id: "compute_lot_lapse",
+			Sql: `
+				CREATE INDEX compute_lot_lapse ON compute_lot (expire_time) WHERE kind = 3 AND remaining_nano_usd > 0
+			`,
+		},
 	}
 }
