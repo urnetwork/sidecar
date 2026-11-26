@@ -59,16 +59,20 @@ const (
 )
 
 // Whether a kind's GenRotates carry a drop key (D-KEYS-17): §8.5's deposit column, the vault, the mailbox, the
-// secret store and the team record.
+// secret store and the team record, and the agent_repos feature's owner-bound kinds (DESIGN-COMPUTE §20.4): an agent
+// repo's inbox deposits, and an agents repo's readers' receipts, as a secret store's. The member's devices form and
+// rotate both kinds' groups as for every owner-bound kind, their key holders the repo's readers (RepoReaders).
 func GkmRepoKindTakesDeposits(kind protocol.RepoKind) bool {
 	switch kind {
-	case protocol.RepoKind_REPO_KIND_VAULT, protocol.RepoKind_REPO_KIND_MAILBOX, protocol.RepoKind_REPO_KIND_SECRET, protocol.RepoKind_REPO_KIND_TEAM_RECORD:
+	case protocol.RepoKind_REPO_KIND_VAULT, protocol.RepoKind_REPO_KIND_MAILBOX, protocol.RepoKind_REPO_KIND_SECRET, protocol.RepoKind_REPO_KIND_TEAM_RECORD,
+		protocol.RepoKind_REPO_KIND_AGENTS, protocol.RepoKind_REPO_KIND_AGENT:
 		return true
 	}
 	return false
 }
 
-// The signed RepoCreate also enables deposits in a general repo marked as an inbox (QD-102).
+// The signed RepoCreate also enables deposits in a general repo marked as a mail inbox (QD-102), never the Team inbox,
+// whose writers write and which takes no deposit (AclRepoIsInbox).
 func gkmRepoTakesDeposits(repo *protocol.AclRepo) bool {
 	return repo != nil && (GkmRepoKindTakesDeposits(repo.GetKind()) || AclRepoIsInbox(repo))
 }

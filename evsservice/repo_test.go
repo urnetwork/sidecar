@@ -127,8 +127,8 @@ func TestRepoKindsKnownOrRefusedAtCreation(t *testing.T) {
 			t.Errorf("%s: repo/ %v", kind, object)
 		}
 	}
-	if createdCount != 9 {
-		t.Errorf("%d kinds created, and §11.12 has nine", createdCount)
+	if createdCount != 11 {
+		t.Errorf("%d kinds created, and §11.12 has nine and agent_repos two", createdCount)
 	}
 	refused := []*EvsRepoFacts{
 		{Kind: protocol.RepoKind(99), NetworkId: sidecar.Id(fixture.networkId)},

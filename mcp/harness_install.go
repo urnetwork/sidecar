@@ -2,7 +2,8 @@
 
 // `ur install-harness <claude-code|codex|cursor> [--agent <n>] [--instance <i>] [--project]` (§16.7, R-MCP-2, D-MCP-5,
 // D-MCP-9, I-9; MCP-M3-16): ur's MCP entry, the ask rule naming each outward tool, and the hooks, in the harness's own
-// files, shown as a diff and then written, and a seal of what ur installed for the config check (harness_hash.go).
+// files, with the recURd skill beside them (DESIGN-COMPUTE §20.9; harness_install_skill.go), shown as a diff and then
+// written, and a seal of what ur installed for the config check (harness_hash.go).
 //
 //	template   everything ur writes is one function of the harness, ur's absolute path (§4.10), the agent, the
 //	           instance and the outward tools, so the seal names those inputs and re-running the install restores
@@ -138,7 +139,13 @@ type HarnessInstallArgs struct {
 	// StateDirectory, or one the caller drew where none is. Nil writes no exporter settings. A user install's alone,
 	// of a harness HarnessExportsTelemetry names; any other is refused.
 	Telemetry *HarnessTelemetry
-	Ingest    *sidecar.SidecarIngestSettings
+	// The harness runs in an enclave, so its recurd skill is the installed-enclave rendering, with the being-managed
+	// lines (DESIGN-COMPUTE §20.9; harness_install_skill.go). False for every other install.
+	Enclave bool
+	// The release's support switch is on (SupportSettings.ServiceEnabled, off until G-SUP-service passes, §28.21), so
+	// support's SKILL.md goes beside recurd's. False writes recurd's alone.
+	SupportSkill bool
+	Ingest       *sidecar.SidecarIngestSettings
 }
 
 // `ur hook`'s flag on the fail-closed form's commands: exit 2 when the daemon cannot take the event.
@@ -163,6 +170,10 @@ type harnessTemplate struct {
 	recordRequired bool
 	// The telemetry pair the exporter's settings name, nil for none (HarnessInstallArgs.Telemetry).
 	telemetry *HarnessTelemetry
+	// The recurd skill's installed-enclave rendering (HarnessInstallArgs.Enclave), and support's skill beside it
+	// (HarnessInstallArgs.SupportSkill).
+	skillEnclave bool
+	supportSkill bool
 }
 
 // The template of args, its outward tools the catalog's.
@@ -329,8 +340,12 @@ type harnessFile struct {
 
 // A harness's install: its files for a scope, and the settings files of a session's working directory.
 type harnessInstallAdapter interface {
-	// The files a user install writes under home, or a project install under directory.
+	// The files a user install writes under home, or a project install under directory, but the skills
+	// (harnessInstallFiles).
 	files(home string, projectDirectory string) []*harnessFile
+	// The directory whose skills/ holds a user install's skills under home, or a project install's under directory
+	// (harness_install_skill.go).
+	skillDirectory(home string, projectDirectory string) string
 	// The settings files of a session's working directory, whose competing entries the check counts at
 	// SessionStart (QD-103).
 	projectSettingsFiles(cwd string) []*harnessFile
@@ -341,6 +356,12 @@ var harnessInstallAdapters = map[string]harnessInstallAdapter{
 	claudeHookHarness: &claudeInstallAdapter{},
 	codexHookHarness:  &codexInstallAdapter{},
 	cursorHookHarness: &cursorInstallAdapter{},
+}
+
+// Every file an install writes and seals, in order: the adapter's, then the skills' (harness_install_skill.go).
+func harnessInstallFiles(adapter harnessInstallAdapter, home string, projectDirectory string, template *harnessTemplate) []*harnessFile {
+	files := adapter.files(home, projectDirectory)
+	return append(files, harnessSkillFiles(adapter.skillDirectory(home, projectDirectory), projectDirectory, template)...)
 }
 
 // The mode a new file of a scope gets: the person's own files 0600, a project's committed ones 0644.
@@ -476,8 +497,10 @@ func PlanHarnessInstall(args *HarnessInstallArgs) (*HarnessInstallPlan, error) {
 		return nil, err
 	}
 	template.telemetry = telemetry
+	template.skillEnclave = args.Enclave
+	template.supportSkill = args.SupportSkill
 	plan := &HarnessInstallPlan{args: args, template: template}
-	for _, file := range adapter.files(args.Home, args.ProjectDirectory) {
+	for _, file := range harnessInstallFiles(adapter, args.Home, args.ProjectDirectory, template) {
 		filePlan, err := planHarnessFile(file, template, args.Ingest)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", file.path, err)

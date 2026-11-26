@@ -58,6 +58,8 @@ func testFeatureStopped(t *testing.T, client *ConfigClient) *ConfigForkError {
 }
 
 func TestAuthFeatureHoldStopsWrites(t *testing.T) {
+	// the client's release implements none, whatever this build's owners registered
+	WithAuthFeaturesImplementedForTest(t, 0, nil)
 	world := newTestConfigClientWorld(t)
 	net := world.net
 	// the network's own reader implements agent_repos; the client's release does not
@@ -200,6 +202,8 @@ func TestAuthFeatureHoldFromLaterBase(t *testing.T) {
 }
 
 func TestAuthFeatureResumeAgrees(t *testing.T) {
+	// the old release implements none, whatever this build's owners registered
+	WithAuthFeaturesImplementedForTest(t, 0, nil)
 	world := newTestConfigClientWorld(t)
 	net := world.net
 	net.log.authFeatures = AuthFeatureAgentRepos

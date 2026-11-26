@@ -352,6 +352,8 @@ func (self testWaitAppliedKeylessHeads) ReadConfigHead(ctx context.Context, conf
 // with the base's pin as soon as the follow records it, though the follow ran only after the save's wait looked at the
 // log and parked with 30 s left on its ctx, and the follower stands stopped below the base with that fork.
 func TestAWriterWhoseBaseForksItsOwnFollowerReturnsTheFork(t *testing.T) {
+	// its ServiceSettings records are the test's own, so the network holds no feature a fresh record would clear
+	sidecar.WithAuthFeaturesImplementedForTest(t, 0, nil)
 	world := newTestWriterWorld(t)
 	world.started()
 	projection := &testWaitAppliedProjection{reader: world.reader()}
@@ -572,6 +574,8 @@ func TestAFarBehindRestartHoldsTheForkItsAnchorMeets(t *testing.T) {
 // only once the wait had parked, and the key client is handed no state: before, the rows-only pass went on in the same
 // follow and handed it the state at the base every full reader refuses, while the wait ran to its ctx.
 func TestAJoiningDevicesFullPassForkStopsItsRowsOnlyPass(t *testing.T) {
+	// its ServiceSettings records are the test's own, so the network holds no feature a fresh record would clear
+	sidecar.WithAuthFeaturesImplementedForTest(t, 0, nil)
 	world := newTestWriterWorld(t)
 	world.started()
 	owner := testWaitAppliedClient(world, world.reader(), world.heads, nil, nil)

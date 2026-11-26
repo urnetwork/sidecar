@@ -506,9 +506,12 @@ func configAclPrefixRulesDark(state *ConfigState, statement *configStatement) er
 }
 
 // CheckStatement at state, keeping the verdict on the statement. A RepoPrefixRules is refused first while the log's
-// prefix rules are dark.
+// prefix rules are dark, and a RepoCreate of the agent_repos feature's kinds or marker before the feature's base.
 func (self configAclStatementRules) check(state *ConfigState, statement *configStatement) error {
 	if err := configAclPrefixRulesDark(state, statement); err != nil {
+		return err
+	}
+	if err := configAclAgentReposFeature(state, statement); err != nil {
 		return err
 	}
 	acl, err := state.Acl()

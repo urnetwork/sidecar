@@ -21,7 +21,9 @@
 //	             nothing (D-PHASE-9; DESIGN-DETAILS 16.2.3). At launch none is folded: the rules moved to Later
 //	             (QD-1032), and the log refuses every RepoPrefixRules before it reaches this fold
 //	             (acl_statement.go's configAclPrefixRulesDark), so the list stays empty unless a log runs the rules
-//	owner        RepoCreate's signer's member for an owner-bound kind (vault, mailbox, secret), and for a mailcfg
+//	owner        RepoCreate's signer's member for an owner-bound kind (vault, mailbox, secret, and the agent_repos
+//	             feature's agents and agent, DESIGN-COMPUTE §20.4, a member's first agents repo in log order being its
+//	             agents repo, AclState.AgentsRepo), and for a mailcfg
 //	             that is a Team scope's own, its creator's member's, as a mailbox is its member's: one whose signer
 //	             is a member device that writes no config heads (QD-1093), or a config writer's while a network
 //	             mailcfg stands (QD-1108). A config writer's mailcfg while none stands names no owner and is the
@@ -115,6 +117,10 @@ func FoldAclRepos(repos []*protocol.AclRepo, entries []AclAccessLogEntry) ([]*pr
 		case *protocol.RepoCreate:
 			if !aclRepoInboxFits(body.GetKind(), body.GetInbox()) || (body.GetInbox() == protocol.RepoInbox_REPO_INBOX_ADMIN &&
 				slices.ContainsFunc(next, func(repo *protocol.AclRepo) bool { return repo.GetInbox() == protocol.RepoInbox_REPO_INBOX_ADMIN })) {
+				return nil, ErrAclAccessLogFold
+			}
+			if body.GetInbox() == protocol.RepoInbox_REPO_INBOX_TEAM && aclTeamInboxStands(next) {
+				// a second Team inbox while one stands, which no check takes, folds to nothing
 				return nil, ErrAclAccessLogFold
 			}
 			if slices.ContainsFunc(next, func(repo *protocol.AclRepo) bool { return bytes.Equal(repo.GetRepoId(), body.GetRepoId()) }) {
@@ -339,6 +345,86 @@ func aclNetworkMailcfgStands(repos []*protocol.AclRepo) bool {
 	return slices.ContainsFunc(repos, func(repo *protocol.AclRepo) bool {
 		return repo.GetKind() == protocol.RepoKind_REPO_KIND_MAILCFG && len(repo.GetOwnerMemberId()) == 0 && aclRepoRowStands(repo)
 	})
+}
+
+// Whether the network's Team inbox stands among repos (DESIGN-COMPUTE §20.4): a standing general repo marked team. While
+// one stands every other RepoCreate marking one is refused, by its check and by the fold alike.
+func aclTeamInboxStands(repos []*protocol.AclRepo) bool {
+	return slices.ContainsFunc(repos, func(repo *protocol.AclRepo) bool {
+		return AclRepoIsTeamInbox(repo) && aclRepoRowStands(repo)
+	})
+}
+
+// The log position a repo was created at, as its rows tell it: its earliest standing admin row, the creator's, which a
+// RepoCreate adds; 0 for a repo with none left, as mail_repos.go reads a mailbox's.
+func aclRepoRowCreatedAt(repo *protocol.AclRepo) uint64 {
+	createdAt := uint64(0)
+	for _, admin := range repo.GetAdmins() {
+		if !AclRepoAdminStands(admin) {
+			continue
+		}
+		if at := admin.GetAt(); createdAt == 0 || at < createdAt {
+			createdAt = at
+		}
+	}
+	return createdAt
+}
+
+// The standing repo of kind that matches, the one created first in log order, then the lowest id, one with no admin row
+// left after every other: what every reader of one state agrees on.
+func (self *AclState) firstRepoOfKind(kind protocol.RepoKind, matches func(repo *protocol.AclRepo) bool) (Id, bool) {
+	found := false
+	bestId := Id{}
+	bestAt := uint64(0)
+	for _, repo := range self.rows.GetRepos() {
+		if repo.GetKind() != kind || !aclRepoRowStands(repo) || (matches != nil && !matches(repo)) {
+			continue
+		}
+		repoId, err := IdFromBytes(repo.GetRepoId())
+		if err != nil {
+			continue
+		}
+		createdAt := aclRepoRowCreatedAt(repo)
+		better := !found
+		if found {
+			switch {
+			case (createdAt == 0) != (bestAt == 0):
+				better = bestAt == 0
+			case createdAt != bestAt:
+				better = createdAt < bestAt
+			default:
+				better = repoId.Cmp(bestId) < 0
+			}
+		}
+		if better {
+			found, bestId, bestAt = true, repoId, createdAt
+		}
+	}
+	return bestId, found
+}
+
+// A member's agents repo (DESIGN-COMPUTE §20.4): the standing agents repo its row binds to the member, the first in log
+// order, the lowest id breaking a tie, so every device of the member and every reader take the same one. False for none.
+func (self *AclState) AgentsRepo(memberId Id) (Id, bool) {
+	if memberId == (Id{}) {
+		return Id{}, false
+	}
+	return self.firstRepoOfKind(protocol.RepoKind_REPO_KIND_AGENTS, func(repo *protocol.AclRepo) bool {
+		return bytes.Equal(repo.GetOwnerMemberId(), memberId.Bytes())
+	})
+}
+
+// The network's Team inbox (DESIGN-COMPUTE §20.4): the standing general repo marked team. False for none, which a
+// personal network never has.
+func (self *AclState) TeamInbox() (Id, bool) {
+	return self.firstRepoOfKind(protocol.RepoKind_REPO_KIND_GENERAL, AclRepoIsTeamInbox)
+}
+
+// Whether repoId is an agent repo of memberId's that stands: an agent repo the log binds to that member, the check a
+// card's or a message's repo field takes within a member (DESIGN-COMPUTE §20.5, §20.7).
+func (self *AclState) MemberAgentRepo(memberId Id, repoId Id) bool {
+	repo := self.repos[repoId]
+	return repo != nil && !repo.deleted && repo.kind == protocol.RepoKind_REPO_KIND_AGENT && repo.ownerId == memberId && memberId != (Id{})
 }
 
 // The revokes without the subject's.

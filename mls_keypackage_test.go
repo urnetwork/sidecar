@@ -304,7 +304,7 @@ func TestMlsUrGroupEncoding(t *testing.T) {
 
 	refused := map[string][]byte{
 		"kind 0":          bytes.Replace(bytes.Clone(encoded), []byte{7, 16}, []byte{0, 16}, 1),
-		"kind 10":         bytes.Replace(bytes.Clone(encoded), []byte{7, 16}, []byte{10, 16}, 1),
+		"kind 12":         bytes.Replace(bytes.Clone(encoded), []byte{7, 16}, []byte{12, 16}, 1),
 		"a short owner":   append(bytes.Clone(encoded[:len(encoded)-17]), 5, 1, 2, 3, 4, 5),
 		"a short network": append([]byte{4, 1, 2, 3, 4}, encoded[17:]...),
 		"a byte past":     append(bytes.Clone(encoded), 0),

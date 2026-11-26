@@ -20,11 +20,11 @@
 //	          200, as an ERASE rewrites them; a crash between leaves its retry, which finds it committed and deletes
 //	          again. The head keeps the highest consumed_through any CONSUME carried, never falling
 //	          (plan-RECORD-depositor-spool)
-//	receipts  a reader of an owner-bound repo (vault, mailbox, secret) that does not write it deposits only read
-//	          receipts: each entry at most 4 KiB padded, else 403 QUOTA_LIMIT naming evs_read_receipt_bytes, and 256 a
-//	          UTC day per repo, counted once a push id through Quota.CountRate's evs_read_receipts, else 429 with
-//	          retry_after_ms to the next 00:00 UTC (plan-EVS1-subscription-caps#3); evs sees only sealed bytes, so the
-//	          owner's ingest enforces the receipt's kind
+//	receipts  a reader of an owner-bound repo (vault, mailbox, secret, agents, agent) that does not write it deposits
+//	          only read receipts: each entry at most 4 KiB padded, else 403 QUOTA_LIMIT naming evs_read_receipt_bytes,
+//	          and 256 a UTC day per repo, counted once a push id through Quota.CountRate's evs_read_receipts, else 429
+//	          with retry_after_ms to the next 00:00 UTC (plan-EVS1-subscription-caps#3); evs sees only sealed bytes, so
+//	          the owner's ingest enforces the receipt's kind
 //	base      BASE is 5c's whole rule at M2 (plan-EVS1-v1-unspecified#6): removals only, each naming the path's newest
 //	          version, which 5g holds, no new object, admin on an owned record-class stream; it commits with window
 //	          bit 3
@@ -190,11 +190,10 @@ func (self *pushAttempt) chargeClosureRecords() *pushOutcome {
 	return nil
 }
 
-// Whether the push's signer reads the owner-bound repo and does not write it: a receipt-only depositor.
+// Whether the push's signer reads the owner-bound repo and does not write it: a receipt-only depositor. The owner-bound
+// kinds are sidecar's one list, the agent_repos feature's agents and agent among them (DESIGN-COMPUTE §20.4).
 func (self *pushAttempt) receiptOnly() bool {
-	switch self.reads.repo.Object.GetKind() {
-	case protocol.RepoKind_REPO_KIND_VAULT, protocol.RepoKind_REPO_KIND_MAILBOX, protocol.RepoKind_REPO_KIND_SECRET:
-	default:
+	if !sidecar.EvsRepoKindOwnerBound(self.reads.repo.Object.GetKind()) {
 		return false
 	}
 	signer := self.request.SidecarId

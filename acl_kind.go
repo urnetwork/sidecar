@@ -47,6 +47,10 @@ const (
 	// AclKindAudienceReceiptsAndOwner's, and every subject of the network the projection marks mail_send, for §15.8's
 	// same-network mail (D-MAIL-8, owner decision 333): the mailbox's
 	AclKindAudienceReceiptsOwnerAndSenders
+	// readers that do not write (the receipt deposit), every member device of the network, the agents on it depositing
+	// through it, and in a network with no document every admitted sidecar, the implicit document's rule
+	// (DESIGN-COMPUTE §16.5's deposit row): the agent repo's
+	AclKindAudienceReceiptsAndAgentDepositors
 )
 
 // One kind's row of §8.5's table and the rules around it.
@@ -60,8 +64,8 @@ type AclKindDefault struct {
 	// Whether * and evs:* reach it: general and record only (§8.4).
 	Wildcard bool
 	// What a rule naming a repo of the kind outright may add: everything for general and record, readers too for
-	// team_record and mailcfg, deposit alone for vault and mailbox, nothing for config, directory and secret. A
-	// mailcfg whose row names an owner, a Team scope's own, takes nothing whatever its kind's row says (QD-1107;
+	// team_record and mailcfg, deposit alone for vault, mailbox and agent, nothing for config, directory, secret and
+	// agents. A mailcfg whose row names an owner, a Team scope's own, takes nothing whatever its kind's row says (QD-1107;
 	// acl_evs.go).
 	DocumentRights AclEvsRights
 	// Whether only its owner's consent adds a reader (§8.5). A Team scope's own mailcfg is owner-bound by its row,
@@ -132,6 +136,25 @@ func AclKindDefaults() []AclKindDefault {
 			Write:      AclKindAudienceOwnerConsented,
 			Deposit:    AclKindAudienceReceipts,
 			OwnerBound: true,
+		},
+		// the agent_repos feature's (DESIGN-COMPUTE §20.4, §16.5): an agents repo, one a member, written only by the
+		// member's own devices and agents, which no rule adds to, so no other member broadcasts to them; an agent repo,
+		// one an agent, taking deposits, to which a rule naming it outright adds a deposit alone. Each EvsShare's
+		// subject, one of the member's agents, reads and writes as the member's devices do (acl_evs.go)
+		{
+			Kind:       protocol.RepoKind_REPO_KIND_AGENTS,
+			Read:       AclKindAudienceOwnerConsented,
+			Write:      AclKindAudienceOwnerConsented,
+			Deposit:    AclKindAudienceReceipts,
+			OwnerBound: true,
+		},
+		{
+			Kind:           protocol.RepoKind_REPO_KIND_AGENT,
+			Read:           AclKindAudienceOwnerConsented,
+			Write:          AclKindAudienceOwnerConsented,
+			Deposit:        AclKindAudienceReceiptsAndAgentDepositors,
+			DocumentRights: AclEvsDeposit,
+			OwnerBound:     true,
 		},
 	}
 }

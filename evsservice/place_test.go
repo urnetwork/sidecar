@@ -568,8 +568,8 @@ func TestPlaceEveryOtherKindKeepsRepoPlacedForAnotherCreator(t *testing.T) {
 		}
 	}
 	slices.Sort(kinds)
-	if len(kinds) != 8 {
-		t.Fatalf("%d kinds besides config, want §11.12's nine less one", len(kinds))
+	if len(kinds) != 10 {
+		t.Fatalf("%d kinds besides config, want §11.12's nine less one and agent_repos' two", len(kinds))
 	}
 	refusedPlaced := func(kind protocol.RepoKind, label string, repoId sidecar.Id) {
 		t.Helper()
