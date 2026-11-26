@@ -200,7 +200,8 @@ func registerAuthFeature(feature AuthFeature, fragment []byte) {
 			panic(fmt.Sprintf("authorization feature %s's implicit fragment: %v", feature, err))
 		}
 	}
-	authFeatureRegistrations = append(authFeatureRegistrations, &authFeatureRegistration{feature: feature, fragment: append([]byte{}, fragment...)})
+	// a nil fragment stays nil, so the compile adds no rule for it (aclImplicitFeatureRules), never an empty source
+	authFeatureRegistrations = append(authFeatureRegistrations, &authFeatureRegistration{feature: feature, fragment: slices.Clone(fragment)})
 	slices.SortFunc(authFeatureRegistrations, func(a *authFeatureRegistration, b *authFeatureRegistration) int {
 		return int(a.feature) - int(b.feature)
 	})

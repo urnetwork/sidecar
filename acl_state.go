@@ -762,6 +762,7 @@ func (self *AclState) indexSuspensions() error {
 // Indexes the rows' repos and their folded access logs.
 func (self *AclState) indexRepos() error {
 	adminInbox := false
+	teamInbox := false
 	for i, row := range self.rows.GetRepos() {
 		field := fmt.Sprintf("repos[%d]", i)
 		repoId, err := aclRowsId(row.GetRepoId(), field+".repo_id")
@@ -782,6 +783,13 @@ func (self *AclState) indexRepos() error {
 				return aclRowsRefusal("%s repeats the network admin inbox", field)
 			}
 			adminInbox = true
+		}
+		if AclRepoIsTeamInbox(row) && aclRepoRowStands(row) {
+			// one standing Team inbox a network (DESIGN-COMPUTE §20.4), which the check and the fold keep
+			if teamInbox {
+				return aclRowsRefusal("%s repeats the standing Team inbox", field)
+			}
+			teamInbox = true
 		}
 		repo := &aclRepoState{
 			row:      row,

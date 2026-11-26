@@ -61,13 +61,13 @@ func EvsRepoObjectKey(repoId Id) string {
 	return EvsRepoObjectKeyPrefix + EvsKeyId(repoId)
 }
 
-// Whether kind is one of §11.12's nine (aclRepoKindKnown), not one of the kinds acl.proto declares under an
-// authorization feature that no reader takes yet.
+// Whether kind is one this build's readers take (aclRepoKindKnown): §11.12's nine and the agent_repos feature's agents
+// and agent, not a kind acl.proto declares under an authorization feature whose readers have not landed (listeners).
 func EvsRepoKindKnown(kind protocol.RepoKind) bool {
 	return aclRepoKindKnown(kind)
 }
 
-// Whether kind binds an owner member (D-EVS-11): vault, mailbox and secret.
+// Whether kind binds an owner member (D-EVS-11): vault, mailbox and secret, and agents and agent (DESIGN-COMPUTE §20.4).
 func EvsRepoKindOwnerBound(kind protocol.RepoKind) bool {
 	return aclRepoKindOwnerBound(kind)
 }

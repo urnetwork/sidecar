@@ -330,9 +330,10 @@ type EvsSignProvenanceFunction func(agentId Id, purpose string, message []byte) 
 type EvsCreateRepoArgs struct {
 	// Fixed at creation and bound into §10's ur_group (§11.12).
 	Kind protocol.RepoKind
-	// An owner-bound kind's owner member (vault, mailbox, secret), or the member whose Team scope a mailcfg is the
-	// own of, which only that member's consented device creates: one that writes no config heads (QD-1093), or a
-	// config writer once the network's mailcfg stands (QD-1108); nil for the network's mailcfg and any other kind.
+	// An owner-bound kind's owner member (vault, mailbox, secret, and the agent_repos feature's agents and agent,
+	// DESIGN-COMPUTE §20.4), or the member whose Team scope a mailcfg is the own of, which only that member's consented
+	// device creates: one that writes no config heads (QD-1093), or a config writer once the network's mailcfg stands
+	// (QD-1108); nil for the network's mailcfg and any other kind.
 	// RepoCreate carries no owner: the access log's fold binds the creator's member, so this names the caller's own
 	// member, and its group's ur_group.
 	OwnerMemberId *Id
@@ -347,7 +348,9 @@ type EvsCreateRepoArgs struct {
 	// the announcement, so no device announces the repo on its own. Asked of EvsClientArgs.PrivateCreate before the
 	// RepoCreate is filed, which refuses while the network's directory does not stand (QD-748).
 	Private bool
-	// The role filed in RepoCreate. A group inbox is announced with requests closed and no roles offered.
+	// The role filed in RepoCreate: group or admin, a mail inbox, which a group's directory item announces with requests
+	// closed and no roles offered; or team, the Team inbox (DESIGN-COMPUTE §20.4), a config writer's under the
+	// agent_repos feature.
 	Inbox protocol.RepoInbox
 	// GroupInbox selects the group role for callers predating the signed marker.
 	GroupInbox bool
@@ -391,6 +394,12 @@ func (self *EvsClient) CreateRepo(ctx context.Context, args *EvsCreateRepoArgs) 
 	if self.args.FileStatement == nil {
 		return nil, ErrEvsNoStatementPoster
 	}
+	if args.ResumeRepoId == nil && aclRepoCreateUsesAgentRepos(&protocol.RepoCreate{Kind: args.Kind, Inbox: args.inboxRole()}) {
+		// §16.6's before row: a device files no entry that uses a feature its network has not turned on
+		if err := self.checkAgentReposOn(); err != nil {
+			return nil, err
+		}
+	}
 	if args.ResumeRepoId == nil && args.Private {
 		// the choice lives only in the private marker, which the directory holds: asked before anything is filed
 		if self.args.PrivateCreate == nil {
@@ -427,7 +436,7 @@ func (self *EvsClient) CreateRepo(ctx context.Context, args *EvsCreateRepoArgs) 
 			OwnerMemberId: args.OwnerMemberId,
 			DisplayName:   args.DisplayName,
 			Private:       args.Private,
-			GroupInbox:    args.inboxRole() != protocol.RepoInbox_REPO_INBOX_NONE,
+			GroupInbox:    args.inboxRole() == protocol.RepoInbox_REPO_INBOX_GROUP || args.inboxRole() == protocol.RepoInbox_REPO_INBOX_ADMIN,
 			Confirmed:     args.Confirmed,
 		}
 		if err := self.args.RepoCreated(ctx, created); err != nil {
@@ -435,6 +444,24 @@ func (self *EvsClient) CreateRepo(ctx context.Context, args *EvsCreateRepoArgs) 
 		}
 	}
 	return repo, nil
+}
+
+// Nil where this sidecar's verified state has the agent_repos feature on (DESIGN-COMPUTE §16.6); else an error wrapping
+// ErrAuthFeatureOff, ErrEvsNoConfig before a verified state, so no RepoCreate of the feature's kinds or marker is filed
+// for every reader to refuse.
+func (self *EvsClient) checkAgentReposOn() error {
+	if self.args.Config == nil {
+		return ErrEvsNoConfig
+	}
+	view := self.args.Config()
+	if view == nil {
+		return ErrEvsNoConfig
+	}
+	state, ok := view.(interface{ AuthFeatureOn(AuthFeature) bool })
+	if !ok || !state.AuthFeatureOn(AuthFeatureAgentRepos) {
+		return fmt.Errorf("evs: %w: %s is not on for this network", ErrAuthFeatureOff, AuthFeatureAgentRepos)
+	}
+	return nil
 }
 
 // CreateRepo's filing and placement, answering the id placed: RepoCreate for a new random id, then PUT

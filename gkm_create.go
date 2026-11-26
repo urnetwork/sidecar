@@ -144,7 +144,8 @@ func (self *gkmGroupManager) createInFlow(ctx context.Context, args *GkmCreateGr
 	if repo == nil {
 		return nil, fmt.Errorf("%w: repo %s: its RepoCreate has not reached this state", ErrGkmNoRepo, self.repoId)
 	}
-	if args.Inbox != protocol.RepoInbox_REPO_INBOX_NONE && (repo.GetInbox() != args.Inbox || !AclRepoIsInbox(repo)) {
+	if args.Inbox != protocol.RepoInbox_REPO_INBOX_NONE && (repo.GetInbox() != args.Inbox || !aclRepoInboxFits(repo.GetKind(), repo.GetInbox())) {
+		// a mail inbox's marker or the Team inbox's (DESIGN-COMPUTE §20.4), as the verified RepoCreate carries it
 		return nil, fmt.Errorf("%w: repo %s does not carry the expected inbox role", ErrGkmMalformed, self.repoId)
 	}
 	for drawCount := 0; drawCount < max(1, client.settings.CreateGroupDrawCount); drawCount += 1 {

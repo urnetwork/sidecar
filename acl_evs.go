@@ -17,6 +17,14 @@
 // checkEvsShare keeps to the owner-bound kinds. The network's mailcfg, whose row names none, keeps every right a
 // mailcfg has.
 //
+// The agent_repos feature's kinds (DESIGN-COMPUTE §20.4, §16.5, D-SKILL-1; SKILL-M11-01) follow the owner-bound rules
+// as vault and mailbox do, bound to their creator's member: its consented devices read and write, the admins among them
+// administer, and an EvsShare's subject, one of the member's own agents, reads and writes too, where a vault's or
+// mailbox's only reads. An agents repo takes no deposit but readers' receipts, and no rule adds to it; an agent repo
+// takes deposits from every member device of the network, from every admitted sidecar in a network with no document
+// (addAgentRepoDeposit), and from a subject a rule naming the repo outright gives deposit. The Team inbox, a general repo
+// whose RepoCreate marks it team, is read and written by every admitted sidecar of the network within §8.6's ceiling.
+//
 // The config repo's row is the state's own where the rows hold none (acl_state.go, QD-719), so its kind default
 // answers in every state. Its admins are the config writers, each a member device of an AdminSet member that is not
 // read_only, at evs and gkm alike (QD-894): the exchange gives each the config's admin scope, and evs and gkm honor it
@@ -95,18 +103,35 @@ type AclEvsAccess struct {
 	AclDecision
 }
 
-// Whether kind is one of §11.12's nine, general to secret. acl.proto also declares the kinds DESIGN-COMPUTE.md's
-// authorization features turn on, agents, agent and listeners (§16.6; CACL-M11-05), which no reader takes until its
-// feature's readers land (SKILL-M11-01, LSTN-M13-05), each before that feature's base refused as a reader that predates
-// the value refuses it, so the declaration alone changes nothing a reader accepts.
+// Whether kind is one this build's readers take: §11.12's nine, general to secret, and the agent_repos feature's
+// agents and agent (DESIGN-COMPUTE §20.4, §16.6; SKILL-M11-01), which this build implements (acl_statement_repo.go's
+// registration), so evs places them and gkm forms their groups. Every RepoCreate of one is refused before the feature's
+// base alike in this build and in one that predates the values (configAclAgentReposFeature), so no repo of either kind
+// stands at a position where an older reader would judge it. listeners, the listeners feature's, stays unknown until
+// its readers land (LSTN-M13-05). A versioning rule naming a kind reads only §11.12's nine (aclRepoKindVersioningNamed).
 func aclRepoKindKnown(kind protocol.RepoKind) bool {
+	return aclRepoKindVersioningNamed(kind) || aclRepoKindAgentRepos(kind)
+}
+
+// Whether a config head's versioning rule may name kind: §11.12's nine. The feature kinds are no kind there, as they
+// were none to a reader that predates their values, so no head names one that such a reader would refuse.
+func aclRepoKindVersioningNamed(kind protocol.RepoKind) bool {
 	return protocol.RepoKind_REPO_KIND_GENERAL <= kind && kind <= protocol.RepoKind_REPO_KIND_SECRET
 }
 
-// The owner-bound kinds, whose readers only the owner's consent adds (§8.5, owner decision 126).
+// Whether kind is one of the agent_repos feature's two (DESIGN-COMPUTE §20.4): agents, one a member per network, and
+// agent, one an agent.
+func aclRepoKindAgentRepos(kind protocol.RepoKind) bool {
+	return kind == protocol.RepoKind_REPO_KIND_AGENTS || kind == protocol.RepoKind_REPO_KIND_AGENT
+}
+
+// The owner-bound kinds, whose readers only the owner's consent adds (§8.5, owner decision 126): vault, mailbox and
+// secret, and the agent_repos feature's agents and agent (DESIGN-COMPUTE §20.4, D-SKILL-1), so no admin reads a
+// member's agents by granting itself.
 func aclRepoKindOwnerBound(kind protocol.RepoKind) bool {
 	switch kind {
-	case protocol.RepoKind_REPO_KIND_VAULT, protocol.RepoKind_REPO_KIND_MAILBOX, protocol.RepoKind_REPO_KIND_SECRET:
+	case protocol.RepoKind_REPO_KIND_VAULT, protocol.RepoKind_REPO_KIND_MAILBOX, protocol.RepoKind_REPO_KIND_SECRET,
+		protocol.RepoKind_REPO_KIND_AGENTS, protocol.RepoKind_REPO_KIND_AGENT:
 		return true
 	}
 	return false
@@ -288,6 +313,13 @@ func (self *AclState) sidecarEvsAccess(sidecar *aclSidecarState, repoId Id, audi
 		}
 	case protocol.RepoKind_REPO_KIND_VAULT, protocol.RepoKind_REPO_KIND_MAILBOX, protocol.RepoKind_REPO_KIND_SECRET:
 		self.addOwnerBoundRights(&accumulator, sidecar, repoId, repo, consented, nowMs)
+	case protocol.RepoKind_REPO_KIND_AGENTS, protocol.RepoKind_REPO_KIND_AGENT:
+		// DESIGN-COMPUTE §20.4's owner-bound kinds: the member's consented devices read and write, and its EvsShares'
+		// subjects, the member's other agents, read and write too; an agent repo also takes the deposits below
+		self.addOwnerBoundRights(&accumulator, sidecar, repoId, repo, consented, nowMs)
+		if repo.kind == protocol.RepoKind_REPO_KIND_AGENT {
+			self.addAgentRepoDeposit(&accumulator, sidecar)
+		}
 	case protocol.RepoKind_REPO_KIND_TEAM_RECORD:
 		// autogroup:admin and :auditor read; autogroup:member and tagged subjects deposit (§8.5). The read
 		// is no row §8.6's ceiling counts, so an ephemeral sidecar only deposits.
@@ -307,7 +339,15 @@ func (self *AclState) sidecarEvsAccess(sidecar *aclSidecarState, repoId Id, audi
 			// tag:mail's read comes as a rule
 			accumulator.add(AclEvsWrite, kindDefault)
 		}
-	case protocol.RepoKind_REPO_KIND_GENERAL, protocol.RepoKind_REPO_KIND_RECORD:
+	case protocol.RepoKind_REPO_KIND_GENERAL:
+		if AclRepoIsTeamInbox(repo.row) {
+			// DESIGN-COMPUTE §20.4's Team inbox: read and written by every admitted sidecar of the network, within §8.6's
+			// ceiling, so an ephemeral sidecar takes neither; a read_only one reads alone, below
+			if !sidecar.ephemeral {
+				accumulator.add(AclEvsRead|AclEvsWrite, kindDefault)
+			}
+		}
+	case protocol.RepoKind_REPO_KIND_RECORD:
 	default:
 		// a kind this code does not know grants nothing
 		return AclEvsAccess{AclDecision: aclDeny(AclReasonNoGrant)}
@@ -416,13 +456,19 @@ func (self *AclState) addOwnerBoundRights(accumulator *aclEvsAccumulator, sideca
 			accumulator.add(AclEvsAdmin, AclDecision{Reason: AclReasonRepoAdmin})
 		}
 	}
+	shared := AclEvsRead
+	if aclRepoKindAgentRepos(repo.kind) {
+		// an agents or agent repo's EvsShare names one of the member's own agents, a tagged sidecar the member sponsors
+		// among them, which reads and writes it as the member's devices do (DESIGN-COMPUTE §20.4's table)
+		shared |= AclEvsWrite
+	}
 	for i := range repo.shares {
 		share := &repo.shares[i]
 		if !share.valid || (share.expiresMs != 0 && share.expiresMs <= nowMs) {
 			continue
 		}
 		if self.namesSidecar(sidecar, share.subject, sidecar.ephemeral) {
-			accumulator.add(AclEvsRead, AclDecision{Reason: AclReasonEvsShare, At: share.row.GetAt()})
+			accumulator.add(shared, AclDecision{Reason: AclReasonEvsShare, At: share.row.GetAt()})
 		}
 	}
 	if repo.kind == protocol.RepoKind_REPO_KIND_VAULT || repo.kind == protocol.RepoKind_REPO_KIND_MAILBOX {
@@ -437,6 +483,19 @@ func (self *AclState) addOwnerBoundRights(accumulator *aclEvsAccumulator, sideca
 	}
 }
 
+// An agent repo's deposits beyond its writers' and readers' receipts (DESIGN-COMPUTE §20.4, §16.5's deposit row): every
+// member device of the network, through which the agents on it deposit; and in a network with no document, every
+// admitted sidecar, ephemeral and tagged ones included, as the implicit document's rule gives (§16.5's personal
+// column). A network with a document, a Team's from its starting document on, gives another tagged subject deposit
+// only by a rule naming the repo (the kind's DocumentRights; Q-HARN-9). Evaluated here from the rows' has_document,
+// not compiled, so it reads at once for a repo created between bases; no document narrows it per agent yet (question
+// skill-m11-01-agent-deposit-rule-target).
+func (self *AclState) addAgentRepoDeposit(accumulator *aclEvsAccumulator, sidecar *aclSidecarState) {
+	if sidecar.class == AclSubjectClassMemberDevice || !self.rows.GetHasDocument() {
+		accumulator.add(AclEvsDeposit, AclDecision{Reason: AclReasonKindDefault})
+	}
+}
+
 // Whether the projection marks the sidecar mail_send at nowMs: a send grant with mail_send in force whose source holds
 // it, MaySend's answer for it (D-ACL-12), which owner decision 333's mailbox deposit reads. The caller has resolved the
 // sidecar and found it not hard denied.
@@ -448,8 +507,8 @@ func (self *AclState) sidecarMarkedMailSend(sidecar *aclSidecarState, nowMs int6
 }
 
 // The rights the rows' rules give the sidecar on the repo, by kind as the file's header says, within the
-// ceiling: none on a Team scope's own mailcfg, whatever names it, the tag:mail kind rule of an older compile included
-// (QD-1107).
+// ceiling: none on a Team scope's own mailcfg or an agents repo, whatever names it, the tag:mail kind rule of an older
+// compile included (QD-1107).
 func (self *AclState) addRuleRights(accumulator *aclEvsAccumulator, sidecar *aclSidecarState, repoId Id, repo *aclRepoState, nowMs int64) {
 	explicit := self.repoRules[repoId]
 	wildcard := aclRepoKindGeneral(repo.kind)
@@ -458,7 +517,9 @@ func (self *AclState) addRuleRights(accumulator *aclEvsAccumulator, sidecar *acl
 	case aclRepoKindGeneral(repo.kind), repo.kind == protocol.RepoKind_REPO_KIND_TEAM_RECORD,
 		repo.kind == protocol.RepoKind_REPO_KIND_MAILCFG && !repo.ownerBound():
 		allowed = AclEvsDeposit | AclEvsRead | AclEvsWrite | AclEvsAdmin
-	case repo.kind == protocol.RepoKind_REPO_KIND_VAULT, repo.kind == protocol.RepoKind_REPO_KIND_MAILBOX:
+	case repo.kind == protocol.RepoKind_REPO_KIND_VAULT, repo.kind == protocol.RepoKind_REPO_KIND_MAILBOX,
+		repo.kind == protocol.RepoKind_REPO_KIND_AGENT:
+		// a rule naming an agent repo outright adds a deposit alone, another tagged subject's (DESIGN-COMPUTE §16.5)
 		allowed = AclEvsDeposit
 	}
 	if allowed == 0 || (explicit == nil && !wildcard) {

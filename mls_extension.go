@@ -147,8 +147,9 @@ func mlsDecodeUrGroup(data []byte) (*MlsUrGroup, error) {
 	return urGroup, nil
 }
 
-// A kind §11.12 names, general 1 to secret 9, directory among them (owner decision 171); acl.proto's kinds under an
-// authorization feature, agents, agent and listeners, wait for their readers (aclRepoKindKnown).
+// A kind this build's readers take (aclRepoKindKnown): §11.12's, general 1 to secret 9, directory among them (owner
+// decision 171), and the agent_repos feature's agents and agent; listeners, under its own feature, waits for its
+// readers.
 func mlsCheckUrGroup(urGroup *MlsUrGroup) error {
 	if urGroup == nil {
 		return fmt.Errorf("%w: a group needs its ur_group", errMlsInvalid)

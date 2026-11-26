@@ -50,6 +50,8 @@ func testAuthFeatureTurnOn(state *ConfigState, core *SidecarSyncCore, sidecarId 
 // features and lacking sidecars read back, a name that is no feature's and an id that does not parse dropped; and an
 // older api's answer, naming none, offers nothing.
 func TestSyncCoreStatesAndReadsAuthFeatures(t *testing.T) {
+	// a release implementing none, whatever this build's owners registered
+	WithAuthFeaturesImplementedForTest(t, 0, nil)
 	listedId := NewId()
 	answers := map[bool]string{
 		true: `{"version":"8","gates":[],"min_secure_version":0,"revoked":false,"auth_features":["agent_repos","listeners","nothing"],` +

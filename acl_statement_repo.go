@@ -7,9 +7,13 @@
 //	                network's and names no owner, else a consented device of the signer's member, whose mailcfg is
 //	                that member's Team scope's own, owner-bound to it: a device that writes no config heads always
 //	                (QD-1093), a config writer once the network's stands (QD-1108; aclNetworkMailcfgStands); vault,
-//	                mailbox and secret: a consented device of the owner, its member; directory: a config writer,
-//	                once per network, and at api alone the team tier (AclStatementNeedsTeamTier); config: none,
-//	                since §7.9's bootstrap creates it (plan-ACL-small-readings #4)
+//	                mailbox and secret, and the agent_repos feature's agents and agent (DESIGN-COMPUTE §20.4): a
+//	                consented device of the owner, its member; directory: a config writer, once per network, and at
+//	                api alone the team tier (AclStatementNeedsTeamTier); config: none, since §7.9's bootstrap creates
+//	                it (plan-ACL-small-readings #4). The inbox marker: group or admin on a general repo, admin a config
+//	                writer's once a network; team, the Team inbox (DESIGN-COMPUTE §20.4), a config writer's general
+//	                repo, one standing a network. A kind or marker of the agent_repos feature only past the base that
+//	                turns it on (configAclAgentReposFeature)
 //	RepoAdmin       a repo admin or a config writer; in an owner-bound repo an add only by a consented device of its
 //	                owner, of a consented device of its owner (§15.7); never an add in the directory
 //	RepoGrant       a repo admin or a config writer, in general, record, team_record and the network's mailcfg
@@ -32,8 +36,8 @@
 // give it an admin and policy never widens its writers (D-ACL-13; acl-m2-02-state-readings #10). Statements on a
 // deleted repo are refused but for RepoRevoke, RepoAdmin's remove, RepoDelete{now} and RepoRestore.
 //
-// "Owner-bound" here is the repo's own standing (aclRepoState.ownerBound): the vault, mailbox and secret kinds, and a
-// mailcfg whose row names an owner, a Team scope's own, which follows their rules as a mailbox does (QD-1107). So on
+// "Owner-bound" here is the repo's own standing (aclRepoState.ownerBound): the vault, mailbox, secret, agents and agent
+// kinds, and a mailcfg whose row names an owner, a Team scope's own, which follows their rules as a mailbox does (QD-1107). So on
 // a scope's mailcfg no RepoGrant takes effect, a RepoAdmin add and a RepoDelete take effect only from a consented
 // device of its owner, and a RepoRevoke never removes its owner, while the network's mailcfg keeps a mailcfg's rules.
 //
@@ -82,6 +86,28 @@ func (self *AclAccessLogSettings) RepoRestoreWithinWindow(deletedTimeMs int64, r
 // A time from ms since the epoch.
 func aclTime(timeMs int64) time.Time {
 	return time.UnixMilli(timeMs)
+}
+
+// This build implements the agent_repos feature (DESIGN-COMPUTE §16.6, §20.4; SKILL-M11-01): every reader of the log
+// here takes its kinds and marker past the base that turns it on (configAclAgentReposFeature), evs places the kinds
+// (EvsRepoKindKnown), gkm forms and rotates their groups, the agent repo's carrying a drop key (GkmRepoKindTakesDeposits),
+// and the receipt rule holds them as owner-bound (evsservice's closure.go). It adds no implicit fragment: an agent repo's
+// deposits are its kind default (addAgentRepoDeposit), so every release compiles the same rows before and after the base,
+// and acl_implicit.hujson's golden does not move.
+func init() {
+	registerAuthFeature(AuthFeatureAgentRepos, nil)
+}
+
+// §16.6's before rule for the agent_repos feature: a RepoCreate of an agents or agent repo, or one marking the Team
+// inbox, refused at a position at or before the base that turns the feature on, alike by this reader and by one whose
+// release predates the values, which refuses it as a kind or marker it does not know. Nil for every other statement.
+// TEAM's configAclRules calls it before the statement's own rule, on the state the entry lands on.
+func configAclAgentReposFeature(state *ConfigState, statement *configStatement) error {
+	create, ok := statement.body.(*protocol.RepoCreate)
+	if !ok || statement.signedType != bridge.SignedType_SIGNED_REPO_CREATE || !aclRepoCreateUsesAgentRepos(create) {
+		return nil
+	}
+	return state.RequireAuthFeature(AuthFeatureAgentRepos, statement.n)
 }
 
 // The repo a statement names, refusing an id of the wrong size, the wildcard's zero form, a repo the rows do not
@@ -168,21 +194,42 @@ func AclStatementNeedsTeamTier(signed []byte) bool {
 	return body.(*protocol.RepoCreate).GetKind() == protocol.RepoKind_REPO_KIND_DIRECTORY
 }
 
-// Whether a signed inbox role is defined for a repo's kind.
+// Whether a signed inbox role is defined for a repo's kind: group and admin, the mail inboxes, and team, the agent_repos
+// feature's Team inbox (DESIGN-COMPUTE §20.4), each on a general repo alone.
 func aclRepoInboxFits(kind protocol.RepoKind, inbox protocol.RepoInbox) bool {
 	switch inbox {
 	case protocol.RepoInbox_REPO_INBOX_NONE:
 		return true
-	case protocol.RepoInbox_REPO_INBOX_GROUP, protocol.RepoInbox_REPO_INBOX_ADMIN:
+	case protocol.RepoInbox_REPO_INBOX_GROUP, protocol.RepoInbox_REPO_INBOX_ADMIN, protocol.RepoInbox_REPO_INBOX_TEAM:
 		return kind == protocol.RepoKind_REPO_KIND_GENERAL
 	default:
 		return false
 	}
 }
 
-// Whether the verified creation marks this general repo as a mail inbox.
+// Whether the verified creation marks this general repo as a mail inbox, a group's or the network's admin address: never
+// the Team inbox, which holds agents' messages and takes no mail, drop key or deposit (AclRepoIsTeamInbox).
 func AclRepoIsInbox(repo *protocol.AclRepo) bool {
-	return repo != nil && repo.GetInbox() != protocol.RepoInbox_REPO_INBOX_NONE && aclRepoInboxFits(repo.GetKind(), repo.GetInbox())
+	if repo == nil || !aclRepoInboxFits(repo.GetKind(), repo.GetInbox()) {
+		return false
+	}
+	switch repo.GetInbox() {
+	case protocol.RepoInbox_REPO_INBOX_GROUP, protocol.RepoInbox_REPO_INBOX_ADMIN:
+		return true
+	}
+	return false
+}
+
+// Whether the verified creation marks this general repo as the network's Team inbox (DESIGN-COMPUTE §20.4, D-SKILL-5):
+// read and written by every admitted sidecar, holding only messages to every agent of the network.
+func AclRepoIsTeamInbox(repo *protocol.AclRepo) bool {
+	return repo != nil && repo.GetInbox() == protocol.RepoInbox_REPO_INBOX_TEAM && aclRepoInboxFits(repo.GetKind(), repo.GetInbox())
+}
+
+// Whether a RepoCreate uses the agent_repos feature (DESIGN-COMPUTE §16.6's table): a kind agents or agent, or the
+// team inbox marker, which every reader refuses at a position before the base that turns the feature on.
+func aclRepoCreateUsesAgentRepos(create *protocol.RepoCreate) bool {
+	return aclRepoKindAgentRepos(create.GetKind()) || create.GetInbox() == protocol.RepoInbox_REPO_INBOX_TEAM
 }
 
 // RepoCreate: who may create this kind and inbox role, becoming its admin.
@@ -212,6 +259,16 @@ func (self *AclState) checkRepoCreate(statement *AclStatement, create *protocol.
 			}
 		}
 	}
+	if create.GetInbox() == protocol.RepoInbox_REPO_INBOX_TEAM {
+		// the Team inbox (DESIGN-COMPUTE §20.4): a config writer's general repo, one standing a network, a second
+		// refused rather than folded as anything else
+		if !signer.configWriter {
+			return nil, fmt.Errorf("%w: only a config writer creates the Team inbox", ErrConfigAuthority)
+		}
+		if aclTeamInboxStands(self.rows.GetRepos()) {
+			return nil, fmt.Errorf("%w: a second Team inbox while one stands", ErrConfigRule)
+		}
+	}
 	switch kind := create.GetKind(); kind {
 	case protocol.RepoKind_REPO_KIND_GENERAL, protocol.RepoKind_REPO_KIND_RECORD:
 		if signer.class != AclSubjectClassMemberDevice && !self.ruleGrantsRepoAdmin(signer, repoId, statement.TimeMs) {
@@ -234,7 +291,11 @@ func (self *AclState) checkRepoCreate(statement *AclStatement, create *protocol.
 			verdict.MemberId = signer.memberId
 			verdict.ConsentedSidecarIds = self.consentedSidecarIds(signer.memberId)
 		}
-	case protocol.RepoKind_REPO_KIND_VAULT, protocol.RepoKind_REPO_KIND_MAILBOX, protocol.RepoKind_REPO_KIND_SECRET:
+	case protocol.RepoKind_REPO_KIND_VAULT, protocol.RepoKind_REPO_KIND_MAILBOX, protocol.RepoKind_REPO_KIND_SECRET,
+		protocol.RepoKind_REPO_KIND_AGENTS, protocol.RepoKind_REPO_KIND_AGENT:
+		// an agents or agent repo is its creator's member's, as a mailbox is (DESIGN-COMPUTE §20.4): the member's first
+		// agents repo in log order is its agents repo (AclState.AgentsRepo). A tagged creator's agent repo, a cloud
+		// agent's or an enclave's, waits for the enclaves feature's evs_member (CACL-M14-01)
 		if signer.class != AclSubjectClassMemberDevice || !self.consentedSignerAt(signer, signer.memberId, statement.N) {
 			return nil, fmt.Errorf("%w: only a consented device of its owner creates a %s repo", ErrConfigAuthority, kind)
 		}
