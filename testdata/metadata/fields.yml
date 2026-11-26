@@ -873,6 +873,8 @@ not_keys:
   "smtp/": "the first segment of an smtp/25/<host> socket name (§9.4), matched as tls/ is: no stored key"
   "smtp/25/": "the namespace and port of a receiver's smtp/25/<host> socket name (§9.4, §15.5), which mxedge's router Finds for a route's host (MAIL-M7-19): no stored key"
   "ur/": "the first segment of a ur/<service> platform socket name (§9.4), by which the sockets engine reads the service a name is of (SOCK-M9-01's namespace_ur.go): no stored key"
+  "state/<>/<>": "a compute billing notice's key, state/<network>/<version>, which the account message outbox keeps only as the SHA-256 of it and its template's name (DESIGN-COMPUTE §9.9; BAL-M12-12): no stored key"
+  "monthly/<>/<>": "a compute billing notice's key, monthly/<network>/<invoice>, hashed into the outbox's message key as state/'s is (DESIGN-COMPUTE §9.8; BAL-M12-11): no stored key"
 
 rows:
   connect-1: {server: [transfer_contract, contract_close, contract_close_report]}

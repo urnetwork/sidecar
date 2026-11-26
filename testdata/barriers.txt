@@ -134,6 +134,8 @@ barrier compute.request.admit.after computeservice/engine.go
 barrier compute.request.admit.before computeservice/engine.go
 barrier compute.stream.comment.after computeservice/engine_stream.go
 barrier compute.stream.comment.before computeservice/engine_stream.go
+barrier compute_auto_renew.charge.after controller/compute_auto_renew.go
+barrier compute_auto_renew.charge.before controller/compute_auto_renew.go
 barrier compute_book.commit.after controller/compute_book.go
 barrier compute_book.commit.before controller/compute_book.go
 barrier compute_book.drop.after controller/compute_book.go
@@ -158,6 +160,8 @@ barrier compute_lot.projection.after controller/compute_lot.go
 barrier compute_lot.projection.before controller/compute_lot.go
 barrier compute_rebuild.script.after controller/compute_rebuild.go
 barrier compute_rebuild.script.before controller/compute_rebuild.go
+barrier compute_state.set.after controller/compute_state.go
+barrier compute_state.set.before controller/compute_state.go
 barrier config.apply config_apply.go
 barrier config.apply.after config_apply.go
 barrier config.apply.before config_apply.go
