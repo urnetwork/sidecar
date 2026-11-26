@@ -124,6 +124,8 @@ func newLinkTest(t *testing.T, edit func(settings *device.BridgeSettings)) *link
 	}
 	settings := device.DefaultBridgeSettings()
 	settings.Clock = clock
+	// the manager's wait uncapped, so its timer stands at the next time a link's state changes; edit may cap it again
+	settings.ClockCheckInterval = 0
 	settings.LinkSign = self.sign
 	settings.LinkTargetKey = self.targetKey
 	if edit != nil {

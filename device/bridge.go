@@ -14,6 +14,16 @@
 // a row's meaning changes, an expiry, the end of a drain, the end of the previous block's drain, and publishes again
 // then, ending the flows of what lapsed.
 //
+// Those times are the wall clock's, from the signed rules, and run waits for them on a runtime timer, which stops
+// while the system sleeps (mach_absolute_time on darwin, CLOCK_MONOTONIC on linux), so a device that slept past one,
+// or whose clock stepped forward past one, would end those flows only when the timer's remaining awake time ran out
+// (§17.8's after sleep or a clock step, owner decision 789). New flows are refused at once regardless, since the hook
+// reads the wall clock for each, and revocations publish at once. Two seams keep the old flows to the rules: the
+// platform calls CheckClock when the device wakes and when its clock changes, and run publishes at now and arms its
+// wait again from the wall clock; and ClockCheckInterval caps the wait on a desktop, where no one wake signal reaches
+// Go, so run reads the wall clock again at least that often while anything is timed. The link manager's wait takes
+// both, for a replaced link's drain until its window clients' strict_exp and the other times it keeps.
+//
 // A Bridge is safe for concurrent use. Status reads a snapshot; nothing here blocks a packet.
 
 package device
@@ -72,6 +82,8 @@ type Bridge struct {
 
 	// the next time a row's meaning changes, zero for none; run waits on it
 	deadline *connect.MonitorValue[time.Time]
+	// has run read the clock again at once (CheckClock), holding one check, so checks that come while one waits are one
+	clockCheck chan struct{}
 	// closed when run returns
 	done chan struct{}
 
@@ -135,6 +147,7 @@ func NewBridge(ctx context.Context, store PostureStore, host BridgeHost, setting
 		closers:           connect.NewCallbackList[connect.EgressFlowCloser](),
 		changeCallbacks:   connect.NewCallbackList[func()](),
 		deadline:          connect.NewMonitorValue(time.Time{}),
+		clockCheck:        make(chan struct{}, 1),
 		done:              make(chan struct{}),
 		entryStates:       map[netip.Prefix]*BridgeEntryState{},
 		heldRejects:       map[netip.Prefix]time.Time{},
@@ -192,23 +205,52 @@ func (self *Bridge) relink() {
 	})
 }
 
-// Waits for the next time a row's meaning changes, and publishes again then, until the bridge closes.
+// Waits for the next time a row's meaning changes, and publishes again then, until the bridge closes. Each turn arms
+// the wait from the wall clock's now, capped by ClockCheckInterval; a capped wait that ends short of the time only
+// reads the clock again, and a check from CheckClock publishes at once, as the timer does, then arms the wait anew.
 func (self *Bridge) run() {
 	defer close(self.done)
 	for {
 		deadline, update := self.deadline.Get()
 		var timeout <-chan time.Time
+		capped := false
 		if !deadline.IsZero() {
-			timeout = self.clock.After(deadline.Sub(self.clock.Now()))
+			wait := deadline.Sub(self.clock.Now())
+			if interval := self.settings.ClockCheckInterval; 0 < interval && interval < wait {
+				wait = interval
+				capped = true
+			}
+			timeout = self.clock.After(wait)
 		}
 		select {
 		case <-self.ctx.Done():
 			return
 		case <-update:
-		case <-timeout:
+		case <-self.clockCheck:
 			self.refresh()
+		case <-timeout:
+			// a capped wait publishes only once the wall clock has reached the time; short of it, the next turn waits
+			// for what remains
+			if !capped || !self.clock.Now().Before(deadline) {
+				self.refresh()
+			}
 		}
 	}
+}
+
+// Reads the clock again at once (§17.8's after sleep or a clock step, owner decision 789): run publishes at now, as its
+// timer does, so the flows of an expiry, a drain's end or the previous block's drain that the device slept past, or
+// that a step of its clock passed, end then, and it arms its wait again from now, so a wait armed before the sleep
+// does not run late; the link manager takes a pass at now too. The platform calls it when the device wakes and when
+// its clock changes. It hands the check to run and returns at once, so it never blocks and is safe at any time from
+// any goroutine, a change callback's included; checks that come while one waits are one, and after Close it does
+// nothing. A revocation needs none: Revoke, SetState and ApplyDeltas publish at once.
+func (self *Bridge) CheckClock() {
+	select {
+	case self.clockCheck <- struct{}{}:
+	default:
+	}
+	self.links.checkClock()
 }
 
 // What the bridge has in force and what it found, at the last adoption or check of the clock. Counts the live pins by

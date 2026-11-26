@@ -145,7 +145,7 @@ func (self *Bridge) Revoke(statementType bridge.SignedType, id []byte, n uint64)
 	})
 }
 
-// Publishes again at the clock's now, so what lapsed since ends: run's timer.
+// Publishes again at the clock's now, so what lapsed since ends: run's timer, and its check after CheckClock.
 func (self *Bridge) refresh() {
 	self.apply(func() (PostureDecision, bool, error) {
 		return self.posture.Decision(), true, nil
