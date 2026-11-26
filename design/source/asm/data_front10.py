@@ -3060,19 +3060,22 @@ INDEX += [
      "The sdk's Sidecar.CheckClock, which the app calls at its foreground and at a clock change, reaches the core's."),
     (804, 'Dial tests and activated dial grants',
      "A save's dial tests with ports count the activated dial grants it can open, as its `ip:` tests do."),
+    (805, "The Linux proxy's IPv6 mDNS answers",
+     "Linux's advertising proxy answers ff02::fb on ur tun's link from the resolver's address in the translator's /96."),
 ]
 for _n, _note in [
         (719, " Extended by @@OD:800@@: the admin commands' saves are a fourth kind."),
         (789, " Extended by @@OD:798@@: the core's own wall-clock ends take the seam too."),
         (798, " Extended by @@OD:803@@: an app's sidecar role takes a call of its own."),
         (679, ' Extended by @@OD:804@@: dial tests with ports count activated dial grants the same way.'),
+        (778, " Extended by @@OD:805@@: Linux's proxy answers IPv6 mDNS too."),
 ]:
     _i = [r[0] for r in INDEX].index(_n)
     assert _note not in INDEX[_i][2], _n
     INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
-assert [r[0] for r in INDEX] == list(range(1, 805))
+assert [r[0] for r in INDEX] == list(range(1, 806))
 DATES.update({_n: '2026-11-25' for _n in range(797, 802)})
-DATES.update({802: '2026-11-26', 803: '2026-11-26', 804: '2026-11-26'})
+DATES.update({802: '2026-11-26', 803: '2026-11-26', 804: '2026-11-26', 805: '2026-11-26'})
 _D796 = "every delete running through taskworker's store (796), amending @@OD:788@@. "
 assert DECISIONS_INTRO.count(_D796) == 1, 'decisions lead moved'
 DECISIONS_INTRO = DECISIONS_INTRO.replace(
@@ -3081,9 +3084,10 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     "(798); the sdk's memory teardown observation a C ABI handle (799); the admin commands' confirmed saves on the "
     "stock daemon (800), extending @@OD:719@@; waits for a time set on the clock itself (801); the compute record "
     "kinds after 55 keeping their numbers whatever their class (802); an app's sidecar role checking its own clock "
-    "(803), extending @@OD:798@@; and a save's dial tests with ports counting activated dial grants (804), "
-    "extending @@OD:679@@. ")
+    "(803), extending @@OD:798@@; a save's dial tests with ports counting activated dial grants (804), "
+    "extending @@OD:679@@; and the address Linux's advertising proxy answers IPv6 mDNS from (805), extending "
+    "@@OD:778@@. ")
 _S796 = "and the build's answer recorded while they were folded, 796. "
 assert STATUS.count(_S796) == 1, 'status moved'
 STATUS = STATUS.replace(_S796, "and the build's answer recorded while they were folded, 796, and the answers recorded "
-                        "after them, owner decisions 797 to 804. ")
+                        "after them, owner decisions 797 to 805. ")
