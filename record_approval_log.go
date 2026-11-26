@@ -12,6 +12,9 @@
 //	           device's admin-approved non-grant action stays pending until the ApprovalDelivery delta exists; read by
 //	           the requester by hint, and by Decision, the poll behind ur://approval/{id}
 //	use        approval_use, after §16.6's Outcome, never instead of it
+//	notice     from M11, a request filed in its author's vault by its own writer, and a decision or cancel filed
+//	           there, owe the request's a/<approval_id> notice its write, rewrite or removal once the entry lands
+//	           (record_approval_notice.go; CTXH-M11-07), so an approver's phone leases a/ and never the whole vault
 //
 // Bodies are stored bytes: an ApprovalRequest as the ledger keeps it, and a decision or a cancel as its Signed bytes,
 // never re-marshaled, since request_sha256 and payload_sha256 bind them. ApprovalDecision holds no run or agent id, and
@@ -33,6 +36,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 
 	"google.golang.org/protobuf/proto"
 
@@ -59,6 +63,21 @@ var (
 type RecordApprovals struct {
 	writer *recordWriter
 	reader *RecordReader
+	// the record's notices part once SidecarRecord.ApprovalNotices made it, nil before and on the ios_extension legs,
+	// which file no request
+	notices atomic.Pointer[approvalNoticeHolder]
+}
+
+// What the approval family's filings tell the record's notices part (record_approval_notice.go), which the
+// ios_extension legs do not link.
+type approvalNoticeNoter interface {
+	noteRequest(ref *RecordEntryRef, request *StoredApprovalRequest)
+	noteAnswer(ref *RecordEntryRef, approvalId Id, kind RecordKind)
+}
+
+// The notices part as RecordApprovals holds it.
+type approvalNoticeHolder struct {
+	noter approvalNoticeNoter
 }
 
 // One request waiting for a decision, as an approver's device reads it.
@@ -133,7 +152,18 @@ func (self *RecordApprovals) FileRequest(request *StoredApprovalRequest) (*Recor
 		id := recordIdOf(agentId)
 		draft.AgentId = &id
 	}
-	return self.appendOne(draft)
+	ref, err := self.appendOne(draft)
+	if err != nil {
+		return nil, err
+	}
+	// its notice, where this device writes its own stream of its author's vault: a deposit or a team record's request
+	// has none here
+	if holder := self.notices.Load(); holder != nil && !ref.Spooled && !teamOnly {
+		if route, err := self.route(); err == nil && !route.deposit && route.logId == ref.LogId {
+			holder.noter.noteRequest(ref, request)
+		}
+	}
+	return ref, nil
 }
 
 // Appends one approval-family draft through the writer, which routes it to this device's author's vault.
@@ -219,7 +249,15 @@ func (self *RecordApprovals) fileAnswer(ctx context.Context, logId Id, approvalI
 		StoredBody: storedSigned,
 		TeamOnly:   inTeam,
 	}
-	return self.appendOne(draft)
+	ref, err := self.appendOne(draft)
+	if err != nil {
+		return nil, err
+	}
+	// the request's notice in the vault: rewritten at a decision, removed at a cancel, once this entry lands
+	if holder := self.notices.Load(); holder != nil && !inTeam && !ref.Spooled && ref.LogId == logId {
+		holder.noter.noteAnswer(ref, approvalId, kind)
+	}
+	return ref, nil
 }
 
 // Files an approval_use for one use of approvalId, after §16.6's Outcome is recorded, in the requester's route.

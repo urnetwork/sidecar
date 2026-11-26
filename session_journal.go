@@ -100,6 +100,9 @@ type SessionJournaled struct {
 	Form       SessionItemForm
 	// The node's parts, omitted ones among them.
 	Parts []*protocol.SessionPart
+	// The item as recorded, RFC 8785 after the exceptions, each part at its pointer by its reference: a same_as node's
+	// too, though its entry holds none. What a call's request_sha256 renders from (session_render.go).
+	Item []byte
 }
 
 // The journal of one network's record. See the file header.
@@ -380,7 +383,7 @@ func (self *SessionJournal) journalNode(state *sessionJournalRun, run *SessionRu
 	body.Stubs = uint32(counts.stubs)
 	written := &SessionJournaled{
 		Key: node.Key, NodeId: nodeId, ItemSha256: itemSha256, ChainSha256: chainSha256,
-		Redactions: counts.redactions, Stubs: counts.stubs, Form: counts.form,
+		Redactions: counts.redactions, Stubs: counts.stubs, Form: counts.form, Item: item,
 	}
 	if earlier, ok := state.itemNodeIds[itemSha256]; ok {
 		// an item the run holds already: a header, not its bytes

@@ -158,6 +158,12 @@ type RecordBodySettings struct {
 	SessionPartWholeByteCount uint64
 	// A part's media type, in bytes: 255, RFC 6838's 127 bytes of type and of subtype and the slash between.
 	SessionMediaTypeByteCount int
+	// DESIGN-COMPUTE §11.12's enclave entry (CTXH-M11-08): its provider's catalog code, in bytes: 64; and its egress
+	// mode's name: 32, the longest of §11.8's modes with room.
+	EnclaveProviderByteCount int
+	EnclaveEgressByteCount   int
+	// DESIGN-COMPUTE §12.7's SSH session receipt: the login user, in bytes: 32, §12.5's agent and root with room.
+	SshUserByteCount int
 }
 
 // RECORD.md's values, the only source of their defaults. A fresh value each call.
@@ -216,6 +222,9 @@ func DefaultRecordBodySettings() *RecordBodySettings {
 		SessionBlobPieceCount:     8,
 		SessionPartWholeByteCount: 64 * 1024 * 1024,
 		SessionMediaTypeByteCount: 255,
+		EnclaveProviderByteCount:  64,
+		EnclaveEgressByteCount:    32,
+		SshUserByteCount:          32,
 	}
 }
 
@@ -466,6 +475,10 @@ func RecordBodyValidate(kind RecordKind, body proto.Message) error {
 		return recordSessionEntryValidate(typed)
 	case *protocol.SessionBlobBody:
 		return recordSessionBlobValidate(typed)
+	case *protocol.EnclaveEntryBody:
+		return recordEnclaveEntryValidate(settings, typed)
+	case *protocol.ReachReceipt:
+		return recordReachSshValidate(settings, typed)
 	}
 	return nil
 }
@@ -757,6 +770,47 @@ func recordLedgerScopeValidate(body *protocol.LedgerScopeBody) error {
 		seen[kind] = true
 	}
 	return errors.Join(checks...)
+}
+
+// EnclaveEntryBody's event and cause (DESIGN-COMPUTE §11.11, §11.12): format values.
+const (
+	recordEnclaveEventLast = 8
+	recordEnclaveCauseRun  = 2
+	recordEnclaveCauseLast = 6
+	recordEnclaveRoleLast  = 2
+)
+
+// enclave (DESIGN-COMPUTE §11.12, CTXH-M11-08): the enclave's id, an event and a cause it names, a run's id and taint only
+// for a run's cause, the incarnation's sidecar and an approval at their lengths, a role it names, the provider's code
+// and the egress mode within their caps, and the egress named only on an egress change.
+func recordEnclaveEntryValidate(settings *RecordBodySettings, body *protocol.EnclaveEntryBody) error {
+	runCause := body.GetCause() == recordEnclaveCauseRun
+	return errors.Join(
+		recordBodyRule(recordBodyLength(body.GetEnclaveId(), recordIdByteCount, false), "enclave_id of %d bytes", len(body.GetEnclaveId())),
+		recordBodyRule(1 <= body.GetEvent() && body.GetEvent() <= recordEnclaveEventLast, "enclave event %d", body.GetEvent()),
+		recordBodyRule(body.GetCause() <= recordEnclaveCauseLast, "enclave cause %d", body.GetCause()),
+		recordBodyRule(recordBodyLength(body.GetCauseRunId(), recordIdByteCount, !runCause), "cause_run_id of %d bytes for cause %d", len(body.GetCauseRunId()), body.GetCause()),
+		recordBodyRule(runCause || (len(body.GetCauseRunId()) == 0 && !body.GetCauseRunTainted()), "a run named for cause %d", body.GetCause()),
+		recordBodyRule(recordBodyLength(body.GetSidecarId(), recordIdByteCount, true), "sidecar_id of %d bytes", len(body.GetSidecarId())),
+		recordBodyRule(body.GetRole() <= recordEnclaveRoleLast, "enclave role %d", body.GetRole()),
+		recordBodyRule(len(body.GetProvider()) <= settings.EnclaveProviderByteCount, "provider of %d bytes", len(body.GetProvider())),
+		recordBodyRule(len(body.GetEgress()) <= settings.EnclaveEgressByteCount, "egress of %d bytes", len(body.GetEgress())),
+		recordBodyRule(body.GetEgress() == "" || body.GetEvent() == recordEnclaveEventLast, "an egress mode on enclave event %d", body.GetEvent()),
+		recordBodyRule(recordBodyLength(body.GetApprovalId(), recordIdByteCount, true), "approval_id of %d bytes", len(body.GetApprovalId())),
+	)
+}
+
+// reach: an SSH session's fields (DESIGN-COMPUTE §12.7, CTXH-M11-08) only on kind 7 ssh, its user within its cap, and a
+// close no earlier than its open. Any other receipt's fields are RECORD-M6-02's, as before.
+func recordReachSshValidate(settings *RecordBodySettings, body *protocol.ReachReceipt) error {
+	ssh := RecordReachKind(body.GetKind()) == RecordReachKindSsh
+	sessionFields := body.GetSshUser() != "" || body.GetOpenedMillis() != 0 || body.GetClosedMillis() != 0 ||
+		body.GetClientByteCount() != 0 || body.GetServerByteCount() != 0
+	return errors.Join(
+		recordBodyRule(ssh || !sessionFields, "an SSH session's fields on reach kind %d", body.GetKind()),
+		recordBodyRule(!ssh || (body.GetSshUser() != "" && len(body.GetSshUser()) <= settings.SshUserByteCount), "an ssh user of %d bytes", len(body.GetSshUser())),
+		recordBodyRule(!ssh || body.GetClosedMillis() == 0 || body.GetOpenedMillis() <= body.GetClosedMillis(), "an SSH session closed before it opened"),
+	)
 }
 
 // Parses stored as kind's body and holds it to RecordBodyValidate: the reader's check of an opened body. A Signed kind

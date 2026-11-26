@@ -141,12 +141,13 @@ func (self *SessionNode) check() error {
 
 // The run and node a Harness journal node is (HARN-M11-08 wires the Harness's journal through it): the Pi entry's id
 // its key and its parentId its parent's, its type the node's, the run's taint and marks, and a continuation's root
-// naming the other run. The tool result's form is the caller's to give, from the tool's spec.
+// naming the other run; an untrusted node's entry carries its trust and sender, which harness-1 reads to place the
+// untrusted-data markers (CTXH-M11-04). The tool result's form is the caller's to give, from the tool's spec.
 func SessionNodeOfHarness(node *HarnessJournalNode, tool *SessionToolResult) (*SessionRun, *SessionNode, error) {
 	if node == nil || node.Entry == nil {
 		return nil, nil, fmt.Errorf("%w: no entry", ErrSessionNodeRefused)
 	}
-	item, err := node.Entry.Json()
+	item, err := SessionHarnessEntryWithTrust(node.Entry, node.Untrusted, node.Sender).Json()
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: %v", ErrSessionNodeRefused, err)
 	}

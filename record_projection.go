@@ -13,8 +13,10 @@
 //	            state, and the body by proto field name, or stub true with what withheld it
 //	trust       own, a device of this sidecar's member (or of its sponsor) in an untainted run; member, another
 //	            member's sidecar or a member-sponsored one in an untainted run; untrusted, a flagged entry (the
-//	            header's tainted, RECORD.md reading 1), a writer the state does not admit, and the directory's
-//	            announcements, requests and decisions whoever wrote them (D-MCP-29)
+//	            header's tainted, RECORD.md reading 1), a writer the state does not admit, the directory's
+//	            announcements, requests and decisions whoever wrote them (D-MCP-29), and a session node or blob a
+//	            tagged sidecar other than the member's own enclave wrote, its taint bit its own word (DESIGN-COMPUTE
+//	            §24.6, §24.7, D-CTXH-9; CTXH-M11-04)
 //	stubs       an untrusted row is a stub unless untrusted: include, which calls Taint once before any untrusted
 //	            text is put in a row and fails the query when Taint fails (D-MCP-16), so a stub leaves the run as it
 //	            was; a raw kind (48-53) carries its body only when entry names it; copy entries are always stubs; an
@@ -345,6 +347,9 @@ func recordProjectionTrust(auth RecordAuthView, sidecarId Id, entry *RecordReadE
 	if writerId == sidecarId {
 		return RecordTrustOwn
 	}
+	if (kind == RecordKindSessionEntry || kind == RecordKindSessionBlob) && recordWriterTaggedOther(auth, sidecarId, writerId) {
+		return RecordTrustUntrusted
+	}
 	writerAuthor, writerAdmitted := recordProjectionAuthor(auth, writerId)
 	if !writerAdmitted {
 		return RecordTrustUntrusted
@@ -353,6 +358,33 @@ func recordProjectionTrust(auth RecordAuthView, sidecarId Id, entry *RecordReadE
 		return RecordTrustOwn
 	}
 	return RecordTrustMember
+}
+
+// Whether writerId is a tagged sidecar other than this device's member's own enclave (DESIGN-COMPUTE §24.7, D-CTXH-9): a
+// sidecar the state admits as no member's device, whose taint bit is its own word. A writer the state does not admit
+// is one too. Where the authorization view cannot tell an enclave, every tagged writer is one, failing closed.
+func recordWriterTaggedOther(auth RecordAuthView, sidecarId Id, writerId Id) bool {
+	if _, member := auth.Member(writerId); member {
+		return false
+	}
+	sponsorId, sponsored := auth.Sponsor(writerId)
+	if !sponsored {
+		return true
+	}
+	enclaves, ok := auth.(recordAuthEnclaves)
+	if !ok || !enclaves.Enclave(writerId) {
+		return true
+	}
+	memberId, member := auth.Member(sidecarId)
+	if !member {
+		memberId, member = auth.Sponsor(sidecarId)
+	}
+	return !member || memberId != sponsorId
+}
+
+// An authorization view that tells an enclave's incarnation by its admission's capability bit 3 (configRecordAuth's).
+type recordAuthEnclaves interface {
+	Enclave(sidecarId Id) bool
 }
 
 // Whether a kind is raw capture, whose body returns only when entry names it (RECORD.md section 5.6's stubs row):

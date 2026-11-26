@@ -1,0 +1,64 @@
+{
+  "request": {
+    "agent_id": "41010000-0000-0000-0000-000000000000",
+    "max_output": 1024,
+    "messages": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "You are an agent of ur.\n\nSupport skill text.\n\nBe brief."
+          }
+        ],
+        "role": "system"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "hello"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "A note for the model."
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "model": "local-test-model-high",
+    "run_id": "52010000-0000-0000-0000-000000000000",
+    "tools": [
+      {
+        "description": "Read one file.",
+        "name": "evs_read",
+        "schema": {
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        }
+      },
+      {
+        "description": "Write a file.",
+        "name": "evs_write",
+        "schema": {
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        }
+      }
+    ]
+  },
+  "request_sha256": "80faf09541dd379dc9a77be7ae98f2cb885b74ab66edd2bd82bcf562ab6c99a6"
+}
