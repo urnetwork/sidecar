@@ -814,7 +814,7 @@ Every entry of the owner's record (owner/DECISIONS.md), by number: 1-111 from th
 | <a id="od-684"></a>684 | 2026-11-21 | A begun erasure whose request entry is gone | A begun erasure's owed work is finished once the copy no longer holds its request's entry, expired or refused. | §11, §16 |
 | <a id="od-685"></a>685 | 2026-11-21 | A directory's read record | A head reader holds a directory to the ref version its newest delta committed at, since merged deltas let its own versions fall. | §11 |
 | <a id="od-686"></a>686 | 2026-11-21 | The identity lookup's gate path | §5.15's internal lookup of sidecars' current clients is `POST /internal/gate/sidecar-identity-clients`, for the gkm and mxedge classes. | §2, §5, §8, §10, §19 |
-| <a id="od-687"></a>687 | 2026-11-21 | A listen's grant expiry | A `tls/` or `smtp/` listen asks its grant's expiry, held to the rule's `maxExpiry`, a mail receiver 7 days by default. Extended by [owner decision 792](#od-792): an app asks it through the sdk's `ListenExpires`. | §8, §9, §13, §15, §16 |
+| <a id="od-687"></a>687 | 2026-11-21 | A listen's grant expiry | A `tls/` or `smtp/` listen asks its grant's expiry, held to the rule's `maxExpiry`, a mail receiver 7 days by default. Extended by [owner decision 792](#od-792): an app asks it through the sdk's `ListenExpires`. | §8, §9, §13, §15, §16, §18 |
 | <a id="od-688"></a>688 | 2026-11-21 | Write implies deposit | A repo's writers deposit wherever it takes deposits, so a consented receiver deposits mail with no send grant. Refined by [owner decision 704](#od-704): a read_only sidecar's deposit is a receipt's, in an owner-bound repo only. Extended by [owner decision 710](#od-710): a personal network's groups take deposits from the member's devices. | §7, §8, §15 |
 | <a id="od-689"></a>689 | 2026-11-21 | Edge client identities | Each edge client's connect identity derives from the edge bearer and its id, so a restart presents the same one. Followed by [owner decision 691](#od-691): connect's session recovers against a restarted responder. | §7, §13 |
 | <a id="od-690"></a>690 | 2026-11-21 | A label comes with its zone | From M5 a label's draw writes its zone's mail-off set, taking a root serial in the label map's order. | §12 |
@@ -919,7 +919,7 @@ Every entry of the owner's record (owner/DECISIONS.md), by number: 1-111 from th
 | <a id="od-789"></a>789 | 2026-11-24 | The bridge rereads the clock on a wake | device.Bridge publishes again when the device wakes or its clock steps; a desktop's wait is capped too. | §17 |
 | <a id="od-790"></a>790 | 2026-11-25 | The file clusters' cap judges no host or store | A request the cap's queue left under a second marks no host; the clusters' checks and the stores' probes go uncapped. | §11, §19 |
 | <a id="od-791"></a>791 | 2026-11-25 | The user root in the embedded host table | The embedded host table carries user_root, which the published list leaves out, so labels resolve from M2. | §12, §18 |
-| <a id="od-792"></a>792 | 2026-11-25 | A listen's grant lifetime in the sdk | SidecarSockets.ListenExpires asks a tls/ or smtp/ listen's grant lifetime; GetGrantExpiresMillis reads its end. | §13 |
+| <a id="od-792"></a>792 | 2026-11-25 | A listen's grant lifetime in the sdk | SidecarSockets.ListenExpires asks a tls/ or smtp/ listen's grant lifetime; GetGrantExpiresMillis reads its end. | §9, §13, §18 |
 | <a id="od-793"></a>793 | 2026-11-25 | Compute: local models on ur.io | ur.io's pages run local models in the browser itself, on desktops with WebGPU, in a keyless engine Worker (CO-47). | §1, §18, §23 |
 | <a id="od-794"></a>794 | 2026-11-25 | Compute: ur.io as the apps | From M13a ur.io's page Worker is a full member device over C4; own devices are remote harnesses (CO-48). | §1, §2, §4, §5, §7, §16, §18, §23 |
 | <a id="od-795"></a>795 | 2026-11-25 | Compute: model downloads in chunks | Model files download from the api in 16 MiB chunks checked against a pinned index, resuming where they stopped (CO-49). | §1, §2, §23 |
@@ -8568,8 +8568,8 @@ func (self *SocketListener) SetServing(serving bool)         // e.g. false while
 func (self *SocketListener) GrantExpires() time.Time         // when the grant a tls/ or smtp/ listen registered under ends:
                                                              // its action's expiry where a decision on that action
                                                              // activated the grant; zero for a name whose listen asks no
-                                                             // grant and for one a standing grant passed (owner decisions
-                                                             // 687, 792)
+                                                             // grant and for one a standing grant passed
+                                                             // (owner decisions 687, 792)
 // *SocketConn implements net.Conn; Close sends FIN and stops reading (the peer reads io.EOF).
 // Deadlines are local (os.ErrDeadlineExceeded, Timeout() true); the stream survives them.
 // RemoteAddr is the dialer's network and client id, Network() "ur"; edge client IPs arrive in-band (§13).
@@ -19935,8 +19935,8 @@ func (self *SidecarSockets) Listen(address string, weight int32) (*SidecarSocket
 func (self *SidecarSockets) ListenExpires(address string, weight int32, expiresMillis int64) (*SidecarSocketListener, error)
 	// Listen whose tls/ or smtp/ grant asks to last expiresMillis from now, as Dial's timeout and the daemon's expires_ms
 	// are: 0 for the requests rule's expiresDefault, past its maxExpiry refused by the core naming the maximum, a
-	// negative one or one past what a duration holds refused before the core; Listen asks none (§9.9; owner decisions
-	// 687, 792)
+	// negative one or one past what a duration holds refused before the core; Listen asks none
+	// (§9.9; owner decisions 687, 792)
 func (self *SidecarSocketListener) Accept(timeoutMillis int64) (*Socket, error) // worker thread
 func (self *SidecarSocketListener) GetGrantExpiresMillis() int64 // the end of the grant the listen registered under,
 	// the core listener's GrantExpires, TlsListener's on a tls/ name; 0 where a standing grant passed it or its name

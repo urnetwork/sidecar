@@ -298,8 +298,8 @@ func (self *SidecarSockets) Listen(address string, weight int32) (*SidecarSocket
 func (self *SidecarSockets) ListenExpires(address string, weight int32, expiresMillis int64) (*SidecarSocketListener, error)
 	// Listen whose tls/ or smtp/ grant asks to last expiresMillis from now, as Dial's timeout and the daemon's expires_ms
 	// are: 0 for the requests rule's expiresDefault, past its maxExpiry refused by the core naming the maximum, a
-	// negative one or one past what a duration holds refused before the core; Listen asks none (§9.9; owner decisions
-	// 687, 792)
+	// negative one or one past what a duration holds refused before the core; Listen asks none
+	// (§9.9; owner decisions 687, 792)
 func (self *SidecarSocketListener) Accept(timeoutMillis int64) (*Socket, error) // worker thread
 func (self *SidecarSocketListener) GetGrantExpiresMillis() int64 // the end of the grant the listen registered under,
 	// the core listener's GrantExpires, TlsListener's on a tls/ name; 0 where a standing grant passed it or its name

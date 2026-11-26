@@ -1584,3 +1584,9 @@ DESIGN.md and DESIGN-DEFER.md are unchanged by this piece.
 - **The lists.** protocol/design_unfenced_test.go's `testFenceAdditions` loses its two session lines and `testUnfencedFence` `SeqRange`, with the source constant only those lines read; `ApprovalNotice` stays there, since no fence writes owner decision 573's per-request notice yet.
 
 `build.sh` on this folder reproduces DESIGN.md (SHA-256 `09da5c714727454732c56df8810a11d1704cfa8608d150372d6308158f33f2d7`) and DESIGN-DEFER.md (SHA-256 `3af6b10c35e06eaa2230e6232dc953d77f4539fe4065623950425ebab41895a6`, unchanged), and the validation shows the second piece's counts: all 795 rows present and cited, 320 superseded-option hits none live, 12,859 section references with the one unresolved, and 106 DESIGN-DEFER.md entries with 172 pointers.
+
+### Owner decision 792 cited where it is built
+
+- **§9.9 and §18.5.** Their Go sketches wrapped "owner decisions 687, 792" across two lines, so the citation scan counted neither section for 792; each now keeps the citation on one line, and 792's index row names §9, §13 and §18.
+
+`build.sh` on this folder reproduces DESIGN.md (SHA-256 `d26ab2179b2881e9d13de66ae7a29b83cbbc1f8078e64b23ba9691a7b6274076`) and DESIGN-DEFER.md (SHA-256 `3af6b10c35e06eaa2230e6232dc953d77f4539fe4065623950425ebab41895a6`, unchanged), and the validation shows the counts above but 12,862 section references, with the one unresolved as before.
