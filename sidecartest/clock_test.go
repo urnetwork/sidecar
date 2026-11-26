@@ -16,6 +16,10 @@ var (
 	_ device.Clock  = (*FakeClock)(nil)
 	_ sidecar.Clock = (*offsetClock)(nil)
 	_ device.Clock  = (*offsetClock)(nil)
+	// the root's waits for a time take the fake's own, so a method that drifts from ClockAt fails here rather than
+	// leaving the root on its timeout from a reading
+	_ sidecar.ClockAt = (*FakeClock)(nil)
+	_ sidecar.ClockAt = (*offsetClock)(nil)
 )
 
 // A host's view of the shared clock goes into its ServiceHost and a Sidecar's settings as it is, so
@@ -223,5 +227,106 @@ func TestOffsetClockReadsAheadAndWaitsOnTheSharedClock(t *testing.T) {
 	case <-fired:
 	default:
 		t.Fatal("did not fire")
+	}
+}
+
+// A wait for a time is set for the time itself (QD-1425), so a clock moved between a caller's reading and the wait's
+// setting does not set it late, as a timeout taken from that reading is: the move here comes between the reading and
+// the waits, and the wait for the time fires at the time, the timeout's only a move later.
+func TestFakeClockWaitForATimeIsSetForThatTime(t *testing.T) {
+	clock := NewFakeClock(DefaultClockStart())
+	reading := clock.Now()
+	at := reading.Add(time.Second)
+	// what another goroutine's Advance does between a caller's reading and its wait
+	clock.Advance(500 * time.Millisecond)
+	forTheTime := clock.AfterAt(at)
+	calls := 0
+	clock.AfterFuncAt(at, func() { calls += 1 })
+	forTheTimeout := clock.After(at.Sub(reading))
+	clock.Advance(500 * time.Millisecond)
+	select {
+	case <-forTheTime:
+	default:
+		t.Fatal("the wait for the time did not fire at it")
+	}
+	if calls != 1 {
+		t.Fatalf("%d calls at the time", calls)
+	}
+	select {
+	case <-forTheTimeout:
+		t.Fatal("the timeout from the earlier reading fired at the time")
+	default:
+	}
+	clock.Advance(500 * time.Millisecond)
+	select {
+	case <-forTheTimeout:
+	default:
+		t.Fatal("the timeout from the earlier reading did not fire a move later")
+	}
+}
+
+// A wait for a time the clock has reached fires at once, and its call runs before AfterFuncAt returns, with nothing left
+// to stop.
+func TestFakeClockWaitForAPassedTimeFiresAtOnce(t *testing.T) {
+	clock := NewFakeClock(DefaultClockStart())
+	for _, at := range []time.Time{clock.Now(), clock.Now().Add(-time.Second)} {
+		select {
+		case <-clock.AfterAt(at):
+		default:
+			t.Fatalf("a wait for %s, reached, waited", at)
+		}
+	}
+	calls := 0
+	if stop := clock.AfterFuncAt(clock.Now(), func() { calls += 1 }); stop() {
+		t.Error("a call already made was stopped")
+	}
+	if calls != 1 {
+		t.Errorf("%d calls", calls)
+	}
+	if pending := clock.PendingTimers(); len(pending) != 0 {
+		t.Errorf("pending %v", pending)
+	}
+}
+
+// A stopped call for a time is taken off the clock and never runs; a second stop finds nothing.
+func TestFakeClockStopCancelsACallForATimeOnce(t *testing.T) {
+	clock := NewFakeClock(DefaultClockStart())
+	calls := 0
+	stop := clock.AfterFuncAt(clock.Now().Add(time.Second), func() { calls += 1 })
+	if !stop() {
+		t.Error("the first stop found nothing to stop")
+	}
+	if stop() {
+		t.Error("the second stop stopped something")
+	}
+	clock.Advance(2 * time.Second)
+	if calls != 0 {
+		t.Errorf("%d calls after stop", calls)
+	}
+}
+
+// A view's wait for a time is for a time on the view, which reads ahead of the shared clock: it fires once the shared
+// clock reaches that time less the offset, and not before.
+func TestOffsetClockWaitsForATimeOnItsOwnReading(t *testing.T) {
+	clock := NewFakeClock(DefaultClockStart())
+	fast := clock.WithOffset(150 * time.Millisecond).(sidecar.ClockAt)
+	at := clock.Now().Add(150 * time.Millisecond).Add(time.Second)
+	fired := fast.AfterAt(at)
+	calls := 0
+	fast.AfterFuncAt(at, func() { calls += 1 })
+	clock.Advance(999 * time.Millisecond)
+	select {
+	case <-fired:
+		t.Fatal("fired before the view reached its time")
+	default:
+	}
+	clock.Advance(1 * time.Millisecond)
+	select {
+	case <-fired:
+	default:
+		t.Fatal("did not fire when the view reached its time")
+	}
+	if calls != 1 {
+		t.Errorf("%d calls at the view's time", calls)
 	}
 }

@@ -638,9 +638,9 @@ type SidecarTlsSettings struct {
 	// Community grant lasts (§13.9).
 	PublishLinkCertificateLifetime time.Duration
 	// How long a publish waits for the grant its approval activated to reach this device's engine before its listen
-	// (tls_publish.go's confirmGrant): 30 s, a reading, a forward's AddressLandTimeout, well past §8.9's p99 of 5 s
-	// from the entry. Past it the publish answers unavailable and the same publish asked again completes it;
-	// non-positive waits not at all, so a grant not yet installed always answers so.
+	// (tls_publish.go's grant effect, AclGrantFiler.awaitGrant): 30 s, a reading, a forward's AddressLandTimeout, well
+	// past §8.9's p99 of 5 s from the entry. Past it the publish answers unavailable and the same publish asked again
+	// completes it; non-positive waits not at all, so a grant not yet installed always answers so.
 	PublishGrantLandTimeout time.Duration
 }
 
@@ -1040,10 +1040,10 @@ type SidecarSocketSettings struct {
 	// its backup.
 	ListenPositionWait time.Duration
 	// How long a listen whose approval has just activated its grant waits for this device's engine to hold the grant
-	// before it registers, on the network's config up to the GrantActivate's receipt (socket_listen_grant.go, MCP's
-	// socket_listen; acl_grant_keep.go's landed row): 30 s, a reading, a publish's PublishGrantLandTimeout and a
-	// forward's AddressLandTimeout, well past §8.9's p99 of 5 s. A grant not held by then answers uncertain, which the
-	// listen asked again completes.
+	// before it registers, on the network's config up to the GrantActivate's receipt (Sidecar.Listen's tls/ and smtp/
+	// listens, socket_listen.go, and MCP's socket_listen, socket_listen_grant.go; acl_grant_keep.go's landed row): 30 s,
+	// a reading, a publish's PublishGrantLandTimeout and a forward's AddressLandTimeout, well past §8.9's p99 of 5 s. A
+	// grant not held by then answers uncertain, naming the grant, which the listen asked again completes.
 	ListenGrantLandTimeout time.Duration
 	// What an smtp/ listen's max_streams of 0 takes: 16, a receiver's (§15.5). Other names take the registration
 	// format's default (SocketFormatSettings.DefaultMaxStreams).

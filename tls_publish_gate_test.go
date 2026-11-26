@@ -2,7 +2,7 @@
 
 // §13.10's publish at §16.6's real gate (tls_publish.go's step 2 and 3; §16.6's grant row, I-8, AU4): on the listen
 // gate world's sidecar, config log and ACL engine, the publish's grant built and confirmed by the production pieces
-// (AclGrantFiler, and sidecarTlsPublishBackend's grant effect with its confirmGrant over a config the test holds), and
+// (AclGrantFiler, and sidecarTlsPublishBackend's grant effect with its awaitGrant over a config the test holds), and
 // behind the publish the world's own tls/ listen, which asks its own grant at the same gate. The names, the
 // certificate and the probe's target are scripted.
 //
@@ -36,7 +36,7 @@ import (
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
-// The world's verified config as a publish's confirmGrant waits on it: at a position the log holds, the log's state is
+// The world's verified config as a publish's awaitGrant waits on it: at a position the log holds, the log's state is
 // installed in the world's engine, as the follower installs it before the position shows (acl_follow.go). Held, it
 // first tells the test it waits and takes its answer from release.
 type tlsPublishGateConfig struct {
@@ -111,7 +111,7 @@ func (self *tlsPublishGateBackend) grantAction(ctx context.Context, base *protoc
 	return self.grants.Action(ctx, base, request, now)
 }
 
-// The production grant effect, confirming its grant in the engine (confirmGrant).
+// The production grant effect, confirming its grant in the engine (AclGrantFiler.awaitGrant).
 func (self *tlsPublishGateBackend) grantEffect(action *StoredCanonicalAction) SidecarEffect {
 	return self.sidecar.grantEffect(action)
 }
