@@ -158,7 +158,7 @@ func (self *ComputePurchaseAnswer) Code() string {
 // Checks request against §9.11's limits before payment (see the file header): the network's always, the payer's
 // once its card is known. Unset secrets refuse every purchase: ErrComputeLedgerSecretsUnset, before anything is read.
 func ComputePurchaseCheck(env operator.Env, ctx context.Context, settings *model.ComputeLedgerSettings, secrets ComputeLedgerSecrets, request *ComputePurchaseRequest) (*ComputePurchaseAnswer, error) {
-	if _, err := computeLedgerKey(secrets, "payer", func(secrets ComputeLedgerSecrets) ([]byte, error) { return secrets.PayerHashKey() }); err != nil {
+	if _, err := computePayerKey(secrets); err != nil {
 		return nil, err
 	}
 	if request.AmountNanoUsd <= 0 {

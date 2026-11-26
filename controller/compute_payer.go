@@ -67,20 +67,42 @@ func ComputeRegisteredLedgerSecrets() ComputeLedgerSecrets {
 	return computeLedgerSecrets
 }
 
-// A key from secrets by get, checked: an error wrapping ErrComputeLedgerSecretsUnset for no secrets, no key or a key too
-// short to key a hash. Names no byte of it.
-func computeLedgerKey(secrets ComputeLedgerSecrets, kind string, get func(secrets ComputeLedgerSecrets) ([]byte, error)) ([]byte, error) {
-	if secrets == nil {
-		return nil, ErrComputeLedgerSecretsUnset
-	}
-	key, err := get(secrets)
+// A key get answers, checked: an error wrapping ErrComputeLedgerSecretsUnset for no key or a key too short to key a
+// hash. Names no byte of it.
+func computeLedgerKeyChecked(kind string, get func() ([]byte, error)) ([]byte, error) {
+	key, err := get()
 	if err != nil {
 		return nil, fmt.Errorf("%w: the %s key: %w", ErrComputeLedgerSecretsUnset, kind, err)
 	}
 	if len(key) < computeLedgerKeyMinByteCount {
 		return nil, fmt.Errorf("%w: the %s key holds %d bytes, under %d", ErrComputeLedgerSecretsUnset, kind, len(key), computeLedgerKeyMinByteCount)
 	}
-	testHookSecret("compute_"+kind+"_hash_key", key)
+	return key, nil
+}
+
+// The host's payer key, checked; unset secrets are ErrComputeLedgerSecretsUnset.
+func computePayerKey(secrets ComputeLedgerSecrets) ([]byte, error) {
+	if secrets == nil {
+		return nil, ErrComputeLedgerSecretsUnset
+	}
+	key, err := computeLedgerKeyChecked("payer", secrets.PayerHashKey)
+	if err != nil {
+		return nil, err
+	}
+	testHookSecret("compute_payer_hash_key", key)
+	return key, nil
+}
+
+// The host's promotion key, checked; unset secrets are ErrComputeLedgerSecretsUnset.
+func computePromoKey(secrets ComputeLedgerSecrets) ([]byte, error) {
+	if secrets == nil {
+		return nil, ErrComputeLedgerSecretsUnset
+	}
+	key, err := computeLedgerKeyChecked("promotion", secrets.PromoHashKey)
+	if err != nil {
+		return nil, err
+	}
+	testHookSecret("compute_promo_hash_key", key)
 	return key, nil
 }
 
@@ -128,7 +150,7 @@ func ComputePayerHash(secrets ComputeLedgerSecrets, source ComputePayerSource, v
 	if value == "" || !utf8.ValidString(value) {
 		return nil, fmt.Errorf("%w: an empty or malformed payer", ErrComputePayerArgs)
 	}
-	key, err := computeLedgerKey(secrets, "payer", func(secrets ComputeLedgerSecrets) ([]byte, error) { return secrets.PayerHashKey() })
+	key, err := computePayerKey(secrets)
 	if err != nil {
 		return nil, err
 	}
