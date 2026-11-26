@@ -138,6 +138,12 @@ MESSAGES = _insert_after(MESSAGES, '`DnsZoneChanged`',
     ('`DnsSdWatch`, `DnsSdWatchResult`', '0x1B02, 0x1B03', 'peer ↔ peer (RPC), on data-class contracts only',
      "A viewer's watch of a host for the DNS-SD instances the host would let it reach (§17.7.1; owner decision 778)",
      '§12.9.1'))
+# DESIGN-COMPUTE.md's support hint, the first value at §16's service byte, which §6.11's fence took with types.proto's
+# declaration (support-push-topic; the fifteenth fold).
+MESSAGES = _insert_after(MESSAGES, '(service 0x18)',
+    ('`SupportHint`', '0x1801', 'ControlId → client (topic `support`)',
+     "A member's support conversation gained an event: `{product, entry, seq}`, never its content "
+     "(DESIGN-COMPUTE.md §28.9; owner decision 783)", '§6.8'))
 
 # ------------------------------------------------------------------ Appendix D: carried messages
 # The carried-in cell names a SignedType range only where §6.11's registry comment names the statement itself:
