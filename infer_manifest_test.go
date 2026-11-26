@@ -44,9 +44,11 @@ func testInferManifestModel(model string, minMemoryGib int64, contextWindow int6
 		Files: []*InferManifestModelFile{
 			{
 				InferManifestFile: testInferManifestFile(model+".litertlm", minMemoryGib*512*1024*1024),
+				IndexSha256:       testInferSha256(model + ".litertlm index"),
 			},
 			{
 				InferManifestFile: testInferManifestFile(model+"-gpu.litertlm", minMemoryGib*480*1024*1024),
+				IndexSha256:       testInferSha256(model + "-gpu.litertlm index"),
 				Accelerator:       InferAcceleratorGpu,
 				Platforms:         []string{"ios/arm64", "android/arm64"},
 			},
@@ -271,5 +273,90 @@ func TestInferReleaseManifestIsASourceBuilds(t *testing.T) {
 	}
 	if name, entry := catalog.Recommended(); name != "" || entry != nil {
 		t.Fatalf("a source build recommends %s", name)
+	}
+}
+
+// Every model file carries its chunk index's pin, a lowercase hex SHA-256 (CO-49): one without it, or with a malformed
+// one, is refused, as is an engine file given one, which the format has no member for; and one SHA-256 is one file, so
+// a manifest naming it under two index pins or two sizes, or one index pin for two files, is refused, while the same
+// file listed twice alike parses.
+func TestInferManifestRequiresIndexOnModelFiles(t *testing.T) {
+	settings := DefaultInferSettings()
+	cases := []struct {
+		why    string
+		change func(manifest *InferManifest)
+	}{
+		{why: "a model file without an index pin", change: func(m *InferManifest) { m.Models[0].Files[0].IndexSha256 = "" }},
+		{why: "a GPU build without an index pin", change: func(m *InferManifest) { m.Models[1].Files[1].IndexSha256 = "" }},
+		{why: "an index pin in capitals", change: func(m *InferManifest) {
+			m.Models[0].Files[0].IndexSha256 = strings.ToUpper(m.Models[0].Files[0].IndexSha256)
+		}},
+		{why: "a short index pin", change: func(m *InferManifest) {
+			m.Models[0].Files[0].IndexSha256 = m.Models[0].Files[0].IndexSha256[:62]
+		}},
+		{why: "an index pin that is no hex", change: func(m *InferManifest) {
+			m.Models[0].Files[0].IndexSha256 = strings.Repeat("z", 64)
+		}},
+		{why: "one SHA-256 under two index pins", change: func(m *InferManifest) {
+			m.Models[1].Files[0].Sha256 = m.Models[0].Files[0].Sha256
+			m.Models[1].Files[0].ByteCount = m.Models[0].Files[0].ByteCount
+		}},
+		{why: "one SHA-256 under two sizes", change: func(m *InferManifest) {
+			m.Models[1].Files[0].Sha256 = m.Models[0].Files[0].Sha256
+			m.Models[1].Files[0].IndexSha256 = m.Models[0].Files[0].IndexSha256
+		}},
+		{why: "one index pin for two files", change: func(m *InferManifest) {
+			m.Models[1].Files[0].IndexSha256 = m.Models[0].Files[0].IndexSha256
+		}},
+	}
+	for _, c := range cases {
+		manifest := testInferManifest()
+		c.change(manifest)
+		if _, err := ParseInferManifest(testInferManifestJson(t, manifest), settings); !errors.Is(err, ErrInferManifestInvalid) {
+			t.Errorf("%s: %v", c.why, err)
+		}
+	}
+
+	// an engine file's index_sha256 is a member the format does not know
+	whole := string(testInferManifestJson(t, testInferManifest()))
+	library := `"name":"libengine-darwin-arm64.bin"`
+	if !strings.Contains(whole, library) {
+		t.Fatalf("the test manifest names no %s", library)
+	}
+	for _, data := range []string{
+		strings.Replace(whole, library, library+`,"index_sha256":"`+testInferSha256("library index")+`"`, 1),
+		strings.Replace(whole, `"name":"libdawn-darwin.bin"`, `"name":"libdawn-darwin.bin","index_sha256":"`+testInferSha256("dawn index")+`"`, 1),
+	} {
+		if _, err := ParseInferManifest([]byte(data), settings); !errors.Is(err, ErrInferManifestInvalid) {
+			t.Errorf("an engine file with an index pin: %v", err)
+		}
+	}
+
+	// the same file in two entries, alike in every pin, is one file
+	shared := testInferManifest()
+	copied := *shared.Models[0].Files[0]
+	copied.Name = "shared.litertlm"
+	shared.Models[1].Files[0] = &copied
+	parsed, err := ParseInferManifest(testInferManifestJson(t, shared), settings)
+	if err != nil {
+		t.Fatalf("one file listed twice alike: %v", err)
+	}
+	if got := parsed.Model("gemma-4-e4b").Files[0].IndexSha256; got != shared.Models[0].Files[0].IndexSha256 {
+		t.Fatalf("the index pin read as %s", got)
+	}
+}
+
+// A source build's manifest, the format with no entry, parses with the index pins in the format: the embedded copy
+// and the same document written out.
+func TestInferManifestEmptySourceBuildParses(t *testing.T) {
+	settings := DefaultInferSettings()
+	for _, data := range [][]byte{inferManifestJson, []byte(`{"version":1,"engines":[],"models":[]}`)} {
+		manifest, err := ParseInferManifest(data, settings)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if manifest.Version != inferManifestVersion || len(manifest.Engines) != 0 || len(manifest.Models) != 0 {
+			t.Fatalf("an empty manifest read as %+v", manifest)
+		}
 	}
 }

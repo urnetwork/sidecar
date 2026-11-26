@@ -12,8 +12,10 @@
 //	         every reader holds the head's record to (configHeadRecordSignedByAdmin), checked before signing so a
 //	         non-admin's device signs nothing rather than a head that would fork its base
 //	head     the head's ServiceSettings as it stands, every other field kept, the asked fields set, signed as a new
-//	         SIGNED_SERVICE_SETTINGS and saved through the writer, which re-reads the head on a race; a device that runs
-//	         no config writer refuses
+//	         SIGNED_SERVICE_SETTINGS and saved through the network's general config writer, which re-reads the head on
+//	         a race, or where none runs, as in the stock ur daemon, through its writer for confirmed saves, as ur bridge
+//	         block saves, whose EXACT_HEAD push refuses the save if the head moved since it was read, for the person to
+//	         run again (QD-1424); a device that runs neither refuses
 //	features auth_features' bits (DESIGN-COMPUTE §16.6; CACL-M11-03) are set beside the head's and never cleared, and
 //	         only bits this release and every service serving the network implement, as the current core answer says,
 //	         since api refuses a base turning on any other (acl_compute_features_on.go, whose TurnOnAuthFeature files
@@ -156,7 +158,8 @@ func (self *Sidecar) SaveServiceSettings(ctx context.Context, change *ServiceSet
 			return nil, err
 		}
 	}
-	writer := authority.client.Writer()
+	// the general writer, else the stock daemon's for confirmed saves, which a person's confirmed command may take
+	writer := authority.client.ConfirmedWriter()
 	if writer == nil {
 		return nil, errors.New("no config writer runs for this network on this device")
 	}

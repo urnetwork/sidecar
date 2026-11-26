@@ -16,8 +16,10 @@
 //	owner    a member the verified state holds, or a tag the head's tags table holds, by its name; one label an owner,
 //	         since a device two scopes take is ambiguous to every reader of its scope (ConfigState.TeamScopeForDevice)
 //	head     the head's ServiceSettings with the binding added in label order, signed as a new SIGNED_SERVICE_SETTINGS
-//	         and saved through the writer, which re-reads the head on a race; each reader takes the binding only once a
-//	         base's verified rows hold it, as compile writes them from the head (configCompileTeamScopes)
+//	         and saved through the general config writer, which re-reads the head on a race, or where none runs, as in
+//	         the stock ur daemon, through its writer for confirmed saves, whose EXACT_HEAD push refuses the save if the
+//	         head moved since it was read (QD-1424); each reader takes the binding only once a base's verified rows hold
+//	         it, as compile writes them from the head (configCompileTeamScopes)
 //
 // Nothing here creates, derives or unwraps a key: the identity key signs through the writer's Sign.
 
@@ -188,7 +190,7 @@ func (self *Sidecar) SaveTeamScope(ctx context.Context, binding *TeamScopeBindin
 	if err := configServiceSettingsSigner(state, identity.SidecarId); err != nil {
 		return AclScope{}, err
 	}
-	writer := authority.client.Writer()
+	writer := authority.client.ConfirmedWriter()
 	if writer == nil {
 		return AclScope{}, errors.New("no config writer runs for this network on this device")
 	}

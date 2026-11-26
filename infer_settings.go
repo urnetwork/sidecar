@@ -84,6 +84,85 @@ type InferSettings struct {
 	EngineStopTimeout time.Duration
 	// The bytes of a helper's stderr the daemon keeps for its log when the helper ends: 64 KiB. Non-positive keeps none.
 	EngineStderrMaxByteCount int
+
+	// §6.5's model downloads (CO-49): the chunk index's format (compute-plan-model-index-format, QD-1408), whose bounds
+	// are format limits both ends read, the release tooling and the api's mirror (CSRV-M11-01, CSRV-M11-02) as every
+	// device and the browser's engine Worker (INFER-M13-02) does. The chunk size InferModelIndexBuild writes an index
+	// with, in bytes: 16 MiB, §6.5's, the last chunk shorter. Non-positive builds no index.
+	ModelChunkByteCount int64
+	// The least chunk size an index may name, in bytes: 1 MiB, a sixteenth of ModelChunkByteCount, so an index stays
+	// within ModelIndexMaxByteCount for any file a manifest may list at a size the release could still choose. An index
+	// naming less is refused, and InferModelIndexBuild builds none.
+	ModelChunkMinByteCount int64
+	// The most chunk size an index may name, in bytes: 64 MiB, four times ModelChunkByteCount, the most one chunk the
+	// download holds in memory before its check, ModelChunkFetchConcurrency times over. An index naming more is refused,
+	// and InferModelIndexBuild builds none.
+	ModelChunkMaxByteCount int64
+	// The largest index a parse reads, in bytes: 1 MiB. An index takes about 67 bytes a chunk, so a 64 GiB file's at
+	// 16 MiB chunks (4096 chunks, about 270 KiB) fits nearly four times over. A larger one is refused before it is hashed,
+	// and InferModelIndexBuild builds none. Non-positive refuses every index.
+	ModelIndexMaxByteCount int
+
+	// §6.5's download (INFER-M11-11), every Go host's. The chunks fetched at once: 4, §6.5's "up to four at a time".
+	// Below 1 fetches one at a time.
+	ModelChunkFetchConcurrency int
+	// How many more times a chunk that fails its check, or the index that fails its pin, is fetched before the download
+	// stops with download_corrupt naming it: 2, §6.5's "fetched again, twice". Negative counts as 0.
+	ModelChunkRetryCount int
+	// The timeouts and 5xx answers in a row, a connection dropped mid-answer among them, after which the api counts as
+	// unreachable and the chunks come from the hub (D-INFER-12): 3, so one slow answer or a restart of one api host does
+	// not move a download. A connection refused, no route or no name counts as unreachable at once. Below 1 counts the
+	// api unreachable at its first.
+	ModelApiUnreachableCount int
+	// How long the index's fetch may take, its answer read whole: 30 seconds, an index being at most a megabyte.
+	// Past it the fetch counts as unanswered. Non-positive leaves only the caller's context.
+	ModelIndexTimeout time.Duration
+	// How long one chunk's fetch may take, its answer read whole: 5 minutes, a 16 MiB chunk on a link under half a
+	// megabit a second, the api's own write deadline for one (CSRV-M11-01). As ModelIndexTimeout past it or when
+	// non-positive.
+	ModelChunkTimeout time.Duration
+	// The room a download needs beyond what it has left to write, as a fraction of the file's size: 0.1, so a fresh
+	// download starts only with the file's size free and a tenth more (§6.5), as the browser's probe asks. Negative
+	// counts as 0.
+	ModelFreeSpaceMarginFraction float64
+	// How long a download waits before it asks a source again after a timeout, a 5xx or a dropped connection: 2
+	// seconds. Non-positive asks again at once.
+	ModelFetchRetryInterval time.Duration
+	// The longest Retry-After a 429 is waited out for: 1 minute, the api's per-address window (CSRV-M11-01). A longer
+	// one is waited this long; a 429 with none waits ModelFetchRetryInterval.
+	ModelRetryAfterMaxDuration time.Duration
+	// The 429s in a row one chunk or the index may take before the download stops with download_unavailable: 10, ten
+	// windows of the api's limit with no progress. Negative counts as 0.
+	ModelRateLimitedMaxCount int
+
+	// §6.5's fallback (D-INFER-12): where the api cannot be reached, the daemon and the apps take the same chunks from
+	// the manifest's Hugging Face URL at its pinned commit, by Range requests, checked against the same index; the
+	// browser never does (its download is JS, INFER-M13-02). Whether this host falls back: true, every Go host's.
+	ModelHubFallback bool
+	// While the chunks come from the hub, how often the api is asked again whether it answers, before a chunk, so the
+	// download goes back to it at the next chunk once it does: 30 seconds. Non-positive asks before every chunk.
+	ModelApiProbeInterval time.Duration
+	// The failed requests in a row at the hub, timeouts, 5xx answers and dropped or refused connections alike, before
+	// the download stops with download_unavailable: 3. Below 1 stops at the first.
+	ModelHubFailureMaxCount int
+	// The redirects one hub request may follow: 3, room for a renamed repository's and the hub's redirect to its CDN.
+	// Each must be https, to the manifest URL's own host or to one under ModelHubRedirectHostSuffixes. Negative counts
+	// as 0.
+	ModelHubRedirectMaxCount int
+	// The hosts a hub request may be redirected to besides the manifest URL's own: each a domain, matching itself and
+	// every name under it, Hugging Face's own and its CDN's as of 2026-11-25 (huggingface.co, and hf.co, which serves
+	// its large files). Every other redirect is refused. Empty allows the manifest URL's own host alone.
+	ModelHubRedirectHostSuffixes []string
+
+	// ur.io's browser view of the catalog (INFER-M13-01; §6.5's In the browser block, Q-INFER-9). The least
+	// navigator.deviceMemory, in GiB as the browser reports it, at which local-gemma-4-e4b-off is offered beside the
+	// E2B default: 16. Where the browser reports none, as Safari, the E4B is listed for the person to choose, with the
+	// memory it needs. Non-positive offers it wherever the probe passes.
+	BrowserLargeModelMemoryGiB float64
+	// The least decode rate a browser's first-load test turn must reach, in tokens a second, below which local models
+	// are marked unavailable in that browser until its version or the engine's changes: 8. Non-positive marks none
+	// unavailable for its rate.
+	BrowserMinDecodeTokensPerSecond float64
 }
 
 // One of §6.5's defaults by memory: the local model a device of its classes gets with at least its memory.
@@ -117,6 +196,27 @@ func DefaultInferSettings() *InferSettings {
 		EngineCancelTimeout:         10 * time.Second,
 		EngineStopTimeout:           5 * time.Second,
 		EngineStderrMaxByteCount:    64 * 1024,
+		ModelChunkByteCount:         16 * 1024 * 1024,
+		ModelChunkMinByteCount:      1024 * 1024,
+		ModelChunkMaxByteCount:      64 * 1024 * 1024,
+		ModelIndexMaxByteCount:      1024 * 1024,
+		ModelChunkFetchConcurrency:  4,
+		ModelChunkRetryCount:        2,
+		ModelApiUnreachableCount:    3,
+		ModelIndexTimeout:           30 * time.Second,
+		ModelChunkTimeout:           5 * time.Minute,
+		// a tenth
+		ModelFreeSpaceMarginFraction:    0.1,
+		ModelFetchRetryInterval:         2 * time.Second,
+		ModelRetryAfterMaxDuration:      time.Minute,
+		ModelRateLimitedMaxCount:        10,
+		ModelHubFallback:                true,
+		ModelApiProbeInterval:           30 * time.Second,
+		ModelHubFailureMaxCount:         3,
+		ModelHubRedirectMaxCount:        3,
+		ModelHubRedirectHostSuffixes:    []string{"huggingface.co", "hf.co"},
+		BrowserLargeModelMemoryGiB:      16,
+		BrowserMinDecodeTokensPerSecond: 8,
 		LocalDefaults: []*InferLocalDefault{
 			{
 				Name:               "local-gemma-4-26b-a4b-off",

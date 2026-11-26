@@ -6,7 +6,9 @@
 //	runs, workers  ServiceSettings.directory {runs, workers} filed into the config head by an Owner's or Admin's
 //	               device, as the person confirmed it, through this network's config writer: the head's other
 //	               settings kept as they stand, every reader checking the record's signer at the base naming the head
-//	               (TEAM-M6-10 honors them from M6). A device that runs no config writer refuses
+//	               (TEAM-M6-10 honors them from M6). Where no general config writer runs, as in the stock ur daemon,
+//	               the writer for confirmed saves files it, its EXACT_HEAD push refusing the save if the head moved
+//	               since it was read (QD-1424). A device that runs neither refuses
 //	keep, searchable  a RetentionPolicy for the coordination and request classes (directory_retention.go's
 //	               SetDirectoryRetention), a directory admin's act
 //	window         the index window is format 2's (RECORD-M10-04; §16.11's Index and search block): refused before it
@@ -66,7 +68,7 @@ func (self *Sidecar) SaveDirectoryServiceSettings(ctx context.Context, change *D
 	if !ok {
 		return nil, ErrAgentPlanNoState
 	}
-	writer := authority.client.Writer()
+	writer := authority.client.ConfirmedWriter()
 	if writer == nil {
 		return nil, errors.New("no config writer runs for this network on this device")
 	}
