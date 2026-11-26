@@ -5,10 +5,11 @@
 // and every CheckInterval:
 //
 //	bind      what the Sidecar holds as it stands (MailBinding): the evs component's EvsClient, with its key client
-//	          and statement poster, the config follower's AclEngine, the zone's row from the DnsClient, the Sidecar as
-//	          the outward-action gate, the generation's SidecarApi for the mail routes, and the opener of the
-//	          designations' sealed services over the key client's config keys (owner decision 634). A host that bound
-//	          its own (MailClient made without a Sidecar) keeps it
+//	          and statement poster, the config follower's AclEngine, the zone's row from the DnsClient with the
+//	          aliases in their 90 days of retiring that the zone and the network's label table keep
+//	          (dns_label_zone_row.go), the Sidecar as the outward-action gate, the generation's SidecarApi for the
+//	          mail routes, and the opener of the designations' sealed services over the key client's config keys
+//	          (owner decision 634). A host that bound its own (MailClient made without a Sidecar) keeps it
 //	follow    mailcfg, through MailConfig, which follows its repo itself once built
 //	send      on a locally enabled, consented prover host, prepare the release keys and drain the member's outbox;
 //	          elsewhere, or where its composition fails, Status says why no sender runs (MailClientSenderStatus)
@@ -37,7 +38,6 @@ import (
 	"fmt"
 	"io"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/urnetwork/sidecar/protocol/bridge"
@@ -399,18 +399,15 @@ func (self *MailClient) bindFromSidecar(ctx context.Context, env *SidecarEnv) {
 	binding.RunTainted = sidecar.RunTainted
 	// a mail search and IMAP SEARCH run on the Sidecar's engine, which answers unavailable until a host installs one
 	binding.Search = sidecar.Search
-	if dns, err := sidecar.Dns(); err == nil {
-		if zone, err := dns.Zone(ctx); err == nil {
-			self.setNetworkRow(NetworkLabelRow{
-				Root:      strings.TrimSuffix(zone.Root, "."),
-				NetworkId: zone.NetworkId,
-				Label:     zone.Label,
-				Alias:     zone.Alias,
-			})
-			// what a burner label must not shadow, as this pass read it
-			publishedHosts := mailBurnerPublishedLabels(zone)
-			binding.PublishedHosts = func() []string { return publishedHosts }
+	if zone, row, err := sidecar.networkLabelZoneRow(ctx); zone != nil {
+		// the label, the alias and each alias in its 90 days of retiring, which networkRow leaves out from its
+		// tombstone time on (§12.5); a zone that makes no row leaves the one read before
+		if err == nil {
+			self.setNetworkRow(row)
 		}
+		// what a burner label must not shadow, as this pass read it
+		publishedHosts := mailBurnerPublishedLabels(zone)
+		binding.PublishedHosts = func() []string { return publishedHosts }
 	}
 	binding.Network = self.networkRow
 	binding.Config = sidecar.configState
