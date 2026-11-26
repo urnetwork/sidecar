@@ -1570,3 +1570,10 @@ On 2026-11-25 the owner added local models for ur.io's pages to DESIGN-COMPUTE.m
 - **Text.** No bare placeholders or HTML tags; the one research-sheet id stands; 12,856 section references, with the one unresolved as before, those on lines naming DESIGN-COMPUTE.md counted as its. `v7/words.json` was regenerated, and `v7/text_checks.json` regenerated with its one id's line moved.
 - **DESIGN-DEFER.md.** 106 entries and 172 pointers: `repo-c4-browser-carrier` and its five pointers gone, two of them now `sdk-extension-worker`'s.
 - **The metadata list** is v72, 117 rows; check's `metadataListAdditions` stays empty.
+
+### The compute plan's answers on CO-47 to CO-49: DESIGN-COMPUTE-AMENDMENTS.md
+
+- **DESIGN-COMPUTE-AMENDMENTS.md** files QD-1408 to QD-1418, the compute planner's questions on CO-47 to CO-49, which the owner answered on 2026-11-25, one at a time, each with its recommendation, with the plan's own readings, which they are, each after the readings of the section it mainly amends and QD-1410 to QD-1412 with Appendix D's; the index takes them, with a row for Appendix I, and the lead and the readings' heading count 54 readings, 50 left there. What they change in this design it carries since the second piece: QD-1409's compute-12, QD-1410's page Worker leg and QD-1411's and QD-1412's answers to the two findings. QD-1408, QD-1413 and QD-1414 to QD-1418 amend DESIGN-COMPUTE.md alone. None takes a number, as QD-1388 to QD-1392 took none.
+- **Superseded where they stand.** QD-1317 (Q-HARN-3) and QD-1364 (Q-SSH-1), appendix answers CO-48 changes, each take a line saying so and what replaces them, for the owner's revision to fold: ur.io's page Worker runs the apps' Harness from M13a, and from M14 the person's own devices answer attach by `ur harness rpc` alone, a shell staying Later.
+
+DESIGN.md and DESIGN-DEFER.md are unchanged by this piece.
