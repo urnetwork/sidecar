@@ -1,4 +1,4 @@
-# metadata_list.yml v71; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
+# metadata_list.yml v72; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
 # §7.9, §10, §11). v6 adds to v5 (2026-11-04) connect-1's ShareCert, api-6's push-token slot sentinels, api-7's
 # {acl_}q, cascade signers, recovery bindings, restored bindings' recovery windows and orphaned networks, api-13's
 # per-eraser closure counters, evs-1's secret kind and orphans, evs-3's creation block, fence time, deleted flag
@@ -266,6 +266,11 @@
 # v71, updated 2026-11-25 for owner decision 786 (the owner's answer QD-1400), adds no row: api-13's
 # connected_sidecar set is added to at connect by one script that counts it under the limit, the resident poll
 # refreshes it and enrollment reads it alone; no value, field, Redis family or ttl changes.
+# v72, updated 2026-11-25 for the owner's answer QD-1409 (compute-plan-model-mirror-store), adds compute-12, the
+# api's mirror of the local model files CO-49 has every platform download from the api in chunks (DESIGN-COMPUTE
+# §6.5, §14.3, §14.5): each file's chunk index, its chunks and its state, objects named by the file's SHA-256, public
+# files with no member, network, token or download history. The model routes' per-address limit counts on the
+# {address_<hash>} attempt histories under the routes' own key prefixes, which api-3 already covers.
 # Each row gives service, store (tables, Redis families, object families, logs or memory),
 # sees, why, ttl, and owner: the section that designs the value and states its ttl. Withdrawn rows keep
 # their ids so citations resolve. Public: this list ships in DESIGN.md on the public sidecar repo (owner
@@ -1059,6 +1064,13 @@ compute-11:
   why: Parallel's failure rate, which pages and which CO-30 asks the owner to watch (DESIGN-COMPUTE §21.8)
   ttl: the hourly counts 400 days; no report kept
   owner: DESIGN-COMPUTE §14.6 (§21.8)
+compute-12:
+  service: api (the model routes, GET api/compute/models/<sha256>/index and .../chunks/<n>) and taskworker (compute_model_mirror)
+  store: objects compute-models/<sha256>/index, compute-models/<sha256>/chunks/<n> and compute-models/<sha256>/state in api's blob store
+  sees: "public model files and their chunk indexes, by SHA-256: no member, network, token or download history"
+  why: CO-49's downloads, each local model file taken from the api in chunks every device checks against the index the signed manifest pins (DESIGN-COMPUTE §6.5, §14.3, §14.5)
+  ttl: while a supported release's manifest names the file
+  owner: DESIGN-COMPUTE §14.6 (§6.5, §14.3)
 support-1:
   service: the feedback service and the triage workspace, FB's (sidecar/FEEDBACK-SYSTEM.md, FB's G1), under FB's G4, which may narrow this row
   store: FB's entries, their events and attachments (FB section 10.4)

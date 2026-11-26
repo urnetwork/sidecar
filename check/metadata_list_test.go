@@ -75,7 +75,38 @@ type metadataListAddition struct {
 // QD-1186's with the sixth late fold's (owner decision 709), and DESIGN-COMPUTE.md's rows with the eighth late
 // fold's, which takes its Appendix D: compute-1 to compute-11 and api-7's and evs-1's compute words, which
 // CARCH-M11-03 published as v68 (QD-1252, QD-1367). Each entry here waits for the next fold.
-var metadataListAdditions = []metadataListAddition{}
+var metadataListAdditions = []metadataListAddition{
+	// compute-12, the api's mirror of the local model files CO-49 has every platform download from the api, as the
+	// owner's answer to compute-plan-model-mirror-store gives the row (QD-1409; CSRV-M11-01): the list's version, the
+	// version's note, and the row after compute-11.
+	{
+		question: "compute-plan-model-mirror-store (QD-1409): the version",
+		block:    "# metadata_list.yml v71;",
+		list:     "# metadata_list.yml v72;",
+	},
+	{
+		question: "compute-plan-model-mirror-store (QD-1409): the version's note",
+		block:    "# refreshes it and enrollment reads it alone; no value, field, Redis family or ttl changes.\n",
+		list: "# refreshes it and enrollment reads it alone; no value, field, Redis family or ttl changes.\n" + `# v72, updated 2026-11-25 for the owner's answer QD-1409 (compute-plan-model-mirror-store), adds compute-12, the
+# api's mirror of the local model files CO-49 has every platform download from the api in chunks (DESIGN-COMPUTE
+# §6.5, §14.3, §14.5): each file's chunk index, its chunks and its state, objects named by the file's SHA-256, public
+# files with no member, network, token or download history. The model routes' per-address limit counts on the
+# {address_<hash>} attempt histories under the routes' own key prefixes, which api-3 already covers.
+`,
+	},
+	{
+		question: "compute-plan-model-mirror-store (QD-1409): compute-12",
+		block:    "  owner: DESIGN-COMPUTE §14.6 (§21.8)\n",
+		list: "  owner: DESIGN-COMPUTE §14.6 (§21.8)\n" + `compute-12:
+  service: api (the model routes, GET api/compute/models/<sha256>/index and .../chunks/<n>) and taskworker (compute_model_mirror)
+  store: objects compute-models/<sha256>/index, compute-models/<sha256>/chunks/<n> and compute-models/<sha256>/state in api's blob store
+  sees: "public model files and their chunk indexes, by SHA-256: no member, network, token or download history"
+  why: CO-49's downloads, each local model file taken from the api in chunks every device checks against the index the signed manifest pins (DESIGN-COMPUTE §6.5, §14.3, §14.5)
+  ttl: while a supported release's manifest names the file
+  owner: DESIGN-COMPUTE §14.6 (§6.5, §14.3)
+`,
+	},
+}
 
 // §2.8's block with each addition in place, in order, and a finding for each that does not apply.
 func applyMetadataListAdditions(block []byte, additions []metadataListAddition) ([]byte, []string) {
