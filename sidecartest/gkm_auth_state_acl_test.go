@@ -214,6 +214,25 @@ func gkmAclStateAwait[T any](t *testing.T, what string, values chan T) T {
 	return none
 }
 
+// Waits for the reconciler's first pass, the one its start's nil change asks for, which reads every network the cache
+// then holds. Taken before a first hint, so that pass reads none: had it run while an install stood between its store
+// and its tell, it would read that network, and the install's change would read it again, two reads of one position
+// where the tests here count one.
+func gkmAclStateAwaitFirstPass(t *testing.T, reconciler *gkmservice.GkmReconciler) {
+	t.Helper()
+	for {
+		count, changed := reconciler.Passes()
+		if 0 < count {
+			return
+		}
+		select {
+		case <-changed:
+		case <-time.After(60 * time.Second):
+			t.Fatal("no first pass of the reconciler")
+		}
+	}
+}
+
 // Waits for the gate's loads to reach the log's tip, starting none.
 func (self *gkmAclStateWorld) awaitTip() {
 	self.t.Helper()
@@ -643,6 +662,7 @@ func TestGkmReconcilerStateIsToldOnceTheGateInstalls(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reconciler.Close()
+	gkmAclStateAwaitFirstPass(t, reconciler)
 
 	// the first hint: the network loads, and the reconciler reads it at the tip
 	world.hint()
@@ -778,6 +798,7 @@ func TestGkmReconcilerStateIsToldAnOwedLoadOnlyOnceItInstalls(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reconciler.Close()
+	gkmAclStateAwaitFirstPass(t, reconciler)
 
 	// the first hint: its load is held at its read, with the log as it stands
 	old := admission.Tip()
