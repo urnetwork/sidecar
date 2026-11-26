@@ -53,6 +53,11 @@ type ComputeLedgerSettings struct {
 	// §9.11's daily load: at most $1,500 a UTC day for each network and each payer, across markets, promotion codes
 	// counted with purchases (Q-BAL-15).
 	DailyLoadNanoUsd int64
+	// The most uncovered charges a credit or a reversal draws an overrun for (§9.4's "drawn from the next lot
+	// credited"), oldest first within the charges' retention: 500, past any overrun the floor and the direct-call
+	// exposure leave. An overrun no charge found within it stays in settled's negative, for the next lot. Not
+	// positive draws none. A reading: §9.4 names no figure.
+	OverrunDrawMaxChargeCount int
 	// §9.11: 3-D Secure is requested on a first purchase above this: $50.
 	ThreeDSecureAboveNanoUsd int64
 
@@ -79,6 +84,18 @@ type ComputeLedgerSettings struct {
 	PromoCodeMinCharacterCount     int
 	PromoCodeMaxCharacterCount     int
 	PromoNetworkCodeCharacterCount int
+	// A network's repeat of its redemption of a code within this answers the redemption's lot again, a retry; past
+	// it, code_redeemed: 24 hours, past any client's retries of one request. A reading: §9.11 says a retry answers
+	// the lot and names no window.
+	PromoRetryWindow time.Duration
+	// How long {cmpk_<network_id>} lives past its last write: a day, compute-2's ttl. Each UTC day's count is its own
+	// field, so no count carries into the next day whatever the key's life.
+	PromoFailureKeyTtl time.Duration
+	// The most promotional lots one run of compute_promo_lapse lapses: 500, the rest left for the next hour's run. A
+	// reading: §14.5 names no figure.
+	PromoLapseBatchCount int
+	// The longest campaign, operator's name or reason a code keeps, in bytes: 256. A reading: §14.4 names no figure.
+	PromoTextMaxByteCount int
 
 	// §9.12: a Stripe lot's unspent part is refundable for 30 days from purchase.
 	RefundWindow time.Duration
@@ -254,12 +271,13 @@ func DefaultComputeLedgerSettings() *ComputeLedgerSettings {
 		StoreSubscriptionCredits: []int64{10, 25, 50, 100},
 		MonthlyPlanCredits:       []int64{10, 25, 50, 100, 250},
 
-		BalanceCapNanoUsd:        usd(10_000),
-		NewAccountDayNanoUsd:     usd(100),
-		NewAccountWindowNanoUsd:  usd(200),
-		NewAccountWindow:         7 * day,
-		DailyLoadNanoUsd:         usd(1_500),
-		ThreeDSecureAboveNanoUsd: usd(50),
+		BalanceCapNanoUsd:         usd(10_000),
+		NewAccountDayNanoUsd:      usd(100),
+		NewAccountWindowNanoUsd:   usd(200),
+		NewAccountWindow:          7 * day,
+		DailyLoadNanoUsd:          usd(1_500),
+		OverrunDrawMaxChargeCount: 500,
+		ThreeDSecureAboveNanoUsd:  usd(50),
 
 		ThresholdBelowNanoUsd:      usd(5),
 		ThresholdPackCredits:       20,
@@ -275,6 +293,10 @@ func DefaultComputeLedgerSettings() *ComputeLedgerSettings {
 		PromoCodeMinCharacterCount:     8,
 		PromoCodeMaxCharacterCount:     32,
 		PromoNetworkCodeCharacterCount: 16,
+		PromoRetryWindow:               24 * time.Hour,
+		PromoFailureKeyTtl:             24 * time.Hour,
+		PromoLapseBatchCount:           500,
+		PromoTextMaxByteCount:          256,
 
 		RefundWindow:        30 * day,
 		ClosureRefundWindow: 90 * day,
