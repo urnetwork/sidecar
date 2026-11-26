@@ -15,7 +15,8 @@
 //
 // The stream path is plan-RECORD-stream-names#4's, in one function, RecordStreamPath. The stream's ref name, ur/<id>/
 // record, is the binding's (RECORD-M3-12), and which text of the id it carries is question record-m3-01-owned-ref-id-
-// text's; RecordStreams takes no ref name.
+// text's; RecordStreams takes no ref name. DESIGN-COMPUTE §24.5 adds s/<n>, RecordBodyPath: a session entry's sealed
+// body filed apart from its header at e/<n>, the same n in the same layout (CTXH-M11-02).
 //
 // Package-level functions are safe for concurrent use.
 
@@ -34,6 +35,8 @@ const (
 	recordStreamLeafEntryCount  = 2048
 	recordStreamLevelEntryCount = recordStreamLeafEntryCount * recordStreamLeafEntryCount
 	recordStreamPathPrefix      = "e/"
+	// DESIGN-COMPUTE §24.5's: a body filed apart from its entry
+	recordBodyPathPrefix = "s/"
 )
 
 var (
@@ -92,15 +95,36 @@ func recordVaultRoute(auth RecordAuthView, sidecarId Id) (*recordRoute, error) {
 // Section 5.2's path of a stream's nth entry, n from 1 (plan-RECORD-stream-names#4): e/<n div 4,194,304>/<(n div
 // 2,048) mod 2,048>/<n>, each part decimal. In a stream that holds no ingested entry n is the header's seq.
 func RecordStreamPath(n uint64) (string, error) {
-	if n == 0 {
-		return "", fmt.Errorf("%w: stream counter 0", ErrRecordStoredInvalid)
-	}
-	return fmt.Sprintf("%s%d/%d/%d", recordStreamPathPrefix, n/recordStreamLevelEntryCount, (n/recordStreamLeafEntryCount)%recordStreamLeafEntryCount, n), nil
+	return recordStreamPrefixPath(recordStreamPathPrefix, n)
 }
 
 // The counter a stream path names, and false for any path RecordStreamPath would not make from it.
 func RecordStreamPathCounter(path string) (uint64, bool) {
-	rest, ok := strings.CutPrefix(path, recordStreamPathPrefix)
+	return recordStreamPrefixPathCounter(recordStreamPathPrefix, path)
+}
+
+// DESIGN-COMPUTE §24.5's path of the sealed body of the stream's nth entry where that entry files its body apart:
+// s/<n div 4,194,304>/<(n div 2,048) mod 2,048>/<n>, the n of its e/<n>, in e/'s layout.
+func RecordBodyPath(n uint64) (string, error) {
+	return recordStreamPrefixPath(recordBodyPathPrefix, n)
+}
+
+// The counter a body path names, and false for any path RecordBodyPath would not make from it.
+func RecordBodyPathCounter(path string) (uint64, bool) {
+	return recordStreamPrefixPathCounter(recordBodyPathPrefix, path)
+}
+
+// The nth path under prefix, e/ or s/, in section 5.2's layout.
+func recordStreamPrefixPath(prefix string, n uint64) (string, error) {
+	if n == 0 {
+		return "", fmt.Errorf("%w: stream counter 0", ErrRecordStoredInvalid)
+	}
+	return fmt.Sprintf("%s%d/%d/%d", prefix, n/recordStreamLevelEntryCount, (n/recordStreamLeafEntryCount)%recordStreamLeafEntryCount, n), nil
+}
+
+// The counter a path under prefix names, false for one recordStreamPrefixPath would not make.
+func recordStreamPrefixPathCounter(prefix string, path string) (uint64, bool) {
+	rest, ok := strings.CutPrefix(path, prefix)
 	if !ok {
 		return 0, false
 	}
@@ -112,7 +136,7 @@ func RecordStreamPathCounter(path string) (uint64, bool) {
 	if err != nil || n == 0 {
 		return 0, false
 	}
-	if want, err := RecordStreamPath(n); err != nil || want != path {
+	if want, err := recordStreamPrefixPath(prefix, n); err != nil || want != path {
 		return 0, false
 	}
 	return n, true

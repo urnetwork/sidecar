@@ -589,13 +589,17 @@ func TestSessionCapsRefusedPastSettings(t *testing.T) {
 		name string
 		edit func(body *protocol.SessionEntryBody)
 	}{
-		{name: "an item past 16 KiB", edit: func(body *protocol.SessionEntryBody) { body.Item = bytes.Repeat([]byte{'x'}, settings.SessionItemByteCount+1) }},
+		{name: "an item past 16 KiB", edit: func(body *protocol.SessionEntryBody) {
+			body.Item = bytes.Repeat([]byte{'x'}, settings.SessionItemByteCount+1)
+		}},
 		{name: "65 parts", edit: func(body *protocol.SessionEntryBody) {
 			for len(body.Parts) <= settings.SessionPartCount {
 				body.Parts = append(body.Parts, part())
 			}
 		}},
-		{name: "a part in nine blobs", edit: func(body *protocol.SessionEntryBody) { body.Parts[0].BlobEntryIds = ids(settings.SessionBlobPieceCount + 1) }},
+		{name: "a part in nine blobs", edit: func(body *protocol.SessionEntryBody) {
+			body.Parts[0].BlobEntryIds = ids(settings.SessionBlobPieceCount + 1)
+		}},
 		{name: "a part kept whole past 64 MiB", edit: func(body *protocol.SessionEntryBody) {
 			body.Parts[0].BlobEntryIds = ids(settings.SessionBlobPieceCount)
 			body.Parts[0].Size = settings.SessionPartWholeByteCount + 1
@@ -666,7 +670,9 @@ func TestSessionCapsRefusedPastSettings(t *testing.T) {
 		func(context *protocol.CallContext) { context.OutputNodeIds = [][]byte{id(2)[:8]} },
 		func(context *protocol.CallContext) { context.RequestSha256 = digest[:16] },
 		func(context *protocol.CallContext) { context.Renderer = "" },
-		func(context *protocol.CallContext) { context.Renderer = strings.Repeat("r", settings.ModelCallFieldByteCount+1) },
+		func(context *protocol.CallContext) {
+			context.Renderer = strings.Repeat("r", settings.ModelCallFieldByteCount+1)
+		},
 	}
 	for i, edit := range callRefusals {
 		body := proto.CloneOf(call)

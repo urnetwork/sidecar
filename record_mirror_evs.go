@@ -74,6 +74,12 @@ func (self *RecordEvsMirrorView) Ledgers() []Id {
 	return ledgerIds
 }
 
+// Whether this device keeps a mirror of logId: its record's reader then fetches every session body at each sync, as
+// the vault's mirror holds them all (DESIGN-COMPUTE §24.5, §24.7; SidecarRecord.SetFetchEveryBody).
+func (self *RecordEvsMirrorView) KeepsMirror(logId Id) bool {
+	return self.args != nil && self.args.Mirror != nil && self.args.Mirror(logId) != nil
+}
+
 // This device's mirror of logId, read fresh against evs's heads; nil when it keeps none.
 func (self *RecordEvsMirrorView) Coverage(ctx context.Context, logId Id) (*RecordMirrorCoverage, error) {
 	if self.args == nil || self.args.Mirror == nil {
