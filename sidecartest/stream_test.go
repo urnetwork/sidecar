@@ -6,7 +6,9 @@ package sidecartest
 // holds its own stream at its window while a sibling stream on the same pair runs to its end. The stall a lost pack
 // costs, D-PROTO-4's measure, is recorded at connect's ack, which no test here can wait for, so its export is held
 // at the root on the dispatcher's own clock (stream_stall_test.go). The T3 half, on server's exchange, is
-// server/connect/sidecar_stream_t3_test.go.
+// server/connect/sidecar_stream_t3_test.go. A stream's deadlines run on the Net's clock: a passed one ends a read or
+// a write at once, whether the clock passed it before the call or while the call waited, and a deadline's wait
+// leaves the clock with the deadline.
 
 import (
 	"bytes"
@@ -17,6 +19,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"slices"
 	"testing"
 	"time"
 
@@ -203,6 +206,107 @@ func TestStreamReadDeadlineRunsOnTheNetsClock(t *testing.T) {
 	})
 	if !errors.Is(err, os.ErrDeadlineExceeded) || !errors.Is(readErr, net.ErrClosed) || len(recorder.failures) != 1 {
 		t.Fatalf("a read nothing reaches, past its real deadline: %v, the read %v, failures %q", err, readErr, recorder.failures)
+	}
+}
+
+// The Net's clock past a stream's read deadline before the read is called, the deadline's wait having fired with
+// nothing waiting: the read ends at once with os.ErrDeadlineExceeded, and once the deadline is cleared the stream
+// reads on. The root's stream_conn_deadline tests hold the orders between a read's start and its wait.
+func TestStreamReadDeadlinePassedBeforeTheReadEndsIt(t *testing.T) {
+	testNet, a, b, accepted := newTestStreamPair(t)
+	opened, stream := testOpenStream(t, a, b, accepted)
+	clock := testNet.Clock()
+	if err := stream.SetReadDeadline(clock.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	clock.Advance(time.Second)
+	err := testStreamReadBy(t, stream, time.Now().Add(testStreamTimeout), "a read past its deadline", func() error {
+		_, err := stream.Read(make([]byte, 1))
+		return err
+	})
+	if !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("a read past its deadline on the Net's clock: %v", err)
+	}
+	if err := stream.SetReadDeadline(time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := opened.Write([]byte("after")); err != nil {
+		t.Fatal(err)
+	}
+	read := make([]byte, 5)
+	if err := testStreamReadFull(t, stream, read); err != nil || string(read) != "after" {
+		t.Fatalf("the read once its deadline is cleared: %q, %v", read, err)
+	}
+}
+
+// TestStreamReadDeadlinePassedBeforeTheReadEndsIt for Write: the write ends at once with os.ErrDeadlineExceeded
+// and sends nothing, so the reader gets only what is written once the deadline is cleared.
+func TestStreamWriteDeadlinePassedBeforeTheWriteEndsIt(t *testing.T) {
+	testNet, a, b, accepted := newTestStreamPair(t)
+	opened, stream := testOpenStream(t, a, b, accepted)
+	clock := testNet.Clock()
+	if err := opened.SetWriteDeadline(clock.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	clock.Advance(time.Second)
+	// within the window, so a write let past its deadline would send at once rather than wait
+	if n, err := opened.Write([]byte("lost")); n != 0 || !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("a write past its deadline on the Net's clock: %d B, %v", n, err)
+	}
+	if err := opened.SetWriteDeadline(time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	written := testStreamWrite(opened, []byte("after"))
+	all, err := testStreamReadAll(t, stream)
+	if err != nil || string(all) != "after" {
+		t.Fatalf("the reader after the refused write: %q, %v", all, err)
+	}
+	if err := testStreamWritten(t, written); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A deadline's wait leaves the Net's clock when the deadline is set again and when its stream closes, and a closed
+// stream sets none, so no wait outlives its deadline there for a test stepping the clock from wait to wait to meet.
+func TestStreamDeadlineWaitsLeaveTheNetsClockWithTheirDeadline(t *testing.T) {
+	testNet, a, b, accepted := newTestStreamPair(t)
+	_, stream := testOpenStream(t, a, b, accepted)
+	clock := testNet.Clock()
+	// instants no other wait on the Net's clock is set for
+	first := clock.Now().Add(1234 * time.Millisecond)
+	second := clock.Now().Add(2345 * time.Millisecond)
+	pending := func(at time.Time) bool {
+		return slices.ContainsFunc(clock.PendingTimers(), at.Equal)
+	}
+	if err := stream.SetReadDeadline(first); err != nil {
+		t.Fatal(err)
+	}
+	if !pending(first) {
+		t.Fatal("no wait on the Net's clock for the read's deadline")
+	}
+	if err := stream.SetReadDeadline(second); err != nil {
+		t.Fatal(err)
+	}
+	if pending(first) || !pending(second) {
+		t.Fatalf("the deadline set again: the replaced deadline's wait pending %t, the new one's %t", pending(first), pending(second))
+	}
+	if err := stream.SetWriteDeadline(first); err != nil {
+		t.Fatal(err)
+	}
+	if !pending(first) {
+		t.Fatal("no wait on the Net's clock for the write's deadline")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if pending(first) || pending(second) {
+		t.Fatalf("the stream closed: the write's deadline wait pending %t, the read's %t", pending(first), pending(second))
+	}
+	if err := stream.SetReadDeadline(first); err != nil {
+		t.Fatal(err)
+	}
+	if pending(first) {
+		t.Fatal("a closed stream set a wait for its deadline")
 	}
 }
 
