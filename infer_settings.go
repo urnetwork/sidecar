@@ -82,6 +82,15 @@ type InferSettings struct {
 	// How long a helper asked to exit, its input closed, may take before it is killed: 5 seconds. Non-positive kills it
 	// at once.
 	EngineStopTimeout time.Duration
+	// §6.5's confinement on Linux (INFER-M11-05; infer_engine_confine_linux.go): the system's paths the helper may read
+	// beneath once Landlock holds it, beside its engine and model directories, each passed over where it is not there:
+	// the loader's libraries and cache, the GPU's loaders and their tables, and the processor, memory and device facts
+	// the engine and its GPU drivers read. Nothing beneath any is writable. Other OSes read none of it.
+	EngineConfineSystemReadPaths []string
+	// The device nodes the helper may open to read and write, with ioctl where the kernel's Landlock handles it, each
+	// passed over where it is not there: the GPU's render nodes and NVIDIA's and AMD's compute nodes, and the null,
+	// zero and random devices libraries open. A device node holds no file, so nothing on disk becomes writable.
+	EngineConfineDevicePaths []string
 	// The bytes of a helper's stderr the daemon keeps for its log when the helper ends: 64 KiB. Non-positive keeps none.
 	EngineStderrMaxByteCount int
 
@@ -195,16 +204,28 @@ func DefaultInferSettings() *InferSettings {
 		EngineLoadTimeout:           5 * time.Minute,
 		EngineCancelTimeout:         10 * time.Second,
 		EngineStopTimeout:           5 * time.Second,
-		EngineStderrMaxByteCount:    64 * 1024,
-		ModelChunkByteCount:         16 * 1024 * 1024,
-		ModelChunkMinByteCount:      1024 * 1024,
-		ModelChunkMaxByteCount:      64 * 1024 * 1024,
-		ModelIndexMaxByteCount:      1024 * 1024,
-		ModelChunkFetchConcurrency:  4,
-		ModelChunkRetryCount:        2,
-		ModelApiUnreachableCount:    3,
-		ModelIndexTimeout:           30 * time.Second,
-		ModelChunkTimeout:           5 * time.Minute,
+		EngineConfineSystemReadPaths: []string{
+			"/lib", "/lib64", "/usr/lib", "/usr/lib64", "/usr/local/lib",
+			"/etc/ld.so.cache", "/etc/ld.so.conf", "/etc/ld.so.conf.d",
+			"/usr/share/vulkan", "/etc/vulkan", "/usr/share/glvnd", "/usr/share/drirc.d", "/etc/drirc", "/usr/share/libdrm",
+			"/proc/cpuinfo", "/proc/meminfo", "/proc/driver/nvidia",
+			"/sys/devices", "/sys/bus/pci", "/sys/class/drm", "/sys/dev/char",
+		},
+		EngineConfineDevicePaths: []string{
+			"/dev/dri", "/dev/kfd", "/dev/nvidiactl", "/dev/nvidia-uvm", "/dev/nvidia-uvm-tools",
+			"/dev/nvidia0", "/dev/nvidia1", "/dev/nvidia2", "/dev/nvidia3",
+			"/dev/null", "/dev/zero", "/dev/urandom",
+		},
+		EngineStderrMaxByteCount:   64 * 1024,
+		ModelChunkByteCount:        16 * 1024 * 1024,
+		ModelChunkMinByteCount:     1024 * 1024,
+		ModelChunkMaxByteCount:     64 * 1024 * 1024,
+		ModelIndexMaxByteCount:     1024 * 1024,
+		ModelChunkFetchConcurrency: 4,
+		ModelChunkRetryCount:       2,
+		ModelApiUnreachableCount:   3,
+		ModelIndexTimeout:          30 * time.Second,
+		ModelChunkTimeout:          5 * time.Minute,
 		// a tenth
 		ModelFreeSpaceMarginFraction:    0.1,
 		ModelFetchRetryInterval:         2 * time.Second,

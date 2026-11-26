@@ -48,6 +48,9 @@ var testCloudEnvironmentReaders = []string{
 	// the enclave's seccomp shim, which passes its whole environment on to the program it execs, reading no variable
 	"enclave_container_linux.go",
 	"identity_host_stores.go",
+	// the ur-engine helper's main, which reads what to confine itself to, three directories, and passes its whole
+	// environment on to its exec into the confined image (INFER-M11-05)
+	"infer_engine_litert.go",
 	"mcp/restore_point.go",
 	"state_dir.go",
 }

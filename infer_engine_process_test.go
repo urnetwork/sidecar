@@ -65,7 +65,7 @@ func newTestInferEngineProcessWorld(t *testing.T, pulled bool) *testInferEngineP
 	if !slices.Contains(inferDesktopPlatforms, platform) {
 		t.Skipf("no engine runs on %s", platform)
 	}
-	engineDirectory, modelDirectory := t.TempDir(), t.TempDir()
+	engineDirectory, modelDirectory, stateDirectory := t.TempDir(), t.TempDir(), t.TempDir()
 	write := func(directory string, name string, content string) InferManifestFile {
 		if err := os.WriteFile(filepath.Join(directory, name), []byte(content), 0o600); err != nil {
 			t.Fatal(err)
@@ -93,12 +93,16 @@ func newTestInferEngineProcessWorld(t *testing.T, pulled bool) *testInferEngineP
 		HelperEnv:       []string{testInferEngineHelperVariable + "=on"},
 		EngineDirectory: engineDirectory,
 		ModelDirectory:  modelDirectory,
+		StateDirectory:  stateDirectory,
 		Manifest:        manifest,
 		Capabilities:    device,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	// the stand-in helper serves the protocol unconfined, whatever this host's kernel offers; confinement's own tests
+	// are infer_engine_confine*_test.go's
+	process.confineAvailable = func() error { return nil }
 	t.Cleanup(process.Close)
 	catalog, err := NewInferLocalCatalog(manifest, device, DefaultInferSettings())
 	if err != nil {
@@ -232,7 +236,9 @@ func TestEngineProcessPassesOnlyItsEnvironment(t *testing.T) {
 	}
 	for _, variable := range environment {
 		name, _, _ := strings.Cut(variable, "=")
-		if name != testInferEngineHelperVariable && !(runtime.GOOS == "windows" && strings.EqualFold(name, "SYSTEMROOT")) {
+		confinement := []string{inferEngineEnvEngineDirectory, inferEngineEnvModelDirectory, inferEngineEnvDeniedDirectory}
+		if name != testInferEngineHelperVariable && !slices.Contains(confinement, name) &&
+			!(runtime.GOOS == "windows" && strings.EqualFold(name, "SYSTEMROOT")) {
 			t.Errorf("the helper sees %s", name)
 		}
 	}

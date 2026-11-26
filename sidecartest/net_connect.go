@@ -360,7 +360,8 @@ func (self *netExchange) addClientWithControl(ctx context.Context, name string, 
 
 // addClient readied by ready before it is on the exchange, as a platform readies a client before its transport exists
 // (sidecar.SidecarPlatformClientArgs.ApplyProvide): the keys and modes its opener asked for, so no frame reaches it
-// first. A client ready leaves providing no mode provides Network once it is on, as addClient's does.
+// first. It provides those modes and no other, as on connect's platform, which sets no mode of its own: a client ready
+// leaves providing none provides none until its opener sets one, so the Net never covers for an opener that asks late.
 func (self *netExchange) addReadiedClient(ctx context.Context, name string, clientId connect.Id, settings *connect.ClientSettings, ready func(client *connect.Client)) *NetClient {
 	requireRequiredClient(name, settings)
 	return self.attachReadiedClient(ctx, name, clientId, settings, nil, ready)
@@ -373,7 +374,7 @@ func (self *netExchange) attachClient(ctx context.Context, name string, clientId
 }
 
 // attachClient readied by ready before the client is on the exchange, so no frame reaches it first. Nil readies
-// nothing.
+// nothing, and the client provides Network once it is on, as a test's own client does.
 func (self *netExchange) attachReadiedClient(ctx context.Context, name string, clientId connect.Id, settings *connect.ClientSettings, control connect.OutOfBandControl, ready func(client *connect.Client)) *NetClient {
 	if control == nil {
 		control = &netContractIssuer{exchange: self, sourceId: clientId, settings: connect.DefaultContractManagerSettings()}
@@ -402,8 +403,8 @@ func (self *netExchange) attachReadiedClient(ctx context.Context, name string, c
 	controlRoute := make(connect.Route)
 	client.RouteManager().UpdateTransport(newNetSendTransport(true), []connect.Route{controlRoute})
 	netClient.receiveRoute(connect.TransportTypeH1)
-	if len(client.ContractManager().GetProvideModes()) == 0 {
-		// what a test's own client provides, and a platform's client whose opener asked for no mode
+	if ready == nil {
+		// a test's own client; a platform's provides what its opener readied it with (addReadiedClient)
 		client.ContractManager().SetProvideModes(map[protocol.ProvideMode]bool{protocol.ProvideMode_Network: true})
 	}
 
