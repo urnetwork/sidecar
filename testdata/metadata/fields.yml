@@ -938,9 +938,8 @@ rows:
   compute-7: {planned: M12}
   compute-8: {planned: M12}
   compute-11: {planned: M13}
-  # compute-12, the api's mirror of the local model files (QD-1409, CSRV-M11-01): objects of api's blob store, which
-  # server/compute_model_store.go names, with no proto field or sidecar-side key behind them; the mirror's first file
-  # is served at M11 (CSRV-M11-02)
+  # DESIGN-COMPUTE.md §14.6's compute-12 (owner decision 795; QD-1409): the api's model mirror, which the model
+  # routes and compute_model_mirror bring at M11 (CSRV-M11-01, CSRV-M11-02)
   compute-12: {planned: M11}
   # DESIGN-COMPUTE.md §28.15's rows (owner decisions 783, 784): what FB's feedback service, URnetwork's own to build,
   # holds of the sidecar's support client, each until M13b's support skill posts to it (DESIGN-COMPUTE §28.21)

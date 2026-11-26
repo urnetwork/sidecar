@@ -2,12 +2,12 @@
 
 This file holds the answers DESIGN-COMPUTE.md does not yet carry, for the owner to fold when they revise it.
 
-The compute planner raised 151 questions about DESIGN-COMPUTE.md on 2026-11-24 (`.stack/questions/compute-plan-*.md`, listed in `.stack/plan/COMPUTE-PLAN.md`), and the owner answered all of them the same day, QD-1233 to QD-1383, each with the recommended option, under the owner's standing acceptance of recommended options (2026-11-16, restated 2026-11-19). The run's question ledger (`.stack/decisions/LEDGER.json`), `.stack/decisions/RESOLUTIONS.md` and `.stack/decisions/later-pending.md` record them outside git; this file is their durable copy in the sidecar repo, each answer stated as the rule it makes. Track dr17-compute-answers wrote it on 2026-11-24. One answer recorded after them that amends DESIGN-COMPUTE.md alone, QD-1386, the catalog's tie rule, which the build raised while implementing §6.3 (INFER-M11-01) and the owner answered the same day, is filed under §6 by track dr17-late-fold, which folded the rest of that day's later answers into DESIGN.md. Five more the build raised while implementing the compute policy (CACL-M11-01, CACL-M11-04, CACL-M11-05 and CACL-M12-01), QD-1388 to QD-1392, which the owner answered the same day, each with the recommended option, are filed under §14 and §16 by track dr19-support-fold; what they change in DESIGN.md it already carries, QD-1388's words in §2.8's compute-4 since metadata_list.yml v69, and QD-1389's to QD-1391's in §8.4 and §16.8 since the tenth fold. One more, QD-1398, the support skill's `client_ref` for kind 27, which the build raised implementing DESIGN-COMPUTE.md §28 and the owner answered the same day, is filed under §28 by the same track, which states its lookup in DESIGN.md's §16.6. One more, QD-1401, where the `ur-engine` helper's main lives, which the build raised implementing §6.5 (INFER-M11-02) and the owner answered the same day with the recommended option, is filed under §6 by track dr20-late-fold, the twelfth fold, which numbered that day's other answers as DESIGN.md's owner decisions 785 to 789; it amends the plan's reading QD-1247, whose second reading says so, and changes nothing DESIGN.md carries. The owner folded four of the plan's readings into DESIGN-COMPUTE.md §26 on 2026-11-24, aligning its listeners with DESIGN.md's service discovery (owner decision 778; commit e9478d45): QD-1248 (`Deliver` on app hosts), QD-1249 (the listeners file's `desc_by` and `v4_uncertain` and the `LISTENERS` bodies), QD-1250 (`BridgeListenerReach` in `device/`) and QD-1251 (a labeled UDP socket above the ephemeral threshold), so they left this file, as its folding rule has a folded item do; track dr18-compute-fences took them out.
+The compute planner raised 151 questions about DESIGN-COMPUTE.md on 2026-11-24 (`.stack/questions/compute-plan-*.md`, listed in `.stack/plan/COMPUTE-PLAN.md`), and the owner answered all of them the same day, QD-1233 to QD-1383, each with the recommended option, under the owner's standing acceptance of recommended options (2026-11-16, restated 2026-11-19). The run's question ledger (`.stack/decisions/LEDGER.json`), `.stack/decisions/RESOLUTIONS.md` and `.stack/decisions/later-pending.md` record them outside git; this file is their durable copy in the sidecar repo, each answer stated as the rule it makes. Track dr17-compute-answers wrote it on 2026-11-24. One answer recorded after them that amends DESIGN-COMPUTE.md alone, QD-1386, the catalog's tie rule, which the build raised while implementing §6.3 (INFER-M11-01) and the owner answered the same day, is filed under §6 by track dr17-late-fold, which folded the rest of that day's later answers into DESIGN.md. Five more the build raised while implementing the compute policy (CACL-M11-01, CACL-M11-04, CACL-M11-05 and CACL-M12-01), QD-1388 to QD-1392, which the owner answered the same day, each with the recommended option, are filed under §14 and §16 by track dr19-support-fold; what they change in DESIGN.md it already carries, QD-1388's words in §2.8's compute-4 since metadata_list.yml v69, and QD-1389's to QD-1391's in §8.4 and §16.8 since the tenth fold. One more, QD-1398, the support skill's `client_ref` for kind 27, which the build raised implementing DESIGN-COMPUTE.md §28 and the owner answered the same day, is filed under §28 by the same track, which states its lookup in DESIGN.md's §16.6. One more, QD-1401, where the `ur-engine` helper's main lives, which the build raised implementing §6.5 (INFER-M11-02) and the owner answered the same day with the recommended option, is filed under §6 by track dr20-late-fold, the twelfth fold, which numbered that day's other answers as DESIGN.md's owner decisions 785 to 789; it amends the plan's reading QD-1247, whose second reading says so, and changes nothing DESIGN.md carries. The compute planner raised eleven more on 2026-11-25, extending the plan for DESIGN-COMPUTE.md's CO-47 to CO-49, which the owner answered the same day, one at a time, each with the recommended option, QD-1408 to QD-1418; track designmd-fold-co47-to-co49, the thirteenth fold, files them with the plan's own readings, which they are, and writes what they change in DESIGN.md with CO-47 to CO-49, its owner decisions 793 to 795: QD-1409's compute-12 in §2.8, metadata_list.yml v72, QD-1410's page Worker leg in §4.4, §4.6, §4.7, §4.9 and §18.10, and QD-1411's and QD-1412's answers to the two findings in §18.8, §2.10 and §2.18. CO-48 also changes two appendix answers, QD-1317 (Q-HARN-3) and QD-1364 (Q-SSH-1), each marked superseded where it stands, for the owner's revision to fold. The owner folded four of the plan's readings into DESIGN-COMPUTE.md §26 on 2026-11-24, aligning its listeners with DESIGN.md's service discovery (owner decision 778; commit e9478d45): QD-1248 (`Deliver` on app hosts), QD-1249 (the listeners file's `desc_by` and `v4_uncertain` and the `LISTENERS` bodies), QD-1250 (`BridgeListenerReach` in `device/`) and QD-1251 (a labeled UDP socket above the ephemeral threshold), so they left this file, as its folding rule has a folded item do; track dr18-compute-fences took them out.
 
 The answers are of two kinds:
 
 - **Appendix answers**, QD-1258 to QD-1365, 108 in all, below by the DESIGN-COMPUTE.md section that asks them. Each answers a question of DESIGN-COMPUTE.md's question register (Appendix B): the 101 open owner questions of Appendix G.2, whose recommended answers the owner let stand with CO-44 ("Let recommendations stand", 2026-11-23), and 7 more that a compute task's plan cites, whose decider Appendix B gives as peer review (Q-CTRUST-2, Q-INFER-7, Q-HARN-6, Q-GW-7, Q-ENC-7, Q-ENC-14, Q-GIT-1) and whose answers stood as the design (CO-14). Every one takes the answer DESIGN-COMPUTE.md already gives, so the rule is the design's own; what the document does not carry yet is that the owner has decided it. One, QD-1260 (Q-BAL-16), is also the G.1 decision Appendix G calls still open, which the second review added after CO-42 and CO-44.
-- **The plan's own readings**, QD-1233 to QD-1257 and QD-1366 to QD-1383, 43 in all, 39 left here, in a section of their own after the appendix answers. The planners raised them where DESIGN-COMPUTE.md leaves a format, a route, a module or a name open, or disagrees with itself or with the code (COMPUTE-PLAN.md's "What the design leaves contradictory or unbuildable"): command names that already exist, modules the design does not name, routes and bytes it gives no form. Each is a rule DESIGN-COMPUTE.md does not state, and some change DESIGN.md or RECORD.md through Appendix D as well, which the item's first line says.
+- **The plan's own readings**, QD-1233 to QD-1257, QD-1366 to QD-1383 and QD-1408 to QD-1418, 54 in all, 50 left here, in a section of their own after the appendix answers. The planners raised them where DESIGN-COMPUTE.md leaves a format, a route, a module or a name open, or disagrees with itself or with the code (COMPUTE-PLAN.md's "What the design leaves contradictory or unbuildable"): command names that already exist, modules the design does not name, routes and bytes it gives no form. Each is a rule DESIGN-COMPUTE.md does not state, and some change DESIGN.md or RECORD.md through Appendix D as well, which the item's first line says.
 
 **Precedence.** Where an item here and DESIGN-COMPUTE.md differ, the item governs until it is folded, as sidecar/DESIGN-AMENDMENTS.md's items govern DESIGN.md's text. The compute tasks build to these items, and to DESIGN-COMPUTE.md where they are silent. DESIGN-COMPUTE.md governs the points it owns over DESIGN.md until a design-records track folds its Appendix D (its front matter); an item that changes what Appendix D carries changes what that fold takes into DESIGN.md.
 
@@ -26,17 +26,17 @@ A reading appears in every row whose section it amends, and is written once, bel
 | §3 Architecture and flows | | QD-1244 |
 | §4 Providers | QD-1344 | QD-1247, QD-1257 |
 | §5 Attestation and the policy | | QD-1242, QD-1243, QD-1254, QD-1256, QD-1379 |
-| §6 Inference | QD-1324, QD-1325, QD-1326; QD-1386 and QD-1401, the build's | QD-1237, QD-1241, QD-1246, QD-1247, QD-1370 |
-| §7 The Harness | QD-1313 to QD-1323 | QD-1255 |
+| §6 Inference | QD-1324, QD-1325, QD-1326; QD-1386 and QD-1401, the build's | QD-1237, QD-1241, QD-1246, QD-1247, QD-1370, QD-1408, QD-1411, QD-1413 |
+| §7 The Harness | QD-1313 to QD-1323, QD-1317 superseded by CO-48 | QD-1255, QD-1410, QD-1415, QD-1416, QD-1417, QD-1418 |
 | §8 The local gateway | QD-1306 to QD-1312 | QD-1254 |
 | §9 The compute balance | QD-1258 to QD-1262 | QD-1238, QD-1247, QD-1252, QD-1376 |
 | §10 Paying providers in Gamma | | QD-1244, QD-1245, QD-1257 |
 | §11 Secure enclaves | QD-1289 to QD-1298 | QD-1243, QD-1254, QD-1255 |
-| §12 The bundled SSH | QD-1364, QD-1365 | QD-1243 |
+| §12 The bundled SSH | QD-1364, superseded by CO-48, and QD-1365 | QD-1243, QD-1417, QD-1418 |
 | §13 The bundled git | QD-1304, QD-1305 | |
-| §14 Server services, routes, tables and metadata | QD-1388, the build's | QD-1237, QD-1239, QD-1241, QD-1243, QD-1245, QD-1246, QD-1252, QD-1367, QD-1374, QD-1375, QD-1377 |
-| §15 CLI, MCP, sdk and app surfaces | | QD-1247, QD-1253, QD-1380, QD-1381, QD-1382 |
-| §16 Policy, budgets and approvals | QD-1263, QD-1264; QD-1389 to QD-1392, the build's | |
+| §14 Server services, routes, tables and metadata | QD-1388, the build's | QD-1237, QD-1239, QD-1241, QD-1243, QD-1245, QD-1246, QD-1252, QD-1367, QD-1374, QD-1375, QD-1377, QD-1409 |
+| §15 CLI, MCP, sdk and app surfaces | | QD-1247, QD-1253, QD-1380, QD-1381, QD-1382, QD-1414, QD-1415, QD-1416 |
+| §16 Policy, budgets and approvals | QD-1263, QD-1264; QD-1389 to QD-1392, the build's | QD-1417 |
 | §17 Abuse, safety and legal process | | QD-1382 |
 | §19 Phasing and milestones | QD-1274, QD-1275 | QD-1233, QD-1255 |
 | §20 The recURd skill | QD-1351 to QD-1355 | QD-1378, QD-1380 |
@@ -44,13 +44,14 @@ A reading appears in every row whose section it amends, and is written once, bel
 | §22 Web fetch | QD-1299 to QD-1303 | |
 | §23 Mail and calendar for agents | QD-1335 to QD-1343 | QD-1235, QD-1236 |
 | §24 Context history in EVS | QD-1278 to QD-1288 | QD-1234, QD-1240, QD-1366 |
-| §25 Connected services | QD-1265 to QD-1273 | QD-1381 |
+| §25 Connected services | QD-1265 to QD-1273 | QD-1381, QD-1414 |
 | §26 Listeners | QD-1327 to QD-1334 | |
-| §27 Automatic approvals and the safety classifier | QD-1345 to QD-1350 | QD-1366, QD-1368 to QD-1373 |
+| §27 Automatic approvals and the safety classifier | QD-1345 to QD-1350 | QD-1366, QD-1368 to QD-1373, QD-1413 |
 | §28 The support skill | QD-1398, the build's | |
 | Appendix B, question register; Appendix G, open decisions | every appendix answer | |
-| Appendix D, amendments to DESIGN.md | QD-1388 and QD-1390, the build's, which DESIGN.md already carries | QD-1234, QD-1237, QD-1238, QD-1240, QD-1243, QD-1252, QD-1254, QD-1255, QD-1366, QD-1367, QD-1374, QD-1378 |
+| Appendix D, amendments to DESIGN.md | QD-1388 and QD-1390, the build's, which DESIGN.md already carries | QD-1234, QD-1237, QD-1238, QD-1240, QD-1243, QD-1252, QD-1254, QD-1255, QD-1366, QD-1367, QD-1374, QD-1378; QD-1409 to QD-1412, which DESIGN.md carries since the thirteenth fold |
 | Appendix F, use-case coverage | | QD-1382 |
+| Appendix I, residual risks | | QD-1411, QD-1412 |
 
 ## §2 Trust model and invariants
 
@@ -136,6 +137,8 @@ Builds: HARN-M11-03. Question: `compute-plan-q-harn-2-local-harness-get-web-acce
 Not at launch: the extension's Worker is Later in DESIGN, and the page Worker has no compute surface. A remote-only Harness in the browser follows the Worker.
 
 Builds: nothing yet. Question: `compute-plan-q-harn-3-local-harness-run-page-worker.md`.
+
+**Superseded by CO-48 (2026-11-25; DESIGN.md's owner decision 794).** ur.io's page Worker runs the apps' Harness, the local profile with its tools, from M13a, a full member device, so this answer stands for the extension's Worker alone, which stays Later (DESIGN-COMPUTE.md §7.5); the owner's revision folds the change with Q-HARN-3.
 
 ### QD-1318 (Q-HARN-4): What runs by default in an enclave?
 *§7.14. In Appendix G.2's open list, blocking M14's entry. The design's answer, (a).*
@@ -361,6 +364,8 @@ Builds: CACL-M14-01, ENC-M14-03, ENC-M14-09. Question: `compute-plan-q-enc-14-ag
 Not at launch; CO-5 is about enclaves. `ur ssh serve` for a person's own machines is Later, behind the same rule.
 
 Builds: ENC-M14-03. Question: `compute-plan-q-ssh-1-desktops-other-sidecars-run-ssh.md`.
+
+**Superseded by CO-48 (2026-11-25; DESIGN.md's owner decision 794).** From M14 each untagged device of the person's that runs `ur daemon` answers §7.10's attach on its overlay address, `ur harness rpc` in session and manage modes alone, under the who rule and origin checks enclaves take; a shell, `ur ssh serve` for a person's own machines, stays Later (DESIGN-COMPUTE.md §7.10, §12), and the owner's revision folds the change with Q-SSH-1.
 
 ### QD-1365 (Q-SSH-2): Should person sessions be recorded?
 *§12.12. In Appendix G.2's open list, blocking nothing at launch. The design's answer.*
@@ -908,7 +913,7 @@ Builds: the support skill's client (support-skill: support_client.go, approval_c
 
 ## The plan's own readings
 
-The 43 rules the planners read where DESIGN-COMPUTE.md leaves a format, a route, a module or a name open, each the option the question recommended. They are in the order of the section each mainly amends, Appendix D's last; the index lists every section each one touches.
+The 54 rules the planners read where DESIGN-COMPUTE.md leaves a format, a route, a module or a name open, each the option the question recommended. They are in the order of the section each mainly amends, Appendix D's last; the index lists every section each one touches.
 
 ### QD-1242: From what instant does a new disclosure version's grace run, which neither §2.8 nor §5.4 gives?
 *Amends §2.8 and §5.4. Option 1.*
@@ -965,6 +970,34 @@ All five stand:
 
 Builds: INFER-M11-04, INFER-M11-07, INFER-M11-09, PROV-M12-01, BAL-M13-01, INFER-M15-02. Question: `compute-plan-inference-small-readings.md`.
 
+### QD-1408: What are the bytes of a model file's chunk index, whose SHA-256 the signed manifest pins?
+*Amends §6.5's model downloads and §6.3's manifest. Option 1.*
+
+RFC 8785 canonical JSON, as the manifest and the compute policy already are (`CanonicalJson`, sidecar/config_admin_command.go): `{"byte_count": <the file's size>, "chunk_byte_count": 16777216, "chunks": ["<lowercase hex SHA-256>", ...], "sha256": "<the file's hex SHA-256>", "version": 1}`, its members in RFC 8785's order, chunk n covering [n × chunk_byte_count, min((n + 1) × chunk_byte_count, byte_count)). A reader hashes the bytes as received, checks the pin, then parses strictly and refuses a document that is not canonical. Why: one canonical form every leg already parses, one encoder in Go and a few lines of JS, about 70 bytes a chunk (some 70 KiB for a 16 GB file), bounded by settings (`ModelIndexMaxByteCount`, `ModelChunkMinByteCount`, `ModelChunkMaxByteCount`), with vectors in `sidecar/testdata/infer/index/` that the browser's tests read too.
+
+Builds: INFER-M11-10, INFER-M11-11, CSRV-M11-02, INFER-M13-02; until they land the index parse refuses every index, so no model file downloads from the api. Question: `compute-plan-model-index-format.md`.
+
+### QD-1413: Where do the browser's pinned engine files come from in this run, LiteRT-LM's web engine, Transformers.js and ONNX Runtime Web, when only Go modules may be fetched?
+*Amends §6.5's files and §27.5, for the build's draft. Option 1.*
+
+The draft builds without them: the adapter, the engine Worker, the probe, the store and the download are built against the engines' documented APIs and tested with fake engine modules under Node and in Chromium without WebGPU; the promoted build's list of engine files names them and leaves their SHA-256s empty, so the loader starts no engine and the probe answers "engine not installed". For the integration phase the owner supplies the pinned npm packages, checked against SHA-256s the owner gives, as with the TLC jar, and the spike runs then by hand.
+
+Builds: INFER-M13-02, SAFE-M13-16, CTEST-M13-07; until the owner supplies the packages the engine Worker finds no pinned build, so every browser shows local models and the classifier unavailable, "engine not installed". Question: `compute-plan-web-engine-files.md`.
+
+### QD-1415: How do the sdk, `ur` and the Harness's tools name one of the person's own devices as a remote harness, beside an enclave?
+*Amends §7.10, §15.1, §15.2 and §15.3. Option 1.*
+
+A prefix for each kind, as `where` already has one: `enclave:<name>` and `device:<sidecar id>`, the device's sidecar id, which `RemoteHarnesses().List()` and `harness_list` give beside its name; the sdk's `harness` parameter takes the id List() returns; `where`, agent names and `harness_continue` take `device:<id>` beside `enclave:<name>`; and `ur harness --device <name or id>`, `ur harness ls --device` and `ur harness continue --device` sit beside `--enclave`, a name resolving only when it names exactly one of the person's devices. Why: ids are stable and never collide, and every existing enclave form stays as it is.
+
+Builds: HARN-M14-03, HARN-M14-04, HARN-M14-08, HARN-M14-09; until then every harness name that is not an enclave's is refused. Question: `compute-plan-remote-harness-names.md`.
+
+### QD-1416: How does `RemoteHarnesses()` know which of the person's devices answer attach, which no format records?
+*Amends §7.10 and §15.3. Option 1.*
+
+By asking: List() names each untagged device of the person, other than this one, that has a live `ssh` `KeyRegister`; each reads `unknown` until a probe answers, an SSH handshake to its overlay address that stops after the origin check and runs no exec, then `reachable`, with its agents from the agents repo's cards (§20.5), or `not answering`; a device is probed at most once a `RemoteHarnessProbeInterval` (a minute, a setting) and again at a List() after that lapses; `harness_list` lists devices the same way, its `live` option probing first. Why: no new format, and the list shows what an attach would meet.
+
+Builds: HARN-M14-09, HARN-M14-08; until then the list and `harness_list` hold enclaves only. Question: `compute-plan-remote-harness-list.md`.
+
 ### QD-1252: May the ledger add the columns, and the metadata rows, the money plan found missing from §9.4's SQL and §14.6?
 *Amends §9.4, §9.9, §9.11, §9.12, §14.4, and §14.6's compute-2 and compute-7, which Appendix D's row for DESIGN §2.8's list carries into DESIGN.md. Option 1.*
 
@@ -1015,6 +1048,13 @@ All seven stand, each a format change the enclave tasks land under the `enclaves
 
 Builds: CARCH-M11-05, CTXH-M11-08. Question: `compute-plan-enc-readings.md`.
 
+### QD-1418: How does one of the person's own devices prove its SSH host key, and what does the attach origin name as its target, since §12.5 and §12.6 give both only for an enclave's incarnation?
+*Amends §12.5, §12.6 and §7.10. Option 1.*
+
+A device's host key is its own purpose-`ssh` key, the one it already registers with `KeyRegister` under its identity key (SSH-M14-01), as an incarnation's is, ENC-M14-03's `KEY_PURPOSE_SSH` serving both; the client checks a device's host key against that live row with no evidence step, refusing a mismatch and naming the device; and the attach origin names its target as an enclave's id and incarnation, or a device's sidecar id with incarnation 0, each in a field of its own, so an origin made for one device is refused at another and at every enclave (HARN-M14-11, a follow-up to HARN-M14-01). Why: the config already names every device's SSH key under its identity key, which is what an incarnation's host key check rests on beside its evidence.
+
+Builds: HARN-M14-11, SSH-M14-08; until then a client refuses every device's host key, so no device is attached. Question: `compute-plan-own-device-host-key.md`.
+
 ### QD-1239: Does `computeservice` check a DPoP proof on every request, as §14.2 says, or the exchange-minted bearer service token, as DESIGN §7.8's services do?
 *Amends §14.2. Option 1, for the draft.*
 
@@ -1043,6 +1083,13 @@ MG-S1 is a migration list of its own, `server/db_migrations_searchsigner.go`, ap
 
 Builds: CSRV-M13-01. Question: `compute-plan-searchsigner-migrations.md`.
 
+### QD-1409: Where does the api keep its mirror of the model files, and which metadata row covers it and the model routes' per-address limit, which §14.4 and §14.6 name none for?
+*Amends §14.3, §14.4, §14.5 and §14.6, which Appendix D's row for DESIGN §2.8's list carries into DESIGN.md. Option 1.*
+
+The mirror is one new object family in server's `BlobStore`, `compute-models/<sha256>/`: the index at `index`, each chunk at `chunks/<n>`, and the file's state (copied, indexed, served) at `state`, written last, so a route's answer is one object read. A new row, compute-12, in §14.6's style: service api (the model routes) and taskworker (`compute_model_mirror`); store those objects; sees "public model files and their chunk indexes, by SHA-256: no member, network, token or download history"; why, CO-49's downloads; ttl, while a supported release's manifest names the file. The routes' per-address limit counts on the existing `{address_<hash>}` histories under the routes' own key prefix, which api-3 already covers, its windows and counts in `ComputeModelRouteSettings`. Why: the files are public and immutable, one object a chunk is exactly what a route serves, and the limit reuses the attempt histories every public route keeps. DESIGN.md's §2.8 carries compute-12 since metadata_list.yml v72 (track designmd-fold-co47-to-co49), so only §14.6's row waits for the owner's revision.
+
+Builds: CSRV-M11-01, CSRV-M11-02; until they land the model routes answer 404 for every file and the mirror copies nothing. Question: `compute-plan-model-mirror-store.md`.
+
 ### QD-1382: `ur search` already runs DESIGN §16.10's encrypted index search: what command does DESIGN-COMPUTE's web search take?
 *Amends §15.1, §17.2, §21.6, §21.9 and Appendix F. Option 1.*
 
@@ -1070,6 +1117,13 @@ Builds: CONN-M13-10. Question: `compute-plan-ur-connect-collision.md`.
 No: `ur native-host` refuses compute methods at launch, with the same refusal the page Worker gives, and the extension has no compute until its Worker returns from Later. Why: consistent with §15.4, which gives the page Worker no compute surface, and with §1.2, which gives the browser the Harness with remote inference only once the extension's Worker returns; relaying the Harness and models through `ur native-host` (DESIGN §18.8's meanwhile path) would be an early browser surface the design does not plan.
 
 Builds: CSURF-M11-02. Question: `compute-plan-native-host-compute.md`.
+
+### QD-1417: Which rule admits an attach to one of the person's own devices, and under which authorization feature, since §16.5's `ssh` rows and the `enclaves` feature name only enclaves?
+*Amends §16.5's `ssh` rows, §7.10 and §12. Option 1.*
+
+The implicit document's `ssh` owners rule also reaches each of a member's own untagged devices, from that member's untagged devices and the agents on them, as user `agent` only and for the `ur harness rpc` exec alone, no `root` or `edit`, since a device has no container and its endpoint runs no shell; another member reaches one only by a requested grant the device's member approves (`autogroup:dst-owner`), as Q-HARN-9 has it for enclaves, never launching an agent there. The rows and the devices' `ssh` keys stay under the `enclaves` feature, whose prompt the apps also raise at a person's first attach to a device, so old readers hold at one base as they do for enclaves. Why: the owner asked that own devices work as enclaves do, and one feature keeps one hold for the same formats.
+
+Builds: CACL-M14-02, SSH-M14-08, HARN-M14-08; until then a device's attach endpoint refuses every caller. Question: `compute-plan-own-device-attach-rule.md`.
 
 ### QD-1233: May the draft build each provider's adapter, and the search signer, before the provider commits in writing and before G-SRCH-parallel's load test?
 *Amends §19.3's D-CPHASE-2 and D-CPHASE-9. Option 1.*
@@ -1134,6 +1188,13 @@ Builds: CTXH-M11-01, CTXH-M11-07. Question: `compute-plan-approval-notice-bytes.
 
 Builds: CTXH-M11-06. Question: `compute-plan-ctxh-stored-count.md`.
 
+### QD-1414: How does ur.io connect a service, since §25.5 lands every sign-in's redirect on the device and never on a URnetwork host?
+*Amends §25.5 and §15.4. Option 1.*
+
+At launch ur.io uses the connections the person made on their other devices, which it reads from EVS as any member device does, and calls them through `service_call` over C4; `connection_request` on ur.io answers with where to connect, the app or `ur`, and its connected-services view lists and disconnects but does not connect; a browser flow waits until §25 designs one.
+
+Builds: CONN-M13-11; until then ur.io calls only services connected on the person's other devices, and `connection_request` there names the app or `ur` as where to connect. Question: `compute-plan-urio-connections.md`.
+
 ### QD-1370: Does the safety classifier run as `ur __engine classify` inside `ur` (§27.5) or in the separate `ur-engine` helper (§6.5)?
 *Amends §27.5, beside §6.5. Option 1.*
 
@@ -1196,3 +1257,24 @@ Builds: CARCH-M11-02, HARN-M11-01, HARN-M14-07. Question: `compute-plan-pig-modu
 The tests that hold the record's code to RECORD.md and DESIGN.md, record_kind_test.go and protocol/design_fence_test.go, take an additions list, each entry naming DESIGN-COMPUTE.md's section and the compute planner's amendment entry (`.stack/plan/COMPUTE-AMENDMENTS.md`, CA-69 to CA-85), which the design-records fold deletes as it writes the text into RECORD.md, as design_unfenced_test.go's testFenceAdditions and metadata_list_test.go's metadataListAdditions already work. So record kinds 54 (`session_entry`) and 55 (`session_blob`), class 8 `bulk`, `body_apart` and Coverage's field 8 (CTXH-M11-01), kind 56 (`auto_verdict`, SAFE-M13-08) and `ModelCallBody` fields 11 to 14 (INFER-M11-07) land without waiting for the fold. Why: the pattern the repository already uses for its other additions; folding first would make M11's first tasks wait for a fold that is paused.
 
 Builds: CTXH-M11-01, CTXH-M11-02, CTXH-M11-08, SAFE-M13-08. Question: `compute-plan-record-registry-fold.md`.
+
+### QD-1410: Which build leg and size gate hold ur.io's page Worker once it links the Harness and a js connect client, and is that client C17 or the full one?
+*Amends §7.5 and Appendix D's rows for DESIGN §4.6's C17 and §18.10's page Worker build. Option 1.*
+
+ur.io's page Worker builds `GOOS=js -tags sidecar_page`, not `sidecar_http`, with the full connect client over C4: the compute families link as they do on the apps' leg, with no constraint changed; the server engines' hosts (`host_*.go`) and anything else that cannot run in a page carry `!sidecar_page` beside `!sidecar_http`; HARN-M13-01 first measures it (DESIGN §18.10's spike: stripped and unstripped sizes, start time in Node, a tool-using turn's linear memory), and its gate becomes the measured stripped size plus 10%; the extension's leg keeps `sidecar_http`, and C17 stays the extension's streaming Worker's, as DESIGN-DEFER has it. Why: it is the one way the tools work on ur.io as in the apps, it changes no compute file, and the spike's figure, not a guess, sets the gate. DESIGN.md carries it since the thirteenth fold (owner decision 794: §4.4, §4.6's C4 and C17, §4.7, §4.9 and §18.10).
+
+Builds: HARN-M13-01, HARN-M13-02, HARN-M13-03, INFER-M13-01 and every ur.io task after them; until then the page Worker stays on the `sidecar_http` leg and links no compute. Question: `compute-plan-page-worker-leg.md`.
+
+### QD-1411: Should ur.io's page Worker become a full member device although Chromium never makes the framed key origin's storage persistent, so a browser may clear its device keys?
+*Amends §6.5's storage, Appendix D's row for DESIGN §18.8's storage and placement, and Appendix I. Option 1.*
+
+It becomes a full member device as CO-48 decided, the eviction bounded: the frame still calls persist(), which Safari and Firefox may grant; the apps and ur.io show a browser device as one whose keys its browser may clear; a page that finds its keys gone enrolls anew as a new device, and the person revokes the old browser device from any member device, whose list shows its last activity; and the residual, that an evicted browser device keeps its k-of-n seat until revoked, so a network should not count on it to reach a quorum, stands in Appendix I beside the eviction row. Why: it builds what the owner decided, and an eviction still costs one enrollment and one revocation. DESIGN.md carries it since the thirteenth fold (owner decision 794: §18.8's storage and admission rows, §2.18's eviction row).
+
+Builds: CACL-M13-02; until then the page Worker stays `read_only`. Question: `compute-plan-keyorigin-persist.md`.
+
+### QD-1412: Should the key origin stay a same-site frame under ur.io, although Chromium may then put ur.io's page and the key origin's Workers in one renderer process, now that the page Worker holds the member's whole authority?
+*Amends Appendix D's row for DESIGN §18.8's storage and placement, and Appendix I. Option 1.*
+
+The same-site key origin stays at launch, with less that can reach its renderer: the ur.io pages that frame the key origin load no third-party script, Cloudflare's script injection, analytics and challenge scripts off on those paths, and serve a CSP of their own with no inline or third-party script; the residual, a renderer exploit through ur.io's own scripts reaching the key origin's Workers, stands in Appendix I beside the served-code row, to be weighed again with Q-INFER-12 if such an exploit is seen in the wild. Why: for M13a it closes the cheap paths now, and a domain move stays open once a measured threat justifies its storage cost. DESIGN.md carries it since the thirteenth fold (owner decision 794: §18.8's pages and process rows, §2.10's renderer row).
+
+Builds: CACL-M13-02, HARN-M13-04; until then the page Worker stays `read_only`. Question: `compute-plan-keyorigin-process.md`.

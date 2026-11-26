@@ -292,8 +292,8 @@ func (self *SocketListener) SetServing(serving bool)         // e.g. false while
 func (self *SocketListener) GrantExpires() time.Time         // when the grant a tls/ or smtp/ listen registered under ends:
                                                              // its action's expiry where a decision on that action
                                                              // activated the grant; zero for a name whose listen asks no
-                                                             // grant and for one a standing grant passed (owner decisions
-                                                             // 687, 792)
+                                                             // grant and for one a standing grant passed
+                                                             // (owner decisions 687, 792)
 // *SocketConn implements net.Conn; Close sends FIN and stops reading (the peer reads io.EOF).
 // Deadlines are local (os.ErrDeadlineExceeded, Timeout() true); the stream survives them.
 // RemoteAddr is the dialer's network and client id, Network() "ur"; edge client IPs arrive in-band (§13).

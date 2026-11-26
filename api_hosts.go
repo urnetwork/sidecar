@@ -16,6 +16,12 @@
 // with remote models, enclaves and web searches: ComputeUrl is its base, empty for a list that names none, which still
 // applies.
 //
+// The table carries §12.4's user root too, dns.yml's, beside its hosts (QD-1407): ApplyServiceUrls fills
+// SidecarSettings.UserRoot from it, so ur resolves the <net> of `.ur`, a git remote and an address, and files GET
+// /sidecar/label's answer, under it from M2, before any zone names a root. It is no host a sidecar reaches, so it is
+// ur's own, as a host's service and requirement are, and PublishedJson leaves it out. A release keeps it equal to
+// dns.yml's root.
+//
 // The issuer SPKIs are data the release supplies (§18.9). Until it does an entry has none, and a probe cannot tell
 // an intercepted chain from a real one, which ur status says rather than guesses.
 //
@@ -46,6 +52,23 @@ const sidecarHostListVersion = 1
 
 // A list that does not hold to its format.
 var ErrSidecarHostList = errors.New("host list refused")
+
+// What the format holds a host's name to (QD-702): RFC 1035's bounds, so changing one is a format change, which no
+// list or reader makes alone.
+type SidecarHostListFormatSettings struct {
+	// The most bytes of a host's name in its dotted text form: RFC 1035's 253.
+	HostNameMaxByteCount int
+	// The most bytes of one label of it: RFC 1035 §2.3.4's 63.
+	HostLabelMaxByteCount int
+}
+
+// The format's values, the only source of their defaults. A fresh value each call.
+func DefaultSidecarHostListFormatSettings() *SidecarHostListFormatSettings {
+	return &SidecarHostListFormatSettings{
+		HostNameMaxByteCount:  253,
+		HostLabelMaxByteCount: 63,
+	}
+}
 
 // Which of SidecarSettings' urls a host is.
 type SidecarHostService string
@@ -154,20 +177,25 @@ func (self *SidecarHostListEntry) IssuerSpkiDigests() ([][sha256.Size]byte, erro
 
 // §18.9's table.
 type SidecarHostList struct {
-	Version int                    `json:"version"`
-	Hosts   []SidecarHostListEntry `json:"hosts"`
+	Version int `json:"version"`
+	// §12.4's user root, dns.yml's, lowercase with no trailing dot: what ApplyServiceUrls fills
+	// SidecarSettings.UserRoot with (QD-1407). Empty for a list that names none, which applies all the same, and a
+	// host given it resolves no <net> by name.
+	UserRoot string                 `json:"user_root,omitempty"`
+	Hosts    []SidecarHostListEntry `json:"hosts"`
 }
 
 // A copy sharing no slice.
 func (self *SidecarHostList) clone() *SidecarHostList {
-	clone := &SidecarHostList{Version: self.Version, Hosts: slices.Clone(self.Hosts)}
+	clone := &SidecarHostList{Version: self.Version, UserRoot: self.UserRoot, Hosts: slices.Clone(self.Hosts)}
 	for i := range clone.Hosts {
 		clone.Hosts[i].IssuerSpkiSha256 = slices.Clone(self.Hosts[i].IssuerSpkiSha256)
 	}
 	return clone
 }
 
-// The list data holds, refusing a field it does not know, a second value, and anything that breaks the format.
+// The list data holds, refusing a field it does not know, a second value, and anything that breaks the format, whose
+// own bounds (DefaultSidecarHostListFormatSettings) hold its host names.
 func ParseSidecarHostList(data []byte) (*SidecarHostList, error) {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
@@ -178,7 +206,7 @@ func ParseSidecarHostList(data []byte) (*SidecarHostList, error) {
 	if decoder.More() {
 		return nil, fmt.Errorf("%w: more than one value", ErrSidecarHostList)
 	}
-	if err := list.validate(); err != nil {
+	if err := list.validate(DefaultSidecarHostListFormatSettings()); err != nil {
 		return nil, err
 	}
 	return list, nil
@@ -198,14 +226,18 @@ func SidecarHostListV1() (*SidecarHostList, error) {
 	return list.clone(), nil
 }
 
-// The format's rules: version 1, at least one host, each a lowercase DNS name once, a port, words for its need, a
-// known requirement, a service at most once and only a known one, and issuer digests of 32 bytes.
-func (self *SidecarHostList) validate() error {
+// The format's rules: version 1, a user root that is a domain name of lowercase labels where one is named, at least
+// one host, each a lowercase DNS name within settings' bounds once, a port, words for its need, a known requirement, a
+// service at most once and only a known one, and issuer digests of 32 bytes.
+func (self *SidecarHostList) validate(settings *SidecarHostListFormatSettings) error {
 	refuse := func(format string, args ...any) error {
 		return fmt.Errorf("%w: %s", ErrSidecarHostList, fmt.Sprintf(format, args...))
 	}
 	if self.Version != sidecarHostListVersion {
 		return refuse("version %d", self.Version)
+	}
+	if self.UserRoot != "" && !isNetworkLabelRoot(self.UserRoot) {
+		return refuse("the user root is not a domain name of lowercase labels with no trailing dot")
 	}
 	if len(self.Hosts) == 0 {
 		return refuse("no hosts")
@@ -214,7 +246,7 @@ func (self *SidecarHostList) validate() error {
 	services := map[SidecarHostService]bool{}
 	for i := range self.Hosts {
 		entry := &self.Hosts[i]
-		if !isSidecarHostName(entry.Host) {
+		if !isSidecarHostName(entry.Host, settings) {
 			return refuse("host %d is not a lowercase DNS name", i)
 		}
 		if hosts[entry.Host] {
@@ -254,9 +286,10 @@ func (self *SidecarHostList) validate() error {
 	return nil
 }
 
-// Whether name is a lowercase DNS name of two or more labels, each 1 to 63 of [a-z0-9-] with no dash at either end.
-func isSidecarHostName(name string) bool {
-	if len(name) == 0 || 253 < len(name) {
+// Whether name is a lowercase DNS name of two or more labels within settings' bounds, each label of [a-z0-9-] with no
+// dash at either end.
+func isSidecarHostName(name string, settings *SidecarHostListFormatSettings) bool {
+	if len(name) == 0 || settings.HostNameMaxByteCount < len(name) {
 		return false
 	}
 	labels := strings.Split(name, ".")
@@ -264,7 +297,7 @@ func isSidecarHostName(name string) bool {
 		return false
 	}
 	for _, label := range labels {
-		if len(label) == 0 || 63 < len(label) || label[0] == '-' || label[len(label)-1] == '-' {
+		if len(label) == 0 || settings.HostLabelMaxByteCount < len(label) || label[0] == '-' || label[len(label)-1] == '-' {
 			return false
 		}
 		for i := 0; i < len(label); i += 1 {
@@ -299,7 +332,8 @@ func (self *SidecarHostList) ServiceLabel(service SidecarHostService) (string, e
 }
 
 // Sets every service url of settings from the list: https://<host>, wss://<host> for the platform, with :<tcp> unless
-// it is 443. A list missing a service changes nothing and refuses, so a host never runs on half a list.
+// it is 443; and its user root, empty where the list names none (QD-1407). A list missing a service changes nothing
+// and refuses, so a host never runs on half a list.
 func (self *SidecarHostList) ApplyServiceUrls(settings *SidecarSettings) error {
 	urls := map[SidecarHostService]string{}
 	for _, service := range sidecarHostServices {
@@ -324,6 +358,7 @@ func (self *SidecarHostList) ApplyServiceUrls(settings *SidecarSettings) error {
 	settings.GkmUrl = urls[SidecarHostServiceGkm]
 	settings.SocketsUrl = urls[SidecarHostServiceSockets]
 	settings.DnsUrl = urls[SidecarHostServiceDns]
+	settings.UserRoot = self.UserRoot
 	if settings.Tls != nil {
 		api, _ := self.ServiceEntry(SidecarHostServiceApi)
 		_, domain, _ := strings.Cut(api.Host, ".")

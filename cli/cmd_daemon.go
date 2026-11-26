@@ -5,7 +5,8 @@
 // it can be. Each Sidecar it starts follows its network's §7.9 log through its config follower, the network's one
 // judge of the log, which the network's bridge is built over when ur tun first asks (daemon_config.go; QD-796). Its
 // control methods are the person's commands, a network-scoped one acting on its network argument, else
-// .ur's, else the only network (CORE-M3-05); the git mode resolves a session's <net> and hands it to §11's git service,
+// .ur's, else the only network (CORE-M3-05), a name resolving through the hosted networks' own label tables under the
+// settings' user root (daemon_labels.go); the git mode resolves a session's <net> and hands it to §11's git service,
 // and the mcp mode is §16's server (mcp.McpServer), one go-sdk session per relay connection, which only this binary
 // links (D-MCP-1, D-MCP-2). Its logs go to stderr, never stdout.
 //
@@ -670,7 +671,10 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) (runErr e
 		AutoSpawned:    autoSpawned,
 		Version:        sidecar.Version,
 		Listen:         listen,
-		Log:            log,
+		// §12's labels: with no resolver given, each hosted network's own label table, under the user root the
+		// settings name, which each network's label refresh files its label under too (daemon_labels.go)
+		LabelRoot: settings.UserRoot,
+		Log:       log,
 	})
 	if err != nil {
 		if errors.Is(err, sidecar.ErrDaemonRunning) {
@@ -795,6 +799,9 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) (runErr e
 			// first client generation on, and D-TRUST-9's zone watch (daemon_dns.go); added before the follower, so a
 			// generation attaches them first
 			startUrDns(running, network.dnsWatchSettings, log)
+			// its label from api's GET /sidecar/label into the same table at each generation, under the user root, so
+			// `.ur` and git remotes name it from M2 (daemon_labels.go)
+			startUrNetworkLabels(running, nil, log)
 			// the network's one judge of its log, which starts at the Sidecar's first client generation; one that does
 			// not start leaves this network unjudged and the others following (CORE-M6-01)
 			if follower := startUrConfigFollower(running, log); follower != nil {

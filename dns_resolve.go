@@ -158,20 +158,6 @@ func canonicalNetworkLabelRoot(root string) string {
 	return strings.TrimSuffix(dnsAsciiLower(strings.TrimSpace(root)), ".")
 }
 
-// Whether root is a name of lowercase LDH labels, two or more.
-func isNetworkLabelRoot(root string) bool {
-	labels := strings.Split(root, ".")
-	if len(labels) < 2 {
-		return false
-	}
-	for _, label := range labels {
-		if !isDnsLowerLdhLabel(label) {
-			return false
-		}
-	}
-	return true
-}
-
 // row with its names folded to lowercase, or why it cannot be a row. Names are held to the LDH shape
 // alone: an alias claimed under older rules stays this network's after the rules move.
 func canonicalNetworkLabelRow(row NetworkLabelRow) (NetworkLabelRow, error) {
@@ -328,9 +314,14 @@ func (self *NetworkLabelTable) RemoveNetwork(networkId Id) error {
 
 // Sets networkId's label and alias under root from api's GET /sidecar/label, keeping its retiring
 // aliases and recording legacyName, the network_name its token carries. An answer about another
-// network is refused and changes nothing, as does a refusal, which leaves a row with no label
-// resolving only as the only network.
+// network, or one whose label or alias is not a label, is not the route's (ErrSidecarApiReply) and
+// changes nothing, as does a refusal, which leaves a row with no label resolving only as the only
+// network. A root that is not one asks api nothing, since the read allocates a label on first need.
+// dns_label_refresh.go calls it at each client generation.
 func (self *NetworkLabelTable) Refresh(ctx context.Context, api *SidecarApi, root string, networkId Id, legacyName string) error {
+	if !isNetworkLabelRoot(canonicalNetworkLabelRoot(root)) {
+		return fmt.Errorf("network labels: root %q is not a domain name", root)
+	}
 	answer, err := api.GetSidecarLabel(ctx)
 	if err != nil {
 		return err
@@ -346,7 +337,7 @@ func (self *NetworkLabelTable) Refresh(ctx context.Context, api *SidecarApi, roo
 		LegacyName: legacyName,
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("sidecar api %s: %w: %w", sidecarLabelRoute, ErrSidecarApiReply, err)
 	}
 	return self.update(func(rows []NetworkLabelRow) ([]NetworkLabelRow, error) {
 		for index := range rows {
@@ -364,11 +355,22 @@ func (self *NetworkLabelTable) Refresh(ctx context.Context, api *SidecarApi, roo
 
 // See NetworkLabelResolver.
 func (self *NetworkLabelTable) ResolveNetworkLabel(root string, text string, interactive bool) (Id, NetworkLabelKind, error) {
+	return resolveNetworkLabelRows(self.Networks(), root, text, interactive)
+}
+
+// §12.14's rule over rows, one a network this client belongs to under a root, as NetworkLabelResolver states it: the
+// rows under root alone, text matched against each one's label, then its alias, then a retiring alias, and its legacy
+// name only when interactive, a step two networks match answering ambiguous; the empty text is the only network. A
+// text two networks hold as a label, an alias or a retiring alias, in whichever kinds, is ambiguous too, since
+// dns_label's key never lets one name name two networks: one table's rows never hold that (checkNetworkLabelRows), and
+// rows a daemon gathers from several networks' tables (daemon_labels.go) are refused for it rather than resolved by
+// the order. A legacy name is the one kind a later network may take, so only the order decides it.
+func resolveNetworkLabelRows(held []NetworkLabelRow, root string, text string, interactive bool) (Id, NetworkLabelKind, error) {
 	root = canonicalNetworkLabelRoot(root)
 	text = dnsAsciiLower(strings.TrimSpace(text))
 	text = strings.TrimSuffix(strings.TrimSuffix(text, "."), "."+root)
 	rows := []NetworkLabelRow{}
-	for _, row := range self.Networks() {
+	for _, row := range held {
 		if row.Root == root {
 			rows = append(rows, row)
 		}
@@ -393,6 +395,16 @@ func (self *NetworkLabelTable) ResolveNetworkLabel(root string, text string, int
 			return rows[0].NetworkId, NetworkLabelKindOnly, nil
 		}
 		return Id{}, "", ambiguous(rows)
+	}
+	holders := []NetworkLabelRow{}
+	for _, row := range rows {
+		holds := row.Label == text || row.Alias == text || slices.Contains(row.RetiringAliases, text)
+		if holds && !slices.ContainsFunc(holders, func(holder NetworkLabelRow) bool { return holder.NetworkId == row.NetworkId }) {
+			holders = append(holders, row)
+		}
+	}
+	if 1 < len(holders) {
+		return Id{}, "", ambiguous(holders)
 	}
 	steps := []struct {
 		kind  NetworkLabelKind

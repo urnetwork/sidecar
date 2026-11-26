@@ -39,6 +39,14 @@ type SidecarSettings struct {
 	GkmUrl      string
 	SocketsUrl  string
 	DnsUrl      string
+	// §12.4's user root, dns.yml's, under which a network's label sits as <label>.<root>: lowercase, with
+	// no trailing dot, which validate holds it to. A host resolves the <net> of `.ur`, a git remote and
+	// an address under it (ur daemon's DaemonSettings.LabelRoot), and a network's label refresh files
+	// GET /sidecar/label's answer under it (dns_label_refresh.go), since that answer names no root.
+	// Empty in DefaultSidecarSettings, as the urls are (owner decision 282): a host sets its
+	// environment's, as ApplyServiceUrls does from §18.9's host table, which carries production's
+	// (QD-1407). Empty: nothing resolves a <net> by name, and no label is read from api.
+	UserRoot string
 	// What a client reports as its version. Default Version, which is empty in a development build,
 	// and empty here reports none.
 	AppVersion string

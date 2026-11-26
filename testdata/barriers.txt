@@ -213,6 +213,8 @@ barrier directory.sync.after directory_sync.go
 barrier directory.sync.before directory_sync.go
 barrier directory.worker.after directory_worker.go
 barrier directory.worker.before directory_worker.go
+barrier dns.label_refresh.after dns_label_refresh.go
+barrier dns.label_refresh.before dns_label_refresh.go
 barrier dnsservice.edge_publish dnsservice/edge.go
 barrier dnsservice.edge_publish.after dnsservice/edge.go
 barrier dnsservice.edge_publish.before dnsservice/edge.go

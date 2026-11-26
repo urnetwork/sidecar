@@ -188,3 +188,15 @@ Q['Q-BRIDGE-11'] = ("How does the advertising proxy name a remote instance whose
 assert D['D-CTX-4'].startswith('The feedback service is out of scope'), 'D-CTX-4 moved'
 D['D-CTX-4'] = ("The feedback service stays FB's, out of scope; the sidecar's agent surface onto it, the support skill, is "
                 "in scope.")
+
+# Owner decision 794 (2026-11-25, CO-48): ur.io's page Worker a full member device from M13a, on its own sidecar_page
+# leg, with C4 brought forward for it; EX7 widens from reading to acting.
+assert D['D-SDK-6'].startswith('Browser sidecars phase per 18.8') and D['D-SDK-19'].startswith('The page Worker builds'), 'SDK rows moved'
+D['D-SDK-6'] = ("Browser sidecars phase per 18.8: member devices, the page Worker read-only until M13a, the quick burner a "
+                "wrapped reader.")
+D['D-SDK-19'] = ("The page Worker builds `-tags sidecar_http`, no connect, its `Id` a twin; ur.io's builds `sidecar_page` "
+                 "from M13a.")
+assert Q['Q-CTX-2'][1].startswith("The extension's sidecar.wasm") and Q['Q-REPO-2'][1].startswith("(b) §4.6's"), 'Q rows moved'
+Q['Q-CTX-2'] = (Q['Q-CTX-2'][0], "The extension's sidecar.wasm in a page Worker, read-only until M13a, labeled as served code.")
+Q['Q-REPO-2'] = (Q['Q-REPO-2'][0], "(b) §4.6's dispositions, amended by owner decisions 85, 86 and 794 (C4 at M13a).")
+Q['Q-TRUST-4'] = (Q['Q-TRUST-4'][0], "Yes, clearly labeled (EX7); from M13a ur.io's page Worker also acts, labeled so.")
