@@ -272,7 +272,7 @@ func (self *InferModelIndex) Bytes() []byte {
 	return bytes.Clone(self.data)
 }
 
-// Chunk n's offset, length and hash; false for an n outside the file's chunks.
+// The offset, length and hash of chunk n; false for an n outside the file's chunks.
 func (self *InferModelIndex) Chunk(n int) (*InferModelChunk, bool) {
 	if n < 0 || len(self.chunkDigests) <= n {
 		return nil, false

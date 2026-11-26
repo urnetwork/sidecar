@@ -381,7 +381,16 @@ func TestInferModelIndexBuildRoundTrips(t *testing.T) {
 		byteCount      int64
 		chunkByteCount int64
 	}{
-		{0, 7}, {1, 7}, {6, 7}, {7, 7}, {8, 7}, {70, 7}, {71, 7}, {1000, 64}, {4096, 1024}, {4097, 1024},
+		{byteCount: 0, chunkByteCount: 7},
+		{byteCount: 1, chunkByteCount: 7},
+		{byteCount: 6, chunkByteCount: 7},
+		{byteCount: 7, chunkByteCount: 7},
+		{byteCount: 8, chunkByteCount: 7},
+		{byteCount: 70, chunkByteCount: 7},
+		{byteCount: 71, chunkByteCount: 7},
+		{byteCount: 1000, chunkByteCount: 64},
+		{byteCount: 4096, chunkByteCount: 1024},
+		{byteCount: 4097, chunkByteCount: 1024},
 	} {
 		content := testInferModelIndexContent(c.byteCount)
 		built, err := InferModelIndexBuild(bytes.NewReader(content), c.chunkByteCount, settings)
