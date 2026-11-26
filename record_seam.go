@@ -8,6 +8,12 @@
 // A seam, not a second evs: what crosses it is the record's own bytes, its entries with their bodies sealed already
 // and its slot rows and deposit batches as plaintext the binding seals, so nothing here encodes, seals or opens. A
 // refusal is evs's, by §11.8's code (EVS-FORMAT.md). On every leg: nothing here names a connect type.
+//
+// DESIGN-COMPUTE §24.5's session entries file two files of a stream (CTXH-M11-02, D-CTXH-10): the entry at e/<n>,
+// body_apart set and sealed_body empty, and its sealed body alone at s/<n>, in the same push or a later one. A push
+// carries such bodies beside its entries, a read lists each version's body files by path without reading them, and
+// ReadBody fetches one on demand, so a reader verifies every chain from headers alone and fetches bodies only for the
+// runs it opens.
 
 package sidecar
 
@@ -76,6 +82,18 @@ type RecordStreamEntry struct {
 	Entry []byte
 }
 
+// One body file a push creates (DESIGN-COMPUTE §24.5): s/<n>, the n of the entry at e/<n> whose body it is, in this
+// push or an earlier one, and that sealed body's bytes alone, which the entry's key row opens.
+type RecordStreamBody struct {
+	Path string
+	Body []byte
+}
+
+// A body file a read lists, by its path alone: a reader fetches its bytes with ReadBody when it opens the run.
+type RecordStreamBodyFile struct {
+	Path string
+}
+
 // One push to a sidecar's own stream in a record-class repo, which §11.8's refs table lets only that sidecar write,
 // and only by creating paths.
 type RecordStreamPush struct {
@@ -90,6 +108,9 @@ type RecordStreamPush struct {
 	SlotRows []*RecordSlotRow
 	// In the push's order, each creating its path.
 	Entries []*RecordStreamEntry
+	// The body files the push creates, each at s/<n> (DESIGN-COMPUTE §24.5). A push holds at least one entry: a body
+	// rides beside its header or in a later push of the writer's that carries one.
+	Bodies []*RecordStreamBody
 	// §7.9's pin the push declares at least, at which readers judge the writer's right (RECORD.md section 5.5's right
 	// step): a binding may declare a newer pin of the same chain, its own newest verified state's, and refuses while
 	// that state is below this one, so no entry's policy_version passes the pin it is judged at.
@@ -127,6 +148,8 @@ type RecordStreamVersion struct {
 	AuthPin    *bridge.AuthPin
 	SlotId     Id
 	Entries    []*RecordStreamEntry
+	// The body files the push created, listed by path and never read here (DESIGN-COMPUTE §24.5): ReadBody fetches one.
+	Bodies []*RecordStreamBodyFile
 	// C_v, the ref's chain value at this version (§11.8), which a checkpoint's frontier carries beside the version.
 	// Empty from a binding that does not state it.
 	Chain []byte
@@ -233,8 +256,12 @@ type RecordStreams interface {
 	Append(ctx context.Context, repoId Id, push *RecordStreamPush) (*RecordStreamCommit, error)
 	// The repo's streams, one a writer, with their versions.
 	Streams(ctx context.Context, repoId Id) ([]*RecordStreamHead, error)
-	// A stream's committed pushes after afterVersion, oldest first.
+	// A stream's committed pushes after afterVersion, oldest first, each body file listed by path alone.
 	ReadStream(ctx context.Context, repoId Id, writerSidecarId Id, afterVersion uint64) ([]*RecordStreamVersion, error)
+	// The sealed body at path, s/<n>, that version of the writer's stream created (DESIGN-COMPUTE §24.5): fetched on
+	// demand, verified as ReadStream verifies an entry file. NOT_FOUND where that version created no such file, and
+	// for one a BASE has removed.
+	ReadBody(ctx context.Context, repoId Id, writerSidecarId Id, version uint64, path string) ([]byte, error)
 	// A slot object's live rows. NOT_FOUND for a slot the repo never held.
 	ReadSlot(ctx context.Context, repoId Id, slotId Id) (*RecordSlot, error)
 	// Commits one deposit to this sidecar's own deposit ref of repo, as Append does a push.
@@ -276,6 +303,11 @@ func (self RecordStreamsUnavailable) ReadStream(ctx context.Context, repoId Id, 
 
 // Refuses.
 func (self RecordStreamsUnavailable) ReadSlot(ctx context.Context, repoId Id, slotId Id) (*RecordSlot, error) {
+	return nil, ErrRecordStreamsUnavailable
+}
+
+// Refuses.
+func (self RecordStreamsUnavailable) ReadBody(ctx context.Context, repoId Id, writerSidecarId Id, version uint64, path string) ([]byte, error) {
 	return nil, ErrRecordStreamsUnavailable
 }
 

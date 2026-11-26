@@ -47,6 +47,15 @@
 // DESIGN-COMPUTE.md §6.8's ModelCallBody fields 11 to 14 (INFER-M11-07; CONTRACTS C-26): the attestation of a TEE call
 // §5 verified, the route, the catalog version and the platform field, attested only with that attestation, and the
 // import of protocol/attest.proto, whose AttestationResult field 11 holds. Field 15, CallContext, is CTXH-M11-01's.
+//
+// DESIGN-COMPUTE.md §24.5's session wire (CTXH-M11-01; CONTRACTS C-26): kinds 54 session_entry's and 55 session_blob's
+// bodies, SessionEntryBody, SessionPart and SessionBlobBody, as §24.5's fence writes them; CallContext, ModelCallBody
+// field 15; RecordEntry.body_apart = 6, a session entry's sealed body filed apart from its header, at s/<n> beside its
+// e/<n> (Appendix D's RECORD.md 5.2 to 5.7 rows), which every reader learns at format 1; Coverage.bodies_dropped = 8
+// with SeqRange (Appendix D's Coverage row); and ApprovalNotice, owner decision 573's per-request notice at
+// a/<approval_id>, shaped as §16.11's DirectoryNotice (compute-plan-approval-notice-bytes, QD-1234). Each travels only
+// sealed, inside an entry or a vault file, so none adds a server-visible field (§24.11), and design_unfenced_test.go
+// writes what no fence does yet: body_apart, bodies_dropped, SeqRange and ApprovalNotice.
 
 syntax = "proto3";
 package urnetwork.sidecar;
@@ -91,6 +100,9 @@ message RecordEntry {                       // header: §6 Signed, purpose recor
   bytes key_slot_id = 3;                    // with key_index, the body key's slot object and index (Erasure)
   uint32 version = 4;                       // 1
   uint32 key_index = 5;
+  bool body_apart = 6;                      // a session entry's (kinds 54, 55; DESIGN-COMPUTE §24.5): sealed_body
+                                            // empty, the sealed body alone at s/<n>, the n of this e/<n>, opened with
+                                            // the key row named here; read from format 1 (RECORD.md section 5.7)
 }
 // The writer's identity key signs the header; from v1 an agent subkey may sign inside the body (§5.5).
 
@@ -369,7 +381,10 @@ message Coverage {                          // at run end, or after 10 min idle 
   repeated string gaps = 5;  // hook failures, missed events, changed configs, downtime, truncation,
                              // oversize, bypass modes, redactions
   uint64 first_seq = 6; uint64 last_seq = 7;
+  repeated SeqRange bodies_dropped = 8;     // DESIGN-COMPUTE §24.5, §24.10: the writer's seqs in this log whose
+                                            // session bodies its spool dropped, gap spool_drop, ascending, apart
 }
+message SeqRange { uint64 first = 1; uint64 last = 2; }   // first <= last, from 1
 message RetentionPolicy {                   // Signed (purpose record-entry) by the log's admin
   bytes log_id = 1; uint32 class = 2;       // a kind class, announce among them (keep_days 30, 16.11)
   uint32 keep_days = 3; uint32 searchable_days = 4; bool archive = 5;
@@ -690,6 +705,61 @@ message ModelCallBody {                     // model_call (M6)
   string route = 12;                        // "local" | "tee" | "direct"; empty on a hook's or a harness's own call
   uint64 catalog_version = 13;              // the broker's catalog version a remote call named
   ModelField platform = 14;                 // evidence 4: the policy profile verified; the model stays evidence 2
+  CallContext context = 15;                 // the call's place in the run's session tree (DESIGN-COMPUTE §24.5)
+}
+
+// DESIGN-COMPUTE.md §24.5: a run's session tree, one node an entry, its large parts as blobs, and a model call's place
+// in it (M11). Kinds 54 and 55 are V's alone, raw and never indexed (I-20), and file their bodies apart (body_apart).
+message SessionEntryBody {                  // session_entry: one message of a run's session tree
+  bytes node_id = 1;                        // 16 random bytes
+  bytes parent_node_id = 2;                 // empty at a root; may name another run's node (24.7)
+  bytes parent_run_id = 3;                  // set when the parent is another run's
+  uint32 type = 4;                          // 1 message, 2 model_change, 3 thinking_level_change, 4 usage,
+                                            // 5 compaction, 6 branch_summary, 7 custom, 8 custom_message, 9 link
+  bytes item = 5;                           // the Harness's Pi v3 entry, or the gateway's API item, RFC 8785 JSON,
+                                            // after redaction and stubs (24.9); <= 16 KiB, larger parts in blobs
+  repeated SessionPart parts = 6;           // <= 64
+  bytes item_sha256 = 7;                    // of the item as recorded, its parts by their hashes
+  bytes chain_sha256 = 8;                   // SHA-256(the parent's chain_sha256 || item_sha256), a root's parent
+                                            // counting as 32 zero bytes
+  bytes same_as = 9;                        // an earlier entry of this run holding the same item; item, parts empty
+  uint32 redactions = 10; uint32 stubs = 11;  // markers in the item (24.9)
+  uint32 marks = 12;                        // from this node on the run carries: bit 0 limited_use, §25.10's
+                                            // mark; bit 1 private, §7.8's (CO-43)
+}
+message SessionPart {
+  string pointer = 1;                       // RFC 6901 pointer to the part within the item
+  bytes sha256 = 2; uint64 size = 3; string media_type = 4;
+  repeated bytes blob_entry_ids = 5;        // <= 8 session_blob entries, in order; empty when omitted
+  bool omitted = 6;                         // past 64 MiB: kept by hash and size only
+}
+message SessionBlobBody {                   // session_blob: one piece of a part
+  bytes part_sha256 = 1; uint32 index = 2; uint32 count = 3;
+  bytes content = 4;                        // <= 8 MiB, after redaction
+}
+message CallContext {                       // ModelCallBody field 15 (§6.8)
+  bytes input_node_id = 1;                  // the context's last message; the path from it to its root is the rest
+  repeated bytes output_node_ids = 2;       // what the response wrote
+  bytes system_node_id = 3;                 // the system message in force
+  bytes request_sha256 = 4;                 // SHA-256 of the InferRequest (§6.4) as recorded, RFC 8785, each
+                                            // part's bytes replaced by {pointer, sha256, size}, so pruning a
+                                            // blob leaves the call checkable (24.6)
+  bool exact = 5;                           // the recorded request is the one sent: no marker, stub or omission
+  string renderer = 6;                      // harness-<version> or gateway-<api>-<version> (24.6)
+  bytes params = 7;                         // the request's fields beside system, tools and messages, RFC 8785
+  bool sign_in_withheld = 8;                // sign-in mail withheld from this call's rendering (§23.4)
+}
+
+// a/<approval_id> in the requester's vault (owner decision 573's remedy; DESIGN-COMPUTE §24.7): one approval request's
+// hint, versionless and sealed as any vault file, which an approver's phone leases in place of the whole approval log.
+// Shaped as §16.11's DirectoryNotice (compute-plan-approval-notice-bytes, QD-1234). It names no approver and no action
+// text, and nothing about a request is trusted from it: the phone reads the request entry from its log.
+message ApprovalNotice {
+  bytes approval_id = 1; bytes requester_sidecar_id = 2;
+  uint64 entry_seq = 3;                     // the approval entry's seq in the requester's stream
+  int64 not_after_millis = 4;               // the request's own not_after_millis
+  uint32 state = 5;                         // 1 pending, 2 decided; a cancel removes the notice
+  uint32 kind = 6;                          // the request's CanonicalAction.kind, a SidecarActionKind
 }
 
 // RECORD.md section 13.1: run cost (M6).

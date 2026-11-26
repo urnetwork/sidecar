@@ -54,7 +54,10 @@
 //	counter   a token path's names are section 5.2's e/<n div 4,194,304>/<(n div 2,048) mod 2,048>/<n>: the level and
 //	          leaf directories are found once each by trying their names under the push epoch's K_path, at most
 //	          StreamLevelCount and 2,048 tries, and n by trying the leaf's 2,048 names from the one after the last
-//	          found, so a push's consecutive counters cost one try each
+//	          found, so a push's consecutive counters cost one try each; DESIGN-COMPUTE §24.5's s/<n> body files are
+//	          found the same way under s/, and any other path is refused as before
+//	bodies    a body file at s/<n> is listed by its path, never read during a sync (CTXH-M11-02): ReadBody fetches one,
+//	          walking and verifying the stream as a read does and rebuilding only that file from its version's payload
 //	hints     Subscribe leases the whole repo (EvsRepo.Subscribe) and listens to the client's verified changes, and this
 //	          binding's own commits call the callbacks too, each with no lock held
 //
@@ -386,6 +389,14 @@ func recordEvsPushDigest(repoId Id, push *RecordStreamPush) []byte {
 		recordEvsDigestWrite(digest, []byte(entry.Path), entrySha256[:])
 	}
 	recordEvsDigestWrite(digest, binary.BigEndian.AppendUint64(nil, push.AuthPin.GetVersion()), push.AuthPin.GetChain())
+	if 0 < len(push.Bodies) {
+		// DESIGN-COMPUTE §24.5's body files; a push of none keeps the digest a journal of before them holds
+		recordEvsDigestWrite(digest, []byte("bodies"))
+		for _, body := range push.Bodies {
+			bodySha256 := sha256.Sum256(body.Body)
+			recordEvsDigestWrite(digest, []byte(body.Path), bodySha256[:])
+		}
+	}
 	return digest.Sum(nil)
 }
 
@@ -476,9 +487,15 @@ func (self *RecordEvsStreams) Append(ctx context.Context, repoId Id, push *Recor
 		return nil, err
 	}
 	if journal == nil {
-		files := make([]*EvsStreamFile, 0, len(push.Entries))
+		files := make([]*EvsStreamFile, 0, len(push.Entries)+len(push.Bodies))
 		for _, entry := range push.Entries {
 			files = append(files, &EvsStreamFile{Path: entry.Path, Content: entry.Entry})
+		}
+		for _, body := range push.Bodies {
+			if _, ok := RecordBodyPathCounter(body.Path); !ok {
+				return nil, fmt.Errorf("%w: a body file at no body path", ErrRecordDraftInvalid)
+			}
+			files = append(files, &EvsStreamFile{Path: body.Path, Content: body.Body})
 		}
 		built, err := repo.BuildStreamPush(ctx, &EvsStreamPushArgs{
 			RefName:  RecordStreamRefName(push.WriterSidecarId),
@@ -573,10 +590,15 @@ func (self *RecordEvsStreams) Streams(ctx context.Context, repoId Id) ([]*Record
 	return streams, nil
 }
 
-// One push epoch's search of section 5.2's names: see the file header's counter row.
+// One push epoch's search of section 5.2's names under e/, and DESIGN-COMPUTE §24.5's under s/: see the file header's
+// counter row.
 type recordStreamCounters struct {
 	pathKey *EvsPathKey
-	// e/'s token, then each level and leaf directory found, by token: a level's a, a leaf's n div 2,048
+	// e/'s tree, then s/'s
+	trees []*recordStreamCounters
+	// a tree's prefix, e/ or s/
+	prefix string
+	// the tree's root token, then each level and leaf directory found, by token: a level's a, a leaf's n div 2,048
 	root          EvsToken
 	levelIndexes  map[EvsToken]uint64
 	leafIndexes   map[EvsToken]uint64
@@ -585,19 +607,37 @@ type recordStreamCounters struct {
 	next          uint64
 }
 
-// A search under pathKey.
+// A search under pathKey, over e/ and s/.
 func newRecordStreamCounters(pathKey *EvsPathKey) (*recordStreamCounters, error) {
-	root, err := EvsPathToken(pathKey, EvsToken{}, []byte(strings.TrimSuffix(recordStreamPathPrefix, "/")))
-	if err != nil {
-		return nil, err
+	counters := &recordStreamCounters{pathKey: pathKey}
+	for _, prefix := range []string{recordStreamPathPrefix, recordBodyPathPrefix} {
+		root, err := EvsPathToken(pathKey, EvsToken{}, []byte(strings.TrimSuffix(prefix, "/")))
+		if err != nil {
+			return nil, err
+		}
+		counters.trees = append(counters.trees, &recordStreamCounters{
+			pathKey:       pathKey,
+			prefix:        prefix,
+			root:          root,
+			levelIndexes:  map[EvsToken]uint64{},
+			leafIndexes:   map[EvsToken]uint64{},
+			leafLevelsHit: map[EvsToken]bool{},
+		})
 	}
-	return &recordStreamCounters{
-		pathKey:       pathKey,
-		root:          root,
-		levelIndexes:  map[EvsToken]uint64{},
-		leafIndexes:   map[EvsToken]uint64{},
-		leafLevelsHit: map[EvsToken]bool{},
-	}, nil
+	return counters, nil
+}
+
+// The tree a token path's first token roots, nil for none.
+func (self *recordStreamCounters) tree(tokenPath EvsTokenPath) *recordStreamCounters {
+	if len(tokenPath) == 0 {
+		return nil
+	}
+	for _, tree := range self.trees {
+		if tree.root == tokenPath[0] {
+			return tree
+		}
+	}
+	return nil
 }
 
 // A name's bytes: its decimal number.
@@ -638,12 +678,23 @@ func (self *recordStreamCounters) leaf(levelToken EvsToken, level uint64, leafTo
 }
 
 // The plaintext path of the stream directory whose token path is tokenPath: "" the root, e, e/<a> or e/<a>/<b>, the
-// names section 5.2's paths hold; false for a token path no stream directory has within levelCount level directories.
+// names section 5.2's paths hold, and s's alike; false for a token path no stream directory has within levelCount
+// level directories.
 func (self *recordStreamCounters) directory(tokenPath EvsTokenPath, levelCount int) (string, bool, error) {
-	prefix := strings.TrimSuffix(recordStreamPathPrefix, "/")
-	switch {
-	case len(tokenPath) == 0:
+	if len(tokenPath) == 0 {
 		return "", true, nil
+	}
+	tree := self.tree(tokenPath)
+	if tree == nil {
+		return "", false, nil
+	}
+	return tree.treeDirectory(tokenPath, levelCount)
+}
+
+// directory within this tree.
+func (self *recordStreamCounters) treeDirectory(tokenPath EvsTokenPath, levelCount int) (string, bool, error) {
+	prefix := strings.TrimSuffix(self.prefix, "/")
+	switch {
 	case 3 < len(tokenPath) || tokenPath[0] != self.root:
 		return "", false, nil
 	case len(tokenPath) == 1:
@@ -663,9 +714,26 @@ func (self *recordStreamCounters) directory(tokenPath EvsTokenPath, levelCount i
 	return fmt.Sprintf("%s/%d/%d", prefix, level, leaf%recordStreamLeafEntryCount), true, nil
 }
 
-// The counter n whose stream path is tokenPath, false for a token path no stream path names within levelCount
-// level directories.
+// The counter n whose stream path, e/<n>, is tokenPath; false for a token path no stream path names within
+// levelCount level directories, a body path among them.
 func (self *recordStreamCounters) counter(tokenPath EvsTokenPath, levelCount int) (uint64, bool, error) {
+	n, prefix, ok, err := self.fileCounter(tokenPath, levelCount)
+	return n, ok && prefix == recordStreamPathPrefix, err
+}
+
+// The counter n whose stream path, e/<n>, or body path, s/<n>, is tokenPath, with that path's prefix; false for a
+// token path neither names within levelCount level directories.
+func (self *recordStreamCounters) fileCounter(tokenPath EvsTokenPath, levelCount int) (uint64, string, bool, error) {
+	tree := self.tree(tokenPath)
+	if tree == nil {
+		return 0, "", false, nil
+	}
+	n, ok, err := tree.treeCounter(tokenPath, levelCount)
+	return n, tree.prefix, ok, err
+}
+
+// counter within this tree.
+func (self *recordStreamCounters) treeCounter(tokenPath EvsTokenPath, levelCount int) (uint64, bool, error) {
 	if len(tokenPath) != 4 || tokenPath[0] != self.root {
 		return 0, false, nil
 	}
@@ -905,17 +973,42 @@ func (self *RecordEvsStreams) streamHead(ctx context.Context, repo *EvsRepo, ref
 
 // A stream's committed pushes after afterVersion, oldest first: see the file header's read and counter rows.
 func (self *RecordEvsStreams) ReadStream(ctx context.Context, repoId Id, writerSidecarId Id, afterVersion uint64) ([]*RecordStreamVersion, error) {
-	return self.readStream(ctx, repoId, writerSidecarId, afterVersion, nil)
+	return self.readStream(ctx, repoId, writerSidecarId, afterVersion, nil, nil)
 }
 
 // Writer recovery visits one entry at a time. Counter recovery needs only its authenticated creation path.
 func (self *RecordEvsStreams) readWriterStream(ctx context.Context, writer *recordWriterStreamRead) error {
-	_, err := self.readStream(ctx, writer.logId, writer.writerSidecarId, 0, writer)
+	_, err := self.readStream(ctx, writer.logId, writer.writerSidecarId, 0, writer, nil)
 	return err
 }
 
-// Replays the verified stream, collecting surviving entries by version or visiting files individually for writer recovery.
-func (self *RecordEvsStreams) readStream(ctx context.Context, repoId Id, writerSidecarId Id, afterVersion uint64, writer *recordWriterStreamRead) ([]*RecordStreamVersion, error) {
+// One body file a ReadBody fetches: its version and path, and what the read found there.
+type recordStreamBodyRead struct {
+	version uint64
+	path    string
+	content []byte
+	found   bool
+}
+
+// The sealed body at path that version of the writer's stream created: see the file header's bodies row. NOT_FOUND
+// for a version that created no such file, and for one a BASE removed since.
+func (self *RecordEvsStreams) ReadBody(ctx context.Context, repoId Id, writerSidecarId Id, version uint64, path string) ([]byte, error) {
+	if _, ok := RecordBodyPathCounter(path); !ok || version == 0 {
+		return nil, &RecordStreamRefusal{Code: protocol.EvsRefusalCode_EVS_REFUSAL_NOT_FOUND}
+	}
+	body := &recordStreamBodyRead{version: version, path: path}
+	if _, err := self.readStream(ctx, repoId, writerSidecarId, version-1, nil, body); err != nil {
+		return nil, err
+	}
+	if !body.found {
+		return nil, &RecordStreamRefusal{Code: protocol.EvsRefusalCode_EVS_REFUSAL_NOT_FOUND}
+	}
+	return body.content, nil
+}
+
+// Replays the verified stream, collecting surviving entries by version, visiting files individually for writer
+// recovery, or rebuilding one body file for ReadBody.
+func (self *RecordEvsStreams) readStream(ctx context.Context, repoId Id, writerSidecarId Id, afterVersion uint64, writer *recordWriterStreamRead, body *recordStreamBodyRead) ([]*RecordStreamVersion, error) {
 	repo := self.client.Repo(repoId)
 	refId, err := repo.resolveRefId(ctx, RecordStreamRefName(writerSidecarId), nil)
 	if err != nil {
@@ -954,7 +1047,7 @@ func (self *RecordEvsStreams) readStream(ctx context.Context, repoId Id, writerS
 	payloads := map[uint64]*EvsCheckedPayload{}
 	for _, statement := range walked {
 		base := statement.Statement.Push.GetFlags()&uint32(protocol.EvsPushFlag_EVS_PUSH_BASE) != 0
-		answered := afterVersion < statement.Version && !base
+		answered := afterVersion < statement.Version && !base && (body == nil || statement.Version == body.version)
 		replayed := replay.through < statement.Version
 		if !answered && !replayed && !base {
 			continue
@@ -1029,12 +1122,53 @@ func (self *RecordEvsStreams) readStream(ctx context.Context, repoId Id, writerS
 			for _, slotId := range entry.GetSlotIds() {
 				named[recordIdOf(slotId)] = true
 			}
-			n, ok, err := counters.counter(change.TokenPath, self.settings.StreamLevelCount)
+			n, prefix, ok, err := counters.fileCounter(change.TokenPath, self.settings.StreamLevelCount)
 			if err != nil {
 				return nil, err
 			}
 			if !ok {
 				return nil, fmt.Errorf("%w: a stream file at no stream path", ErrEvsEntryRefused)
+			}
+			if prefix == recordBodyPathPrefix {
+				// DESIGN-COMPUTE §24.5's body file: listed by path and never read here, but by ReadBody alone; writer
+				// recovery counts and reads entries alone
+				if writer != nil || removed[string(change.TokenPath.Bytes())] {
+					continue
+				}
+				path, err := RecordBodyPath(n)
+				if err != nil {
+					return nil, err
+				}
+				if body == nil {
+					version.Bodies = append(version.Bodies, &RecordStreamBodyFile{Path: path})
+					continue
+				}
+				if path != body.path {
+					continue
+				}
+				content, err := func() ([]byte, error) {
+					result := &evsReadResult{refId: refId, head: head, keys: keys, objects: newEvsReadObjects(self.client)}
+					defer result.objects.close()
+					verified := &EvsVerifiedPath{TokenPath: change.TokenPath, EntryBytes: change.EntryVersion, Entry: entry, Statement: statement.Statement, CommitVersion: statement.Version}
+					spill, _, _, err := repo.reconstructContent(ctx, result, verified, nil)
+					if err != nil {
+						return nil, err
+					}
+					defer spill.close()
+					return io.ReadAll(spill.reader())
+				}()
+				if errors.Is(err, ErrEvsErased) {
+					continue
+				}
+				if err != nil {
+					return nil, recordEvsRefusal(err)
+				}
+				body.content = content
+				body.found = true
+				continue
+			}
+			if body != nil {
+				continue
 			}
 			if writer != nil {
 				writer.counter = max(writer.counter, n)
@@ -1095,7 +1229,7 @@ func (self *RecordEvsStreams) readStream(ctx context.Context, repoId Id, writerS
 			m, _ := RecordStreamPathCounter(b.Path)
 			return cmp.Compare(n, m)
 		})
-		if 0 < len(version.Entries) {
+		if 0 < len(version.Entries) || 0 < len(version.Bodies) {
 			versions = append(versions, version)
 		}
 	}

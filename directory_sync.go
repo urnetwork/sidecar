@@ -482,6 +482,11 @@ func (self *directoryStreams) ReadSlot(ctx context.Context, repoId Id, slotId Id
 	return slot, nil
 }
 
+// None: the directory holds no body filed apart, DESIGN-COMPUTE §24.5's kinds being the vault's alone.
+func (self *directoryStreams) ReadBody(ctx context.Context, repoId Id, writerSidecarId Id, version uint64, path string) ([]byte, error) {
+	return nil, &RecordStreamRefusal{Code: protocol.EvsRefusalCode_EVS_REFUSAL_NOT_FOUND}
+}
+
 // Refuses.
 func (self *directoryStreams) Deposit(ctx context.Context, repoId Id, deposit *RecordStreamDeposit) (*RecordStreamCommit, error) {
 	return nil, ErrDirectoryReadOnly

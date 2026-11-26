@@ -355,9 +355,10 @@ func recordProjectionTrust(auth RecordAuthView, sidecarId Id, entry *RecordReadE
 	return RecordTrustMember
 }
 
-// Whether a kind is raw capture, whose body returns only when entry names it (RECORD.md section 5.6's stubs row).
+// Whether a kind is raw capture, whose body returns only when entry names it (RECORD.md section 5.6's stubs row):
+// transcript to model_call, and DESIGN-COMPUTE §24.5's session_entry and session_blob (§24.6).
 func recordKindRaw(kind RecordKind) bool {
-	return RecordKindTranscript <= kind && kind <= RecordKindModelCall
+	return RecordKindTranscript <= kind && kind <= RecordKindSessionBlob
 }
 
 // What record_query asks (RECORD.md section 5.6).

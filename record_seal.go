@@ -15,6 +15,12 @@
 // Only the identity key signs the header (§6.9): agent ids stay sealed inside it, and from M6 an agent subkey signs
 // inside the body (RecordEntry.version 2), never the header.
 //
+// DESIGN-COMPUTE §24.5's session entries, kinds 54 and 55, seal as any entry and file their sealed body apart
+// (CTXH-M11-02, D-CTXH-10): EntryBytes writes the RecordEntry with sealed_body empty and body_apart set, for e/<n>, and
+// BodyBytes the sealed body alone, for s/<n>. The leaf covers the signed header alone, so filing the body apart changes
+// no leaf and no chain. A deposit, which only an ingester opens, carries the entry whole, and the ingester files it
+// apart in its own stream.
+//
 // Package-level functions are safe for concurrent use. A RecordSealedEntry is not: it holds its key and salt, which
 // Clear wipes once the entry is pushed or deposited.
 
@@ -58,6 +64,8 @@ const (
 	recordEntryKeySlotIdField  = 3
 	recordEntryVersionField    = 4
 	recordEntryKeyIndexField   = 5
+	// DESIGN-COMPUTE §24.5's body_apart
+	recordEntryBodyApartField = 6
 )
 
 var (
@@ -160,6 +168,9 @@ type RecordSealedEntry struct {
 	CaptureId []byte
 	// RecordEntry.version: 2 for an agent-signed body, else 1, which 0 reads as.
 	Version uint32
+	// The kind files its body apart (RecordKind.BodyApart): EntryBytes leaves sealed_body out and sets body_apart, and
+	// BodyBytes is the body's own file.
+	BodyApart bool
 	// a version-2 entry's sealed plaintext, the AgentSignedBody its commitment covers, from its seal until the writer
 	// has taken what a copy of it opens by; never journaled apart from the sealed body
 	agentBody []byte
@@ -184,13 +195,27 @@ func (self *RecordSealedEntry) SlotRow(keyIndex uint32) *RecordSlotRow {
 
 // The RecordEntry's bytes for a stream file: the stored Signed and sealed_body, its version, and the slot row's place,
 // slotId nil and keyIndex 0 for a deposit, where the ingester re-slots it (RECORD.md section 5.4). The same arguments
-// give the same bytes, however protobuf comes to encode, so a retried push carries exactly what it carried before.
+// give the same bytes, however protobuf comes to encode, so a retried push carries exactly what it carried before. A
+// body-apart entry's, at e/<n>, leaves sealed_body out and sets body_apart, its body going to s/<n> (BodyBytes); a
+// deposit's carries the entry whole.
 func (self *RecordSealedEntry) EntryBytes(slotId *Id, keyIndex uint32) []byte {
+	return self.entryBytes(slotId, keyIndex, self.BodyApart && slotId != nil)
+}
+
+// The sealed body alone, for a body-apart entry's s/<n> file.
+func (self *RecordSealedEntry) BodyBytes() []byte {
+	return self.SealedBody
+}
+
+// EntryBytes' encoding, the body inline or apart.
+func (self *RecordSealedEntry) entryBytes(slotId *Id, keyIndex uint32, apart bool) []byte {
 	entry := make([]byte, 0, len(self.Signed)+len(self.SealedBody)+48)
 	entry = protowire.AppendTag(entry, recordEntryHeaderField, protowire.BytesType)
 	entry = protowire.AppendBytes(entry, self.Signed)
-	entry = protowire.AppendTag(entry, recordEntrySealedBodyField, protowire.BytesType)
-	entry = protowire.AppendBytes(entry, self.SealedBody)
+	if !apart {
+		entry = protowire.AppendTag(entry, recordEntrySealedBodyField, protowire.BytesType)
+		entry = protowire.AppendBytes(entry, self.SealedBody)
+	}
 	if slotId != nil {
 		entry = protowire.AppendTag(entry, recordEntryKeySlotIdField, protowire.BytesType)
 		entry = protowire.AppendBytes(entry, slotId[:])
@@ -200,6 +225,10 @@ func (self *RecordSealedEntry) EntryBytes(slotId *Id, keyIndex uint32) []byte {
 	if keyIndex != 0 {
 		entry = protowire.AppendTag(entry, recordEntryKeyIndexField, protowire.VarintType)
 		entry = protowire.AppendVarint(entry, uint64(keyIndex))
+	}
+	if apart {
+		entry = protowire.AppendTag(entry, recordEntryBodyApartField, protowire.VarintType)
+		entry = protowire.AppendVarint(entry, 1)
 	}
 	return entry
 }
@@ -419,6 +448,7 @@ func RecordSeal(env *RecordSealEnv, args *RecordSealArgs) (*RecordSealedEntry, e
 			Salt:       salt,
 			CaptureId:  bytes.Clone(args.CaptureId),
 			Version:    version,
+			BodyApart:  args.Kind.BodyApart(),
 			agentBody:  agentBody,
 		}, nil
 	})
