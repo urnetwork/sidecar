@@ -69,6 +69,8 @@ func newRouteTest(t testing.TB, fixture *sidecartest.BridgeRulesFixture, edit fu
 	self := &routeTest{t: t, clock: clock, host: sidecartest.NewFakeBridgeHost(clock.Now().Add(7 * 24 * time.Hour))}
 	settings := device.DefaultBridgeSettings()
 	settings.Clock = clock
+	// run's and the links' waits uncapped, so each timer stands at the time it waits for
+	settings.ClockCheckInterval = 0
 	settings.LinkSign = func(ctx context.Context, delegation *bridge.WindowDelegation) ([]byte, error) {
 		return []byte("signed"), nil
 	}

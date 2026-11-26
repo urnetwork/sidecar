@@ -477,14 +477,26 @@ func (self *BridgeLinkManager) wakeRun() {
 	}
 }
 
-// Keeps the links: one maintain pass at each wake, and a timer for the next time a link's state changes.
+// Has run take a pass at the clock's now and arm its timer again from it: Bridge.CheckClock's, when the device wakes or
+// its clock changes, since a timer armed before a sleep runs late by the time slept (§17.8's after sleep). Never blocks.
+func (self *BridgeLinkManager) checkClock() {
+	self.wakeRun()
+}
+
+// Keeps the links: one maintain pass at each wake, and a timer for the next time a link's state changes, capped by
+// ClockCheckInterval, so a wall-clock time such as a replaced link's drain end is read again at least that often (the
+// pass is the same either way: it acts on what is due at its now).
 func (self *BridgeLinkManager) run() {
 	defer close(self.done)
 	for {
 		next := self.maintain()
 		stop := func() bool { return false }
 		if !next.IsZero() {
-			stop = self.clock.AfterFunc(next.Sub(self.clock.Now()), self.wakeRun)
+			wait := next.Sub(self.clock.Now())
+			if interval := self.settings.ClockCheckInterval; 0 < interval && interval < wait {
+				wait = interval
+			}
+			stop = self.clock.AfterFunc(wait, self.wakeRun)
 		}
 		select {
 		case <-self.ctx.Done():
@@ -745,11 +757,14 @@ func (self *BridgeLinkManager) buildLink(link *bridgeLink) error {
 	}
 	linkCtx, linkCancel := context.WithCancel(self.ctx)
 	built := &bridgeLinkBuilt{
-		link:            link,
-		manager:         self,
-		ctx:             linkCtx,
-		cancel:          linkCancel,
-		builtAt:         self.clock.Now(),
+		link:    link,
+		manager: self,
+		ctx:     linkCtx,
+		cancel:  linkCancel,
+		// on the wall clock alone, as the window clients' strict_exp the rebuild comes before is: a monotonic reading
+		// stops while the device sleeps, so a link's age would count only its awake time, and neither a check of the
+		// clock nor the cap could bring its rebuild forward (§17.8's after sleep)
+		builtAt:         self.clock.Now().Round(0),
 		networkId:       networkId,
 		sidecarId:       sidecarId,
 		targetClientKey: clientKey,
