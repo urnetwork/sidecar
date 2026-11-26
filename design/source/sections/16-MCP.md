@@ -194,9 +194,10 @@ control mode       (CLI, apps) authority statements, admissions, OwnerConfirm, K
 
 ```text
 approval_capable(d, M) = consented(d, M) (§8.5), untagged, not ephemeral, not read_only (§7.9), and d's host
-                         renders and signs decisions: an app in local mode (SidecarApprovals), or a ur daemon
-                         through ur approve <id> confirmed on its controlling terminal or in its remote-mode
-                         app (D-MCP-14)
+                         renders and signs decisions: an app in local mode (SidecarApprovals), from M13a
+                         ur.io's page Worker while a page of M's is open (§18.8; owner decision 794), or a ur
+                         daemon through ur approve <id> confirmed on its controlling terminal or in its
+                         remote-mode app (D-MCP-14)
 device evidence          the identity key of an approval-capable d of the request's approver M, d not the
                          request's requester_sidecar_id
 host                                      signs decisions for         channels
@@ -209,8 +210,10 @@ desktop app, remote mode                  other sidecars' requests    device, af
                                                                       its confirmation (§5.6)
 agents' enclave, its running incarnation  its own requests alone      auto, under its sponsor's settings,
   (bit 3; owner decision 775)                                         which it reads from the vault
-page Worker, quick burner, tagged,        nothing                     none
-ephemeral or cloud sidecar
+ur.io's page Worker, from M13a, while a   others' requests; its own   as an app in local mode
+  page is open (owner decision 794)
+read_only page Worker, quick burner,      nothing                     none
+tagged, ephemeral or cloud sidecar
 ```
 
 A person also acknowledges a compute disclosure on an approval-capable device or with a presence key's host, on /dev/tty or in an app: the Harness's `ui_request` of kind `disclosure` is answered only by that act, never by a harness prompt, an agent, a run, MCP, an RPC `ui_response` or a server (owner decisions 765, 766; DESIGN-COMPUTE.md §2.8, §7.6). An enclave incarnation, tagged and carrying bit 3, is never approval-capable (§7.9's Enclave admissions).
@@ -2160,7 +2163,8 @@ phones        keep cards only while the directory view is open, up to PhoneMeter
               designated search indexer answering, remote search off, or a notice not yet answered; they lease
               notices for this member's targets and each own pending request's notice path, so requests and
               decisions, denials included, wake them (M8)
-console       the page Worker shows read-only views and files no request or decision (read_only)
+console       the page Worker shows read-only views and files no request or decision (read_only, until
+              M13a makes ur.io's page Worker a full member device; owner decision 794)
 sdk           GetDirectory() *SidecarDirectory, nil outside a team network: List, Get, SetRuns, SetWorker,
               Request, GetRequests, AnnounceRepo, RevokeRepo; a private flag on repo creation;
               SidecarApprovals.GetPending adds kind access_request; SidecarEvent kinds access_request,

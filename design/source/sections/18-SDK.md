@@ -52,7 +52,7 @@ Phones mirror `mailcfg`, `vault/` and `i/` in full and head-read `m/` (§11.13),
 | Mail send | fg, outbox | fg, outbox | yes (§14) | outbox |
 | Socket dial | fg | fg | yes | C4 |
 | Listen: mail, sockets, TLS | fg | fg | yes | no |
-| Approvals, admissions, alarms (18.5) | fg | fg | app or `ur approve` (for other sidecars); presence key | alarms only |
+| Approvals, admissions, alarms (18.5) | fg | fg | app or `ur approve` (for other sidecars); presence key | alarms only; on ur.io's pages from M13a, while a page is open, as an app (18.8; owner decision 794) |
 | Forwarding (§17): routes and forwards out / hosting | VPN, links after §22.9 / VPN, after C16 | VPN / VPN, after C16 | the app's VPN component, else `ur tun` / likewise, after C16 on an app's; `ur bridge` | no |
 
 iOS suspends backgrounded apps (https://developer.apple.com/documentation/backgroundtasks), and Android's sidecar role now runs only while the app is open, whether or not the VPN runs, OS-granted windows and wakes aside, as on iOS (owner decision 197), so Android 15's 6 h daily cap on `dataSync` without a VPN [R:sdk-clients] no longer bears on it; forwarding alone runs in the background, in the VPN component.
@@ -889,17 +889,19 @@ FCM   data message, priority high                  {"data":{"t":"mail","v":"42"}
 
 ```text
 ur.io:     page, labeled as served code (§2.8 EX7) -> iframe https://sidecar.ur.io/v1/ (key origin)
-             -> Worker: sidecar.wasm; the quick burner memory-only
+             -> Worker: sidecar.wasm; the quick burner memory-only; from M13a beside it the engine Worker,
+                keyless, for local models and the safety classifier (owner decisions 793, 794)
 Chrome:    extension page -port urnetwork-sidecar-v1-> service worker (relay; mints client; alarms)
              -> offscreen document (reason WORKERS; alarms re-create it) -> Worker: sidecar.wasm (IndexedDB, WebCrypto)
 Firefox:   event page -> Worker: sidecar.wasm; both unload when idle (MDN)
 meanwhile: connectNative -> `ur native-host` (stdio) -> `ur daemon` control mode (§5.8)
-carrier:   first HTTPS-only: §6 long-poll, §10, §11 (config repo too) | later wss H1 + in-band protocol.Auth (§4 C4)
+carrier:   first HTTPS-only: §6 long-poll, §10, §11 (config repo too) | wss H1 + in-band protocol.Auth (§4 C4),
+             from M13a for ur.io's page Worker (owner decision 794), the extension's Worker Later
 ```
 
-- **Phasing (owner decisions 15, 26, 76).** HTTPS-only needs neither C4 nor C17, so the page Worker, on 18.10's `sidecar_http` leg, serves ur.io/recurd from RS1 (M4) and the team console from RS2 (M6).
-- **Carrier.** C4's `GOOS=js` WebSocket carrier, templated on sdk/device_rpc_platform_js.go, needs the server to admit `chrome-extension://` ids, the `moz-extension:` scheme (per-install UUID origins, https://bugzilla.mozilla.org/show_bug.cgi?id=1372288) and the key origin `https://sidecar.ur.io`, safe since auth is a bearer frame.
-- **Identity (owner decisions 112, 114, 126, 144).** Each Worker but the quick burner is an untagged member device, admitted per §5.6 with the member's consent (§8.5) and counted in `config_admissions` (§20.4). The page Worker reads records, receipts and the config's names, tags, groups and policy (owner decisions 46, 67); it is admitted `read_only` (§7.9), so every verifier refuses what it signs but its sign-out `SidecarRevoke`, its own ReaderKeys, KeyPackages and leaf's MLS maintenance under its r scopes (§10.6), read receipts and, from §4.6's C4 (Later), HeadCheck replies, and it is never approval-capable (§16.6) or a key deliverer; until C4 it runs no HeadCheck, so a page's view is unwitnessed and shows no `witnessed_at` (§7.9's read_only row). The extension's service worker, or on ur.io the key origin by its sign-in hand-off (owner decision 219), mints one `admin_refused`, `strict_exp` top-level client declaring no egress (§20.8), re-minted under its `sidecar_id` after expiry (§5.5); the Worker gets only its token, never listens, and serves only its own pages. `nativeMessaging`, which warns of "cooperating native applications", stays optional (Firefox 87+, https://bugzil.la/1630415).
+- **Phasing (owner decisions 15, 26, 76, 794).** HTTPS-only needs neither C4 nor C17, so the page Worker, on 18.10's `sidecar_http` leg, serves ur.io/recurd from RS1 (M4) and the team console from RS2 (M6). From M13a ur.io works fully like the apps (owner decision 794): its page Worker, a full member device (identity, below), runs the apps' Harness, its runs recorded in EVS (DESIGN-COMPUTE.md §7.5, §7.7), and reaches over C4, with the full connect client on 18.10's `sidecar_page` leg, both brought forward to M13a for it, what the apps reach beyond URnetwork's own hosts, its tools and direct providers and, from M14, its attach to the person's remote harnesses; URnetwork's own hosts, evs, the api and the broker, it reaches over HTTPS. Its local models run in the browser itself, in the engine Worker (key origin, below; owner decision 793). The extension's Worker stays Later.
+- **Carrier.** C4's `GOOS=js` WebSocket carrier, templated on sdk/device_rpc_platform_js.go, needs the server to admit `chrome-extension://` ids, the `moz-extension:` scheme (per-install UUID origins, https://bugzilla.mozilla.org/show_bug.cgi?id=1372288) and the key origin `https://sidecar.ur.io`, safe since auth is a bearer frame. At M13a, for ur.io's page Worker, the platform admits the key origin's Origin; the extensions' ids and scheme come with the extension's Worker (owner decision 794).
+- **Identity (owner decisions 112, 114, 126, 144, 794).** Each Worker but the quick burner is an untagged member device, admitted per §5.6 with the member's consent (§8.5) and counted in `config_admissions` (§20.4). Until M13a the page Worker reads records, receipts and the config's names, tags, groups and policy (owner decisions 46, 67); it is admitted `read_only` (§7.9), so every verifier refuses what it signs but its sign-out `SidecarRevoke`, its own ReaderKeys, KeyPackages and leaf's MLS maintenance under its r scopes (§10.6), read receipts and, from §4.6's C4, HeadCheck replies, and it is never approval-capable (§16.6) or a key deliverer; without C4 it runs no HeadCheck, so a page's view is unwitnessed and shows no `witnessed_at` (§7.9's read_only row). From M13a ur.io's page Worker is a full member device, as an app is (owner decision 794): admitted without `read_only`, it is approval-capable (§16.6) and a config signer, signs admissions, consent and config and counts toward k of n, and writes and deposits where the apps do, owner decision 704 no longer binding it; approvals and admissions reach it through §16.6's channels while a page of its member is open, and it runs HeadCheck over C4. The extension's service worker, or on ur.io the key origin by its sign-in hand-off (owner decision 219), mints one `admin_refused`, `strict_exp` top-level client declaring no egress (§20.8), re-minted under its `sidecar_id` after expiry (§5.5); the Worker gets only its token, never listens, and serves only its own pages. `nativeMessaging`, which warns of "cooperating native applications", stays optional (Firefox 87+, https://bugzil.la/1630415).
 - **Key origin (D-SDK-18).** ur.io pages frame it and message it by exact origin:
 
 ```text
@@ -909,18 +911,37 @@ pages       https://ur.io/recurd, the console and the quick tools render views a
             origin's sign-in and hands it the one-time code (owner decision 219); the team console shows the
             directory, and the drops of the repos it reads with their states and the device command; it files
             no request or decision and never dry-runs, signs or cancels a drop (read_only, admin_refused;
-            D-SDK-29)
+            D-SDK-29); from M13a, when the page Worker holds the member's whole authority, every ur.io page
+            that frames the key origin loads no third-party script, Cloudflare's script injection, analytics
+            and challenge scripts being off on those paths, and serves a CSP of its own with no inline or
+            third-party script (owner decision 794)
 key origin  https://sidecar.ur.io/v1/, served direct from the lb, never through Cloudflare, which terminates
             https://ur.io (§2.8 EX7, §19.5's W10; owner decision 211), serves only a promoted build's loader
-            and sidecar.wasm, both listed in the release's signed SHA256SUMS (§4.10), the loader pinning
-            sidecar.wasm's SHA-256 and checking it before instantiating: signed means listed in those sums,
+            and sidecar.wasm and, from M13a, the web engine's scripts, its adapter and WASM builds and ONNX
+            Runtime Web's, under /v1/engine/<version>/ (owner decisions 793, 794), all listed in the
+            release's signed SHA256SUMS (§4.10), the loader pinning sidecar.wasm's SHA-256 and checking it
+            before instantiating, as it pins each engine WASM build's, which the adapter checks before the
+            engine instantiates it: signed means listed in those sums,
             so anyone can compare the served bytes, and no browser verifies them on load, so EX7 stands
             (owner decision 221); its CSP is exactly default-src 'none'; script-src 'self'
-            'wasm-unsafe-eval'; connect-src 'self' <18.9's hosts>; frame-ancestors https://ur.io, worker-src
+            'wasm-unsafe-eval'; connect-src 'self' <18.9's hosts>, from M13a also the broker's
+            https://compute.bringyour.com and C4's WebSocket host, which the page Worker's Harness and its
+            tools reach (owner decision 794); frame-ancestors https://ur.io, worker-src
             falling back to script-src, and its framing rests on that frame-ancestors alone: the lb sends it
             no X-Frame-Options, warp's services.yml listing it among the exact hosts the lb sends none for,
             checked as no_access_log's are, while every other host keeps SAMEORIGIN (owner decision 486); its
             Worker holds IndexedDB, the non-extractable WebCrypto root key and its token
+engine      from M13a (owner decisions 793, 794): the engine Worker, a classic dedicated Worker of the key
+            origin, which the key-origin document starts beside the page Worker while a local model is
+            loaded and, for the safety classifier's ONNX Runtime Web, in any browser ur.io runs in; it holds
+            no key, token or record, opens none of the sidecar's IndexedDB databases and takes only model
+            files and requests over a MessagePort the frame hands the page Worker, which serves
+            SidecarLocalInferenceHost and SidecarSafetyClassifierHost on the js leg through it; its script
+            is served with a CSP of its own, which a Worker follows in place of its creator's, exactly
+            default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'
+            https://api.bringyour.com, for the api's model routes alone, so it reaches nothing but the key
+            origin and the api; one runs a browser, under the Web Lock ur-engine
+            (DESIGN-COMPUTE.md §6.5, §27.5)
 sign-in     the hand-off from the ur.io session (owner decision 219): the page calls /auth/code-create and
             posts the one-time code; the key origin runs /auth/code-login, mints the page Worker's client with
             POST /network/auth-client and drops the network token, and re-mints the same way under its
@@ -942,7 +963,15 @@ storage     one IndexedDB database per network, urnetwork-sidecar-v1-<network_id
             (https://webkit.org/blog/10218/full-third-party-cookie-blocking-and-more/); so the frame calls
             navigator.storage.persist(), which Safari grants by heuristics such as a Home Screen web app
             (https://webkit.org/blog/14403/updates-to-storage-policy/, 2023-08-10), and the page tells the
-            person what an eviction costs: the next Worker enrolls anew (admission, below)
+            person what an eviction costs: the next Worker enrolls anew (admission, below); Chromium grants
+            persistence only to a top-level origin, so there the framed key origin's call answers false and
+            its storage stays best-effort, and the frame still calls it, since Safari and Firefox may grant
+            it, the apps and ur.io showing a browser device as one whose keys its browser may clear
+            (owner decision 794); from M13a the browser's model files sit apart, in the origin private file
+            system, in a storage bucket of their own, ur-models, best-effort and never persisted, wherever
+            navigator.storageBuckets exists (Chromium 122+), so evicting them leaves the default bucket's
+            keychain, MLS state and token, Firefox and Safari keeping them in the default bucket
+            (owner decision 793)
 instance    one Worker per network (§22.9's two-tab case), as §5.8's flock keeps one daemon: a Worker opens
             a network's state only while it holds the Web Lock urnetwork-sidecar-<network_id> (exclusive,
             scoped like IndexedDB to the storage bucket: https://w3c.github.io/web-locks/), so only the
@@ -955,6 +984,11 @@ instance    one Worker per network (§22.9's two-tab case), as §5.8's flock kee
             start without locks (before Chrome 69, Firefox 96, Safari 15.4), while a SharedWorker would need
             Chrome 148 on Android (https://github.com/mdn/browser-compat-data, 2026-11-05); quick burners,
             memory-only, take none
+process     same-site framing lets Chrome place ur.io's page and the key origin's Workers in one renderer
+            process, so a renderer exploit delivered by ur.io's own script could reach the Workers' memory,
+            from M13a the member's whole authority; the key origin stays same-site at launch, every page that
+            frames it loading no third-party script (pages, above), and a key origin on a registrable domain
+            of its own is weighed again if such an exploit is seen in the wild (owner decision 794)
 extension   (Later) its Worker accepts only its own extension pages' ports, never a content-script relay,
             and takes the same lock
 admission   a page Worker or quick burner needs a consented device of its member online to admit it (§5.6),
@@ -963,18 +997,25 @@ admission   a page Worker or quick burner needs a consented device of its member
             eviction is a new sidecar_id, adding a config_admissions entry (§20.4); the device admitting it,
             an admin's included, and the member's consented device revoke the member's stale page Workers as
             §7.10's stale row says (D-TEAM-29), so evictions pile up only as that row bounds, and from 90%
-            of the cap admins' devices list the rest to revoke (§7.10's cleanup)
-leaves      each page Worker is a read_only MLS leaf of each group it reads, within D-KEYS-2's 1,000 per
-            group; in the config and directory groups, unless §7.9's rank makes it one of the 1,000
-            leaf-entitled, it reads by wraps (owner decisions 144, 182); sign-out removes it, and an unused
-            or evicted one goes by §10.9's stale-leaf Removes, 90 days after its leaf last changed
+            of the cap admins' devices list the rest to revoke (§7.10's cleanup); from M13a, the page Worker
+            a full member device, a page that finds its keys gone enrolls anew as a new device and the person
+            revokes the old browser device from any member device, whose list shows its last activity, and
+            an evicted browser device keeps its k-of-n seat until it is revoked, so a network should not
+            count on one to reach a quorum (owner decision 794)
+leaves      each page Worker is an MLS leaf of each group it reads, read_only until M13a
+            (owner decision 794), within D-KEYS-2's 1,000 per group; in the config and directory groups,
+            unless §7.9's rank makes it one of the 1,000 leaf-entitled, it reads by wraps
+            (owner decisions 144, 182); sign-out removes it, and an unused or evicted one goes by §10.9's
+            stale-leaf Removes, 90 days after its leaf last changed
 disclosed   script running in https://ur.io (served code, Cloudflare's altered page script, an XSS, an
             extension with page access) can request views while it runs, never the Worker's key or token, so
             that access ends with it; it can also take the account panel's network byJwt from localStorage
             while a member is signed in on that browser, and the sign-in hand-off's one-time code as it
             crosses the page, which reaches network-credential routes, but a client
             minted with it gets no admission, key or plaintext without a consented device (§5.6, §7.9; §2.4,
-            §2.10); until §4.6's C4 a page's view is unwitnessed, since its Worker runs no HeadCheck
+            §2.10); until §4.6's C4, which ur.io's page Worker takes at M13a, a page's view is unwitnessed,
+            since its Worker runs no HeadCheck; from M13a whoever controls what the key origin serves can act
+            as the member while a page is open (§2.8's EX7; owner decision 794)
 ```
 
 - **Quick burner (Q-SDK-4).** An ephemeral sidecar: a memory-only keychain (§5.6) on an `ephemeral` client (§7.7), never a genesis signer, reading the member's mailbox by ReaderWraps through an `EvsShare` (§8.8, §15.7) that the consented device admitting it signs, and reaped 30-36 min after its last poll (the lease below, §7.10); with no consented device of its member online, the page waits. It searches the mailbox's two buckets in memory only and never fetches all.
@@ -1135,6 +1176,8 @@ miss        if the leg still exceeds the goal at M4's entry, RS1 ships it under 
             gate, a size ur.io already serves, and Gn-in records the slip; never a hosted sidecar
 ```
 
+- **ur.io's page Worker from M13a (owner decision 794).** Running the apps' Harness, its tools and its attach, the page Worker builds a leg of its own, `GOOS=js GOARCH=wasm -tags sidecar_page`, not `sidecar_http`, with the full connect client over C4, which its tools need: their egress is a userspace TCP/IP stack over the network's NAT path, which C17, a build without gVisor or the IP stack, leaves out, so it would carry only sidecar streams (the compute plan's answer QD-1410). The compute families link as on the apps' leg, no constraint changed, and the server engines' hosts (`host_*.go`) and anything else that cannot run in a page carry `!sidecar_page` beside `!sidecar_http`. The size spike at M13a's entry measures the leg stripped and unstripped, with its start time in Node and a tool-using turn's linear memory, and its gate becomes that stripped size plus 10%, which `make check` holds with the leg's tags (§4.7). The extension's Worker keeps the `sidecar_http` leg, and C17 stays its streaming Worker's.
+
 ### 18.11 Alternatives considered
 
 | Option | Pros | Cons | Verdict |
@@ -1169,7 +1212,7 @@ miss        if the leg still exceeds the goal at M4's entry, RS1 ships it under 
 
 **D-SDK-5 (proposed).** 18.4's budgets are carved out of each process limit. *Why:* message pools and the soft limit are process-wide (sdk/sdk.go:554-571).
 
-**D-SDK-6 (proposed).** The browser sidecar is phased per 18.8; its Workers are member devices, the page Worker admitted `read_only`, and the quick burner a wrapped reader. *Why:* owner decisions 15, 26, 76, 114.
+**D-SDK-6 (proposed).** The browser sidecar is phased per 18.8; its Workers are member devices, the page Worker admitted `read_only` until M13a, when ur.io's becomes a full member device (owner decision 794), and the quick burner a wrapped reader. *Why:* owner decisions 15, 26, 76, 114, 794.
 
 **D-SDK-7 (proposed).** Cloud hosts climb 18.9's rungs against its host list. *Why:* owner decision 49; connect proxies only over SOCKS5.
 
@@ -1195,7 +1238,7 @@ miss        if the leg still exceeds the goal at M4's entry, RS1 ships it under 
 
 **D-SDK-18 (proposed).** Browser keys, tokens and the Worker live in a key origin that ur.io pages frame and message by exact origin, one Worker per network under a Web Lock. *Why:* one shared origin would let any ur.io XSS take the key, and two tabs' Workers over one IndexedDB would race refreshes, commits and keychain writes.
 
-**D-SDK-19 (proposed).** The page Worker builds the root with `-tags sidecar_http`: connect-facing and engine host (`host_*.go`) files are `!sidecar_http`, and the rest, token path included, use only §5.4's root types and `SidecarApi`. The root's `Id` aliases operator-core's, which imports connect, on every other leg; on this one it is a twin with the same methods and encodings, so the leg links no connect or gVisor (owner decision 276, amending 251), and at about 57.8 MB it misses 18.10's goal, a recorded slip under the miss rule's gate. Its loader starts `sidecar.wasm` with `GODEBUG=gcstoptheworld=1` (owner decision 492). *Why:* the page Worker runs no connect client, engine or `Env`, and connect's IP stack puts the 40 MB goal out of reach without C17; on js/wasm's one thread the background mark worker runs only when the program blocks, so a long CPU-bound call could leave a GC cycle open while linear memory, which never shrinks, grows.
+**D-SDK-19 (proposed).** The page Worker builds the root with `-tags sidecar_http`: connect-facing and engine host (`host_*.go`) files are `!sidecar_http`, and the rest, token path included, use only §5.4's root types and `SidecarApi`. The root's `Id` aliases operator-core's, which imports connect, on every other leg; on this one it is a twin with the same methods and encodings, so the leg links no connect or gVisor (owner decision 276, amending 251), and at about 57.8 MB it misses 18.10's goal, a recorded slip under the miss rule's gate. Its loader starts `sidecar.wasm` with `GODEBUG=gcstoptheworld=1` (owner decision 492). From M13a ur.io's page Worker builds `-tags sidecar_page` instead, with the full connect client over C4 and the server engines' hosts `!sidecar_page`, gated at its measured stripped size plus 10%, and `sidecar_http` stays the extension's Worker's (18.10; owner decision 794). *Why:* until M13a the page Worker runs no connect client, engine or `Env`, and connect's IP stack puts the 40 MB goal out of reach without C17; on js/wasm's one thread the background mark worker runs only when the program blocks, so a long CPU-bound call could leave a GC cycle open while linear memory, which never shrinks, grows.
 
 **D-SDK-20 (proposed).** The forwarding role is `sidecar/device`, importing connect and `sidecar/protocol/bridge` only, with the root files on the `ios_extension` leg's list, a computed closure every other root file is tagged out of, whose list, refused modules and descriptors `make check` holds and whose stripped size `make size` holds (18.10); through the root's `Id` the leg also links operator-core (owner decision 251), and with the replaying config head reader every leg runs it is held to 7.5 MiB, the budget owner decision 491 set from the measurement owner decision 251 asked for, amending 215's 6 MiB. *Why:* owner decision 197 puts the config follower and compiler in the VPN component, and only an allow-list keeps every other root init and descriptor out of the jetsam-bound tunnel.
 
@@ -1285,6 +1328,7 @@ miss        if the leg still exceeds the goal at M4's entry, RS1 ships it under 
 - **v1 (M6, RS2):** `GetDiscovery` in the desktop apps beside `ur daemon` (§17.7.1; owner decision 778); the team console on that Worker, with the directory's read-only views; the `sdk.Sidecar` shell, dark, with `SignEdgeLogin` for §13's `members-device`, app hosts joining it at M8; the directory's seams (`SidecarDirectory`, `CreateRepo`'s `private`, access-request approvals; §16.11's announce entries), in app hosts from M8; after M8, §17.9's egress spec on app devices.
 - **v0, app hosts (M8, BS1):** Android and iOS local mode; desktop remote mode with §5.8's pairing, the macOS app's included (owner decision 493); forwarding in every app's VPN component (owner decision 197): its keys, setup, the device handed at each start (owner decision 490), forwarding Delegation and forwarding clients, its own following, compile and signing, posture and private names on app paths, with §12.9.1's DNS-SD names owned there and answered NODATA (owner decision 778), hosting after C16 in the device client's network, iOS links after §22.9; Android's sidecar role only while the app is open; `SidecarApprovals` and alarms (owner decision 126), with the member's device list and revocation and, in team networks, revocation proposals' cosigns (D-SDK-30); wakes (owner decision 88), directory notices' included, and the directory view's policy; the receiver and coverage APIs and the indexer prompt; from M9, the send check and results (§14.5); the quick tools; the native companion (owner decision 26).
 - **v1, M10 (owner decision 169):** 18.4's search policy and targets, `SidecarSearch`, conditions and 18.7's windows on app hosts, and remote search's requester side (modes, notice, `GetIndexers` and the Hello a search sends), at the later of M10's and M8's exits, in team networks at the later of those and M6's (§23); the page Worker's search operations, conditions and cache; the quick burner's in-memory buckets; remote mode's search stream; with format 2 (§11.7), `Write`'s versioning argument, the drop calls, `History`'s states and `EVS_DROPPED` (owner decisions 173, 183) and the console's drop view, and the directory's cards and index with phones' directory "search more".
-- **Later:** [the extension's own Worker](DESIGN-DEFER.md#sdk-extension-worker), [Firefox session mode](DESIGN-DEFER.md#sdk-firefox-session-mode), [browser streams (C4)](DESIGN-DEFER.md#repo-c4-browser-carrier), [C17](DESIGN-DEFER.md#repo-c17-js-connect-build) for the extension's streaming Worker if the spike needs it; [browser Workers and ephemeral CLI hosts as remote-search requesters](DESIGN-DEFER.md#sdk-remote-search-requesters), browsers after C4.
+- **M13a, ur.io as the apps (owner decisions 793, 794):** the page Worker a full member device, approval-capable and a config signer, approvals and admissions reaching it while a page is open; the apps' Harness in it, on 18.10's `sidecar_page` leg with the full connect client over C4, which comes forward for it, the platform admitting the key origin's Origin; the engine Worker, its CSP and its files under `/v1/engine/<version>/` in the signed sums, with local models in desktop browsers with WebGPU after the browser's spike; and the pages' own CSP, with no third-party script; from M14 its attach to the person's remote harnesses (DESIGN-COMPUTE.md §7.10).
+- **Later:** [the extension's own Worker](DESIGN-DEFER.md#sdk-extension-worker), with its streams over C4, which ur.io's page Worker takes at M13a, [Firefox session mode](DESIGN-DEFER.md#sdk-firefox-session-mode), [C17](DESIGN-DEFER.md#repo-c17-js-connect-build) for the extension's streaming Worker if the spike needs it; [browser Workers and ephemeral CLI hosts as remote-search requesters](DESIGN-DEFER.md#sdk-remote-search-requesters), browsers after C4.
 - **Deferred:** DESIGN-DEFER.md holds an entry for each Later item, linked above, and for [this section's v1 set](DESIGN-DEFER.md#sdk-v1) (owner decision 587).
-- **Blocking:** §7.4's stage 1 blocks every host, stage 2 the first desktop sidecar beside the app or the extension (owner decision 45); the page Worker ships within the `sidecar_http` leg's gate or, at M4's entry, its miss rule (18.10); C16, device hosting, once M8's entry has measured its latch (owner decision 224).
+- **Blocking:** §7.4's stage 1 blocks every host, stage 2 the first desktop sidecar beside the app or the extension (owner decision 45); the page Worker ships within the `sidecar_http` leg's gate or, at M4's entry, its miss rule, and from M13a ur.io's within the `sidecar_page` leg's measured gate (18.10); C16, device hosting, once M8's entry has measured its latch (owner decision 224).

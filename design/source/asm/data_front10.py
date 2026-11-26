@@ -2978,3 +2978,40 @@ _S789 = "and the build's answers after it, owner decisions 785 to 789. "
 assert STATUS.count(_S789) == 1, 'status moved'
 STATUS = STATUS.replace(_S789, "and the build's answers after it, owner decisions 785 to 789, and the build's answers "
                         "of 2026-11-25, owner decisions 790 to 792. ")
+
+# Owner decisions 793-795 (2026-11-25): DESIGN-COMPUTE.md's CO-47 to CO-49, local models on ur.io's pages, ur.io
+# working as the apps do and model downloads from the api, folded by the thirteenth fold after the build's answers.
+INDEX += [
+    (793, "Compute: local models on ur.io",
+     "ur.io's pages run local models in the browser itself, on desktops with WebGPU, in a keyless engine Worker "
+     '(CO-47).'),
+    (794, 'Compute: ur.io as the apps',
+     "From M13a ur.io's page Worker is a full member device over C4; own devices are remote harnesses (CO-48)."),
+    (795, 'Compute: model downloads in chunks',
+     'Model files download from the api in 16 MiB chunks checked against a pinned index, resuming where they stopped '
+     '(CO-49).'),
+]
+for _n, _note in [
+        (22, " Amended by @@OD:794@@: C4 into M13a for ur.io's page Worker."),
+        (26, " Amended by @@OD:794@@: ur.io's page Worker takes C4 at M13a; the extension stays Later."),
+        (704, " Amended by @@OD:794@@: it no longer binds ur.io's page Worker, a full member device from M13a."),
+        (737, ' Extended by @@OD:794@@: from M14 own devices answer attach too.'),
+        (776, " Amended by @@OD:794@@: ur.io runs the apps' Harness, and own devices answer attach."),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 796))
+DATES.update({_n: '2026-11-25' for _n in range(793, 796)})
+_D792 = "and a listen's grant lifetime in the sdk (792), extending @@OD:687@@. "
+assert DECISIONS_INTRO.count(_D792) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D792, _D792 + "It then enters DESIGN-COMPUTE.md's owner statements of 2026-11-25, CO-47 to CO-49: local models "
+    "on ur.io's pages, in the browser itself (793); the owner's answers to their questions, ur.io working fully like "
+    "the apps, its page Worker a full member device from M13a over C4 with a js connect client, and the person's own "
+    "devices as remote harnesses (794), amending @@OD:22@@, @@OD:26@@, @@OD:704@@ and @@OD:776@@; and model files "
+    "downloaded from the api in chunks checked against a pinned index (795). ")
+_S792 = "and the build's answers of 2026-11-25, owner decisions 790 to 792. "
+assert STATUS.count(_S792) == 1, 'status moved'
+STATUS = STATUS.replace(_S792, "and the build's answers of 2026-11-25, owner decisions 790 to 792, and DESIGN-COMPUTE.md's "
+                        "local models for ur.io, ur.io as the apps and model downloads, 793 to 795. ")
