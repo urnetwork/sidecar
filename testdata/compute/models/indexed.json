@@ -1,0 +1,91 @@
+{
+  "version": 1,
+  "engines": [
+    {
+      "platform": "ios/arm64",
+      "version": "v0.19.1",
+      "libraries": [],
+      "gpu_plugins": []
+    }
+  ],
+  "models": [
+    {
+      "model": "test-mirror-a",
+      "efforts": [
+        "off"
+      ],
+      "default_effort": "off",
+      "context_window": 32768,
+      "max_output": 8192,
+      "tools": true,
+      "structured_output": true,
+      "modalities": [
+        "text"
+      ],
+      "license": "Apache-2.0",
+      "min_memory_byte_count": 4294967296,
+      "accelerators": [
+        "cpu",
+        "gpu"
+      ],
+      "files": [
+        {
+          "name": "test-mirror-a.litertlm",
+          "url": "https://hub.example/litert-community/test-mirror-a-litert-lm/resolve/0123456789abcdef0123456789abcdef01234567/test-mirror-a.litertlm",
+          "byte_count": 2621440,
+          "sha256": "35aeff7e048974ee23c365c8faf6bcb868ca0529c69309a00f6cde98bfbf89ce",
+          "index_sha256": "2efd2b8d5093e0523a4cf45604b02185378275dd76327b75085588cea23176f7"
+        },
+        {
+          "name": "test-mirror-b-gpu.litertlm",
+          "url": "https://hub.example/litert-community/test-mirror-b-litert-lm/resolve/89abcdef0123456789abcdef0123456789abcdef/gpu/test-mirror-b-gpu.litertlm",
+          "byte_count": 1048577,
+          "sha256": "7c7a4592cb23381f1bb73356d5bff522b62e870243fa1d4bf64189ddd2cba5c7",
+          "index_sha256": "eb6c79db833a947ccbf62212fc9f9654aaecacae4cbc4b0da191d4c066e89609",
+          "accelerator": "gpu",
+          "platforms": [
+            "ios/arm64",
+            "android/arm64"
+          ]
+        }
+      ],
+      "decode_rates": [
+        {
+          "device": "reference phone",
+          "accelerator": "gpu",
+          "tokens_per_second": 52
+        }
+      ]
+    },
+    {
+      "model": "test-mirror-b",
+      "efforts": [
+        "off"
+      ],
+      "default_effort": "off",
+      "context_window": 32768,
+      "max_output": 8192,
+      "tools": false,
+      "structured_output": false,
+      "modalities": [
+        "text"
+      ],
+      "license": "Apache-2.0",
+      "min_memory_byte_count": 2147483648,
+      "accelerators": [
+        "gpu"
+      ],
+      "files": [
+        {
+          "name": "test-mirror-b-gpu.litertlm",
+          "url": "https://hub.example/litert-community/test-mirror-b-litert-lm/resolve/89abcdef0123456789abcdef0123456789abcdef/gpu/test-mirror-b-gpu.litertlm",
+          "byte_count": 1048577,
+          "sha256": "7c7a4592cb23381f1bb73356d5bff522b62e870243fa1d4bf64189ddd2cba5c7",
+          "index_sha256": "eb6c79db833a947ccbf62212fc9f9654aaecacae4cbc4b0da191d4c066e89609",
+          "accelerator": "gpu"
+        }
+      ],
+      "decode_rates": []
+    }
+  ]
+}
