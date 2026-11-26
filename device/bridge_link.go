@@ -757,11 +757,14 @@ func (self *BridgeLinkManager) buildLink(link *bridgeLink) error {
 	}
 	linkCtx, linkCancel := context.WithCancel(self.ctx)
 	built := &bridgeLinkBuilt{
-		link:            link,
-		manager:         self,
-		ctx:             linkCtx,
-		cancel:          linkCancel,
-		builtAt:         self.clock.Now(),
+		link:    link,
+		manager: self,
+		ctx:     linkCtx,
+		cancel:  linkCancel,
+		// on the wall clock alone, as the window clients' strict_exp the rebuild comes before is: a monotonic reading
+		// stops while the device sleeps, so a link's age would count only its awake time, and neither a check of the
+		// clock nor the cap could bring its rebuild forward (§17.8's after sleep)
+		builtAt:         self.clock.Now().Round(0),
 		networkId:       networkId,
 		sidecarId:       sidecarId,
 		targetClientKey: clientKey,

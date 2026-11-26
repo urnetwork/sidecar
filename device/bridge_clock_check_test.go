@@ -5,8 +5,8 @@
 // a check with nothing due arms a late wait again; a phone's settings take no cap, and the desktop's cap reads the
 // clock again, publishing nothing short of the time and ending what lapsed once it has passed; a revocation publishes
 // at once and a check leaves it in force; a check is safe from a change callback, from many goroutines and after
-// Close; and the link manager's wait takes both the check, which ends a replaced link's drain the device slept past,
-// and the cap.
+// Close; the link manager's wait takes both the check, which ends a replaced link's drain the device slept past, and
+// the cap; and a link's age counts on the wall clock, so its rebuild is the check's to bring forward too.
 
 package device_test
 
@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -391,5 +392,27 @@ func TestBridgeClockCheckIntervalCapsTheLinksWaitOnADesktop(t *testing.T) {
 	clockCheckTestAwaitTimer(t, test.clock, start.Add(2*interval))
 	if opened.Closed() {
 		t.Fatal("a capped wait closed a link short of its idle")
+	}
+}
+
+// A link's age counts on the wall clock, as the window clients' strict_exp it rebuilds before does: on real time its
+// build time carries no monotonic reading, which stops while the device sleeps, so the rebuild 6 days on is judged by
+// the wall clock and a check of the clock or the cap brings it forward after a sleep.
+func TestBridgeLinkAgeCountsOnTheWallClock(t *testing.T) {
+	test := newLinkTest(t, func(settings *device.BridgeSettings) {
+		// real time, whose readings carry a monotonic clock
+		settings.Clock = nil
+	})
+	if !strings.Contains(time.Now().String(), " m=") {
+		t.Fatal("CONTROL FAILED: real time carries no monotonic reading here")
+	}
+	link := test.link(4)
+	test.open(link)
+	builtAt, ok := test.manager.LinkBuiltAtForTest(link)
+	if !ok {
+		t.Fatal("the link has no build")
+	}
+	if strings.Contains(builtAt.String(), " m=") {
+		t.Fatalf("the link's build time %v carries a monotonic reading", builtAt)
 	}
 }
