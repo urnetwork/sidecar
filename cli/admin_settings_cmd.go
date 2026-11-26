@@ -21,6 +21,12 @@
 // not yet, or only the network's Owners and Admins can, whom it names. Otherwise the question says the feature stays
 // on, since no command turns one off, and which of the network's sidecars would pause until they update; on a yes the
 // Confirm method admin.settings.feature files it (sidecar.TurnOnAuthFeature), which the daemon refuses as the root does.
+//
+// The show, and a change once filed, also list the config head's carried records (D-TEAM-26; owner decision 699;
+// QD-1207): its ServiceSettings and VersioningRules whose signer no longer stands as one who may sign them, each with
+// the signer, its member, why it no longer stands and who files another (sidecar.CarriedConfigRecords). Each stands
+// under that signer, as every reader holds it, until an Owner or Admin, or for VersioningRules a Network admin, files a
+// fresh one; a device that could not read the head's records now says so.
 
 package main
 
@@ -29,6 +35,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/docopt/docopt-go"
 
@@ -78,6 +85,32 @@ type urAdminSettingsReply struct {
 	RecordRequired string `json:"record_required,omitempty"`
 	// Each authorization feature as this device sees it, in bit order; absent where the daemon could not say.
 	Features []*sidecar.AuthFeatureStatus `json:"features,omitempty"`
+	// The head's records whose signer no longer stands, for an Owner or Admin to file anew (QD-1207); empty while every
+	// record's signer stands.
+	Carried []*sidecar.ConfigCarriedRecord `json:"carried,omitempty"`
+	// The daemon could not read the head's records now, so Carried says nothing.
+	CarriedUnknown bool `json:"carried_unknown,omitempty"`
+}
+
+// What lists the head's carried records: a Sidecar is one.
+type urAdminCarriedLister interface {
+	CarriedConfigRecords(ctx context.Context) ([]*sidecar.ConfigCarriedRecord, error)
+}
+
+var _ urAdminCarriedLister = (*sidecar.Sidecar)(nil)
+
+// Lists into reply the head's records whose signer no longer stands, or that the daemon could not say; nothing where
+// the settings themselves are unknown, since a device that opens no head holds no record.
+func urAdminSettingsListCarried(ctx context.Context, lister urAdminCarriedLister, reply *urAdminSettingsReply) {
+	if reply.Unknown {
+		return
+	}
+	carried, err := lister.CarriedConfigRecords(ctx)
+	if err != nil {
+		reply.CarriedUnknown = true
+		return
+	}
+	reply.Carried = carried
 }
 
 // The feature named name among the reply's, nil if absent.
@@ -170,6 +203,7 @@ func urAdminSettingsMethods(target urDaemonTarget) []*sidecar.DaemonMethod {
 				if statuses, err := call.Sidecar.AuthFeatureStatuses(); err == nil {
 					reply.Features = statuses
 				}
+				urAdminSettingsListCarried(ctx, call.Sidecar, reply)
 				return reply, nil
 			},
 		},
@@ -194,7 +228,10 @@ func urAdminSettingsMethods(target urDaemonTarget) []*sidecar.DaemonMethod {
 				if err != nil {
 					return nil, err
 				}
-				return urAdminSettingsReplyOf(filed), nil
+				// the save returns once this device took the base naming the head, so the listing is that head's
+				reply := urAdminSettingsReplyOf(filed)
+				urAdminSettingsListCarried(ctx, call.Sidecar, reply)
+				return reply, nil
 			},
 		},
 		{
@@ -309,6 +346,55 @@ func printUrAdminSettings(cli *urCli, reply *urAdminSettingsReply) {
 			printUrAdminSettingsFeature(cli, status)
 		}
 	}
+	switch {
+	case reply.CarriedUnknown:
+		cli.printf("carried records: not known here, since this device could not read the config head's records now\n")
+	case 0 < len(reply.Carried):
+		cli.printf("carried records, each standing under a signer who no longer stands until another is filed:\n")
+		for _, carried := range reply.Carried {
+			if carried != nil {
+				cli.printf("  %s\n", urAdminCarriedLine(carried))
+			}
+		}
+	}
+}
+
+// One carried record as ur lists it: the record, its signer and the signer's member, why the signer no longer stands,
+// and who files another with which command (§7.9's records table).
+func urAdminCarriedLine(carried *sidecar.ConfigCarriedRecord) string {
+	signer := carried.SignerId.String()
+	if carried.MemberId != nil {
+		signer += " of member " + carried.MemberId.String()
+	}
+	why := func() string {
+		switch carried.Why {
+		case sidecar.ConfigCarriedRevoked:
+			if carried.MemberRemoved {
+				return fmt.Sprintf("revoked at position %d, its member no longer the network's", carried.At)
+			}
+			return fmt.Sprintf("revoked at position %d", carried.At)
+		case sidecar.ConfigCarriedParked:
+			return fmt.Sprintf("parked at position %d", carried.At)
+		case sidecar.ConfigCarriedExpired:
+			return fmt.Sprintf("its admission ended at %s", time.UnixMilli(carried.NotAfterMs).UTC().Format(time.RFC3339))
+		case sidecar.ConfigCarriedRemoved:
+			return "its member is no longer the network's"
+		case sidecar.ConfigCarriedTagged:
+			return "a tagged sidecar, which signs no such record"
+		case sidecar.ConfigCarriedRole:
+			return fmt.Sprintf("its member's role is now %s, which does not sign it", carried.Role)
+		case sidecar.ConfigCarriedUnlisted:
+			return "the network's rows no longer hold it"
+		case sidecar.ConfigCarriedSignature:
+			return "its signature does not verify under the key its row admits"
+		}
+		return carried.Why
+	}
+	filer, command := "an Owner or Admin", "ur admin settings with any option"
+	if carried.Record == sidecar.ConfigHeadVersioningRulesPath {
+		filer, command = "an Owner, Admin or Network admin", "ur admin versioning --rules"
+	}
+	return fmt.Sprintf("%s: signed by %s, %s; %s files another: %s", carried.Record, signer, why(), filer, command)
 }
 
 // One feature's line.
