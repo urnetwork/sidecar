@@ -238,8 +238,9 @@ func TestEngineDefaultHelperPath(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		return
 	}
-	bundled := filepath.Join(directory, "ur.app", "Contents", "MacOS", "ur")
-	want := filepath.Join(directory, "ur.app", "Contents", "Helpers", "ur-engine.app", "Contents", "MacOS", "ur-engine")
+	// paths within the bundle, slash-separated as the bundle's layout is written
+	bundled := filepath.Join(directory, filepath.FromSlash("ur.app/Contents/MacOS/ur"))
+	want := filepath.Join(directory, filepath.FromSlash("ur.app/Contents/Helpers/ur-engine.app/Contents/MacOS/ur-engine"))
 	if got := inferEngineDefaultHelperPath(bundled); got != want {
 		t.Errorf("inside ur.app: %s, want %s", got, want)
 	}
@@ -258,7 +259,7 @@ func TestEngineDefaultHelperPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want = filepath.Join(filepath.Dir(resolved), "..", "Helpers", "ur-engine.app", "Contents", "MacOS", "ur-engine")
+	want = filepath.Join(filepath.Dir(resolved), filepath.FromSlash("../Helpers/ur-engine.app/Contents/MacOS/ur-engine"))
 	if got := inferEngineDefaultHelperPath(link); got != want {
 		t.Errorf("through a link: %s, want %s", got, want)
 	}
