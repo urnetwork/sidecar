@@ -87,11 +87,30 @@ type inferModelsListAnswer struct {
 	Models []*inferModelsListEntry `json:"models"`
 }
 
-func (self *inferModelsListTool) Name() string        { return inferModelsListToolName }
-func (self *inferModelsListTool) Description() string { return inferModelsListDescription }
-func (self *inferModelsListTool) Schema() []byte      { return []byte(inferModelsListSchema) }
-func (self *inferModelsListTool) Mode() string        { return HarnessToolParallel }
-func (self *inferModelsListTool) Tier() string        { return HarnessToolTierRead }
+// See HarnessTool.
+func (self *inferModelsListTool) Name() string {
+	return inferModelsListToolName
+}
+
+// See HarnessTool.
+func (self *inferModelsListTool) Description() string {
+	return inferModelsListDescription
+}
+
+// See HarnessTool.
+func (self *inferModelsListTool) Schema() []byte {
+	return []byte(inferModelsListSchema)
+}
+
+// See HarnessTool: listings run beside one another.
+func (self *inferModelsListTool) Mode() string {
+	return HarnessToolParallel
+}
+
+// See HarnessTool: R, a read of this device's catalog and checks.
+func (self *inferModelsListTool) Tier() string {
+	return HarnessToolTierRead
+}
 
 // A name as a model reads it: plain where a signed source vouches for it; else only within §6.3's grammar and the
 // settings' bound, between the untrusted-data markers, and dropped otherwise.

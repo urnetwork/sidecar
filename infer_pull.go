@@ -448,6 +448,7 @@ type inferPullCounter struct {
 	report func(count int64)
 }
 
+// See io.Writer: hashes and counts data, then reports the count.
 func (self *inferPullCounter) Write(data []byte) (int, error) {
 	self.digest.Write(data)
 	self.count += int64(len(data))
