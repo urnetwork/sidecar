@@ -6,7 +6,7 @@
  ],
  "Q-CTX-2": [
   "decided",
-  "decided (implied by owner decision 76)",
+  "decided (implied by owner decision 76); amended (owner decision 794, 2026-11-25)",
   "owner"
  ],
  "Q-CTX-3": [
@@ -36,7 +36,7 @@
  ],
  "Q-TRUST-4": [
   "decided",
-  "decided (owner decision 76)",
+  "decided (owner decision 76); amended (owner decision 794, 2026-11-25)",
   "owner"
  ],
  "Q-TRUST-5": [
@@ -116,7 +116,7 @@
  ],
  "Q-REPO-2": [
   "decided",
-  "decided (owner decision 22)",
+  "decided (owner decision 22); amended (owner decision 794, 2026-11-25)",
   "owner"
  ],
  "Q-REPO-3": [

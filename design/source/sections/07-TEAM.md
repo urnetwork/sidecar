@@ -806,11 +806,12 @@ forwarding  (D-TEAM-33; owner decision 197) a Delegation with forward set is its
             alike: past that point the replay row already refuses its Signed bytes and nothing admits under a
             non-live forwarding key, a DelegationRevoke naming a dropped id is refused as unknown, and holder
             sets read only live rows (owner decision 309)
-read_only   (D-TEAM-24) page Workers are admitted read_only (§18.8); every verifier (api's, members' devices,
-            gkm, evs) accepts from such a device only its own SidecarRevoke (sign-out), its own key upkeep
+read_only   (D-TEAM-24) page Workers are admitted read_only (§18.8) until M13a, when ur.io's page Worker
+            becomes a full member device, admitted without it (owner decision 794); every verifier (api's,
+            members' devices, gkm, evs) accepts from such a device only its own SidecarRevoke (sign-out), its own key upkeep
             under its r scopes at gkm (§10.6's scopes: its ReaderKeys, signed reader-key, its KeyPackages,
             whose credentials it signs mls-credential, and its leaf's path-only commits, resyncs and acks),
-            leaving, `read` record entries and receipt deposits (§16.8) and, from §4.6's C4 (Later), HeadCheck
+            leaving, `read` record entries and receipt deposits (§16.8) and, from §4.6's C4, HeadCheck
             replies (until then a page Worker runs no HeadCheck: it neither witnesses nor is witnessed, raises
             no unwitnessed alarm, seals nothing and shows no witnessed_at, keeping its digests and newest 64
             KiB as retain says but uploading nothing, since the site-loss upload refuses read_only devices),
@@ -1602,7 +1603,7 @@ All three rename routes (server/controller/account_controller.go:13,160-256) cal
 
 **D-TEAM-23 (proposed).** JIT links an IdP identity to an existing user only after that user logs in with its existing credential in the same flow (7.6). *Why:* a verified-domain email alone would hand a pre-registered account to the IdP.
 
-**D-TEAM-24 (proposed).** `SidecarAdmit.capabilities.read_only` limits a device to reading, its own sign-out, its own key upkeep (ReaderKeys, KeyPackages, its leaf's path-only commits, resyncs and acks, under the r scopes §10.6 maps), receipts and HeadCheck; it is never one of k, and never delivers a key. *Why:* a read-only browser must not carry its member's signing authority (owner decision 76's served code).
+**D-TEAM-24 (proposed).** `SidecarAdmit.capabilities.read_only` limits a device to reading, its own sign-out, its own key upkeep (ReaderKeys, KeyPackages, its leaf's path-only commits, resyncs and acks, under the r scopes §10.6 maps), receipts and HeadCheck; it is never one of k, and never delivers a key. From M13a ur.io's page Worker is admitted without it, a full member device (owner decision 794). *Why:* a read-only browser must not carry its member's signing authority (owner decision 76's served code), which the owner chose to give ur.io's page Worker at M13a, accepting EX7's widened label (§2.8).
 
 **D-TEAM-25 (proposed).** SCIM removals deny at once and are cryptographic only once an admin device, or the admin's indexer that `ServiceSettings.scim_signer` names (owner decision 150), signs the MemberRevoke (7.6). *Why:* a server queue is not a removal.
 

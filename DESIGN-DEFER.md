@@ -33,7 +33,7 @@ A design-records pass that folds a deferral adds its entry here in the same chan
 
 ## Index
 
-107 entries, grouped by the DESIGN.md section that owns the deferred thing. "Described in" lists the subsections of DESIGN.md that point at the entry.
+106 entries, grouped by the DESIGN.md section that owns the deferred thing. "Described in" lists the subsections of DESIGN.md that point at the entry.
 
 | Section | Entry | Stage | Described in |
 |---|---|---|---|
@@ -41,8 +41,7 @@ A design-records pass that folds a deferral adds its entry here in the same chan
 |  | [A release log](#trust-release-log) | Later | §2.19 |
 |  | [Web code transparency](#trust-web-code-transparency) | Later | §2.19 |
 |  | [An external security review and audit](#trust-external-audit) | Later, unless the owner reinstates it | §2.19, §10.12 |
-| [§4 Repositories, code placement, branches, and build](#s4) | [C4, the browser WebSocket carrier](#repo-c4-browser-carrier) | Later | §4.6, §4.18, §5.17, §18.17, §23.4 |
-|  | [C17, a js connect build without gVisor](#repo-c17-js-connect-build) | Later, decided after §18's spike | §4.6, §4.18, §18.17 |
+| [§4 Repositories, code placement, branches, and build](#s4) | [C17, a js connect build without gVisor](#repo-c17-js-connect-build) | Later, decided after §18's spike | §4.6, §4.18, §18.17 |
 |  | [C7, caller lane keys and logical lanes](#repo-c7-logical-lanes) | Later | §4.6, §6.18 |
 |  | [apt and yum repositories](#repo-apt-yum-repositories) | Open, decided at v1's exit review | §4.18 |
 |  | [§4's v1 set](#repo-v1) | v1 (M6, M7, M10) | §4.18 |
@@ -122,7 +121,7 @@ A design-records pass that folds a deferral adds its entry here in the same chan
 |  | [IPv6 subnet routes](#bridge-ipv6-subnet-routes) | Later | §17.7, §17.18, §23.4 |
 |  | [The advertising proxy on Windows, and discovery in the apps](#bridge-discovery-other-platforms) | Later | §17.7, §17.18 |
 |  | [§17's v1 set](#bridge-v1) | v1 (M6) | §17.18 |
-| [§18 SDK, apps, and extension integration](#s18) | [The extension's own Worker](#sdk-extension-worker) | Later | §5.17, §18.17, §22.17, §23.4 |
+| [§18 SDK, apps, and extension integration](#s18) | [The extension's own Worker](#sdk-extension-worker) | Later | §4.6, §4.18, §5.17, §18.17, §22.17, §23.4 |
 |  | [Firefox session mode](#sdk-firefox-session-mode) | Later | §18.17 |
 |  | [Browser Workers and ephemeral CLI hosts as remote-search requesters](#sdk-remote-search-requesters) | Later | §18.17 |
 |  | [§18's v1 set](#sdk-v1) | v1 (M6, M10) | §18.17 |
@@ -203,31 +202,18 @@ A design-records pass that folds a deferral adds its entry here in the same chan
 <a id="s4"></a>
 ## §4 Repositories, code placement, branches, and build
 
-<a id="repo-c4-browser-carrier"></a>
-### C4, the browser WebSocket carrier
-
-*Later. DESIGN.md: §4.6, §4.18, §5.17, §18.17, §23.4.*
-
-- **Deferred.** C4 of §4.6's connect changes: a `GOOS=js` WebSocket H1 carrier with in-band auth and an Origin allowlist (owner decisions 22 and 26; §18.8). With it wait browser streams, socket dials from a browser (§18.4), HeadCheck replies from `read_only` page Workers (§7.9, §18.8; QD-227) and the extension's own Worker.
-- **Why.** Owner decision 26 runs the browser HTTPS-only first, and connect streams follow C4. The page Worker needs no connect client for what it serves at RS1 and RS2.
-- **Launch instead.** The page Worker runs on the `sidecar_http` leg, HTTPS-only, over §6's long-poll (§18.8, §18.10). Where a desktop `ur daemon` exists, the extension uses it through `ur native-host`.
-- **Lost.** No stream or socket dial from a browser. A page Worker runs no HeadCheck, so a page's view is unwitnessed and shows no `witnessed_at` (§7.9's read_only row).
-- **Dark in code.** Nothing is built. `make check`'s X9 rule holds C4 as `later` and fails when a js carrier over a browser WebSocket appears in connect (sidecar/check/x9_test.go).
-- **Held.** Nothing: no task or track waits on it.
-- **To bring back.** C4 on connect's `sidecar` branch, templated on sdk/device_rpc_platform_js.go; the server admits `chrome-extension://` ids, the `moz-extension:` scheme and the key origin; the X9 row moves to a milestone. Then HeadCheck for read_only Workers and the extension's Worker follow.
-
 <a id="repo-c17-js-connect-build"></a>
 ### C17, a js connect build without gVisor
 
 *Later, decided after §18's spike. DESIGN.md: §4.6, §4.18, §18.17.*
 
 - **Deferred.** C17 of §4.6: a `js` connect build without gVisor or the IP stack, for the extension's streaming Worker only (owner decision 22; Q-REPO-2's residual; Q-SDK-1; D-SDK-19).
-- **Why.** A connect-only js/wasm main imports 42 gVisor packages, which puts `sidecar.wasm`'s size goal out of reach. The page Worker no longer needs C17, since it links no connect client, so only the extension's streaming Worker would, and that Worker waits on C4.
-- **Launch instead.** The page Worker is built `-tags sidecar_http` and links no connect client, engine or IP stack (§18.10).
-- **Lost.** Nothing beyond what C4's entry lists.
+- **Why.** A connect-only js/wasm main imports 42 gVisor packages, which puts `sidecar.wasm`'s size goal out of reach. The page Worker needs no C17: until M13a it links no connect client, and from M13a ur.io's links the full one on the `sidecar_page` leg, since its tools' egress needs the IP stack C17 leaves out (owner decision 794), so only the extension's streaming Worker would, and that Worker is Later.
+- **Launch instead.** The page Worker is built `-tags sidecar_http` and links no connect client, engine or IP stack, and from M13a ur.io's is built `-tags sidecar_page` with the full connect client over C4 (§18.10).
+- **Lost.** Nothing beyond what the extension's Worker's entry lists.
 - **Dark in code.** Nothing is built. `make check`'s X9 rule fails when connect gains a gVisor-free js build that §4.6 has not decided (sidecar/check/x9_test.go).
 - **Held.** Nothing: no task or track waits on it.
-- **To bring back.** §18.10's size spike gives the figures; the owner decides C17 on them; the change then lands in connect with C4.
+- **To bring back.** §18.10's size spike gives the figures; the owner decides C17 on them; the change then lands in connect, where C4 is from M13a.
 
 <a id="repo-c7-logical-lanes"></a>
 ### C7, caller lane keys and logical lanes
@@ -1301,15 +1287,15 @@ A design-records pass that folds a deferral adds its entry here in the same chan
 <a id="sdk-extension-worker"></a>
 ### The extension's own Worker
 
-*Later. DESIGN.md: §5.17, §18.17, §22.17, §23.4.*
+*Later. DESIGN.md: §4.6, §4.18, §5.17, §18.17, §22.17, §23.4.*
 
-- **Deferred.** The browser extension running the sidecar itself as a web worker, with its streams (owner decision 26; R-CTX-5, R-ARCH-4; §5.17, §18.4, §18.8, §18.17, §22.17, §23.4). §22's rows for it wait with it.
-- **Why.** Owner decision 26: HTTPS-only first, and connect streams follow C4. The extension's Worker also waits on §18.10's size spike and C17.
-- **Launch instead.** The extension uses a desktop `ur daemon` over native messaging, `ur native-host`, where one exists; without one it is alarms-only. ur.io pages use the read-only page Worker.
+- **Deferred.** The browser extension running the sidecar itself as a web worker, with its streams over §4.6's C4 and the platform's admission of the extensions' ids and scheme, and socket dials from a browser (owner decision 26; R-CTX-5, R-ARCH-4; §4.6, §5.17, §18.4, §18.8, §18.17, §22.17, §23.4). C4 itself comes forward to M13a for ur.io's page Worker alone (owner decision 794). §22's rows for it wait with it.
+- **Why.** Owner decision 26: HTTPS-only first, and connect streams follow C4, which owner decision 794 brings forward to M13a for ur.io's page Worker alone. The extension's Worker also waits on §18.10's size spike and C17.
+- **Launch instead.** The extension uses a desktop `ur daemon` over native messaging, `ur native-host`, where one exists; without one it is alarms-only. ur.io pages use the page Worker, read-only until M13a and a full member device from then (owner decision 794).
 - **Lost.** An extension with no desktop daemon beside it has no sidecar: no vault, no approvals of its own, and `PreviewRevokeDevice` and `RevokeDevice` answer `REVOKE_NOT_CAPABLE`.
 - **Dark in code.** On js, `NewSidecarLocal` answers unsupported and `NewSidecarRemote` runs over a host-supplied `ur native-host` port (sdk/sidecar.go, sdk/sidecar_types_js.go). `ur native-host` relays no call that §5.8 signs only on confirmation.
 - **Held.** Nothing: no task or track waits on it.
-- **To bring back.** C4, and C17 if the spike asks for it; a Worker main within `sidecar.wasm`'s size gate; the rule that the Worker accepts only its own extension pages' ports; and §22's extension rows.
+- **To bring back.** C4's admission of the extensions' ids and scheme, C4 being on connect's `sidecar` branch from M13a, and C17 if the spike asks for it; a Worker main within `sidecar.wasm`'s size gate; the rule that the Worker accepts only its own extension pages' ports; and §22's extension rows.
 
 <a id="sdk-firefox-session-mode"></a>
 ### Firefox session mode
