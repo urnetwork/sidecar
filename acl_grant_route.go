@@ -26,8 +26,9 @@
 // names. testHookSecret runs where the detail's key derives, inside OpenConfigBody.
 //
 // Its dial counterpart reads the same detail for the ports a port-limited activated dial grant opens at each sidecar
-// (aclGrantDialPortsOf, QD-740), one way for the bridge compile's host dial rows and a forward's route
-// (ConfigState.grantPortRule) and AclEngine's AllowInbound and Check (acl_engine.go):
+// (aclGrantDialPortsOf, QD-740), one way for the bridge compile's host dial rows (bridge_compile_grants.go) and a
+// forward's route (ConfigState.grantPortRule), and AclEngine's AllowInbound, Check and ActiveGrant (acl_engine.go,
+// acl_grant_file.go), ActiveGrant reading a forward's own asked ports from its detail by it too:
 //
 //	ports      each sidecar:<id>:<protocol>:<port> of the detail's grant_dst, at that sidecar alone, a target_port
 //	           keeping only the destinations whose port it is; none at a sidecar opens nothing there, and an ip:

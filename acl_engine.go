@@ -38,8 +38,11 @@
 //	         detail naming no prefix routing by its subjects
 //	dial     AllowInbound: the ports the detail names at this sidecar, as the host's dial rows serve them
 //	         (grantPortRule); a dial grant whose action seals none limits no ports, as its rows say
-//	subject  Check's dial or route to a sidecar: a dial grant only to a sidecar its detail names a port at, a route
-//	         grant only where its detail reads
+//	subject  Check's dial or route to a subject, which asks no port or address: a dial grant only to a sidecar its
+//	         detail names a port at, and a route grant only through a via it reaches some address through by its
+//	         detail, as a document rule is read by its local detail (dialReaches, routeReaches)
+//	standing ActiveGrant (acl_grant_file.go): a forward's ask at the ports its own sealed detail names, covered at each
+//	         sidecar by a port-limited dial grant whose detail names those ports there
 //
 // A grant whose detail does not read here, or a route grant whose action seals none, reaches nothing, the closed
 // direction. One whose detail waited on a config key generation this device did not hold is read again when the
@@ -48,7 +51,8 @@
 // never widens. A client allows AclEngineSettings.ClockSkew against the gates' server time (§8.6).
 //
 // Safe for concurrent use. The root file carries no connect type; an install and ReadWaitingGrants open grants'
-// details, where testHookSecret runs inside OpenConfigBody, and no check creates or unwraps a key.
+// details, where testHookSecret runs inside OpenConfigBody, and no check creates or unwraps a key but ActiveGrant, a
+// gate's standing check on no packet path, which opens a forward's own sealed detail the same way.
 
 package sidecar
 
@@ -546,10 +550,12 @@ type AclCheck struct {
 // socket dialed or listened on by name, a repo read, written, administered or deposited to, a dns host published, an
 // alias sent to or listened on; an ip range routed to through any via, by a rule's prefixes or, for a rule that names
 // none, by the subnet routes in force InstallRoutes last took (findRouteToPrefix), an activated route grant's being
-// its sealed detail's, as InstallWithGrants read it. A dial or route to a subject reads a document rule by its rows,
-// any of its ports or prefixes standing, and an activated grant by its sealed detail as the rest of Check does: a
-// port-limited dial grant reaches only a sidecar its detail names a port at, and a route grant only where its detail
-// reads (routeLocal), so acl_check answers what the compile serves.
+// its sealed detail's, as InstallWithGrants read it. A dial or route to a subject asks no port or address, so it
+// counts a rule that reaches the subject at some port, or some address through it, read as AllowInbound and AllowRoute
+// read a rule at one, for a document rule and an activated grant alike (dialReaches, routeReaches): a rule limiting
+// ports only where this device holds them, a document rule's from its local detail and an activated grant's from its
+// sealed detail, and a route rule only by the prefixes, autogroup:internet or routes in force those checks take; so
+// acl_check answers what the engine and the compile serve, not the rows alone.
 func (self *AclEngine) Check(subject AclSubject, action protocol.AclAction, resource AclResource, now time.Time) AclCheck {
 	installed := self.installed.Load()
 	if installed == nil {
@@ -572,15 +578,11 @@ func (self *AclEngine) Check(subject AclSubject, action protocol.AclAction, reso
 		}
 		if action == protocol.AclAction_ACL_ACTION_DIAL {
 			return answer(state.mayDial(subject, destination, nowMs, func(rule *aclRule) bool {
-				read := installed.grantDials[rule.index]
-				return read == nil || (destination.Kind == AclSubjectSidecar && read.dial.reaches(destination.Id))
+				return installed.dialReaches(rule, destination)
 			}))
 		}
 		if action == protocol.AclAction_ACL_ACTION_ROUTE {
-			return answer(state.mayRoute(subject, netip.Addr{}, destination, nowMs, func(rule *aclRule) bool {
-				_, _, reaches := installed.routeLocal(rule)
-				return reaches
-			}))
+			return answer(installed.routeThrough(subject, destination, nowMs, self.servedRoutes.Load()))
 		}
 	case AclResourceSocket:
 		return answer(state.resourceDecision(subject, nowMs, action, func(rule *aclRule) bool {
@@ -638,6 +640,75 @@ func (self *AclEngine) checkSubject(state *AclState, selector AclSelector) (AclS
 		return AclClientSubject(selector.Id, Id{}, nil, ""), true
 	}
 	return AclSubject{}, false
+}
+
+// Whether a dial rule reaches the destination at some port here, as AllowInbound and the host's dial rows read the rule
+// at a port (§8.6's ports match; DESIGN-DETAILS 12.2.4's rows): a rule limiting no ports at every port of each
+// destination its rows name; a port-limited activated dial grant only at a sidecar its sealed detail names a port at
+// (aclGrantDialPorts, as InstallWithGrants read it); and a port-limited document rule only at a sidecar, and only where
+// this device holds its ports, its local detail. A client's ports are its own device's to check, and this reader cannot
+// tell an enforcing client from a legacy one, which §8.10 reaches only through a rule limiting no ports, so a
+// port-limited rule reaches no client here, the closed direction and never wider than the contract gate (QD-1432).
+// Allocates nothing.
+func (self *aclEngineInstall) dialReaches(rule *aclRule, destination AclSubject) bool {
+	if !rule.portsLimited {
+		return true
+	}
+	if destination.Kind != AclSubjectSidecar {
+		return false
+	}
+	if read := self.grantDials[rule.index]; read != nil {
+		return read.dial.reaches(destination.Id)
+	}
+	local := self.localRules[rule.index]
+	return local != nil && 0 < len(local.Ports)
+}
+
+// Check's route to a subject: the first route rule in force from the source whose via subjects hold the via
+// (routeTakes, as MayRoute reads it) and that reaches some address through it (routeReaches), or why none does.
+func (self *aclEngineInstall) routeThrough(source AclSubject, via AclSubject, nowMs int64, servedRoutes *AclServedRoutes) AclDecision {
+	state := self.state
+	sourceResolved := state.resolve(&source, nowMs)
+	if sourceResolved.deny != 0 {
+		return aclDeny(sourceResolved.deny)
+	}
+	viaResolved := state.resolve(&via, nowMs)
+	if viaResolved.deny != 0 {
+		return aclDeny(viaResolved.deny)
+	}
+	rule := state.findResourceRule(&sourceResolved, nowMs, protocol.AclAction_ACL_ACTION_ROUTE, func(rule *aclRule) bool {
+		return state.routeTakes(&sourceResolved, &viaResolved, rule) && self.routeReaches(&sourceResolved, &viaResolved, rule, servedRoutes)
+	})
+	if rule != nil {
+		return aclAllowRule(rule)
+	}
+	return aclDeny(AclReasonNoGrant)
+}
+
+// Whether a route rule that takes the via reaches some address through it, as AllowRoute reads the rule at one address
+// and port, here at any (routeLocal for its prefixes and ports, a document rule's local detail and an activated grant's
+// sealed one alike): its ports must open some port, a rule limiting ports only where this device holds them; then its
+// autogroup:internet reaches the public addresses, which rows carry; past that the device must hold its detail, whose
+// prefixes it reaches, or, where the detail names none, the subnet routes in force of a via its subject destinations
+// also name for the source (owner decision 575), by the routes InstallRoutes last took and by none before. A rule whose
+// detail the device does not hold reaches only by its autogroup:internet, and an activated grant whose detail does not
+// read here, or whose action seals none, reaches nothing (QD-003).
+func (self *aclEngineInstall) routeReaches(source *aclResolved, via *aclResolved, rule *aclRule, servedRoutes *AclServedRoutes) bool {
+	local, portsLimited, reaches := self.routeLocal(rule)
+	if !reaches || (portsLimited && (local == nil || len(local.Ports) == 0)) {
+		return false
+	}
+	if rule.internetTarget {
+		return true
+	}
+	if local == nil {
+		return false
+	}
+	if aclRouteBySubject(local, rule.internetTarget) {
+		// no prefix of its own: the subnet routes in force of a via its destinations name
+		return via.sidecar != nil && self.state.targetsSubject(source, via, rule) && 0 < len(servedRoutes.Prefixes(via.sidecar.id))
+	}
+	return true
 }
 
 // The first route rule in force that reaches the whole of cidr through some via: one whose prefixes hold it, or one that
