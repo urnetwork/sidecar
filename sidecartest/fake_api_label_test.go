@@ -300,11 +300,22 @@ func TestFakeApiLabelFilesEachHostedNetworksNames(t *testing.T) {
 		case <-ctx.Done():
 			t.Fatalf("network %s's Sidecar attached no generation", networkId)
 		}
+		// the generation's env, its reads ending with the test's bound too: a read refused for later would wait on the
+		// Net's clock, which nothing moves here, and Close would wait with it
+		readCtx, stopRead := context.WithCancel(env.Ctx)
+		defer stopRead()
+		stopAtBound := context.AfterFunc(ctx, stopRead)
+		defer stopAtBound()
+		readEnv := *env
+		readEnv.Ctx = readCtx
 		refresh := running.NewNetworkLabelRefreshComponent(nil)
-		if err := refresh.Attach(env); err != nil {
+		if err := refresh.Attach(&readEnv); err != nil {
 			t.Fatal(err)
 		}
 		refresh.Close()
+		if err := ctx.Err(); err != nil {
+			t.Fatalf("network %s's label refresh landed no read: %v", networkId, err)
+		}
 		return running
 	}
 	alpha, bravo := refreshed(alphaId), refreshed(bravoId)
