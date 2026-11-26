@@ -8,14 +8,14 @@
 // at most once a HintRefetchMinInterval, and again each ResyncInterval with no hint (§6.8's hourly resync).
 //
 // The subscription is a function value, Subprotocol.Subscribe on a connect leg, so this file stays on every leg but
-// the ios_extension legs. The client also feeds DNS-M2-01's NetworkLabelTable from each zone it fetches.
+// the ios_extension legs. The client also feeds DNS-M2-01's NetworkLabelTable from each zone it fetches, the zone's
+// retiring aliases with their tombstone times among it, and the alias a fetch finds changed kept retiring.
 
 package sidecar
 
 import (
 	"context"
 	"errors"
-	"slices"
 )
 
 // Subprotocol.Subscribe's shape.
@@ -123,12 +123,14 @@ func (self *DnsClient) runHints(ctx context.Context, hints *dnsHints) {
 }
 
 // Sets the network's label and alias under the zone's root from GET /dns/zone's answer, keeping its legacy name and
-// its retiring aliases but the one that is live again. An answer that names no label changes nothing.
+// its retiring aliases, the alias it held live when the zone gives another or none among them (§12.5's 90 days of
+// retiring), and taking the retiring aliases the zone names with their tombstone times; the one that is live again
+// retires no more (networkLabelAnsweredRow). An answer that names no label changes nothing.
 func (self *NetworkLabelTable) SetZoneLabel(zone *DnsZone) error {
 	if zone == nil || zone.Label == "" {
 		return nil
 	}
-	row, err := canonicalNetworkLabelRow(NetworkLabelRow{Root: zone.Root, NetworkId: zone.NetworkId, Label: zone.Label, Alias: zone.Alias})
+	row, err := networkLabelAnswerRow(NetworkLabelRow{Root: zone.Root, NetworkId: zone.NetworkId, Label: zone.Label, Alias: zone.Alias}, zone.RetiringAliases)
 	if err != nil {
 		return err
 	}
@@ -136,13 +138,7 @@ func (self *NetworkLabelTable) SetZoneLabel(zone *DnsZone) error {
 		for index := range rows {
 			if rows[index].Root == row.Root && rows[index].NetworkId == row.NetworkId {
 				row.LegacyName = rows[index].LegacyName
-				row.RetiringAliases = slices.DeleteFunc(rows[index].RetiringAliases, func(alias string) bool {
-					return alias == row.Alias
-				})
-				if rows[index].Label == row.Label && rows[index].Alias == row.Alias {
-					return rows, nil
-				}
-				rows[index] = row
+				rows[index] = networkLabelAnsweredRow(row, rows[index])
 				return rows, nil
 			}
 		}
