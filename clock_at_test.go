@@ -1,5 +1,7 @@
+//go:build !sidecar_http && !js
+
 // clock_at.go's waits for a time (QD-1425): a ClockAt sets the wait for the time itself, and any other clock, the
-// real one among them, for the timeout to the time from a reading of it, as before.
+// real one among them, for the timeout to the time from a reading of it, as before. Built where testAwait is.
 
 package sidecar
 
