@@ -16,10 +16,12 @@ import (
 	"github.com/urnetwork/sidecar/sidecartest"
 )
 
-// Settings on clock.
+// Settings on clock, with run's wait uncapped, so its timer stands at each time a row's meaning changes (the cap's own
+// tests are bridge_clock_check_test.go's).
 func bridgeTestSettings(clock device.Clock) *device.BridgeSettings {
 	settings := device.DefaultBridgeSettings()
 	settings.Clock = clock
+	settings.ClockCheckInterval = 0
 	return settings
 }
 

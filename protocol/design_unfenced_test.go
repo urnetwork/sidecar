@@ -24,6 +24,21 @@ message ComputePolicyTicket {
   int64 not_after_ms = 5;
 }
 message ComputePolicyTicketFile { bytes ticket = 1; bytes signature = 2; }
+// sidecar/protocol/harness.proto
+// DESIGN-COMPUTE.md §7.10's and §12.5's attach origin, which the design gives as a field list without numbers: numbered
+// in the order written (HARN-M14-01), the device target HARN-M14-11 gives it joining after them.
+enum HarnessAttachMode {
+  HARNESS_ATTACH_MODE_UNSPECIFIED = 0; HARNESS_ATTACH_MODE_CARRIED = 1; HARNESS_ATTACH_MODE_STAMPED = 2;
+}
+enum HarnessOriginKind {
+  HARNESS_ORIGIN_KIND_UNSPECIFIED = 0; HARNESS_ORIGIN_KIND_PERSON = 1; HARNESS_ORIGIN_KIND_RUN = 2;
+  HARNESS_ORIGIN_KIND_UNKNOWN = 3;
+}
+message HarnessOrigin { HarnessOriginKind kind = 1; bytes run_id = 2; bytes agent_id = 3; bool tainted = 4; }
+message HarnessAttachOrigin {
+  bytes network_id = 1; bytes sidecar_id = 2; bytes enclave_id = 3; uint64 incarnation = 4; bytes exchange_hash = 5;
+  HarnessAttachMode mode = 6; HarnessOrigin origin = 7;
+}
 // sidecar/protocol/envelope.proto
 // §6.5: each result has its request's fields.
 message HelloResult {

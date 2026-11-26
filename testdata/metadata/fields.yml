@@ -252,6 +252,7 @@ sealed_files:
   protocol/directory.proto: "plaintext inside the directory's sealed files and entries (§16.11)"
   protocol/dns.proto: "peer to peer over a Required session on a data-class contract, so only sizes and timing show (§12.9.1, §17.7.1; connect-1, connect-2)"
   protocol/evsindex.proto: "plaintext inside index files, which evs seals as any file (§11.14)"
+  protocol/harness.proto: "peer to peer in a session of the bundled SSH, over a Required overlay connection between a member's sidecar and its enclave, so only sizes and timing show (DESIGN-COMPUTE §7.10, §12.5, IC-2; HARN-M14-01)"
   protocol/mail.proto: "only MailIngress and MailHint pass through a server, and the rest is sealed under §11 (§15.5, §15.7, §15.8)"
   protocol/record.proto: "each RecordEntry is a sealed file in its writer's stream (§16.8); the roots above are what a gate reads"
   protocol/search.proto: "peer to peer over a Required session, so only sizes show (§11.14, connect-5)"
