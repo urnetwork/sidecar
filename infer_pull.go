@@ -93,10 +93,11 @@ type InferPullArgs struct {
 	ApiUrl string
 	// What every request goes through: the host's egress-bound transport, never net/http's default.
 	Transport http.RoundTripper
-	// Where the model files are kept, absolute: <state>/models.
+	// Where the model files are kept, absolute: an app's <state>/models, a desktop instance's
+	// <ur>/_local/<instance>/models (InferDesktopLocalDirectory).
 	ModelDirectory string
-	// Where the engine's files are kept, absolute: <state>/engine on a desktop; empty on an app, whose engine is in its
-	// bundle, which then pulls no engine file.
+	// Where the engine's files are kept, absolute: <ur>/_local/<instance>/engine on a desktop; empty on an app, whose
+	// engine is in its bundle, which then pulls no engine file.
 	EngineDirectory string
 	// The release manifest; nil for this build's.
 	Manifest *InferManifest

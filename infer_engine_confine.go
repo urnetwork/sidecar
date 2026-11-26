@@ -46,9 +46,10 @@ import (
 // What the helper is confined to (§6.5): its engine's files and its model files, read-only, beside the system's
 // libraries and the GPU's device nodes, which each OS's code names.
 type inferEngineConfinement struct {
-	// Where the engine's libraries, its GPU plugins and Dawn are pulled to: <state>/engine on a desktop.
+	// Where the engine's libraries, its GPU plugins and Dawn are pulled to: <ur>/_local/<instance>/engine on a desktop
+	// (InferDesktopLocalDirectory).
 	EngineDirectory string
-	// Where the model files are pulled to: <state>/models on a desktop.
+	// Where the model files are pulled to: <ur>/_local/<instance>/models on a desktop.
 	ModelDirectory string
 	// A directory the helper must not read once confined: the instance's state directory, which holds its keys'
 	// wraps. The helper lists it once confined, and runs nothing if it can.

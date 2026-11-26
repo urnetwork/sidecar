@@ -23,7 +23,8 @@
 // verified policy for a remote one; a name only the broker's catalog carries prints between the untrusted-data markers,
 // so a process a run binds reads it as data. Every string passes HarnessSanitizeLine before it reaches the terminal.
 // The daemon builds the instance's one local engine and pull here, which every network it hosts shares
-// (startUrLocalInference): ur-engine beside ur, confined (INFER-M11-05), over <state>/engine and <state>/models.
+// (startUrLocalInference): ur-engine beside ur, confined (INFER-M11-05), over the instance's engine and models
+// directories in <ur>/_local/<instance>, outside its state (InferDesktopLocalDirectory).
 
 package main
 
