@@ -1,0 +1,302 @@
+# The apps and ur.io: UI design
+
+Status: mockups, 2026-11-25; every question decided by the owner on 2026-11-26 (UI-5 to UI-16). This document will become the UI design the apps and ur.io are built from. For now it records the owner's statements word for word, points to the mockups, lists the screens they show, names what they change in other documents, and keeps each question with its decision. DESIGN-COMPUTE.md already sends the bot tab's screens here (§15.4, CO-48).
+
+## Owner statements
+
+> UI-1 (2026-11-25): "Now I want to flesh out the UI design for the sidecar update. the main changes are 1. the apps top level tabs will be connect, burner, bot, support, account. The leaderboard will move into account. 2. the mmm/ur.io site will have top sections Products, Install, CLI, Burner, Bot. The agents section will move to the footer. Next I will detail what the new tabs and site sections should look like. I want to create mock ups of all of them. a. the burner tab will be a mix of a main inbox (&lt;me&gt;@&lt;mynetwork&gt;.ur.network) and per-use burner categories. The per-use categories will be like a password manager, where there can be a password, otp, notes per category. The burner can be registed as a password manager and for a password a new category can be created or an existing one used. I want the category password to have an easy rotate button, which saves old passwords in the extra notes section with the date that it was rotated. The mail client can add inboxes with custom names. There is a unified view, and a per-inbox view, with search. The admin account has a default "admin@&lt;mynetwork&gt;.ur.network" and asks the user to create a user account if it doesnt' exit. If there is not an indexer on a network, the screen will have a small indicator to create a remote enclave to run the indexer to receive emails when the app is closed. The current remote indexer status is displayed on the burner top.   b. the bot app section will be a harness cli optimized for mobile on mobile. The top will show the current harness, the current model, an agent count, the compute balance. tapping the harness pill will open the harness screen, which shows all harnesses and allows switching to another remote harness or creating a remote enclave/harness. Tapping the model pill opens a model list that shows the available modes and names, and cost. Tapping the agent count will open a feed view of all the agents, that shows a feed of all the updates from the agents. There is a chat at the bottom that can @agent mention to send to a specific agent, or send to all agents. This is the agent control view that gives a sense of everything happening on all agents. Tapping the compute balance shows where the balance has been spent in the past 30 days and all time. c. the support tab will be the chat support where users post messages, logs, and get replies. d. the mmm/ur.io site cli will be about fully encrypted, private infrastructure. The page should have an install box, and list the top features: storage, ip, port forwarding, model router e. The burner page should explain fully encrypted private email, email server runs on your device, full search, password manager integration. The call to action is to open the burner section in the web app. f. the bot page explains a fully private bot that runs local models or tee remote models, remote encrypted enclaves, allows visiblity into work and communication between all agents . I want to start with mock ups, and work towards sidecar/DESIGN-UI.md for a final design document"
+
+> UI-2 (2026-11-25, on the mockups): "Feedback: - the cli sit should also include the tls edge and email - the details of the cli should be in the docs. Instead of listing specific commands, teh bottom section should redirect to read more in the docs. - the cli should include the team management details and show how admins add access to the cli via teams - on burner "One address for life" makes it seem like you get only one address. that should be "as many addresses as you want" - on agents, "Agents talk
+> in the open" should be more generally "agent actions in the open, only visible to you"."
+
+> UI-3 (2026-11-25): "There are two other app screens we have to work on: 1. under account, there will be a new section called team to manage the team. This will expose all the ways to adopt new devices/clients into the team, permissions management, and team-only features like custom domain and custom idp. The permissions for teams should follow the design, but also be role based RBAC . Each role should have an ipv4 and ipv4 subnet for the bridge. 2. under account, a bridge section. The bridge will show every device, its ip, public tls, discovered local ports, ip:port forwards from that device. This is essentially a canonical mapping of all the network endpoints reachable on the network and the ways they can be reached. Each device will also show its roles."
+
+> UI-4 (2026-11-25): "In the agent details screen, each agent should be tagged with the harness it runs on. The harness name is the device/client name.
+> Also any ips, email addresses, and public tls endpoints the agent has should be shown."
+
+> UI-5 (2026-11-25, the owner's answers to the questions below, asked one at a time):
+> - Q-UI-25: "One IPv4 range per role (Recommended)"
+> - Q-UI-1: "Footer only (Recommended)"
+> - Q-UI-2: "ur.io/app/burner (Recommended)"
+> - Q-UI-3: "One login per category (Recommended)"
+> - Q-UI-4: "Both"
+> - Q-UI-5: "Their own address (Recommended)"
+> - Q-UI-6: "Theirs; teams can share (Recommended)"
+> - Q-UI-7: "No, categories stay apart"
+> - Q-UI-8: "Owners and Admins (Recommended)"
+> - Q-UI-9: "No I want to choose an enclave provider. Which one is closest?" Then, asked which provider: "Hippius (Recommended)"
+> - Q-UI-10: "Passwords and codes; passkeys later (Recommended)"
+> - Q-UI-11: "Count and balance stay whole (Recommended)"
+> - Q-UI-12: "Active, on every harness (Recommended)"
+> - UI-11 follow-up, asked whether passwords stay one per category now that passkeys are per site: "Passwords per site too"
+> - Q-UI-13: "30 days everywhere (Recommended)"
+> - Q-UI-14: "One message to each (Recommended)"
+> - Q-UI-15: "The session pill's session (Recommended)"
+> - Q-UI-16: "Account › Settings (Recommended)"
+> - Q-UI-17: "Beside Account's list (Recommended)"
+> - Q-UI-18: "Titles on every platform (Recommended)"
+> - Q-UI-19: "The products page needs to update to include a new plan: team. The main plans are community, pro, and team. Team allocates resource caps per seat, where each seat gets basically a pro level bump to usage caps. teams also includes team management, rbac, custom auth, custom domain. Teams has a 1 seat minimum, at $10/month per seat or $80/year. The community tier includes 100mb of encrypted versioned storage, pro includes 100gb of storage. The enterprise plan should be mentioned as custom services, and link to the services page."
+> - Q-UI-20: "Leave Install as is"
+> - Q-UI-21: "Off; Load images per message (Recommended)"
+> - Q-UI-22: "Same five sections (Recommended)"
+> - Q-UI-23: "Lift the caps"
+> - Q-UI-24: "One line under the section (Recommended)"
+> - Q-UI-26: "Several roles, written as policy (Recommended)"
+> - Q-UI-27: "Its first role's (Recommended)"
+> - Q-UI-28: "/24 default, up to /20 (Recommended)"
+> - Q-UI-29: "Bridge replaces it (Recommended)"
+> - Q-UI-30: "Rule editors add; others request (Recommended)"
+> - Q-UI-39: answered by UI-13
+> - Q-UI-31: "Create a team; your devices (Recommended)"
+> - Q-UI-32: "Share the harness's IP (Recommended)"
+> - Q-UI-33: "30 days, then burned (Recommended)"
+> - Q-UI-34: "App if installed, else store (Recommended)"
+> - Q-UI-35: "Platform store, plus other ways (Recommended)"
+> - Q-UI-36: "One runs it, others join (Recommended)"
+> - Q-UI-37: "Auto at 90%, plus on demand (Recommended)"
+> - Q-UI-38: "The network's people (Recommended)"
+> - Q-UI-40: "Pooled (Recommended)"
+> - Q-UI-41: "Drop it"
+> - Q-UI-42: "Any model the person picks"
+> - Q-UI-43: "URnetwork by default; provider opt-in (Recommended)"
+> - Q-UI-44: "Device's check; attendees ask (Recommended)"
+> - Q-UI-45: "Yes, in place (Recommended)"
+> - Q-UI-46: "The app store will sell single seat team subscriptions at monthly and yearly. The user must add seats via the web with stripe billing."
+> - Q-UI-47: "Sum them; degrade gently (Recommended)"
+
+> UI-6 (2026-11-25, while answering): "Each category also has an inbox where emails to the category address live. The category address itself can also be rotated, but the email history remains"
+
+> UI-7 (2026-11-25, while answering): "On mobile web, open app goes to the app stores. On normal web, it goes to the web app. The web app is not mobile optimized, it refers out to the apps."
+
+> UI-8 (2026-11-25, while answering): "The bot harness should have context management: be able to switch sessions, resume older sessions, and create a new session. It should also have some way to compact a session. Any harness can resume a session from any other harness. The sessions are in EVS."
+
+> UI-9 (2026-11-25, while answering): "The bot main screen should have a session pill that shows the current session, and allows switching into another unclaimed session. Multiple harnesses can share the same session. Tapping the session pill should open the session screen, which shows all sessions by recency, allows searching sessions, and shows which harnesses are actively using each session."
+
+> UI-10 (2026-11-26, while answering): "The burner screen should have a way to create a new group also, and add people to a group."
+
+> UI-11 (2026-11-26, revising the answer to Q-UI-10): "Actually I want to include passkeys now. Passkeys are per site, just like passwords."
+
+> UI-12 (2026-11-26, while answering): "We need to add a bunch of quality of life features to the mail/indexer for non-category inboxes: easy unsubscribe, spam detection using local model or remote model of choice, auto pull out events and add to linked calendar, auto report spam to spam controls using local model or remote model of choice."
+
+> UI-13 (2026-11-26, while answering): "Under burner, category, there should be site cards, where each site has a passowrd, otp, passkey, notes, etc. There shoudl also be per-categy notes at the top"
+
+> UI-14 (2026-11-26, while answering): "Create a team should upgrade to the teams plan."
+
+> UI-15 (2026-11-26): "The app store team sub should be a 2 seat team sub. Teams pricing is the first 2 seats are charged at the cost of 1 seat. So the price of the intial sub is still $10/month or $80/year, but 2 seats are included."
+
+> UI-16 (2026-11-26, revising UI-15): "The app store team sub should be a 3 seat team sub. Teams pricing is the first 3 seats are charged at the cost of 1 seat. So the price of the intial sub is still $10/month or $80/year, but 3 seats are included."
+
+## How to read
+
+- **Mockups.** Two self-contained HTML files; open them in a browser.
+
+  | File | What it shows |
+  |---|---|
+  | [design/mocks/ui-app.html](design/mocks/ui-app.html) | The apps' five tabs in 52 screens, drawn as the iPhone app: Connect (1), Burner (20), Bot (11), Support (3), Account (4), Account › Team (9) and Account › Bridge (4), then the questions |
+  | [design/mocks/ui-site.html](design/mocks/ui-site.html) | ur.io's header and footer; the CLI, Burner and Bot pages; the web app's Burner and Bot sections; on a phone, the Burner page, the menu and the web app, which refers people to the apps |
+
+  Both use the brand faces from the mmm checkout beside this repo when it is there; no font file is copied into this repo. The 1 November phone mockup, design/mocks/urnetwork-mobile.html, is superseded by ui-app.html.
+- **Sample data.** The network is `ravenwood.ur.network` and its person is sam; the Team and Bridge screens use the team network `acme`, block 100.88.0.0/16, where sam is an Admin. Sites, senders, agents and prices are made up.
+- **Screen ids.** C (Connect), B (Burner), T (Bot), S (Support), A (Account), TM (Team), BR (Bridge), M (ur.io on a phone). Each mockup caption names the design sections the screen follows: DESIGN for DESIGN.md, COMPUTE for DESIGN-COMPUTE.md.
+- **Style rules.** The screens follow mmm/DESIGNSTYLE.md: one primary button per screen, placeholders sized like their content, layout by window size class, the split layouts on wide windows, and the code rules for every command shown.
+
+## The apps
+
+### Tabs
+
+Connect, Burner, Bot, Support and Account, each with an icon and a title on every platform (Q-UI-18). Leaderboard moves into Account (A1, A2), which also gains Team and Bridge (UI-3). The Feedback tab becomes Support (Q-UI-16). The web app at ur.io/app takes the same five sections (Q-UI-22).
+
+### Connect
+
+| Id | Screen | What it shows | Follows |
+|---|---|---|---|
+| C1 | Connect | Unchanged: the connect graphic, its status and the drawer; only the tab bar changes | DESIGNSTYLE "Split layouts" |
+
+### Burner
+
+A main inbox, `<me>@<mynetwork>.ur.network`, beside per-use categories that work like a password manager. A category is one per-use address (DESIGN §15.9's burner) with its vault entry (§15.8): a password, a one-time code and notes.
+
+| Id | Screen | What it shows | Follows |
+|---|---|---|---|
+| B1 | Burner home | The indexer's status at the top; search; Inboxes (All inboxes, the main inbox, custom inboxes, admin@) with unread counts; Groups, shared addresses with their people (UI-10); Categories, each with its address, the sites that use it, which of password, code and notes it holds, and a live code; whether Burner fills passwords | DESIGN §15.6, §15.8, §15.9 (`GetVaultEntries`, `GetOneTimeCodes`, `GetReceiverCoverage`); COMPUTE §7.6 (`enclave_status`) |
+| B2 | First run | admin@ alone; "Create your address", the profile name prefilled; the small no-indexer indicator; empty categories; the password manager row | DESIGN §15.8 (admin and id addresses), §15.6 item 3 |
+| B3 | All inboxes | The unified list of every inbox and group, each message tagged with where it landed; categories stay out (Q-UI-7); chips to narrow it; the receiver's "validated" and "opportunistic" labels; a sign-in code as a copy chip | DESIGN R-MAIL-16, §15.9 |
+| B4 | One inbox | One inbox's folders (Inbox, Sent, Spam, Archive) and a search bound to it | DESIGN §15.7 |
+| B5 | Search | All inboxes or one; partial words, plurals and typos; the last 60 days on the device at once; "Search older mail" on the indexer | DESIGN R-MAIL-17, §11.14, §16.10 |
+| B6 | A category | Its address, with Rotate address; the category's own notes at the top, keeping each address rotation; a card for each site, with that site's password (reveal, copy, Rotate), one-time code, passkey and notes, whose dated lines keep its old passwords; the category's inbox, mail to earlier addresses included; pause and burn | UI-6, UI-11, UI-13; DESIGN §15.8 (`VaultEntry`), §15.9 |
+| B7 | Rotate a site's password | A generated password for one site, which can be redrawn; what happens: the old one to that site's notes with today's date and to its history, the new one copied; the site to update; Rotate password | UI-1, UI-11; Q-UI-3, Q-UI-4 |
+| B13 | Rotate the address | A new address for the category, its label redrawn and the name before the @ kept; the old address keeps receiving for 30 days, or stops now, and then is burned; the mail already in the inbox stays; the old address goes into the notes with the date; the sites to update | UI-6; DESIGN §15.9; Q-UI-33 |
+| B14 | A category's inbox | Every message sent to the category, at its current address and each earlier one, grouped by address and kept through every rotation; folders, search and reply, which goes out from the current address | UI-6; DESIGN §15.7, §15.9 |
+| B8 | Password manager | The sheet Burner shows on a sign-up form as the phone's password provider: a new category (a fresh address, with a passkey or a strong password for the site) or an existing one, whose address the site shares with a login of its own | UI-1; DESIGN §15.9, §18.15; Q-UI-10 |
+| B9 | Add inbox | The address, its name in Burner, whether it shows in All inboxes, notifications | DESIGN §15.8 (ids); Q-UI-6 |
+| B15 | New group | The group's address, its name in Burner and its people, chosen from the network's people; Create group | UI-10; DESIGN §15.8 (`ur id group-create`, `group-add`), R-MAIL-5; Q-UI-38 |
+| B16 | A group | Its address; its people, with Add people and Remove for whoever manages it; the group's shared inbox; Delete group | UI-10; DESIGN §15.7, §15.8 |
+| B17 | Add people | The network's people to choose from, or Invite someone new, who joins the network first | UI-10; DESIGN §15.8, §7.5; Q-UI-38 |
+| B18 | Mail tools | For every inbox and group, not categories: one-tap unsubscribe; spam detection with a model the person chooses; reporting spam automatically, to URnetwork's spam controls and, if chosen, the sender's provider; events added to the linked calendar, automatically or on asking | UI-12; DESIGN §15.9, §21.5, §21.8; COMPUTE §6.3, §23, §27; Q-UI-42 to Q-UI-44 |
+| B19 | Unsubscribe and events | A list message with its one Unsubscribe button, and the event it describes added to the calendar, with who approved it and Undo | UI-12; RFC 8058; COMPUTE §23.9, §23.11 |
+| B20 | Spam | Each message with why it's spam (the model and how sure, a failed sender check, the person's filter) and whether it was reported; Not spam on an unsure call, which also teaches the filter | UI-12; DESIGN §15.9; Q-UI-42, Q-UI-43 |
+| B10 | Indexer setup | Why an indexer; a secure enclave (machine, monthly cost, the reserve set aside, the provider's disclosure line, the member's search grant) or an always-on computer; Create indexer, approved on the device | DESIGN §15.6; COMPUTE §11.10, §15.4; Q-UI-8, Q-UI-9 |
+| B11 | Indexer status | State, last mail, uptime and restarts, machine, this month's cost and the reserve, the keeper, the search grant with its disclosure line, what it receives for, Stop | COMPUTE §11.6, §11.10, §9.9 |
+| B12 | A message | The receiver's label in words, a sign-in code with Copy, the address replies come from, remote images off | DESIGN R-MAIL-16, §15.10; Q-UI-21 |
+
+### Bot
+
+The Harness as a CLI made for a phone, with pills across the top: the current harness, the current model, the agent count and the compute balance, and below them the current session (UI-9).
+
+| Id | Screen | What it shows | Follows |
+|---|---|---|---|
+| T1 | The bot | The pills, the session pill among them (UI-9), which names the current session and the share of the context it uses; the run as a terminal: the prompt, the agent's words, each tool call as a card (output for bash, a diff for edit) collapsed past a few lines, approvals in line, each answer's model badge and the run's cost; slash commands; the composer | COMPUTE §7.6, §7.8, §7.11, §15.4; Q-UI-11, Q-UI-15 |
+| T2 | Harnesses | The sdk's `RemoteHarnesses()`: this device, the person's devices running ur, their enclaves, each with its state, agents and whether this device can reach it; switch, Start, Create remote harness | COMPUTE §7.10, §11.6 |
+| T3 | Create remote harness | Name; machine shape with its hourly price; a provider that passed its gate, with its disclosure line; the monthly figure if left running; Create and approve (kind 19) | COMPUTE §11.5, §11.7, §2.8 |
+| T4 | Models | The catalog by mode (local, TEE, direct): each model's full name and its price per million tokens; local models' size and speed on this device, and why one can't run; TEE only; effort; each remote model's label and disclosure line | COMPUTE §6.3, §6.5, §16.4, §2.8 |
+| T5 | The agents' feed | Every active agent with its state and its harness, tagged by the device or client name it runs on; in time order, status changes, summaries, messages between agents, approvals waiting, launches and replies, each tagged with its agent's harness; the chat, to all agents unless one is mentioned | COMPUTE §20.5-20.8, §7.6; UI-4; Q-UI-12, Q-UI-14 |
+| T6 | @mention | The agent picker, with each agent's state, host and task; the label by the input naming who receives the message | COMPUTE §20.7, R-SKILL-9 |
+| T8 | An agent | Its card, tagged with its harness (the device or client name, as `build1`); its model; how to reach it: its IP (its own, or its harness's, which it shares), its email address and any public TLS names it published; its latest summary, threads, the agents it started and its runs; Message | UI-4; COMPUTE §20.5-20.8; DESIGN §15.8, §17.4, §13.10, §16.5; Q-UI-32 |
+| T9 | Sessions | Opened by the session pill: every session, newest first, with search; each row names its agent and the harnesses using it now (several may share one); Join for a session in use, Switch for one no harness has claimed, wherever it last ran; Compact on the current one; New session | UI-8, UI-9; COMPUTE §7.7, §7.10, §24.7, §24.10; Q-UI-36 |
+| T10 | Switch into a session from another harness | Where it last ran and where it will run; the model, offered again where the old one can't run here; what carries over: taint, and the private mark in an enclave; Switch | UI-8, UI-9; COMPUTE §24.7, §7.8, §11.8 |
+| T11 | Compact | The context in use against the model's window; Compact, with an optional focus for the summary; compacting automatically near the limit; the full session kept | UI-8; COMPUTE §7.4, §7.6, §24; Q-UI-37 |
+| T7 | Compute balance | The balance, auto-renew, Add credit, Redeem code; the last 30 days or all time: a daily chart and the totals by service, agent and model | COMPUTE §9.5, §9.8, §9.10, §9.13; Q-UI-13 |
+
+### Support
+
+| Id | Screen | What it shows | Follows |
+|---|---|---|---|
+| S1 | The conversation | Every item in time order: the person's and their agents' messages (each agent's with how it was sent), support's replies, each item's number and status (Received, In progress, Fixed in a version, Not planned); the disclosure line above the composer | COMPUTE §28.5, §28.13; FEEDBACK-SYSTEM.md §6 |
+| S2 | Attach | A screenshot, this device's logs, the support bundle; each previewable; nothing attached unless checked | COMPUTE §28.7 |
+| S3 | The first message | The `support:urnetwork` disclosure, whole, acknowledged once | COMPUTE §28.13; CO-46 |
+
+### Account
+
+| Id | Screen | What it shows | Follows |
+|---|---|---|---|
+| A1 | Account | The account card and list as today, with two rows added: Leaderboard (the projected rank) and Compute balance (T7) | UI-1; Q-UI-17 |
+| A2 | Leaderboard | Today's screen with its Protocol, Points and Data tabs, pushed from Account | UI-1; DESIGNSTYLE "Long ranked lists" |
+| A4 | Create a team | The upgrade to the Team plan: what stays (devices, addresses, mail, storage), the person as first Owner, three seats for $10 a month or $80 a year through the store, what Team adds, and Upgrade to Team | UI-14; DESIGN §7.5 (team-create), §20; Q-UI-45, Q-UI-46 |
+| A3 | Account in a team network | The card names the team, the person's role and the network switcher; Team and Bridge lead the list. In a personal network (A1), Team offers to create a team and Bridge lists the person's own devices | UI-3; Q-UI-31 |
+
+A1 gains four rows: Leaderboard, Compute balance, Team and Bridge.
+
+### Account › Team
+
+Managing a team: every way to adopt people, devices and clients; permissions as roles (RBAC) that follow the design, each role with its own IPv4 range for the bridge (Q-UI-25); and the team-only features, a custom domain and the team's own identity provider. The app writes roles into the team's signed policy as groups, tags and rules, so enforcement stays DESIGN's (Q-UI-26).
+
+| Id | Screen | What it shows | Follows |
+|---|---|---|---|
+| TM1 | Team | The team, its plan and the person's role; Add people or devices; what waits on the person; people, devices, auth keys and OAuth clients; roles, access rules and the admin signatures waiting; the identity provider, custom domain, audit log and billing | DESIGN §7.5-7.9, §7.11, §20.9 |
+| TM2 | Add to the team | Every way in: invite by email with a role; sign-in through the team's identity provider (new people wait for an admin); approving waiting devices; a QR code; an MDM profile; an auth key; an OAuth client; enclaves, which join under their sponsor. Each ends with an admin's device signing the admission | DESIGN §7.5-7.8; COMPUTE §11.7 |
+| TM3 | Waiting for approval | Each waiting device or person, how it arrived, the role it will get and the address that role's range gives it; Approve or Refuse each, or Approve all | DESIGN §7.6 (JIT), §7.7 (approval is admission); Q-UI-27 |
+| TM4 | New auth key | Name; the role its devices take, with that role's range; uses; expiry; pre-approved; ephemeral; shown once | DESIGN §7.8 (owner decision 701), §7.7 |
+| TM5 | Roles | The team's own roles, then the seven built in; each with its IPv4 range, its people and devices, and how much of the range is in use; the services' /24 kept apart | UI-3; DESIGN §7.5, §17.4; Q-UI-25 to Q-UI-28 |
+| TM6 | A role | Its range and use; who holds it, by hand or through an identity-provider group kept in step by SCIM; what it can reach; what it can manage | UI-3; DESIGN §8.4-8.8, §7.6 |
+| TM7 | Access rules | A check that answers "can this role reach that endpoint?" and names the rule; the rules, role to role, with ports; admin changes waiting for a second admin's signature | DESIGN §8.5-8.8, §7.9 (k = 2 once there are 3 or more admins); COMPUTE §26 (the listeners rule) |
+| TM8 | Identity provider | The team's own provider over OIDC: connected, sign-in required or not; new people wait for an admin; directory sync, which ends a leaver's access at once; the SCIM token; the provider's groups mapped to roles | UI-3; DESIGN §7.6 |
+| TM9 | Custom domain | The verified domain; what it does: mail addresses, published web names, sign-in routing; the DNS records to keep | UI-3; DESIGN §7.6, §12.8, §13.8, §15.4 |
+
+### Account › Bridge
+
+The network's endpoints in one place, as the canonical map of everything reachable and every way to reach it. It takes the place of DESIGN-COMPUTE's Listeners section (Q-UI-29).
+
+| Id | Screen | What it shows | Follows |
+|---|---|---|---|
+| BR1 | By device | The network and its block; every device with its IP and private name, its roles (the first, which set its address, marked) and what it offers: public names, listening ports, forwards, routed subnets; this device first | UI-3; DESIGN §17.4, §12.9; COMPUTE §26.11 (every admitted device reads every list) |
+| BR2 | A device | Its address and roles; its public TLS names; the local ports it listens on; the ip:port forwards it makes; the subnets and LAN devices it routes; each entry marked reachable from this device or not, with Open and Copy | UI-3; COMPUTE §26.4, §26.10; DESIGN §13.10, §17.6-17.7.1 |
+| BR3 | By endpoint | Every endpoint on the network, by kind (public, services, forwards, subnets and LAN devices), each with the device and port, its address, private name, public name or route, and whether this device may reach it; filters, Blocked among them | UI-3; COMPUTE §26.4, §26.7; DESIGN §17.8 |
+| BR4 | A blocked endpoint | Why this device can't reach it, its roles and what they reach, the one rule that would open it and who else it would open it to; Add this rule for those who may edit rules, Request access for everyone else | COMPUTE §26.10; DESIGN §8.5, §8.6; Q-UI-30 |
+
+## ur.io
+
+- **Header.** The logo; Products, Install, CLI, Burner, Bot; the IP indicator, the language selector and Get Connected, which mmm/ur.io/SITEMAP.md says the header always keeps. Docs leaves the header (Q-UI-1).
+- **Footer.** The Product column gains CLI, Burner and Bot and keeps Agents, now its only link outside the page itself; Docs stays under Explore.
+- **CLI page** (ur.io/cli). "Fully encrypted private infrastructure": the install box (`install.sh`, then `ur login`, with a Copy button and a link to the packages on Install); six features, storage, IP, port forwarding, the TLS edge, email and the model router, each described and linked to its docs page, with no commands on the page (UI-2); three trust points (keys on your devices, servers carry ciphertext, signed releases and open code); "Give your team the CLI", how admins add access through a team: connect sign-in (OIDC, a verified domain, invitations, SCIM), people sign in from the CLI, admins approve each device from their own device, servers and CI join with an auth key or an OAuth client, with the seven roles beside it (DESIGN §7.5-7.8); and at the bottom "Read more in the docs", a link for each part, the commands among them.
+- **Burner page** (ur.io/burner). "Email only you can read": as many addresses as you want, a fresh one for every site (UI-2; Q-UI-23); the four points the owner named (fully encrypted; the mail server is your device; full search; the password manager); how mail reaches you, from the sender through the edge, which holds no key, to the person's device or indexer; the person's addresses and per-use addresses. Its call to action, Open Burner, goes to the web app's Burner section on a computer, with Get the app beside it, and on a phone to the app, or its store where it isn't installed (Q-UI-2, UI-7).
+- **Bot page** (ur.io/bot). "A fully private bot": local models, TEE models, encrypted enclaves and every agent in view; where a prompt goes for each kind of model; "Agent actions in the open, only visible to you" (UI-2): every command an agent ran, file it changed, approval it asked for and message it sent, recorded and encrypted to the person's devices, with one line on what a team's admins see (Q-UI-24). Open Bot goes to the web app's Bot section on a computer and to the app on a phone (UI-7), with Install the CLI beside it.
+- **The web app** (ur.io/app). It is made for computers and has no phone layout: on a phone, every ur.io/app address shows a page that refers people to the app's store, or opens the app where it's installed (UI-7, M3). The sidebar takes the five sections. On a wide window Burner is three panes (inboxes and categories, the list, the message) and Bot shows the run with the agents' feed beside it, so the control view stays in sight.
+- **On a phone.** Each page becomes one column, and the menu lists the five sections with the language and Get Connected. Every "Open" button goes to the app, or its store (M1, UI-7).
+
+## What this changes in other documents
+
+| Document | Change | Depends on |
+|---|---|---|
+| DESIGN-COMPUTE.md | The spend view's window becomes the last 30 days and all time, in place of the last 7 days: R-BAL-9, §9.13, §15.4's compute screen and §20.8's `compute_spend` | Q-UI-13 |
+| DESIGN-COMPUTE.md §15.4 | The bot tab's harness selector is T2, the sdk's `RemoteHarnesses()`; the agents' feed (T5) is added to the bot tab beside the recURd view's graph | UI-1 |
+| DESIGN.md §20.4 (DESIGN.md's track), per-use addresses | `mail_burners_active` and `mail_burner_creates_per_day` are lifted on every plan: per-use addresses are unlimited, as inboxes are, with no daily limit on making them | Q-UI-23, Q-UI-41 (decided) |
+| DESIGN.md §20.4 and §1.8 (DESIGN.md's track; X16 is canonical for tiers) | The plans become Community, Pro and Team: Team's first three seats for one seat's price, $10 a month or $80 a year, and $10 a month or $80 a year for each seat after, each seat raising the caps by about Pro's; storage 100 MB on Community and 100 GB on Pro, in place of 1, 20 and 200 GiB; Enterprise as custom services. Replaces "$100/mo for 5 billable seats, then $20/seat" | Q-UI-19 (decided); Q-UI-40 |
+| DESIGN.md §20 (DESIGN.md's track), Team billing | The App Store and Google Play sell a three-seat Team subscription, $10 a month or $80 a year; further seats are bought on the web through Stripe | Q-UI-46, Q-UI-47 (decided); UI-16 |
+| mmm/ur.io/SITEMAP.md and the Products page | Products lists Community, Pro and Team, and names Enterprise as custom services linking to /services | Q-UI-19 |
+| DESIGN.md §15.8 (DESIGN.md's track) | A category is one address with its inbox, its own notes and a card per site: `VaultEntry` becomes per site (its password and history, one-time code, passkey and notes), the entries of one category sharing its address; address rotations go into the category's notes, password rotations into the site's | UI-11, UI-13; Q-UI-3 |
+| DESIGN.md §15.8 (DESIGN.md's track), password history | `VaultEntry.password_history` stays; Rotate also writes the old password into the notes as a dated line, so the notes and the history both keep it | Q-UI-4 (decided: both) |
+| DESIGN.md §18 (DESIGN.md's track) | The apps' tabs are Connect, Burner, Bot, Support and Account; the Feedback tab's survey moves into Settings | UI-1; Q-UI-16 |
+| mmm/DESIGNSTYLE.md "Split layouts" | Leaderboard is no longer a top-level screen: Account's list-detail opens it. Burner and Bot gain their wide layouts (B: inboxes, list and message; T: run and feed) | Q-UI-17 |
+| mmm/ur.io/SITEMAP.md | The header's sections become Products, Install, CLI, Burner and Bot; Agents moves to the footer; the CLI, Burner and Bot sections join the sitemap with their key messages | UI-1 |
+| mmm/ur.io/react (Header.jsx, Footer.jsx, AppLayout.jsx) | The header links, the footer's Product column and the web app's sections | UI-1; Q-UI-22 |
+| DESIGN.md §7.5 and §8 (DESIGN.md's track) | Roles become RBAC: a team defines its own roles beside the seven built in, a person or device may hold several, an identity-provider group may map to a role, and the app compiles roles into the signed policy's groups, tags and rules | UI-3; Q-UI-26 |
+| DESIGN.md §17.4 (DESIGN.md's track) | Each role holds an IPv4 range carved from the block's lower /17; a device takes its address from its first role's range in place of a random one | UI-3; Q-UI-25, Q-UI-27, Q-UI-28 |
+| DESIGN-COMPUTE.md §15.4 and §26.10 | The apps' Listeners section becomes Account › Bridge, which adds addresses, roles, public TLS names, subnet routes and shared LAN devices | UI-3; Q-UI-29 |
+| DESIGN-COMPUTE.md §15.4, §7.10 and §24.7 | The bot tab gains the session pill and the session screen: sessions by recency on every harness, search, the harnesses using each; Switch is §24.7's resume on the same harness and continue on another, offered for a session no harness is working in; Join is §7.10's attach; Compact is Pi's compaction, kept in the record | UI-8, UI-9; Q-UI-36, Q-UI-37 |
+| DESIGN-COMPUTE.md §15.4 and §20.8 | The bot tab gains the agent's card (T8): its harness, the device or client name, and its IP, email address and public TLS names | UI-4 |
+| DESIGN.md §15.9 and §21.8 (DESIGN.md's track) | Mail tools for inboxes and groups: one-click unsubscribe (RFC 8058) through the network's egress; a model the person chooses joins spam's sealed checks, filter and verdicts; incoming spam can be reported to URnetwork's spam controls and, by choice, the sender's provider | UI-12; Q-UI-42, Q-UI-43 |
+| DESIGN-COMPUTE.md §11.10 and §23 | The indexer, an enclave or an always-on device, runs the mail tools as mail arrives, calling the model the person picks, local, TEE or direct once its disclosure is acknowledged, through the router and charged to the compute balance (the indexer enclave runs no gateway today); events from mail are kind 25 writes the device's check may approve, those with other people always asking | UI-12; Q-UI-42, Q-UI-44 |
+| DESIGN-COMPUTE.md §11.10 and §4.7 | Hippius is the indexer enclave's first provider; its gate, G-PROV-hippius, is the work that lets Burner offer the enclave (B10) | Q-UI-9 (decided) |
+| DESIGN.md §15.8 and §15.9 (DESIGN.md's track) | A category, a vault entry with its burner, keeps its current address and its earlier ones; its inbox holds the mail to all of them; rotating the address mints a new label, keeps the old mail and burns the old address, after 30 days or at once | UI-6; Q-UI-33 |
+| mmm/ur.io/react | Every "Open" button picks by platform: an app link on iOS, iPadOS and Android, the web app elsewhere; ur.io/app shows the refer-out page on a phone | UI-7; Q-UI-34, Q-UI-35 |
+| mmm/DESIGNSTYLE.md "Supported form factors" | The web app is checked on laptops and monitors only; on a phone it shows the refer-out page | UI-7 |
+| ur.io/docs | The CLI's pages, which the CLI page links to and which hold its commands: getting started, storage and sharing, addresses and subnets, port forwarding, the TLS edge, email, the model router, teams and access, and a command reference | UI-2 |
+
+## Questions
+
+Each has a recommended answer, drawn as recommended in the mockups. The decider for each is the owner. Q-UI-23 and Q-UI-24 come from UI-2, Q-UI-25 to Q-UI-31 from UI-3, Q-UI-32 from UI-4, Q-UI-33 from UI-6, Q-UI-34 and Q-UI-35 from UI-7, Q-UI-36 and Q-UI-37 from UI-8 and UI-9, Q-UI-38 from UI-10, Q-UI-39 from UI-11, Q-UI-40 from the answer to Q-UI-19, Q-UI-41 from the answer to Q-UI-23, Q-UI-42 to Q-UI-44 from UI-12, Q-UI-45 and Q-UI-46 from UI-14, and Q-UI-47 from the answer to Q-UI-46.
+
+| Id | Question | Recommended answer | Screens |
+|---|---|---|---|
+| Q-UI-1 | Does Docs stay in ur.io's header? | **Decided (UI-5), as recommended:** No. The header holds exactly the five sections named. Docs stays in the footer's Explore column, where it is today, and the CLI page links to it; Agents stays in the footer's Product column. | site header, footer |
+| Q-UI-2 | Where does the Burner page's Open Burner land? | **Decided (UI-5, UI-7):** on a computer, ur.io/app/burner, the web app's Burner section, through sign-in where needed (the existing `?auth&next=` path), with Get the app beside it; on a phone, the app, or its store if it isn't installed (UI-7). | Burner page, web app |
+| Q-UI-3 | Does a category hold one login that several sites share? | **Decided (UI-5, revised by UI-11):** a login per site. A category has one address and one inbox, and a login for each site that uses it, with that site's own password and passkey, all under the category's address; rotation is per site. | B1, B6, B7, B8 |
+| Q-UI-4 | Old passwords: in the notes, or in DESIGN's `password_history`? | **Decided (UI-5):** both. Rotate writes a dated line with the old password into the notes, for people to read, and keeps the old password in `VaultEntry.password_history`, as structured data the app can list and export. *(Recommended was: In the notes, as UI-1 says: Rotate appends a dated line with the old password. DESIGN.md's track then drops `VaultEntry.password_history`, so the history lives in one place, and the notes stay hidden until Show.)* | B6, B7 |
+| Q-UI-5 | What is the user account Burner asks for? | **Decided (UI-5), as recommended:** The person's own address, an id `<name>@<net>.ur.network` (DESIGN §15.8's id row), asked for on Burner's first open with the profile name prefilled. admin@ stays an inbox; in a Team only admins see it. | B2 |
+| Q-UI-6 | Is an added inbox the person's own, or shared? | **Decided (UI-5), as recommended:** The person's own id by default. In a Team, a "Shared with" choice makes it a group inbox (`ur id group-create`). Its name in Burner is separate from its address. | B9 |
+| Q-UI-7 | Does categories' mail show in All inboxes? | **Decided (UI-5):** no. All inboxes shows only inboxes; each category's mail stays in that category's own inbox. Search still reaches both. *(Recommended was: Yes, every inbox and category, each message tagged with where it landed; any one can be taken out of All inboxes.)* | B3, B9 |
+| Q-UI-8 | Who can act on the no-indexer indicator? | **Decided (UI-5), as recommended:** Owners and Admins get Set up; other members see the status and who to ask. Each member's own search grant is theirs to switch. | B2, B10, B11 |
+| Q-UI-9 | What does the indicator offer before any enclave provider opens? | **Decided (UI-5):** an enclave, with a chosen provider: the indexer enclave targets Hippius (subnet 75), the closest, and B10 offers it. Closing Hippius's gaps to its gate (a measured bootstrap or attested SSH setup, documented guest reports and image measurements, published terms, placement the broker doesn't choose, the external audit) is the work that ships it. *(Recommended was: The indicator shows as drawn, and its sheet offers only an always-on computer until a provider passes its gate (COMPUTE §11.10's Where row). No provider passes today.)* | B10 |
+| Q-UI-10 | What does Burner fill as a password manager? | **Decided (UI-5, revised by UI-11):** passwords, one-time codes and passkeys at launch, as an iOS AutoFill credential provider and an Android autofill service; a passkey belongs to one site. | B1, B2, B8 |
+| Q-UI-11 | The bot's four pills when names are long? | **Decided (UI-5), as recommended:** The agent count and the balance always show in full; the harness and model pills shorten (the model to its name without provider or effort, with a TEE mark), and the full names live in their lists. | T1 |
+| Q-UI-12 | Which agents does the count count? | **Decided (UI-5), as recommended:** The member's agents not retired whose status is under 15 minutes old, on every harness, with a dot while one waits on the person. The feed shows offline and retired agents when asked. | T1, T5 |
+| Q-UI-13 | 30 days and all time, in place of 7 days? | **Decided (UI-5), as recommended:** Yes, everywhere: the spend screen, `Compute().Spend()` and the bot's `compute_spend` (COMPUTE R-BAL-9, §9.13, §15.4, §20.8), all time meaning since the network's first charge. | T7 |
+| Q-UI-14 | A message with several @mentions? | **Decided (UI-5), as recommended:** One message to each agent named, each in its own thread, shown once in the feed. No mention means all agents, and the label beside the input always says who receives it. | T5, T6 |
+| Q-UI-15 | Which run does the bot's main view show? | **Decided (UI-5):** the session the session pill names, the one the person last spoke to on this harness; tapping an agent in the feed opens its session, and /new starts one. *(Recommended was: The run of the agent the person last spoke to on the current harness; tapping an agent in the feed opens its run, and `/new` starts one.)* | T1, T5 |
+| Q-UI-16 | Where does today's feedback survey go? | **Decided (UI-5), as recommended:** The Support tab is the conversation alone; the survey form moves to Account › Settings › Rate URnetwork (COMPUTE §28.3 keeps it as it is). | S1 |
+| Q-UI-17 | How does Leaderboard sit in Account on wide windows? | **Decided (UI-5), as recommended:** A row under the account card (A1); from medium width, Account's list-detail opens it beside the list, which changes DESIGNSTYLE's "Split layouts", where Leaderboard is a top-level screen. | A1, A2 |
+| Q-UI-18 | Titles under the tab icons? | **Decided (UI-5), as recommended:** Yes, on every platform, Android included, where the bar is icon-only today: five tabs, two of them new, need names. | every screen |
+| Q-UI-19 | Does the Products page change? | **Decided (UI-5, priced by UI-16):** three plans, Community, Pro and Team. Team gives each seat about Pro's caps, and adds team management, RBAC, custom sign-in and a custom domain. Its first three seats cost one seat's price, $10 a month or $80 a year together, and each further seat is $10 a month or $80 a year (UI-16). Community includes 100 MB of encrypted, versioned storage and Pro 100 GB. Enterprise is named as custom services, linking to the services page. | Products |
+| Q-UI-20 | Does the Install page change? | **Decided (UI-5):** Install stays as it is. The CLI installs from the CLI page alone, whose packages (.pkg, .deb, .rpm, .zip) are in the docs' install guide. *(Recommended was: It lists the apps as today and adds the CLI's install box beside the desktop downloads, linking to the CLI page.)* | Install |
+| Q-UI-21 | Remote images in mail? | **Decided (UI-5), as recommended:** Off by default, with Load images on each message, since a tracking image tells the sender when, and from where, mail was read. | B12 |
+| Q-UI-22 | The web app's sections? | **Decided (UI-5), as recommended:** ur.io/app takes the same five sections in its sidebar, with Leaderboard moving into Account. It has no phone layout: on a phone, every ur.io/app address refers people to the apps (UI-7). | web app |
+| Q-UI-23 | "As many addresses as you want" (UI-2), while DESIGN §20.4 caps active per-use addresses? | **Decided (UI-5):** lift the caps: unlimited per-use addresses on every plan, as well as unlimited inboxes. DESIGN.md's track drops `mail_burners_active` (10 / 500 / none); whether `mail_burner_creates_per_day` stays as a pace limit is Q-UI-41. *(Recommended was: Keep the line: inboxes are unlimited on every plan (DESIGN R-MAIL-3). Per-use addresses stay capped at 10 active on Community and 500 on Pro, which Products lists by plan (Q-UI-19); a new category past the cap waits until one is burned. The other way is lifting the cap, which DESIGN keeps as an abuse bound and a reason for Pro.)* | Burner page; B1, B8 |
+| Q-UI-24 | "Only visible to you" (UI-2) in a team network? | **Decided (UI-5), as recommended:** One line under that section says so: in a team, the team's admins also see agents' actions and approvals (DESIGN R-KEYS-9), and a team's visible audit reader may read sessions. For a personal network the headline holds as written. | Bot page |
+| Q-UI-25 | "An ipv4 and ipv4 subnet" for each role (UI-3): what is it? | **Decided (UI-5), as recommended:** One IPv4 range per role, carved from the network's /16, from which each device whose first role it is takes its address. No IPv6, since the bridge has none (owner decision 28: "no IPv6 overlay"). If an address for the role itself was meant, such as a gateway, the overlay has no use for one: every device is reached at its own address. | TM3-TM6, BR1 |
+| Q-UI-26 | How do roles sit on the design's model? | **Decided (UI-5), as recommended:** People and devices may hold several roles. The seven built-in roles keep DESIGN's management rights (§7.5); a team's own roles carry network access and any management rights an admin gives them. The app writes roles into the signed policy as groups for people, tags for devices and rules between them, so enforcement stays DESIGN's (§8). An identity-provider group can map to a role through SCIM. | TM5-TM8 |
+| Q-UI-27 | A device with several roles: which range gives its address? | **Decided (UI-5), as recommended:** Its first role's. Changing the first role moves the device to an address in the new range; its private name stays, and the old address is held 30 days (DESIGN §17.4's tombstone). What the device may reach is the union of all its roles' rules. | TM3, BR1, BR2 |
+| Q-UI-28 | How big is each range, and where does it come from? | **Decided (UI-5), as recommended:** Carved from the block's lower /17, DESIGN's host half, outside `<block>.0.0/24`, which stays with the services; a /24 by default, an admin choosing up to a /20. A full range holds new devices for that role until an admin grows it. This replaces DESIGN's random host address (§17.4). | TM5, TM6 |
+| Q-UI-29 | Bridge and DESIGN-COMPUTE's Listeners section? | **Decided (UI-5), as recommended:** Bridge takes the Listeners section's place under Account (COMPUTE §15.4, §26.10) and adds addresses, roles, public TLS names, subnet routes and shared LAN devices. Listeners' rules carry over unchanged: the publishing acknowledgment, Label, Hide and each entry's badge. | BR1-BR4 |
+| Q-UI-30 | Who can open a blocked endpoint from Bridge? | **Decided (UI-5), as recommended:** People whose role may edit access rules (Owners, Admins, Network admins, and any role given that right) add the rule in place, signed by their device; everyone else gets Request access, which an admin approves (DESIGN §8.5's requests). | BR4 |
+| Q-UI-31 | Team and Bridge in a personal network? | **Decided (UI-5, UI-14):** Team offers "Create a team", which upgrades the network to the Team plan (UI-14); Bridge lists the person's own devices and their endpoints, without roles. | A1, A3 |
+| Q-UI-32 | Does every agent get its own IP? | **Decided (UI-5), as recommended:** No. An agent is reached at its harness's address unless it runs as its own sidecar, under its own OS user, container or VM (DESIGN §17.4's binding); the agent's card shows whichever applies and says which. Its email address is its own in every case (DESIGN §15.8). | T8 |
+| Q-UI-33 | After a category's address is rotated (UI-6), what happens to the old one? | **Decided (UI-5), as recommended:** It keeps receiving into the category's inbox for 30 days while sites are updated, then is burned; "Stops now" burns it at once. Its mail stays either way, and the old address goes into the notes with the date. | B6, B13, B14 |
+| Q-UI-34 | On a phone, does "Open" open the app when it's installed? | **Decided (UI-5), as recommended:** Yes: the button is an app link (a universal link on iOS, an app link on Android) that opens the app at that tab where it's installed and the store page where it isn't. The platform decides: iPhones, iPads and Android devices, which run the app, get the app; every other browser gets the web app, whatever its width (UI-7). | M1, M3 |
+| Q-UI-35 | Which stores does the phone page offer? | **Decided (UI-5), as recommended:** On iPhone and iPad, the App Store. On Android, Google Play, with "Other ways to install" leading to F-Droid, the Solana dApp Store and the APK on GitHub, as the Install page lists them. | M1, M3 |
+| Q-UI-36 | Several harnesses share a session (UI-9): what does sharing mean? | **Decided (UI-5), as recommended:** One harness runs the session's agent at a time, which claims it; any other harness joins it to watch it live and add prompts, which go to the running harness (COMPUTE §7.10's attach). When the running harness lets go, the session is unclaimed and any harness can switch into it (§24.7). The other reading, several harnesses each running turns in one session, needs a way to order their turns that the design doesn't have. | T1, T9 |
+| Q-UI-37 | How does compaction run? | **Decided (UI-5), as recommended:** Automatically when the context reaches 90% of the model's window, and at any time with Compact or /compact, with an optional focus for the summary. The most recent turns stay word for word, and every summary and what it replaced stay in the record (CO-25). | T11 |
+| Q-UI-38 | Who can be added to a group (UI-10)? | **Decided (UI-5), as recommended:** People who are members of the network: in a team, any of its people; in a personal network, people the owner invites into it, each with their own address there. DESIGN's `group-add` admits only the network's members, so someone new is invited into the network first (B17). | B15, B17 |
+| Q-UI-39 | UI-1 gives each category a password, a one-time code and notes; passwords and passkeys are now per site (UI-11). Is the one-time code per site too? | **Decided (UI-13):** yes. Each site card holds its own password, one-time code, passkey and notes; the category keeps its own notes at the top. | B1, B6 |
+| Q-UI-40 | Team caps are per seat (Q-UI-19): pooled across the team, or held per person? | **Decided (UI-5), as recommended:** Pooled: a team's caps are the per-seat caps times its seats, shared by everyone, as DESIGN's quotas are kept per network (§20.4); an admin sees the team's use against the total. | Products |
+| Q-UI-41 | With per-use addresses unlimited (Q-UI-23), does a daily limit on creating them stay? | **Decided (UI-5):** drop it: no limit on creating per-use addresses either. DESIGN.md's track drops `mail_burner_creates_per_day` as well as `mail_burners_active`; the sending limits, which every address shares, still bound abuse. *(Recommended was: Yes, as a pace limit rather than a cap: DESIGN's 3 a day on Community and 50 on Pro, none on Team, so a stolen session or a runaway agent can't mint thousands of addresses at once; the number a person keeps is unlimited.)* | B8, B15 |
+| Q-UI-42 | Where do the mail tools run, and which models may read mail? | **Decided (UI-5):** any model the person picks: local, a TEE model, or a direct one once the person acknowledges that provider's disclosure, which says the provider reads the mail it's given. The tools run on the indexer as mail arrives, or on a phone while the app is open when there is no indexer. *(Recommended was: On the network's indexer as mail arrives, and on a phone while the app is open when there is none. A local model on the indexer where it has room, else a TEE model through the router; a model labeled `none`, whose provider would read the mail, is not offered for mail. This lets the indexer enclave call a model, which DESIGN-COMPUTE §11.10 doesn't today.)* | B18, B20 |
+| Q-UI-43 | Where does Report spam send? | **Decided (UI-5), as recommended:** To URnetwork's spam controls by default, for spam sent through URnetwork, whose sending network then faces DESIGN §21.7's probation; to the sender's provider only when the person turns it on, since that report carries the message and so the person's address. | B18, B20 |
+| Q-UI-44 | How do events get added "automatically"? | **Decided (UI-5), as recommended:** Each is a calendar write the device's check approves in auto mode (COMPUTE §23.9, §27); an event with other people on it always waits as a card for the person; each added event shows who approved it, with Undo. | B18, B19 |
+| Q-UI-45 | Create a team upgrades to the Team plan (UI-14): does this network become the team? | **Decided (UI-5), as recommended:** Yes, in place: its devices, addresses, mail and storage stay, the person becomes its first Owner and its first seat (DESIGN §7.5's team-create), and a Pro subscription's unused time is credited to the Team plan. | A1, A4 |
+| Q-UI-46 | Where are Team seats billed from the apps? | **Decided (UI-5, UI-16):** the app stores sell a three-seat Team subscription, $10 a month or $80 a year (UI-16); more seats are added on the web, billed through Stripe. | A4 |
+| Q-UI-47 | A team's first seat is a store subscription and its other seats are Stripe's (Q-UI-46): how do they combine? | **Decided (UI-5, adjusted by UI-16):** the store bills its subscription, which covers the first three seats, and Stripe the rest; the team's seats are their sum. A person joining takes a free seat, else the inviting admin is sent to ur.io to add one. If the store subscription lapses, the Stripe seats keep the team going; if all lapse, the network drops to Pro's caps, nothing deleted. | A4, TM1, TM2 |
+
+## Next
+
+1. Apply the changes listed under "What this changes in other documents": DESIGN-COMPUTE.md's in this repo, the site's in mmm, and DESIGN.md's through DESIGN.md's own track.
+2. Grow this document into the design: every screen's states (loading, empty, error, offline), platform differences, wide windows and foldables, accessibility, copy, and the sdk view controller behind each screen.
