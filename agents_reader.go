@@ -73,6 +73,7 @@ func NewAgentsAuthority(state *ConfigState) (AgentsAuthority, error) {
 	return &agentsStateAuthority{state: state, acl: acl}, nil
 }
 
+// The admission's member, or a tagged sidecar's live sponsor; a revoked sidecar names none.
 func (self *agentsStateAuthority) MemberOf(sidecarId Id) (Id, bool) {
 	sidecar := self.state.Sidecar(sidecarId)
 	if sidecar == nil || sidecar.Row.GetRevokedAt() != 0 {
@@ -84,18 +85,22 @@ func (self *agentsStateAuthority) MemberOf(sidecarId Id) (Id, bool) {
 	return sidecar.MemberId, sidecar.MemberId != (Id{})
 }
 
+// §8.5's consented(d, M) at the state: an untagged, standing device of memberId.
 func (self *agentsStateAuthority) UntaggedConsented(sidecarId Id, memberId Id) bool {
 	return self.acl.ConsentedFor(sidecarId, memberId)
 }
 
+// The member's first standing agents repo in log order.
 func (self *agentsStateAuthority) AgentsRepo(memberId Id) (Id, bool) {
 	return self.acl.AgentsRepo(memberId)
 }
 
+// Whether the log binds the standing agent repo to memberId.
 func (self *agentsStateAuthority) MemberAgentRepo(memberId Id, repoId Id) bool {
 	return self.acl.MemberAgentRepo(memberId, repoId)
 }
 
+// Whether the state's newest base turns agent_repos on.
 func (self *agentsStateAuthority) AgentReposOn() bool {
 	return self.state.AuthFeatureOn(AuthFeatureAgentRepos)
 }
@@ -139,6 +144,7 @@ type agentCardBuffer struct {
 // A card past its bound.
 var errAgentCardOversize = errors.New("past the card's bound")
 
+// Appends data, refusing what would pass the bound.
 func (self *agentCardBuffer) Write(data []byte) (int, error) {
 	if self.maxByteCount < len(self.data)+len(data) {
 		return 0, errAgentCardOversize
