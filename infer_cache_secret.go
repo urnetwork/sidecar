@@ -56,6 +56,7 @@ import (
 	"bytes"
 	"context"
 	cryptorand "crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -783,7 +784,7 @@ func (self *InferCacheFile) validate(settings *InferSettings) error {
 	}
 	keyHex := func(text string) bool {
 		decoded, err := hex.DecodeString(text)
-		return err == nil && len(decoded) == 32 && hex.EncodeToString(decoded) == text
+		return err == nil && len(decoded) == sha256.Size && hex.EncodeToString(decoded) == text
 	}
 	drawId, err := hex.DecodeString(self.DrawId)
 	switch {
