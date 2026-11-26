@@ -219,8 +219,10 @@ func (self *Sidecar) VersioningRules() (*protocol.VersioningRules, bool, error) 
 }
 
 // Saves the network's VersioningRules into the config head, signed by this device, as the person confirmed it (never
-// MCP or a hook, D-CORE-13), through this network's config writer, which a device that runs none refuses. Every reader
-// checks the record's signer is an Owner's, Admin's or Network admin's device at the base that names the head.
+// MCP or a hook, D-CORE-13), through this network's general config writer, or where none runs, as in the stock ur
+// daemon, through its writer for confirmed saves, whose EXACT_HEAD push refuses the save if the head moved since it was
+// read (QD-1424); a device that runs neither refuses. Every reader checks the record's signer is an Owner's, Admin's or
+// Network admin's device at the base that names the head.
 func (self *Sidecar) SaveVersioningRules(ctx context.Context, rules *protocol.VersioningRules, origin SidecarActOrigin) error {
 	if origin != SidecarActConfirmed {
 		return ErrSidecarActMode
@@ -232,7 +234,7 @@ func (self *Sidecar) SaveVersioningRules(ctx context.Context, rules *protocol.Ve
 	if !ok {
 		return ErrAgentPlanNoState
 	}
-	writer := authority.client.Writer()
+	writer := authority.client.ConfirmedWriter()
 	if writer == nil {
 		return errors.New("no config writer runs for this network on this device")
 	}

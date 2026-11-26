@@ -526,6 +526,12 @@ barrier identity.stale.recheck.before identity_act_stale.go
 barrier infer.disclosure.ask.before infer_check_disclosure.go
 barrier infer.dispatch.before infer_router.go
 barrier infer.terminal.before infer_router.go
+barrier infer_download.chunk.marked infer_download.go
+barrier infer_download.chunk.synced infer_download.go
+barrier infer_download.index.kept infer_download_state.go
+barrier infer_download.whole.marked infer_download_state.go
+barrier infer_download.whole.renamed infer_download_state.go
+barrier infer_download.whole.returned infer_download_state.go
 barrier infer_engine.conversation.open.before infer_engine_helper.go
 barrier infer_engine.generate.answered infer_engine_helper.go
 barrier keys.change_pass.after keys_unlock.go
@@ -884,6 +890,10 @@ barrier stream.keepalive_reset.after stream_keepalive.go
 barrier stream.keepalive_reset.before stream_keepalive.go
 barrier stream.open.after stream_open.go
 barrier stream.open.before stream_open.go
+barrier stream.read_wait.after stream_conn.go
+barrier stream.read_wait.before stream_conn.go
+barrier stream.write_wait.after stream_conn.go
+barrier stream.write_wait.before stream_conn.go
 barrier team_directory.file.after config_directory.go
 barrier team_directory.file.before config_directory.go
 barrier tls.cert_install.after tls_cert_manager.go

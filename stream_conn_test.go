@@ -16,8 +16,6 @@ import (
 	"net"
 	"os"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -59,12 +57,9 @@ func TestSubprotocolStreamPassesNettest(t *testing.T) {
 // A passed deadline fails I/O as a timeout and leaves the stream usable once it is cleared, and a read
 // waiting when the dispatcher's clock reaches its deadline wakes with the timeout.
 //
-// The read times its wait off the clock and then sets it, and the dispatcher's other loops set waits on
-// the same clock, the stream keepalive's first among them, which can land long after the stream opened.
-// An Advance taken as soon as the clock's next wait was set could fall between the read's two steps, and
-// no later Advance fired the read's wait. So the Advance waits for the read's own wait, the one set after
-// the count for its deadline, an instant nothing else on the dispatcher waits for; and the read is held
-// between its two steps while another wait passes the count, so every run meets the order that hung.
+// The deadline's wait is set on the clock when the deadline is, so it is there before the read starts, and
+// the Advance fires it wherever the read has got to. stream_conn_deadline_hooks_test.go holds the read at
+// each step of its wait, and stream_conn_deadline_test.go moves the clock while the deadline's wait is set.
 func TestSubprotocolStreamDeadlineLeavesTheStreamUsable(t *testing.T) {
 	_, a, b := newTestStreamSides(t, nil)
 	incomings := testStreamAccepting(t, a, testStreamTarget)
@@ -91,49 +86,20 @@ func TestSubprotocolStreamDeadlineLeavesTheStreamUsable(t *testing.T) {
 		t.Errorf("read %q", got)
 	}
 	// a deadline on the dispatcher's clock wakes a waiting read when the clock reaches it
-	deadline := a.clock.Now().Add(time.Second)
-	accepted.SetReadDeadline(deadline)
-	held := make(chan struct{})
-	release := make(chan struct{})
-	releaseRead := sync.OnceFunc(func() {
-		close(release)
-	})
-	// a test that fails while the read is held lets it go as it ends
-	t.Cleanup(releaseRead)
-	holding := atomic.Bool{}
-	a.clock.setOnAfter(func(timeout time.Duration) {
-		// the read's: its deadline is a second from the clock it read, and no other loop here waits a second
-		if timeout == time.Second && holding.CompareAndSwap(false, true) {
-			close(held)
-			<-release
-		}
-	})
-	// counted before the read starts, so its wait is past the count
 	waits := a.clock.waitCount.Value()
+	deadline := a.clock.Now().Add(time.Second)
+	if err := accepted.SetReadDeadline(deadline); err != nil {
+		t.Fatal(err)
+	}
+	// set by SetReadDeadline itself, before any read: an instant nothing else on the dispatcher waits for
+	if set, _ := a.clock.waitAt(waits, deadline); !set {
+		t.Fatalf("no wait set for the read's deadline")
+	}
 	readErr := make(chan error, 1)
 	go func() {
 		_, err := accepted.Read(make([]byte, 8))
 		readErr <- err
 	}()
-	testAwait(t, held, "read timing its wait")
-	// another loop's wait past the count: an await on the count alone ends here, the read's wait not yet set
-	a.clock.After(a.settings.PingTimeout)
-	if set, _ := a.clock.waitAt(waits, deadline); set {
-		t.Fatalf("a wait for the read's deadline before the read set one")
-	}
-	releaseRead()
-	guard := time.After(testSubprotocolAwaitTimeout)
-	for {
-		set, notify := a.clock.waitAt(waits, deadline)
-		if set {
-			break
-		}
-		select {
-		case <-notify:
-		case <-guard:
-			t.Fatalf("the read set no wait for its deadline")
-		}
-	}
 	a.clock.Advance(time.Second)
 	if err := testAwait(t, readErr, "the read at its deadline"); !errors.Is(err, os.ErrDeadlineExceeded) {
 		t.Errorf("the read at its deadline: %v", err)

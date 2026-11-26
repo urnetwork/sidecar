@@ -21,11 +21,17 @@
 // weight ride the request beside it. Its effect is the grant component's. A standing grant, a document's rule or a
 // grant already activated, passes it under an empty key with nothing to do; else the request is filed for the rule's
 // approvers, and the listen asked again once a person approves spends the decision, whose use files the GrantActivate
-// the approval fixes and is done with its grant_id, which the listen kind's Lookup finds again after a restart. A
-// listen no requests rule takes names no rule and no expiry, so no decision could activate a grant for it: a standing
-// grant alone passes it, and with none it is refused here (ErrSocketDenied), filing nothing. A use that came to
-// not_done refuses the listen, and an uncertain one answers unavailable, which the same listen asked again completes
-// under its key (AU4). A listener the gate passed keeps when its grant ends: its action's expiry, where the grant is
+// the approval fixes and is done with its grant_id, which the listen kind's Lookup finds again after a restart. That
+// use is done only once this device's engine holds the grant in force, waited on in the host's config client up to the
+// GrantActivate's receipt within ListenGrantLandTimeout (AclGrantFiler.landedEffect, the one wait §13.10's publish and
+// MCP's socket_listen take; acl_grant_keep.go's landed row), so the registration that follows rests on a grant the log
+// holds where the sockets service's gate reads it, and a fresh grant's first registration needs no second ask; a grant
+// the engine does not hold by then leaves the use uncertain, and the listen answers unavailable naming the grant
+// (AclGrantUnconfirmedError), registering nothing. A listen no requests rule takes names no rule and no expiry, so no
+// decision could activate a grant for it: a standing grant alone passes it, and with none it is refused here
+// (ErrSocketDenied), filing nothing. A use that came to not_done refuses the listen, and an uncertain one answers
+// unavailable, which the same listen asked again completes under its key (AU4), or, once the engine holds the grant,
+// passes on it as standing. A listener the gate passed keeps when its grant ends: its action's expiry, where the grant is
 // the one a decision on that action activated, now or before, and none where a standing grant of the config's passed
 // it, whose end it did not ask; the daemon's reply carries it to ur socket listen. The expiry asked moves with the
 // clock, a rule's default as much as Expires from now, so each listen's action is kept as its request was filed, by
@@ -762,27 +768,35 @@ func (socketListenStandingEffect) Run(ctx context.Context, effectKey []byte) ([]
 	return nil, fmt.Errorf("%w: no requests rule takes this listen, so no grant activates for it", ErrSidecarEffectNotDone)
 }
 
-// The grant filer a tls/ or smtp/ listen's action is built and activated by: the one a host-less component was given,
-// else one over the host's standing follower's ACL engine, the engine the host's gate reads its standing grants from
-// (cli's bridge_filing_config.go), for this network alone. Nil while there is none.
-func (self *SocketComponent) listenGrantFiler() *AclGrantFiler {
-	grants := func() *AclGrantFiler {
+// The grant filer a tls/ or smtp/ listen's action is built and activated by, and the config a grant its use activates
+// is waited on in before the listen registers (the file header): the ones a host-less component was given, else one
+// over the host's standing follower's ACL engine, the engine the host's gate reads its standing grants from (cli's
+// bridge_filing_config.go), and that follower's config client, whose follow installs each state in that engine before
+// its position shows, taken together from one standing follower for this network alone. Both nil while there is none.
+func (self *SocketComponent) listenGrants() (*AclGrantFiler, AclGrantConfig) {
+	grants, config := func() (*AclGrantFiler, AclGrantConfig) {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
-		return self.grants
+		return self.grants, self.grantConfig
 	}()
 	if grants != nil || self.host == nil {
-		return grants
+		return grants, config
 	}
 	follower := self.host.ConfigFollower()
 	if follower == nil {
-		return nil
+		return nil, nil
 	}
 	engine, client := follower.StandingPolicy()
 	if engine == nil || client == nil || client.NetworkId() != self.networkId {
-		return nil
+		return nil, nil
 	}
-	return NewAclGrantFiler(self.host, engine)
+	return NewAclGrantFiler(self.host, engine), client
+}
+
+// listenGrants' filer.
+func (self *SocketComponent) listenGrantFiler() *AclGrantFiler {
+	grants, _ := self.listenGrants()
+	return grants
 }
 
 // The §5.4 action a tls/ or smtp/ listen on name goes through Authorize as, with its effect (the file header): kind
@@ -791,11 +805,13 @@ func (self *SocketComponent) listenGrantFiler() *AclGrantFiler {
 // the request's socket_name and weight (QD-740), and the expiry settings' Expires asks, from now, or none for the
 // rule's expiresDefault (owner decision 687). This listener accepts in process and binds no local port, so the request
 // carries none. The action a requests rule takes is kept as its request was filed until its expiry, and given up once
-// the grant its decision activated has ended (the file header). ErrSocketDenied where no requests rule takes the
-// listen and no standing grant covers it, or a requests rule takes it but gives no grant as long as Expires asks,
-// which the error says (socketListenDeniedError), and ErrSocketUnavailable with no verified ACL state to judge it on.
+// the grant its decision activated has ended, and a use that activates its grant is done only once this device's
+// engine holds it, waited on in the config listenGrants answers within ListenGrantLandTimeout (the file header).
+// ErrSocketDenied where no requests rule takes the listen and no standing grant covers it, or a requests rule takes it
+// but gives no grant as long as Expires asks, which the error says (socketListenDeniedError), and ErrSocketUnavailable
+// with no verified ACL state to judge it on.
 func (self *SocketComponent) socketListenAction(ctx context.Context, generation *socketGeneration, name string, settings *SocketListenSettings) (*SidecarAction, error) {
-	grants := self.listenGrantFiler()
+	grants, config := self.listenGrants()
 	if grants == nil || grants.engine == nil || grants.engine.State() == nil || generation == nil || generation.identity == nil {
 		return nil, &SocketCodeError{Err: ErrSocketUnavailable}
 	}
@@ -831,7 +847,11 @@ func (self *SocketComponent) socketListenAction(ctx context.Context, generation 
 			func(kept *StoredCanonicalAction) bool {
 				return grants.grantEnded(kept, detail, nil, nil, now)
 			})
-		effect = grants.Effect(stored)
+		// the grant its use activates is waited on until this device's engine holds it, so the registration after the
+		// gate rests on a grant the sockets service's gate can read rather than one it may refuse (the file header)
+		effect = grants.landedEffect(stored, func() AclGrantConfig {
+			return config
+		}, self.settings.ListenGrantLandTimeout)
 	case errors.Is(err, ErrAclRequestNoMatch):
 		// no requests rule takes it, or none for as long as it asks, so no decision could activate its grant: a standing
 		// grant alone passes it, and with none nothing is filed
@@ -914,8 +934,10 @@ func (self *SocketComponent) listenLookup(ctx context.Context, canonical []byte,
 
 // What a listen the gate passed answers for its outcome: nil once its grant stands, a standing grant's included;
 // ErrSocketDenied where its use proved the grant did not activate; ErrSocketUnavailable while that is uncertain, which
-// the same listen asked again completes under the use's key (AU4). A gate that set no outcome passed the listen with
-// nothing more to say.
+// the same listen asked again completes under the use's key (AU4), beside the *AclGrantUnconfirmedError that names the
+// grant where its use activated one this device's engine did not hold within the wait (the file header). No other
+// cause is carried, so the answer names no socket (I-13). A gate that set no outcome passed the listen with nothing
+// more to say.
 func socketListenOutcomeError(outcome *SidecarOutcome) error {
 	if outcome == nil {
 		return nil
@@ -926,7 +948,12 @@ func socketListenOutcomeError(outcome *SidecarOutcome) error {
 	case ApprovalOutcomeNotDone:
 		return &SocketCodeError{Err: ErrSocketDenied}
 	}
-	return &SocketCodeError{Err: ErrSocketUnavailable}
+	unavailable := &SocketCodeError{Err: ErrSocketUnavailable}
+	var unconfirmed *AclGrantUnconfirmedError
+	if errors.As(outcome.Err, &unconfirmed) {
+		return fmt.Errorf("%w: %w", unavailable, unconfirmed)
+	}
+	return unavailable
 }
 
 // The registration args for name with settings' defaults applied, from format and from sockets for a receiver, and
