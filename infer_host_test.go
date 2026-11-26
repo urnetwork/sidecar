@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -347,5 +348,41 @@ func TestHostCapabilitiesReadStrictly(t *testing.T) {
 		if len(catalog.Entries()) != 0 || catalog.LocalUnavailable() == "" {
 			t.Errorf("%s listed %d local models", capabilities, len(catalog.Entries()))
 		}
+	}
+}
+
+// A desktop instance keeps its engine and model files in its own folder of <ur>/_local, beside the instance state
+// directories and outside every one of them, a folder no instance can be named, so the macOS helper's one sandbox
+// exception (<home>/Library/Application Support/ur/_local) reads every instance's files and no instance's state.
+func TestDesktopLocalDirectoryHoldsNoInstanceState(t *testing.T) {
+	environment := map[string]string{"XDG_STATE_HOME": "/synthetic/state"}
+	getEnvironment := func(name string) string { return environment[name] }
+	getHome := func() (string, error) { return "/synthetic/home", nil }
+	if isSidecarInstanceName(inferDesktopLocalDirectoryName) {
+		t.Fatalf("an instance may be named %s", inferDesktopLocalDirectoryName)
+	}
+	for _, instance := range []string{"default", "work"} {
+		for _, goos := range []string{"darwin", "linux"} {
+			state, err := sidecarStateDirectoryFor(instance, goos, getEnvironment, getHome)
+			if err != nil {
+				t.Fatal(err)
+			}
+			local := InferDesktopLocalDirectory(state)
+			want := filepath.Join(filepath.Dir(state), "_local", instance)
+			if local != want || InferModelDirectory(local) != filepath.Join(want, "models") || InferEngineDirectory(local) != filepath.Join(want, "engine") {
+				t.Errorf("%s's %s keeps its files in %s", goos, instance, local)
+			}
+			if strings.HasPrefix(local+string(filepath.Separator), state+string(filepath.Separator)) ||
+				strings.HasPrefix(state+string(filepath.Separator), filepath.Dir(local)+string(filepath.Separator)) {
+				t.Errorf("%s's %s: its files %s and its state %s nest", goos, instance, local, state)
+			}
+			if goos == "darwin" && filepath.ToSlash(filepath.Dir(local)) != "/synthetic/home/Library/Application Support/ur/_local" {
+				t.Errorf("the macOS folder %s is not the one the helper's sandbox names", filepath.Dir(local))
+			}
+		}
+	}
+	// a state named with a trailing separator is the same instance
+	if InferDesktopLocalDirectory("/synthetic/state/ur/work/") != filepath.Join("/synthetic/state/ur", "_local", "work") {
+		t.Errorf("a trailing separator moved the folder to %s", InferDesktopLocalDirectory("/synthetic/state/ur/work/"))
 	}
 }

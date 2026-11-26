@@ -69,22 +69,38 @@ type SidecarSafetyClassifierHost interface {
 	Unload(handle int64)
 }
 
-// The directories of <state> the local half keeps its files in, beside §5.9's tree: the models, by their SHA-256
-// (InferModelDownload), and on a desktop the engine's libraries, by their manifest names. Format values: every build of
-// an instance reads the same tree.
+// The directories the local half keeps its files in: the models, by their SHA-256 (InferModelDownload), and on a
+// desktop the engine's libraries, by their manifest names; an app's inside its <state>, beside §5.9's tree, a desktop
+// instance's inside its own folder of InferDesktopLocalDirectory. Format values: every build of an instance reads the
+// same tree.
 const (
 	inferModelDirectoryName  = "models"
 	inferEngineDirectoryName = "engine"
 )
 
-// The directory of <state> the model files are kept in: <state>/models.
-func InferModelDirectory(state string) string {
-	return filepath.Join(state, inferModelDirectoryName)
+// The folder beside a desktop's instance state directories that holds each instance's engine and model files and
+// nothing else (question infer-m11-05-macos-instance-directories, option 1): no instance can be named so, since an
+// instance's name is [a-z0-9][a-z0-9-]{0,31}. The macOS helper's sandbox names it once, as one read-only exception
+// (build/all/ur/macos/ur-engine.entitlements), so every instance's helper reads its files and none reads an instance's
+// state; Landlock and the AppContainer grant an instance's two directories alone. A format value.
+const inferDesktopLocalDirectoryName = "_local"
+
+// The folder a desktop instance whose state is state (<ur>/<instance>, SidecarStateDirectory's) keeps its engine and
+// model files in: <ur>/_local/<instance>, outside its state, which the helper must not read.
+func InferDesktopLocalDirectory(state string) string {
+	state = filepath.Clean(state)
+	return filepath.Join(filepath.Dir(state), inferDesktopLocalDirectoryName, filepath.Base(state))
 }
 
-// The directory of <state> a desktop's engine files are kept in: <state>/engine.
-func InferEngineDirectory(state string) string {
-	return filepath.Join(state, inferEngineDirectoryName)
+// The directory of local the model files are kept in: <local>/models, an app's <state>/models, a desktop instance's
+// <ur>/_local/<instance>/models.
+func InferModelDirectory(local string) string {
+	return filepath.Join(local, inferModelDirectoryName)
+}
+
+// The directory of local a desktop's engine files are kept in: <ur>/_local/<instance>/engine.
+func InferEngineDirectory(local string) string {
+	return filepath.Join(local, inferEngineDirectoryName)
 }
 
 // No directory to keep model files in: this Sidecar's state is not on a disk, as the page Worker's and a test's

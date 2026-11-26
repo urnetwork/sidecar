@@ -141,19 +141,21 @@ func (self *urDaemonApiTransport) RoundTrip(request *http.Request) (*http.Respon
 	return nil, errors.New("no network runs on this daemon to pull a model through")
 }
 
-// The instance's local engine and pull over stateDirectory's engine and models, which the daemon closes at its end;
-// nil, logged, where they do not build, which leaves every network with no local engine.
+// The instance's local engine and pull over its engine and model files, kept outside stateDirectory in the instance's
+// folder of <ur>/_local (InferDesktopLocalDirectory), which the daemon closes at its end; nil, logged, where they do not
+// build, which leaves every network with no local engine.
 func startUrLocalInference(ctx context.Context, stateDirectory string, settings *sidecar.SidecarSettings, daemon *sidecar.Daemon, log sidecar.Logger) *urLocalInference {
 	inferSettings := settings.Infer
 	if inferSettings == nil {
 		inferSettings = sidecar.DefaultInferSettings()
 	}
 	local := &urLocalInference{ctx: ctx, settings: inferSettings}
+	files := sidecar.InferDesktopLocalDirectory(stateDirectory)
 	pull, err := sidecar.NewInferPull(&sidecar.InferPullArgs{
 		ApiUrl:          settings.ApiUrl,
 		Transport:       &urDaemonApiTransport{daemon: daemon},
-		ModelDirectory:  sidecar.InferModelDirectory(stateDirectory),
-		EngineDirectory: sidecar.InferEngineDirectory(stateDirectory),
+		ModelDirectory:  sidecar.InferModelDirectory(files),
+		EngineDirectory: sidecar.InferEngineDirectory(files),
 		Device: func(ctx context.Context) (*sidecar.InferDeviceCapabilities, error) {
 			return local.engine.Capabilities(ctx)
 		},
@@ -166,8 +168,8 @@ func startUrLocalInference(ctx context.Context, stateDirectory string, settings 
 		return nil
 	}
 	engine, err := sidecar.NewInferEngineProcess(&sidecar.InferEngineProcessArgs{
-		EngineDirectory: sidecar.InferEngineDirectory(stateDirectory),
-		ModelDirectory:  sidecar.InferModelDirectory(stateDirectory),
+		EngineDirectory: sidecar.InferEngineDirectory(files),
+		ModelDirectory:  sidecar.InferModelDirectory(files),
 		StateDirectory:  stateDirectory,
 		Models:          pull,
 		Settings:        inferSettings,
