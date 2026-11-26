@@ -302,11 +302,12 @@ func TestComputeProjectionReadsAvailableAndBalance(t *testing.T) {
 	}
 }
 
-// The scripts keep their rules in their sources: each redis.call names a key from KEYS, or one a declared key was found
-// as, never a key built from a literal; no global is assigned; no number reaches Redis through Lua's own formatting.
+// The scripts keep their rules in their sources: each redis.call names a key straight from KEYS, by a literal index or
+// an index a helper was given (KEYS[ki], cmp_budget_index's answer), never a key built from a literal; no global is
+// assigned; no number reaches Redis through Lua's own formatting.
 func TestComputeProjectionScriptsReadOnlyDeclaredKeys(t *testing.T) {
 	call := regexp.MustCompile(`redis\.call\('(\w+)'(?:, ([^,)]+))?`)
-	allowed := []string{"KEYS[1]", "KEYS[2]", "KEYS[i]", "key"}
+	allowed := []string{"KEYS[1]", "KEYS[2]", "KEYS[i]", "KEYS[ki]"}
 	for _, script := range []*operator.RedisScript{
 		computeProjectionHoldScript, computeProjectionConfirmScript, computeProjectionSettleScript, computeProjectionVoidScript,
 		computeProjectionDropScript, computeProjectionRebuildScript, computeProjectionMarkScript, computeProjectionReadScript,
@@ -318,7 +319,7 @@ func TestComputeProjectionScriptsReadOnlyDeclaredKeys(t *testing.T) {
 			if match[1] == "TIME" {
 				continue
 			}
-			if !slices.Contains(allowed, match[2]) && !strings.HasPrefix(match[2], "cmp_budget_key(") {
+			if !slices.Contains(allowed, match[2]) {
 				t.Errorf("%s calls %s on %s", script.Name, match[1], match[2])
 			}
 		}
