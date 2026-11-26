@@ -7,7 +7,7 @@
 | Path | What it is |
 |---|---|
 | `sections/01-CTX.md` … `sections/23-PHASE.md` | DESIGN.md §1-§23, one file per section. The build copies them verbatim, adding only links. |
-| `owner/DECISIONS.md` | The owner's record, entries 1-804. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
+| `owner/DECISIONS.md` | The owner's record, entries 1-805. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
 | `owner/APPLY.md` | The rules for applying the owner's decisions: precedence (§1), supersession, where two decisions disagree (§2), notation (§3), editing rules (§4), and the follow-up decisions 112-136 with the sections each binds (§6-§8). |
 | `CONVENTIONS.md` | The writing conventions every section follows: the owner directive (§0), the owner rules (§1), the section template (§2) and the X registry (§7), which DESIGN.md's X1-X20 table replaced. |
 | `OUTLINE.md` | The original outline: section codes, scope boundaries, and the word budgets that G0's density rule replaced on 2026-11-04. |
@@ -44,7 +44,7 @@ It needs only `python3`; it was built and checked with Python 3.13. The steps, a
 
 The data files are layered. Each `data_*N.py` loads its predecessor with `runpy` and patches it: `data_front10.py` loads `data_front9.py`, back to `data_front3.py`, and the registers, glossary and appendices go the same way. Change the top layer (the `*10` files), or add an `*11` layer that loads them. Comments in the scripts cite working files from the design sessions (the reconcilers' orders, `peer/`, `review/`, `snap/`), which were not imported; they are history.
 
-## Adding owner decision N (805 onward)
+## Adding owner decision N (806 onward)
 
 1. Add entry N to `owner/DECISIONS.md`: the question, the answer, its cost, the options not taken, and what raised it.
 2. In `asm/data_front10.py`, append `(N, "<what it settles>", "<one line>")` to `INDEX`, add `DATES[N]`, and raise the `assert` to `list(range(1, N + 1))`. Update `STATUS` and `DECISIONS_INTRO` where they name a range. `@@OD:k@@` writes a link to decision k.
@@ -1624,7 +1624,7 @@ The owner answered one more question the build raised, QD-1420, on 2026-11-25 wh
 
 ## Validation after the fourteenth fold: the answers since the thirteenth fold, and what was built (2026-11-26)
 
-The design-records track dr22-late-fold (lane slot mail, wave f48m) brings the design up to what was decided or built after the thirteenth fold (sidecar 0d9b970d to e9287531): the owner's answers recorded since, QD-1421 to QD-1428, two of them while it ran, and the builds of owner decisions 789 and 790, which the twelfth and thirteenth folds stated ahead of their code. DESIGN-UI.md's changes to this design wait for the DESIGN-UI phase (owner, 2026-11-26: "The implementation needs to start working on DESIGN-UI.md after DESIGN-COMPUTE.md"), so none is folded here. It lands in pieces, each a commit of its own, recorded below as each lands.
+The design-records track dr22-late-fold (lane slot mail, wave f48m) brings the design up to what was decided or built after the thirteenth fold (sidecar 0d9b970d to e9287531): the owner's answers recorded since, QD-1421 to QD-1430, four of them while it ran, and the builds of owner decisions 789 and 790, which the twelfth and thirteenth folds stated ahead of their code. DESIGN-UI.md's changes to this design wait for the DESIGN-UI phase (owner, 2026-11-26: "The implementation needs to start working on DESIGN-UI.md after DESIGN-COMPUTE.md"), so none is folded here. It lands in pieces, each a commit of its own, recorded below as each lands.
 
 ### What was built since the thirteenth fold
 
@@ -1674,3 +1674,23 @@ The answers to the questions recorded after the thirteenth fold's last number, Q
 - **DESIGN-DEFER.md.** 106 entries and 172 pointers, unchanged: none of the eight defers anything.
 
 Outside this folder the fold touched DESIGN.md (rebuilt), RECORD.md (sections 6.1 and 21), DESIGN-AMENDMENTS.md's lead and its two "Later decisions" items' lines, and DESIGN-COMPUTE-AMENDMENTS.md (QD-1366 and QD-1243); outside git, .stack/decisions/folded.txt. Left for the tracks that own them: owner decision 797's code (fetch-m13-01), 803's (sdk-sidecar-check-clock) and 804's (acl-engine-followups); kinds 56 and 57 in RECORD.md's sections 6.3, 6.4 and 8 and the `ssh` reach kind in section 6.2 and §16.8's `ReachReceipt` fence, with their writers (SAFE-M13-08, ENC-M14-08, SSH-M14-02), whose fold also moves record_kind_test.go's block check off the additions list; record.proto's header, which still names body_apart, bodies_dropped and SeqRange among what no fence writes (ctxh-m11-07's file); and QD-024 and QD-1086, as before.
+
+### Owner decision 805 and QD-1430: the answers recorded after the second piece
+
+The owner answered two more questions the build raised on 2026-11-26, after the second piece landed, one at a time, accepting each recommendation under the owner's standing acceptance of recommended options:
+
+| Ledger id | Owner decision | What it settles |
+|---|---|---|
+| QD-1429 | 805 | Linux's advertising proxy answers mDNS over ff02::fb on `ur tun`'s link from `<block>.0.53`'s address in the translator's /96. |
+| QD-1430 | none | Each instance's engine and model files live under one per-user parent, `<ur>/_local/<instance>/`, which the macOS `ur-engine` entitlement names once; a compute answer. |
+
+- **The Linux proxy's IPv6 answers (805), as built** (discovery-proxy-ipv6-mdns, sidecar 5aa5a01c): §17.7.1's as built paragraph says the proxy answers IPv6 mDNS from `<block>.0.53`'s address in the translator's /96, where it said the fix would answer from the link's IPv6 address, with what the track built beside it: both groups for announcements and goodbyes, each family's own split bound and no IPv6 answer with the translator off. Owner decision 778's index row notes it.
+- **Asked of the compute document.** QD-1430, where each instance's engine and model files live so the macOS sandbox can name them, amends DESIGN-COMPUTE.md §6.5 alone, so it takes no number: DESIGN-COMPUTE-AMENDMENTS.md files it under its §6 as the build's, beside QD-1386 and QD-1401, its lead and index naming it, and infer-m11-05 builds it.
+
+`build.sh` on this folder reproduces DESIGN.md (SHA-256 `15393e8630096dbf90839b95c1f46394a65e5223726067e256673efd2df3c934`) and DESIGN-DEFER.md (SHA-256 `3af6b10c35e06eaa2230e6232dc953d77f4539fe4065623950425ebab41895a6`, unchanged), and the validation shows:
+
+- **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item and no §2.8 row, so no guard line.
+- **Owner decisions.** All 805 rows are present and cited; APPLY.md's section pairs hold. `MAXD`, the two range checks and `LATE_DATES` take 805, dated 2026-11-26. One open owner question, Q-REPO-6.
+- **Superseded options.** 320 grep hits, none on a changed line unread, none live.
+- **Text.** No bare placeholders or HTML tags; the one research-sheet id stands; 12,895 section references, with the one unresolved as before. `v7/words.json` was regenerated, and `v7/text_checks.json` regenerated unchanged.
+- **DESIGN-DEFER.md.** 106 entries and 172 pointers, unchanged.

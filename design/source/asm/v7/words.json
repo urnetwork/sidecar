@@ -146,11 +146,11 @@
  {
   "num": 17,
   "code": "BRIDGE",
-  "words": 16255,
+  "words": 16382,
   "code_words": 8417,
   "ceiling": 3800,
-  "over": 12455,
-  "over_pct": 327.8
+  "over": 12582,
+  "over_pct": 331.1
  },
  {
   "num": 18,
