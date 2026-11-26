@@ -372,7 +372,8 @@ func (self *urBridgeWire) network() *urBridgeNetwork {
 		alarm: func(alarm sidecar.SidecarBridgeAlarm) {
 			self.raise(alarm, nil)
 		},
-		close: self.close,
+		close:      self.close,
+		checkClock: self.bridge.CheckClock,
 		// ur tun's choices for default traffic, in the network's sealed local state (tun_default.go)
 		choices: newUrTunSealedChoices(self.args.Sidecar),
 		// the translator's /48 beside them (tun_translator.go)
@@ -393,6 +394,9 @@ type urBridgeNetwork struct {
 	alarm func(alarm sidecar.SidecarBridgeAlarm)
 	// ends the bridge, nil for none
 	close func()
+	// has the bridge read the clock again at once, nil for none: device.Bridge.CheckClock, which the daemon calls when
+	// the host resumes (resume.go)
+	checkClock func()
 	// where §17.5's translator /48 is kept (tun_translator.go); nil keeps it for the daemon's life alone, in memory
 	translator urTunTranslatorStore
 	// where ur tun's choices for the network's default traffic are kept (tun_default.go); nil keeps them for the
@@ -422,6 +426,9 @@ type urBridgeDaemonArgs struct {
 	Log       sidecar.Logger
 	// Called after each of the tun's syncs has applied, with its error; nil for none. A test's barrier.
 	OnTunSync func(err error)
+	// The platform's watch for the host's resume, at each of which every bridge reads the clock again (resume.go);
+	// nil watches nothing, and the bridges' capped waits cover the host.
+	ResumeWatch urResumeWatchFunction
 }
 
 // The daemon's bridges and the instance's one OS tun (the file's comment). Safe for concurrent use.
@@ -443,6 +450,8 @@ type urBridgeDaemon struct {
 	// wakes the shared blocks' judgment; closed when it has returned
 	sharedWake chan struct{}
 	sharedDone chan struct{}
+	// closed when the resume watch has returned, or at once with none
+	resumeDone chan struct{}
 
 	stateLock sync.Mutex
 	networks  map[sidecar.Id]*urBridgeNetwork
@@ -452,15 +461,15 @@ type urBridgeDaemon struct {
 	sharedBlocks []urSharedBlock
 }
 
-// A daemon's bridges' args: the platform's half of ur tun where it runs, and no builder, since the daemon follows no
-// network's config yet (the file's comment).
+// A daemon's bridges' args: the platform's half of ur tun where it runs, its watch for the host's resume where it has
+// one (resume.go), and no builder, since the daemon follows no network's config yet (the file's comment).
 func urBridgeDaemonArgsOf(instance string, log sidecar.Logger) *urBridgeDaemonArgs {
 	settings := defaultUrTunSettings()
 	var system urTunSystem
 	if urTunPlatform != nil {
 		system = urTunPlatform(settings, log)
 	}
-	return &urBridgeDaemonArgs{Instance: instance, System: system, Settings: settings, Log: log}
+	return &urBridgeDaemonArgs{Instance: instance, System: system, Settings: settings, Log: log, ResumeWatch: urResumeWatch}
 }
 
 // The daemon's bridges, living until ctx ends or close.
@@ -486,9 +495,15 @@ func newUrBridgeDaemon(ctx context.Context, args *urBridgeDaemonArgs) *urBridgeD
 		log:        log,
 		sharedWake: make(chan struct{}, 1),
 		sharedDone: make(chan struct{}),
+		resumeDone: make(chan struct{}),
 		networks:   map[sidecar.Id]*urBridgeNetwork{},
 	}
 	go self.runSharedBlocks()
+	if args.ResumeWatch != nil {
+		go self.runResumeWatch(args.ResumeWatch)
+	} else {
+		close(self.resumeDone)
+	}
 	return self
 }
 
@@ -724,4 +739,5 @@ func (self *urBridgeDaemon) close() {
 	}
 	self.cancel()
 	<-self.sharedDone
+	<-self.resumeDone
 }
