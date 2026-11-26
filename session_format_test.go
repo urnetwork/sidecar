@@ -1,4 +1,4 @@
-//go:build !ios_extension && !js
+//go:build !ios_extension && !sidecar_http && !js
 
 // DESIGN-COMPUTE §24.5's session wire (CTXH-M11-01): the fields as the fence numbers them, read from the descriptors;
 // item_sha256 and chain_sha256 against testdata/session/vectors/, a root, a three-node path and a same_as node, with a
@@ -609,10 +609,6 @@ func TestSessionCapsRefusedPastSettings(t *testing.T) {
 		{name: "an omitted part naming blobs", edit: func(body *protocol.SessionEntryBody) {
 			body.Parts[0].Omitted = true
 			body.Parts[0].Size = settings.SessionPartWholeByteCount + 1
-		}},
-		{name: "a part omitted under the cap", edit: func(body *protocol.SessionEntryBody) {
-			body.Parts[0].Omitted = true
-			body.Parts[0].BlobEntryIds = nil
 		}},
 		{name: "a pointer that is none", edit: func(body *protocol.SessionEntryBody) { body.Parts[0].Pointer = "message" }},
 		{name: "a media type past its bytes", edit: func(body *protocol.SessionEntryBody) {

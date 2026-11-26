@@ -1,4 +1,4 @@
-//go:build !js
+//go:build !ios_extension && !sidecar_http && !js
 
 // DESIGN-COMPUTE §24.5's layout as the writer files it (CTXH-M11-02, D-CTXH-10, D-CTXH-12): a session entry's header at
 // e/<n> with sealed_body empty and body_apart set, its sealed body alone at s/<n>, the leaf the header's alone; a
@@ -13,6 +13,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -311,5 +312,21 @@ func TestSessionHeldBodyLeavesItsHeaderToGo(t *testing.T) {
 	}
 	if _, err := (&recordWriter{}).Append(&RecordDraft{Kind: RecordKindApproval, Source: RecordSourceObserved, StoredBody: []byte{}, Rides: true}); err == nil {
 		t.Error("an approval rode")
+	}
+}
+
+// The session component registers on the compute legs, and a Sidecar that has not started answers no journal, never a
+// nil one (CARCH-M11-01's rule).
+func TestSessionComponentRegistered(t *testing.T) {
+	registered := false
+	for _, registration := range sidecarComputeRegistrations {
+		registered = registered || registration.name == sessionComponentName
+	}
+	if !registered {
+		t.Fatal("the session component is not registered")
+	}
+	journal, err := (&Sidecar{}).SessionJournal()
+	if journal != nil || !errors.Is(err, ErrComputeComponentUnavailable) {
+		t.Errorf("a Sidecar not started gave %v, %v", journal, err)
 	}
 }

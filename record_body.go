@@ -482,7 +482,7 @@ const recordSessionMarkBits uint32 = 1<<0 | 1<<1
 // SessionPartCount; the item and chain hashes of 32 bytes; a same_as node of 16 bytes standing for an item and parts
 // it leaves empty; and only the two marks. Each part holds an RFC 6901 pointer into the item, a 32-byte hash, a media
 // type within its bytes, and either its pieces, 1 to SessionBlobPieceCount blob entry ids of 16 bytes for a part of up
-// to SessionPartWholeByteCount, or, omitted, none at all for a part past it.
+// to SessionPartWholeByteCount, or, omitted, none at all: a part past it, past the run-hour budget or at a cap.
 func recordSessionEntryValidate(body *protocol.SessionEntryBody) error {
 	settings := DefaultRecordBodySettings()
 	sameAs := len(body.GetSameAs()) != 0
@@ -517,10 +517,8 @@ func recordSessionPartValidate(settings *RecordBodySettings, part *protocol.Sess
 		recordBodyRule(len(part.GetMediaType()) <= settings.SessionMediaTypeByteCount, "a session part media type of %d bytes", len(part.GetMediaType())),
 	}
 	if part.GetOmitted() {
-		checks = append(checks,
-			recordBodyRule(pieceCount == 0, "an omitted session part naming %d blobs", pieceCount),
-			recordBodyRule(settings.SessionPartWholeByteCount < part.GetSize(), "a session part of %d bytes omitted though it is kept whole", part.GetSize()),
-		)
+		// past SessionPartWholeByteCount, past the run-hour budget, or at a history cap (§24.10): by hash and size alone
+		checks = append(checks, recordBodyRule(pieceCount == 0, "an omitted session part naming %d blobs", pieceCount))
 	} else {
 		checks = append(checks,
 			recordBodyRule(1 <= pieceCount && pieceCount <= settings.SessionBlobPieceCount, "a session part in %d blobs", pieceCount),

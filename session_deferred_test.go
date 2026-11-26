@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !ios_extension && !sidecar_http
 
 // DESIGN-COMPUTE §24.5's headers in the chain and bodies apart, as a reader verifies them (CTXH-M11-02, D-CTXH-10; the
 // second review's R2-01): on a cold device that fetches no body, an approval filed after two session entries verifies,
