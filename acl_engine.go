@@ -648,8 +648,8 @@ func (self *AclEngine) checkSubject(state *AclState, selector AclSelector) (AclS
 // (aclGrantDialPorts, as InstallWithGrants read it); and a port-limited document rule only at a sidecar, and only where
 // this device holds its ports, its local detail. A client's ports are its own device's to check, and this reader cannot
 // tell an enforcing client from a legacy one, which §8.10 reaches only through a rule limiting no ports, so a
-// port-limited rule reaches no client here, the closed direction (question
-// acl-grant-port-consistency-check-client-ports). Allocates nothing.
+// port-limited rule reaches no client here, the closed direction and never wider than the contract gate (QD-1432).
+// Allocates nothing.
 func (self *aclEngineInstall) dialReaches(rule *aclRule, destination AclSubject) bool {
 	if !rule.portsLimited {
 		return true
