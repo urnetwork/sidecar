@@ -455,9 +455,18 @@ func (self *ConfigHead) Names() (*protocol.ConfigNameTable, error) {
 // asks (§7.9). A head is judged at the state its base lands on, and a record once, at the base whose head first holds
 // it: CheckConfigBase judges no record the previous base's head held byte for byte (QD-1207).
 func configHeadRecordSignedByAdmin(state *ConfigState, signed *bridge.Signed, signedType bridge.SignedType) error {
-	return configHeadRecordSignedByRole(state, signed, signedType, func(role bridge.MemberRole) bool {
-		return role == bridge.MemberRole_MEMBER_ROLE_OWNER || role == bridge.MemberRole_MEMBER_ROLE_ADMIN
-	})
+	return configHeadRecordSignedByRole(state, signed, signedType, configAdminSignerRole)
+}
+
+// Whether a member of role signs a head's ServiceSettings or BridgeBlock (§7.9's records table, §17.8): an Owner or an
+// Admin.
+func configAdminSignerRole(role bridge.MemberRole) bool {
+	return role == bridge.MemberRole_MEMBER_ROLE_OWNER || role == bridge.MemberRole_MEMBER_ROLE_ADMIN
+}
+
+// Whether a member of role signs a head's VersioningRules (§7.9's records table): an Owner, an Admin or a Network admin.
+func configVersioningRulesSignerRole(role bridge.MemberRole) bool {
+	return configAdminSignerRole(role) || role == bridge.MemberRole_MEMBER_ROLE_NETWORK_ADMIN
 }
 
 // configHeadRecordSignedByAdmin with the roles a record's signer row allows: VersioningRules' adds a Network admin.
@@ -583,9 +592,7 @@ func CheckConfigBase(head *ConfigHead, check *ConfigHeadCheck, rows *ConfigCompi
 	if versioningSigned != nil {
 		facts.versioningRulesRecordSha256 = head.recordSha256(ConfigHeadVersioningRulesPath)
 		if !configHeadRecordCarried(check.Previous.headVersioningRulesRecordSha256, facts.versioningRulesRecordSha256) {
-			err := configHeadRecordSignedByRole(check.Previous, versioningSigned, bridge.SignedType_SIGNED_VERSIONING_RULES, func(role bridge.MemberRole) bool {
-				return role == bridge.MemberRole_MEMBER_ROLE_OWNER || role == bridge.MemberRole_MEMBER_ROLE_ADMIN || role == bridge.MemberRole_MEMBER_ROLE_NETWORK_ADMIN
-			})
+			err := configHeadRecordSignedByRole(check.Previous, versioningSigned, bridge.SignedType_SIGNED_VERSIONING_RULES, configVersioningRulesSignerRole)
 			if err != nil {
 				return nil, fmt.Errorf("%w: versioning_rules: %w", ErrConfigHeadMismatch, err)
 			}
