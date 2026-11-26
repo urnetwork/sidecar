@@ -135,12 +135,12 @@ func inferEngineGrantRead(path string, sid *windows.SID, inherit bool) error {
 	return windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION, nil, nil, acl, nil)
 }
 
-// env as a Unicode environment block, SYSTEMROOT added from this process's where it names none, as os/exec does, and
-// the names sorted as CreateProcess asks.
+// env as a Unicode environment block, SYSTEMROOT added where it names none, as os/exec adds it, from Windows' own
+// directory rather than this process's environment, and the names sorted as CreateProcess asks.
 func inferEngineEnvironmentBlock(env []string) ([]uint16, error) {
 	entries := slices.Clone(env)
 	if !slices.ContainsFunc(entries, func(entry string) bool { return strings.HasPrefix(strings.ToUpper(entry), "SYSTEMROOT=") }) {
-		if root, ok := os.LookupEnv("SYSTEMROOT"); ok {
+		if root, err := windows.GetSystemWindowsDirectory(); err == nil {
 			entries = append(entries, "SYSTEMROOT="+root)
 		}
 	}
