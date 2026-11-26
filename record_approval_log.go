@@ -63,8 +63,21 @@ var (
 type RecordApprovals struct {
 	writer *recordWriter
 	reader *RecordReader
-	// the record's notices part once SidecarRecord.ApprovalNotices made it, nil before
-	notices atomic.Pointer[ApprovalNotices]
+	// the record's notices part once SidecarRecord.ApprovalNotices made it, nil before and on the ios_extension legs,
+	// which file no request
+	notices atomic.Pointer[approvalNoticeHolder]
+}
+
+// What the approval family's filings tell the record's notices part (record_approval_notice.go), which the
+// ios_extension legs do not link.
+type approvalNoticeNoter interface {
+	noteRequest(ref *RecordEntryRef, request *StoredApprovalRequest)
+	noteAnswer(ref *RecordEntryRef, approvalId Id, kind RecordKind)
+}
+
+// The notices part as RecordApprovals holds it.
+type approvalNoticeHolder struct {
+	noter approvalNoticeNoter
 }
 
 // One request waiting for a decision, as an approver's device reads it.
@@ -145,9 +158,9 @@ func (self *RecordApprovals) FileRequest(request *StoredApprovalRequest) (*Recor
 	}
 	// its notice, where this device writes its own stream of its author's vault: a deposit or a team record's request
 	// has none here
-	if notices := self.notices.Load(); notices != nil && !ref.Spooled && !teamOnly {
+	if holder := self.notices.Load(); holder != nil && !ref.Spooled && !teamOnly {
 		if route, err := self.route(); err == nil && !route.deposit && route.logId == ref.LogId {
-			notices.noteRequest(ref, request)
+			holder.noter.noteRequest(ref, request)
 		}
 	}
 	return ref, nil
@@ -241,8 +254,8 @@ func (self *RecordApprovals) fileAnswer(ctx context.Context, logId Id, approvalI
 		return nil, err
 	}
 	// the request's notice in the vault: rewritten at a decision, removed at a cancel, once this entry lands
-	if notices := self.notices.Load(); notices != nil && !inTeam && !ref.Spooled && ref.LogId == logId {
-		notices.noteAnswer(ref, approvalId, kind)
+	if holder := self.notices.Load(); holder != nil && !inTeam && !ref.Spooled && ref.LogId == logId {
+		holder.noter.noteAnswer(ref, approvalId, kind)
 	}
 	return ref, nil
 }
@@ -282,32 +295,6 @@ func (self *RecordApprovals) approvalLogs() ([]Id, error) {
 		return nil, err
 	}
 	return logIds, nil
-}
-
-// The logs a phone's approval part follows on this device and how it leases each (record_approval_app.go's phone row):
-// the author's vault by its a/ notices, and the team record, where this device reads it, whole, since it holds no
-// session entry (I-20).
-func (self *RecordApprovals) approvalPhoneLogs() ([]ApprovalPhoneLog, error) {
-	logIds, err := self.approvalLogs()
-	if err != nil {
-		return nil, err
-	}
-	teamRecordId, _ := recordTeamLogs(self.writer.auth())
-	logs := []ApprovalPhoneLog{}
-	for _, logId := range logIds {
-		logs = append(logs, ApprovalPhoneLog{LogId: logId, Vault: teamRecordId == nil || *teamRecordId != logId})
-	}
-	return logs, nil
-}
-
-// A phone's check of vaultId's notices against its requests (record_approval_notice.go's phone row):
-// ErrApprovalNoticeUnbound while the record has made no notices part or bound no vault.
-func (self *RecordApprovals) CheckNotices(ctx context.Context, vaultId Id) (*ApprovalNoticesChecked, error) {
-	notices := self.notices.Load()
-	if notices == nil {
-		return nil, ErrApprovalNoticeUnbound
-	}
-	return notices.Check(ctx, vaultId)
 }
 
 // The requests waiting in the logs this approver's device reads, each with no decision or cancel and not past its

@@ -365,12 +365,12 @@ type ApprovalNotices struct {
 // The record's notices part, made at the first call: from then its loop writes what the approval family's filings owe
 // and runs the repair. The record component calls it.
 func (self *SidecarRecord) ApprovalNotices() *ApprovalNotices {
-	if notices := self.approvals.notices.Load(); notices != nil {
+	if notices := self.approvals.noticesPart(); notices != nil {
 		return notices
 	}
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
-	if notices := self.approvals.notices.Load(); notices != nil {
+	if notices := self.approvals.noticesPart(); notices != nil {
 		return notices
 	}
 	notices := &ApprovalNotices{
@@ -379,10 +379,48 @@ func (self *SidecarRecord) ApprovalNotices() *ApprovalNotices {
 		owed:      map[Id]*approvalNoticeOwed{},
 		alarmed:   map[string]uint64{},
 	}
-	self.approvals.notices.Store(notices)
+	self.approvals.notices.Store(&approvalNoticeHolder{noter: notices})
 	self.tendHooks = append(self.tendHooks, notices.Tick)
 	return notices
 }
+
+// The notices part RecordApprovals holds, nil for none.
+func (self *RecordApprovals) noticesPart() *ApprovalNotices {
+	holder := self.notices.Load()
+	if holder == nil {
+		return nil
+	}
+	notices, _ := holder.noter.(*ApprovalNotices)
+	return notices
+}
+
+// The logs a phone's approval part follows on this device and how it leases each (record_approval_app.go's phone row):
+// the author's vault by its a/ notices, and the team record, where this device reads it, whole, since it holds no
+// session entry (I-20).
+func (self *RecordApprovals) approvalPhoneLogs() ([]ApprovalPhoneLog, error) {
+	logIds, err := self.approvalLogs()
+	if err != nil {
+		return nil, err
+	}
+	teamRecordId, _ := recordTeamLogs(self.writer.auth())
+	logs := []ApprovalPhoneLog{}
+	for _, logId := range logIds {
+		logs = append(logs, ApprovalPhoneLog{LogId: logId, Vault: teamRecordId == nil || *teamRecordId != logId})
+	}
+	return logs, nil
+}
+
+// A phone's check of vaultId's notices against its requests (record_approval_notice.go's phone row):
+// ErrApprovalNoticeUnbound while the record has made no notices part or bound no vault.
+func (self *RecordApprovals) CheckNotices(ctx context.Context, vaultId Id) (*ApprovalNoticesChecked, error) {
+	notices := self.noticesPart()
+	if notices == nil {
+		return nil, ErrApprovalNoticeUnbound
+	}
+	return notices.Check(ctx, vaultId)
+}
+
+
 
 // Binds where a vault's notices are read and written: an EvsClient's repos (bindMemberReplica), or a test's. Nil
 // unbinds, and writes stay owed.
