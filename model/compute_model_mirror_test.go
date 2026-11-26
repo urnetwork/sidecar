@@ -79,6 +79,7 @@ type testComputeModelStore struct {
 	chunkPutCount      int
 }
 
+// An empty store.
 func newTestComputeModelStore() *testComputeModelStore {
 	return &testComputeModelStore{
 		sha256Records:      map[string]*ComputeModelFileRecord{},
@@ -222,6 +223,7 @@ type testComputeModelHub struct {
 	requests []string
 }
 
+// A hub holding no file.
 func newTestComputeModelHub() *testComputeModelHub {
 	return &testComputeModelHub{
 		urlBytes:              map[string][]byte{},
@@ -275,6 +277,7 @@ type testComputeModelSetup struct {
 	bytes    map[string][]byte
 }
 
+// The draft parsed, its files on a fresh hub, and a mirror over a fresh store.
 func newTestComputeModelSetup(t *testing.T) *testComputeModelSetup {
 	t.Helper()
 	inferSettings := testComputeModelInferSettings()

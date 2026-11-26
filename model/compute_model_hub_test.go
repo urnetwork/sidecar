@@ -94,6 +94,7 @@ type testComputeModelTlsHub struct {
 	ranges []string
 }
 
+// A hub on a local TLS server, closed with the test, answering the file whole.
 func newTestComputeModelTlsHub(t *testing.T) *testComputeModelTlsHub {
 	hub := &testComputeModelTlsHub{
 		data: testComputeModelBytes(300*1024, 3),
