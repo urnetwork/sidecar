@@ -25,6 +25,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -36,6 +37,10 @@ import (
 
 // The alarm kind of a store purchase flagged for review.
 const ComputeAlarmPurchaseFlagged = "purchase_flagged"
+
+// A credit to a deleted network's closed account: nothing is credited, and the caller refunds the purchase where its
+// market allows (§9.5).
+var ErrComputeAccountClosed = errors.New("compute ledger: the network's account is closed, so it is credited nothing")
 
 // One credit to write (§9.4, §9.5).
 type ComputeCreditRequest struct {
@@ -123,6 +128,10 @@ func computeCreditLotInTx(env operator.Env, ctx context.Context, tx operator.DbT
 		expire := request.ExpireTime.UTC()
 		lot.ExpireTime = &expire
 	}
+	before, err := model.ComputeAccountForUpdateInTx(env, ctx, tx, request.NetworkId, now)
+	if err != nil {
+		return nil, err
+	}
 	inserted, stands, err := model.ComputeLotInsertInTx(env, ctx, tx, lot)
 	if err != nil {
 		return nil, err
@@ -131,8 +140,9 @@ func computeCreditLotInTx(env operator.Env, ctx context.Context, tx operator.DbT
 		// a replay: the first delivery's lot, nothing credited, nothing flagged again
 		return &ComputeCreditAnswer{Lot: stands}, nil
 	}
-	if _, err := model.ComputeAccountForUpdateInTx(env, ctx, tx, request.NetworkId, now); err != nil {
-		return nil, err
+	if before.State == model.ComputeAccountStateClosed {
+		// a deleted network credits nothing (§9.5), and the transaction's rollback takes the lot back
+		return nil, ErrComputeAccountClosed
 	}
 	account, err := model.ComputeAccountMoveInTx(env, ctx, tx, request.NetworkId, request.AmountNanoUsd, nil, now)
 	if err != nil {
