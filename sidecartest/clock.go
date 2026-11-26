@@ -1,6 +1,9 @@
 // The injected clock (§22.4): every fake here reads it, and a schedule moves it with Advance. Nothing
 // in this package sleeps. A wait that must end at a time on this clock is a timer on it, and it fires
-// only when a schedule moves the clock past it, so a test holds no real-time race.
+// only when a schedule moves the clock past it, so a test holds no real-time race. A wait for a time,
+// AfterAt's and AfterFuncAt's (sidecar.ClockAt, QD-1425), is set for that time under the clock's lock,
+// so an Advance on another goroutine cannot land between reading the clock and setting the wait and set
+// it late.
 
 package sidecartest
 
@@ -103,6 +106,44 @@ func (self *FakeClock) AfterFunc(timeout time.Duration, function func()) (stop f
 			function()
 		})
 	}()
+	return func() bool { return self.removeTimer(timer) }
+}
+
+// See sidecar.ClockAt: set for at under the clock's lock, firing at once when the clock has reached at.
+func (self *FakeClock) AfterAt(at time.Time) <-chan time.Time {
+	fired := make(chan time.Time, 1)
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		if !self.now.Before(at) {
+			fired <- self.now
+			return
+		}
+		self.addTimerWithLock(at, func(at time.Time) {
+			fired <- at
+		})
+	}()
+	return fired
+}
+
+// See sidecar.ClockAt: set for at under the clock's lock, calling function at once, on this goroutine with
+// no lock held, when the clock has reached at.
+func (self *FakeClock) AfterFuncAt(at time.Time, function func()) (stop func() bool) {
+	var timer *clockTimer
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		if !self.now.Before(at) {
+			return
+		}
+		timer = self.addTimerWithLock(at, func(at time.Time) {
+			function()
+		})
+	}()
+	if timer == nil {
+		function()
+		return func() bool { return false }
+	}
 	return func() bool { return self.removeTimer(timer) }
 }
 
@@ -223,4 +264,15 @@ func (self *offsetClock) After(timeout time.Duration) <-chan time.Time {
 
 func (self *offsetClock) AfterFunc(timeout time.Duration, function func()) (stop func() bool) {
 	return self.clock.AfterFunc(timeout, function)
+}
+
+// A time on this view, which reads ahead of the shared clock by the offset, is that much earlier on the
+// shared clock the timer runs on.
+func (self *offsetClock) AfterAt(at time.Time) <-chan time.Time {
+	return self.clock.AfterAt(at.Add(-self.offset))
+}
+
+// As AfterAt, calling function.
+func (self *offsetClock) AfterFuncAt(at time.Time, function func()) (stop func() bool) {
+	return self.clock.AfterFuncAt(at.Add(-self.offset), function)
 }
