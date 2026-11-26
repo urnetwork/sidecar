@@ -80,7 +80,7 @@ func newTestInferEngineProcessWorld(t *testing.T, pulled bool) *testInferEngineP
 		os.Remove(filepath.Join(modelDirectory, modelFile.Name))
 	}
 	model := testInferManifestModel("test-model", 1, 32*1024)
-	model.Files = []*InferManifestModelFile{{InferManifestFile: modelFile}}
+	model.Files = []*InferManifestModelFile{{InferManifestFile: modelFile, IndexSha256: testInferSha256("model weights index")}}
 	manifest := &InferManifest{
 		Version: 1,
 		Engines: []*InferManifestEngine{{Platform: platform, Version: "v0.19.1", Libraries: []*InferManifestFile{&library}}},

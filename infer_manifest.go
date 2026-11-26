@@ -5,17 +5,25 @@
 // with its files' URLs, sizes and SHA-256s, and, per platform, the LiteRT-LM version the build pins (Q-INFER-2): on
 // the desktops, where the ur-engine helper loads it, the engine's libraries, its GPU plugins and, where the version
 // needs it, Dawn's WebGPU library (#4611), each with its SHA-256; on the phones, whose apps bundle the engine, the
-// version alone. A downloader checks every file against its SHA-256 before it is moved into place and again before
-// load (INFER-M11-06), and the helper loads no library off its pin (INFER-M11-04), so the manifest, not the host a
-// file comes from, is what a device trusts.
+// version alone.
+//
+// Each model file also carries its chunk index's SHA-256, index_sha256 (CO-49; infer_model_index.go): every platform
+// downloads a model file from the api in chunks, each checked against that index before it is written (INFER-M11-11),
+// so the pins, not the api, a cache between or the hub, are what a device trusts for a byte. A model file's url stays
+// the Hugging Face address at the pinned commit, the api's mirror's source and the daemon's and the apps' fallback
+// (D-INFER-12); the api's address is built from the file's SHA-256. The engine's files carry no index: they are whole
+// files from LiteRT-LM's release, each checked against its SHA-256 before it is moved into place and again before
+// load (INFER-M11-06, §6.5's desktop row), and the helper loads no library off its pin (INFER-M11-04). One SHA-256 is
+// one file, so the manifest names it under one size and one index pin.
 //
 // Its entries are the release pipeline's, read at release time from LiteRT-LM's release and Hugging Face's
 // litert-community (External). A source build carries the format and no entry, so it lists, recommends and pulls
 // nothing local.
 //
 // The file is a format, so its parse is strict: one JSON value in at most the settings' ManifestMaxByteCount, no
-// member twice and none unknown, this version, and every entry whole: a hash on every file, an https URL, a known
-// platform on every engine and no platform or model twice. macOS on Intel and Windows on arm64 have no engine build
+// member twice and none unknown, this version, and every entry whole: a hash on every file, an index pin on every
+// model file and none on an engine file, an https URL, a known platform on every engine and no platform or model
+// twice. macOS on Intel and Windows on arm64 have no engine build
 // and get remote models only (§6.5), so an entry for either is refused, as is any other platform the design names
 // none for. A refusal names the first fault it met and never the document's bytes.
 //
@@ -113,13 +121,16 @@ type InferManifestEngine struct {
 	Dawn *InferManifestFile `json:"dawn,omitempty"`
 }
 
-// One file a device downloads and checks before it moves it into place and again before load.
+// One file a device downloads and checks before it opens it.
 type InferManifestFile struct {
-	// Its name in the state directory.
+	// Its name: an engine file's in the state directory; a model file's download keeps the file under its SHA-256
+	// (InferModelDownload), so there the name only labels it.
 	Name string `json:"name"`
-	// Where it is fetched from, https only. The SHA-256, not the host, is what the device trusts.
+	// Where it is fetched from, https only: an engine file's from LiteRT-LM's release; a model file's the Hugging Face
+	// address at its pinned commit, the mirror's source and the daemon's and the apps' fallback, the api's address being
+	// built from the SHA-256. The pins, not the host, are what the device trusts.
 	Url string `json:"url"`
-	// Its size in bytes, which bounds the download (INFER-M11-06).
+	// Its size in bytes, which bounds the download (INFER-M11-06, INFER-M11-11).
 	ByteCount int64 `json:"byte_count"`
 	// Its SHA-256, in lowercase hex.
 	Sha256 string `json:"sha256"`
@@ -128,6 +139,10 @@ type InferManifestFile struct {
 // One file of a local model: a build for one accelerator, or every, on some platforms, or every.
 type InferManifestModelFile struct {
 	InferManifestFile
+	// Its chunk index's SHA-256, in lowercase hex: the pin ParseInferModelIndex holds the index to, so each chunk the
+	// download takes is checked against an index the signed release vouches for (CO-49). Required; an engine file has
+	// no such member, and a manifest giving one an index_sha256 is refused as naming an unknown member.
+	IndexSha256 string `json:"index_sha256"`
 	// The accelerator the build is for, one of its model's; empty for any, such as one file every accelerator loads.
 	Accelerator InferAccelerator `json:"accelerator,omitempty"`
 	// The platforms it is for; empty for every platform.
@@ -251,6 +266,9 @@ func (self *InferManifest) validate(settings *InferSettings) error {
 		platforms[engine.Platform] = true
 	}
 	models := map[string]bool{}
+	// one SHA-256 is one file, whichever entries list it: one size and one index pin; and one index is one file's
+	sha256Files := map[string]*InferManifestModelFile{}
+	indexSha256FileSha256s := map[string]string{}
 	for _, model := range self.Models {
 		if model == nil {
 			return inferManifestFault("an empty model entry")
@@ -263,6 +281,21 @@ func (self *InferManifest) validate(settings *InferSettings) error {
 			return inferManifestFault("the model %s twice", model.Model)
 		}
 		models[model.Model] = true
+		for _, file := range model.Files {
+			if other, ok := sha256Files[file.Sha256]; ok {
+				if other.IndexSha256 != file.IndexSha256 {
+					return inferManifestFault("the SHA-256 of %s under two index pins", file.Name)
+				}
+				if other.ByteCount != file.ByteCount {
+					return inferManifestFault("the SHA-256 of %s under two sizes", file.Name)
+				}
+			}
+			sha256Files[file.Sha256] = file
+			if fileSha256, ok := indexSha256FileSha256s[file.IndexSha256]; ok && fileSha256 != file.Sha256 {
+				return inferManifestFault("the index pin of %s for two files", file.Name)
+			}
+			indexSha256FileSha256s[file.IndexSha256] = file.Sha256
+		}
 	}
 	return nil
 }
@@ -388,6 +421,9 @@ func (self *InferManifestModel) validate(settings *InferSettings) error {
 		}
 		if fileFault := file.fault(settings); fileFault != "" {
 			return fault("%s", fileFault)
+		}
+		if !inferManifestSha256Pattern.MatchString(file.IndexSha256) {
+			return fault("the file %s with no index pin", file.Name)
 		}
 		if names[file.Name] {
 			return fault("the file %s twice", file.Name)
