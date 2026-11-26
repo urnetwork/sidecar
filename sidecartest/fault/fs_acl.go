@@ -28,7 +28,7 @@
 //     refreshes no witnessed_at, under FI-10. Its dispatchers' Hello alone is not on the forked log: the admission
 //     world's devices are fixtures with no dispatcher, so the HeadCheck sidecars stand on the Net's default network.
 //   - FS-62's gate case (T2+T3): api's, evs's and gkm's gate caches over AclGateDirectSource with {acl_}e current, lost,
-//     stale and short.
+//     stale and short, each closed at the end with its loaders waited for.
 //
 // And, holding no FS row, schedules for §22.5's §8 row (AclRowsEqualTheWriters, AclRowsALyingWriter,
 // AclVersionsRefused, AclNoDocumentRules), §22.7's revocation suite's acl clause (AclRevocationTaggedAgents), S3a's
@@ -1101,12 +1101,43 @@ func (self fs62AclCountingCluster) List(ctx context.Context, keyPrefix string, s
 }
 
 // One process's gate cache over the direct source, api's, evs's or gkm's, its store reads counted and each load's
-// outcome sent on loads.
+// outcome sent on loads while the gate lives.
 type fs62AclGate struct {
 	name  string
 	cache *sidecar.AclGateCache
 	reads atomic.Int64
 	loads chan *bridge.AuthPin
+	// the gate's life, the cache's context: close ends it, and a load's OnLoad waits for room on loads only until then
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
+// A gate named name over the Net's Redis and first metadata cluster, polling nothing, living until the admission
+// world's context ends or close.
+func newFs62AclGate(net *Net, admission *sidecartest.AdmissionNet, name string) *fs62AclGate {
+	gate := &fs62AclGate{name: name, loads: make(chan *bridge.AuthPin, 64)}
+	gate.ctx, gate.cancel = context.WithCancel(admission.Context())
+	settings := sidecar.DefaultAclGateSettings()
+	settings.Log = sidecar.NewNoopLogger()
+	settings.PollInterval = 0
+	settings.FailureBackoff = 0
+	settings.OnLoad = func(networkId sidecar.Id, pin *bridge.AuthPin, err error) {
+		// a load nobody takes gives up at the gate's end, so close's wait never meets a loader held here
+		select {
+		case gate.loads <- pin:
+		case <-gate.ctx.Done():
+		}
+	}
+	blobs := fs62AclCountingBlobs{BlobStore: net.Host().Blobs, reads: &gate.reads}
+	gate.cache = sidecar.NewAclGateCache(gate.ctx, sidecar.NewAclGateDirectSource(net.Host().Redis, blobs, settings), net.Clock(), settings)
+	return gate
+}
+
+// Ends the gate's life and waits until its cache's poll and every loader have returned, so nothing of the gate reads
+// the Net, reaches its hooks or calls OnLoad after.
+func (self *fs62AclGate) close() {
+	self.cancel()
+	self.cache.CloseAndWait()
 }
 
 // FS-62's gate case's world: the admission world, and the gates.
@@ -1198,29 +1229,30 @@ func fs62AclLoad(world *fs62AclWorld, want uint64, fromStore bool) error {
 	return nil
 }
 
+// The step before the world's own close: every gate ends and its loaders return, so none outlives the schedule. A
+// schedule that fails at an earlier step runs no later one, so its gates end with the Net's context, unwaited for.
+func fs62AclClose(world *fs62AclWorld) *Step {
+	return &Step{Actor: "setup", Action: func(ctx context.Context, net *Net) error {
+		for _, gate := range world.gates {
+			gate.close()
+		}
+		return nil
+	}}
+}
+
 // FS-62's {acl_}e case (§7.9's read cache, §8.9, owner decision 136): api's, evs's and gkm's gate caches, each over
 // AclGateDirectSource on the Net's Redis and first metadata cluster, load the log's tip from {acl_}e while it records
 // {acl_}v's current value and holds every position they need, with no read of proj/; with the hash lost, then stale
 // (recording an older {acl_}v and an older tip), then short of a position, each reads proj/ instead and reaches api's
 // tip; and a hash that is current but holds a tip below a gate's pin moves no gate down. T2 and T3: on T3 the Redis is
 // server's and the store the local stack's MinIO, while api's script is the schedule's own until sidecart3's sequencer
-// installs model.NewConfigLogRedisEntryCache.
+// installs model.NewConfigLogRedisEntryCache. The last step closes every gate and waits for its loaders.
 func Fs62AclGate(net *Net) *Schedule {
 	world := &fs62AclWorld{fsTeamWorld: newFsTeamWorld()}
 	steps := []*Step{
 		aclSetup(world.fsTeamWorld, func(admission *sidecartest.AdmissionNet) error {
 			for _, name := range []string{"api", "evs", "gkm"} {
-				gate := &fs62AclGate{name: name, loads: make(chan *bridge.AuthPin, 64)}
-				settings := sidecar.DefaultAclGateSettings()
-				settings.Log = sidecar.NewNoopLogger()
-				settings.PollInterval = 0
-				settings.FailureBackoff = 0
-				settings.OnLoad = func(networkId sidecar.Id, pin *bridge.AuthPin, err error) {
-					gate.loads <- pin
-				}
-				blobs := fs62AclCountingBlobs{BlobStore: net.Host().Blobs, reads: &gate.reads}
-				gate.cache = sidecar.NewAclGateCache(admission.Context(), sidecar.NewAclGateDirectSource(net.Host().Redis, blobs, settings), net.Clock(), settings)
-				world.gates = append(world.gates, gate)
+				world.gates = append(world.gates, newFs62AclGate(net, admission, name))
 			}
 			// a cold start reads proj/ from position 1
 			return fs62AclLoad(world, admission.Tip().GetVersion(), true)
@@ -1303,6 +1335,7 @@ func Fs62AclGate(net *Net) *Schedule {
 			}
 			return nil
 		}),
+		fs62AclClose(world),
 	}
 	return fsTeamSchedule("FS-62 acl gate", world.fsTeamWorld, steps...)
 }

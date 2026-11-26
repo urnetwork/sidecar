@@ -18,8 +18,9 @@
 // base 1 has landed (bootstrap.go; QD-824), and before that the gate holds no log of it and answers nothing.
 //
 // The gate learns of a log's new entries when told (Sync): api writes no {acl_} hint here, and the cache polls
-// nothing. The engines are the Net's (AddEngine), closed with it; the cache closes at the test's end. Safe for
-// concurrent use.
+// nothing. The engines are the Net's (AddEngine), closed with it; the cache closes at the test's end and waits for its
+// loaders, so none reads the Net's stores, reaches its hooks or counts a load once the test's cleanups move on. Safe
+// for concurrent use.
 
 package enginenet
 
@@ -123,7 +124,8 @@ func NewEngines(t testing.TB, net *sidecartest.Net, settings *EnginesSettings) *
 		self.loads.Update(func(count uint64) uint64 { return count + 1 })
 	}
 	self.cache = sidecar.NewAclGateCache(net.Context(), sidecar.NewAclGateDirectSource(net.Host().Redis, net.Host().Blobs, gateSettings), net.Clock(), gateSettings)
-	t.Cleanup(self.cache.Close)
+	// its close cancels a load still running, whose store read the fakes then answer, so the wait ends
+	t.Cleanup(self.cache.CloseAndWait)
 	revocationSettings := sidecar.DefaultRevocationSettings()
 	revocationSettings.Clock = net.Clock()
 	revocations := sidecar.NewRevocationChecker(net.Host().Blobs, func(object []byte) ([]byte, error) {
