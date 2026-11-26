@@ -20,10 +20,11 @@ func init() {
 }
 
 // The client on sidecar: its local store's support directory, read at each use since a Sidecar enrolls after it starts,
-// its settings and its host's support log.
+// its settings and its host's support log, and its part of each client generation, which holds the support push topic
+// (support_push_topic.go).
 func newSidecarSupportClient(sidecar *Sidecar) (*SupportClient, error) {
 	supportLog, _ := sidecar.settings.SupportLog.(*SupportLog)
-	return NewSupportClient(&SupportClientArgs{
+	client, err := NewSupportClient(&SupportClientArgs{
 		Host:     sidecar,
 		Settings: sidecar.settings.Support,
 		Log:      supportLog,
@@ -33,6 +34,21 @@ func newSidecarSupportClient(sidecar *Sidecar) (*SupportClient, error) {
 		Clock:      sidecar.settings.Clock,
 		BundleHost: &SupportLogBundleHost{Version: Version},
 	})
+	if err != nil {
+		return nil, err
+	}
+	// listed as AddComponent lists one, without its wake, as the compute client's is: the client constructs before the
+	// run loop's first pass, which attaches every listed component (compute_sidecar.go). With the release's switch off
+	// the topic stays dark with the rest of the skill, holding no subscription
+	leg, ok := sidecar.leg.(*sidecarConnectLeg)
+	if !ok || !client.settings.ServiceEnabled {
+		// no client generations, so no push, or no skill: the loop's interval reads where anything does
+		return client, nil
+	}
+	if err := leg.addComponent(&supportHintComponent{client: client}); err != nil && sidecar.log.V(1).Enabled() {
+		sidecar.log.Infof("[support]the support topic is not subscribed: %s", err)
+	}
+	return client, nil
 }
 
 // This Sidecar's support client, or why it has none.

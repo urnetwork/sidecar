@@ -1,7 +1,8 @@
 // §18.7's vendor submissions (D-SDK-10, WK4; §2.8's ext-8): what the push sender hands APNs and FCM. A
 // wake carries a topic class and a version and nothing else, never an id (owner decision 88): the class is
-// mail, team, evs or core, §6.8's topic with any id stripped, and the version is the topic's, which for evs
-// passes 2^53, so it travels as its canonical decimal digits and never through a float (reading 15).
+// mail, team, evs, core or support (DESIGN-COMPUTE §28.9), §6.8's topic with any id stripped, and the version is
+// the topic's, which for evs passes 2^53, so it travels as its canonical decimal digits and never through a float
+// (reading 15).
 //
 //	APNs  apns-push-type background, apns-priority 5   {"aps":{"content-available":1},"t":"mail","v":42}
 //	FCM   data message, Android priority high           {"data":{"t":"mail","v":"42"}}
@@ -32,7 +33,7 @@ var ErrWakeVendorSettings = errors.New("wake vendor: settings or credentials inv
 
 // What one wake carries (WK4): a topic class and a version.
 type WakePayload struct {
-	// mail, team, evs or core.
+	// mail, team, evs, core or support.
 	TopicClass string
 	// The topic's version in ver.
 	Version uint64

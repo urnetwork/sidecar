@@ -74,7 +74,8 @@ const (
 	MessageType_SMTP_HANDSHAKE_RESULT MessageType = 5640 // §14; TLS 1.3's disclosed SHTS, RPC to smtpedge, M9
 	MessageType_MAIL_INGRESS          MessageType = 5889
 	MessageType_MAIL_HINT             MessageType = 5890 // §15; StreamOpen metadata; push mail
-	// 0x18 §16 MCP: none in v0 or v1; the directory's notices ride §11's hints (§16.11)
+	// 0x18 §16 MCP: the directory's notices ride §11's hints (§16.11); DESIGN-COMPUTE's support hint takes the first
+	MessageType_SUPPORT_HINT MessageType = 6145 // DESIGN-COMPUTE §28.9; push support (support-push-topic-hint-bytes)
 	// 0x19 §17: bridge rules ride the config repo (owner decision 5); listeners' live ask is DESIGN-COMPUTE's
 	MessageType_LISTENERS        MessageType = 6401
 	MessageType_LISTENERS_RESULT MessageType = 6402 // DESIGN-COMPUTE §26.8; peer RPC on the control class too
@@ -130,6 +131,7 @@ var (
 		5640: "SMTP_HANDSHAKE_RESULT",
 		5889: "MAIL_INGRESS",
 		5890: "MAIL_HINT",
+		6145: "SUPPORT_HINT",
 		6401: "LISTENERS",
 		6402: "LISTENERS_RESULT",
 		6657: "CORE_HINT",
@@ -180,6 +182,7 @@ var (
 		"SMTP_HANDSHAKE_RESULT":    5640,
 		"MAIL_INGRESS":             5889,
 		"MAIL_HINT":                5890,
+		"SUPPORT_HINT":             6145,
 		"LISTENERS":                6401,
 		"LISTENERS_RESULT":         6402,
 		"CORE_HINT":                6657,
@@ -220,7 +223,7 @@ var File_protocol_types_proto protoreflect.FileDescriptor
 
 const file_protocol_types_proto_rawDesc = "" +
 	"\n" +
-	"\x14protocol/types.proto\x12\x11urnetwork.sidecar*\xd9\a\n" +
+	"\x14protocol/types.proto\x12\x11urnetwork.sidecar*\xec\a\n" +
 	"\vMessageType\x12\x15\n" +
 	"\x11MESSAGE_TYPE_NONE\x10\x00\x12\t\n" +
 	"\x05HELLO\x10\x01\x12\x10\n" +
@@ -268,7 +271,8 @@ const file_protocol_types_proto_rawDesc = "" +
 	"\x0eSMTP_HANDSHAKE\x10\x87,\x12\x1a\n" +
 	"\x15SMTP_HANDSHAKE_RESULT\x10\x88,\x12\x11\n" +
 	"\fMAIL_INGRESS\x10\x81.\x12\x0e\n" +
-	"\tMAIL_HINT\x10\x82.\x12\x0e\n" +
+	"\tMAIL_HINT\x10\x82.\x12\x11\n" +
+	"\fSUPPORT_HINT\x10\x810\x12\x0e\n" +
 	"\tLISTENERS\x10\x812\x12\x15\n" +
 	"\x10LISTENERS_RESULT\x10\x822\x12\x0e\n" +
 	"\tCORE_HINT\x10\x814\x12\x15\n" +

@@ -21,6 +21,7 @@ func TestPushTopicClasses(t *testing.T) {
 		{topic: PushTopicDns, class: PushTopicDurable},
 		{topic: PushTopicGkm, class: PushTopicClock, raising: true},
 		{topic: PushTopicCompute, class: PushTopicClock, raising: true},
+		{topic: PushTopicSupport, class: PushTopicClock, raising: true},
 		{topic: PushTopicGkmGroup(groupId), class: PushTopicDurable},
 		{topic: PushTopicEvs(repoId), class: PushTopicClock},
 		{topic: "", class: PushTopicUnknown},

@@ -382,7 +382,7 @@ func casePushNotCanonicalRefused(env *pushSuiteEnv) error {
 
 func casePushClockRaised(env *pushSuiteEnv) error {
 	clientId := pushSuiteClientId()
-	for _, topic := range []string{sidecar.PushTopicGkm, sidecar.PushTopicCore, sidecar.PushTopicSock, sidecar.PushTopicMail, sidecar.PushTopicTls} {
+	for _, topic := range []string{sidecar.PushTopicGkm, sidecar.PushTopicCore, sidecar.PushTopicSock, sidecar.PushTopicMail, sidecar.PushTopicTls, sidecar.PushTopicSupport} {
 		writes := []struct {
 			version uint64
 			carried uint64

@@ -16,6 +16,11 @@
 //	compute         DESIGN-COMPUTE §9.9   the network's compute state changed: the writer's clock in ms, raised past
 //	                      the stored value; the device reads the balance route on it (compute-plan-compute-low-delivery,
 //	                      QD-1238)
+//	support         DESIGN-COMPUTE §28.9  a member's support conversation gained an event: the feedback service's clock
+//	                      in ms, raised past the stored value, hinted through Push.HintSidecars to each of the member's
+//	                      sidecars and a tagged sender's own, its hint SupportHint {product, entry, seq} under kind
+//	                      SUPPORT_HINT (support_push_topic.go); a wake class, as mail is; residents tell it to sidecars'
+//	                      clients alone, never a forwarding device client (owner decisions 197, 783)
 //
 // Only topics that gate access are durable, and a durable version never falls (I-16): a reset that shows
 // one lower sends the client to versions, whose page alarms if it shows the fall too (QD-1044). A clock
@@ -43,6 +48,10 @@ const (
 	// The network's compute state changed (DESIGN-COMPUTE §9.9; QD-1238): a hint carries no state, and each member
 	// device reads the balance route on it (compute_events.go).
 	PushTopicCompute = "compute"
+	// The member's support conversation gained an event (DESIGN-COMPUTE §28.9; owner decision 783): a hint names the
+	// event, {product, entry, seq}, and never its content, and the device reads the conversation from the feedback
+	// service on it (support_push_topic.go). It wakes the apps as mail does (§18.7).
+	PushTopicSupport = "support"
 )
 
 // The families' prefixes: gkm:<group_id> and evs:<repo_id>, each id in its UUID form.
@@ -98,7 +107,7 @@ func PushTopicClassOf(topic string) PushTopicClass {
 	switch topic {
 	case PushTopicTeam, PushTopicDns:
 		return PushTopicDurable
-	case PushTopicCore, PushTopicSock, PushTopicMail, PushTopicTls, PushTopicGkm, PushTopicCompute:
+	case PushTopicCore, PushTopicSock, PushTopicMail, PushTopicTls, PushTopicGkm, PushTopicCompute, PushTopicSupport:
 		return PushTopicClock
 	}
 	if idText, found := strings.CutPrefix(topic, PushTopicGkmGroupPrefix); found {
@@ -122,14 +131,15 @@ func pushTopicIdValid(idText string) bool {
 }
 
 // Whether the hint script raises topic's version past the stored value when the writer's is not above
-// it: the clocks of core, sock, mail, tls, gkm and compute, as gkm's was first (§6.8). Several writers' clocks
-// share each, a hint written at a version not above the stored one would carry the stored one, and a
+// it: the clocks of core, sock, mail, tls, gkm, compute and support, as gkm's was first (§6.8). Several writers'
+// clocks share each, a hint written at a version not above the stored one would carry the stored one, and a
 // client ignores a hint at or below the version it holds: of two sock hints for one listener in one
 // millisecond, the second never reached it until sock was raised too (QD-1212). compute's writers are the
-// taskworkers that run compute_suspend, any of which may change a network's state (QD-1238).
+// taskworkers that run compute_suspend, any of which may change a network's state (QD-1238); support's are the
+// feedback service's instances, any of which may append a member's events, two of them in one millisecond (§28.9).
 func PushTopicRaisesClock(topic string) bool {
 	switch topic {
-	case PushTopicCore, PushTopicSock, PushTopicMail, PushTopicTls, PushTopicGkm, PushTopicCompute:
+	case PushTopicCore, PushTopicSock, PushTopicMail, PushTopicTls, PushTopicGkm, PushTopicCompute, PushTopicSupport:
 		return true
 	}
 	return false

@@ -294,6 +294,7 @@
         {"number":5640,"name":"SMTP_HANDSHAKE_RESULT"},
         {"number":5889,"name":"MAIL_INGRESS"},
         {"number":5890,"name":"MAIL_HINT"},
+        {"number":6145,"name":"SUPPORT_HINT"},
         {"number":6401,"name":"LISTENERS"},
         {"number":6402,"name":"LISTENERS_RESULT"},
         {"number":6657,"name":"CORE_HINT"},

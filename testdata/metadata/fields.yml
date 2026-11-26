@@ -81,6 +81,8 @@ roots:
   # protocol/mail.proto
   MailIngress: "mxedge builds it from what it holds (§15.4)"
   MailHint: "a kind and an mx host in PushHint.hint on topic mail, which mxedge's router builds (§15.15, §15.6)"
+  # protocol/support.proto
+  SupportHint: "the feedback service builds it, in PushHint.hint on topic support (DESIGN-COMPUTE §28.9; support-push-topic-hint-bytes)"
   # protocol/gkm.proto
   GkmCommitHeader: "gkm reads the clear header of every commit (§10.4, §10.6)"
   UrMlsCredential: "in a KeyPackage's clear credential, which gkm holds (§10.6, gkm-4)"
@@ -351,6 +353,10 @@ fields:
   # protocol/mail.proto
   MailHint.kind: connect-4
   MailHint.host: connect-4
+  # protocol/support.proto: support-2 names the hint's {product, entry, seq} (DESIGN-COMPUTE §28.15)
+  SupportHint.product: support-2
+  SupportHint.entry: support-2
+  SupportHint.seq: support-2
   MailIngress.sender_ip: mx-1
   MailIngress.sender_port: mx-1
   MailIngress.sni: mx-1

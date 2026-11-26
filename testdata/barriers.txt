@@ -527,9 +527,11 @@ barrier identity.revoke.sign.after identity_revoke_device.go
 barrier identity.revoke.sign.before identity_revoke_device.go
 barrier identity.stale.recheck.after identity_act_stale.go
 barrier identity.stale.recheck.before identity_act_stale.go
+barrier infer.background.grant.end infer_background.go
 barrier infer.disclosure.ask.before infer_check_disclosure.go
 barrier infer.dispatch.before infer_router.go
 barrier infer.engine.confine.exec.before infer_engine_confine_linux.go
+barrier infer.pull.engine.rename.before infer_pull.go
 barrier infer.terminal.before infer_router.go
 barrier infer_download.chunk.marked infer_download.go
 barrier infer_download.chunk.synced infer_download.go
@@ -899,6 +901,8 @@ barrier stream.read_wait.after stream_conn.go
 barrier stream.read_wait.before stream_conn.go
 barrier stream.write_wait.after stream_conn.go
 barrier stream.write_wait.before stream_conn.go
+barrier support_client.wake.after support_client.go
+barrier support_client.wake.before support_client.go
 barrier team_directory.file.after config_directory.go
 barrier team_directory.file.before config_directory.go
 barrier tls.cert_install.after tls_cert_manager.go
