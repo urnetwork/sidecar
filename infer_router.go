@@ -85,6 +85,8 @@ type inferRouterArgs struct {
 	RemoteCatalogErr error
 	// Required: the checks.
 	Checker inferChecker
+	// Nil for real time: the background's grants run on it (infer_background.go).
+	Clock Clock
 }
 
 // §6.4's router.
@@ -97,6 +99,9 @@ type inferRouter struct {
 	remoteCatalog    InferRemoteCatalog
 	remoteCatalogErr error
 	checker          inferChecker
+
+	// the app's lifecycle: calls in flight, and whether the app is in the background (infer_background.go)
+	background *inferBackground
 
 	stateLock   sync.Mutex
 	localEngine InferLocalEngine
@@ -130,6 +135,7 @@ func newInferRouter(args *inferRouterArgs) (*inferRouter, error) {
 		remoteCatalog:    args.RemoteCatalog,
 		remoteCatalogErr: args.RemoteCatalogErr,
 		checker:          args.Checker,
+		background:       newInferBackground(args.Settings, args.Clock),
 	}, nil
 }
 
@@ -251,7 +257,7 @@ func (self *inferRouter) Infer(ctx context.Context, request *InferRequest) (<-ch
 	if err != nil {
 		return nil, err
 	}
-	return self.dispatch(ctx, call, source), nil
+	return self.dispatch(ctx, call, source, self.onGpu(ctx, call)), nil
 }
 
 // The call request makes, resolved and checked; else the *InferError Infer answers.
@@ -261,6 +267,9 @@ func (self *inferRouter) prepare(ctx context.Context, request *InferRequest) (*I
 	}
 	if request == nil {
 		return nil, newInferError(InferErrorModelRefused, "no request")
+	}
+	if refused := self.background.refusal(request.Model); refused != nil {
+		return nil, refused
 	}
 	if request.MaxOutput < 0 {
 		return nil, &InferError{Code: InferErrorModelRefused, Model: request.Model, Message: "a negative maximum output"}
@@ -329,11 +338,14 @@ func (self *inferRouter) source(call *InferCall) (func(ctx context.Context, call
 // Starts call on source and returns its stream: the source on its own goroutine, under a context that ends with ctx,
 // with the call or when its reader falls too far behind; and the stream's relay on another, which ends once the
 // terminal event is delivered.
-func (self *inferRouter) dispatch(ctx context.Context, call *InferCall, source func(ctx context.Context, call *InferCall, emit InferEmit) error) <-chan *InferEvent {
+func (self *inferRouter) dispatch(ctx context.Context, call *InferCall, source func(ctx context.Context, call *InferCall, emit InferEmit) error, gpu bool) <-chan *InferEvent {
 	callCtx, cancelCall := context.WithCancel(ctx)
 	stream := newInferStream(self.settings, call.Name, cancelCall)
+	// tracked for the app's lifecycle until the source returns (infer_background.go)
+	tracked := self.background.track(gpu, cancelCall)
 	testHookBarrier("infer.dispatch.before", string(call.Entry.Kind))
 	go func() {
+		defer tracked()
 		defer cancelCall()
 		err := source(callCtx, call, stream.emit)
 		stream.finish(err)
@@ -608,6 +620,7 @@ func newSidecarInfer(sidecar *Sidecar) (*sidecarInfer, error) {
 	args := &inferRouterArgs{
 		Settings:    settings,
 		Log:         sidecar.log,
+		Clock:       sidecar.clock,
 		RemotePaths: newInferRemotePaths(sidecar, settings, inferRemotePathRegistrations),
 		Checker:     newInferSidecarChecker(sidecar, settings),
 	}

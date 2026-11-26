@@ -160,13 +160,22 @@ func TestSupportLogKeepsCountsDurationsAndSizesAsBuckets(t *testing.T) {
 }
 
 func TestSupportLogRefusesAndCountsFieldsTheCodeDoesNotDeclare(t *testing.T) {
-	log := openTestSupportLog(t, t.TempDir(), nil, newSupportLogTestClock())
+	// a ring started after the events: Start wakes the writer to flush, and a writer waking between two of the events
+	// would split their refusals' count between two flushes
+	log, err := OpenSupportLog(&SupportLogArgs{Directory: t.TempDir(), Settings: DefaultSupportSettings(), Clock: newSupportLogTestClock(), Deferred: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(log.Close)
 	// a field another code declares, the zero field, a second field of one number and an enum value its enum lacks
 	log.Event(SupportLogCodeDaemonStarted,
 		SupportLogFieldRelease("1.2.3"), SupportLogFieldRun([]byte("run")), SupportLogField{}, SupportLogFieldRelease("4.5.6"))
 	log.Event(SupportLogCodeDaemonStopped, SupportLogFieldStopReason(SupportLogStopReason(99)))
 	// a code the registry does not hold
 	log.Event(SupportLogCode(9999), SupportLogFieldCount(1))
+	if err := log.Start(); err != nil {
+		t.Fatal(err)
+	}
 	bundle := testSupportLogBundle(t, log, nil)
 	started := testSupportLogEvents(bundle.Document, "daemon.started")
 	if len(started) != 1 || len(started[0].Fields) != 1 || started[0].Fields["release"] != "1.2.3" {

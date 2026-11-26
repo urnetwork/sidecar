@@ -63,6 +63,9 @@ type InferEngineProcessArgs struct {
 	// The instance's state directory, which holds the two and which the helper must not read: once confined it proves
 	// it cannot list it before it serves (infer_engine_confine.go).
 	StateDirectory string
+	// Where a model's whole file is found: the daemon's InferPull over ModelDirectory, whose download marks a file
+	// whole (INFER-M11-11). Nil finds none, so every local call is refused as not pulled.
+	Models InferModelFiles
 	// The release manifest; nil for this build's.
 	Manifest *InferManifest
 	// The device; nil to read it from the OS.
@@ -83,6 +86,7 @@ type InferEngineProcess struct {
 	engineDirectory string
 	modelDirectory  string
 	confinement     *inferEngineConfinement
+	modelFiles      InferModelFiles
 	// whether this host can confine a helper: inferEngineConfineAvailable, a test's seam
 	confineAvailable func() error
 	manifest         *InferManifest
@@ -158,6 +162,7 @@ func NewInferEngineProcess(args *InferEngineProcessArgs) (*InferEngineProcess, e
 		engineDirectory:  confinement.EngineDirectory,
 		modelDirectory:   confinement.ModelDirectory,
 		confinement:      confinement,
+		modelFiles:       args.Models,
 		confineAvailable: inferEngineConfineAvailable,
 		manifest:         manifest,
 		capabilities:     args.Capabilities,
@@ -205,20 +210,12 @@ func (self *InferEngineProcess) plan(ctx context.Context, call *InferCall) (*inf
 	if engine == nil || len(engine.Libraries) == 0 {
 		return nil, newInferError(InferErrorModelRefused, "this build pins no engine for %s", device.Platform)
 	}
-	backend := string(InferAcceleratorCpu)
-	if slices.Contains(device.Accelerators, InferAcceleratorGpu) && slices.Contains(local.Accelerators, InferAcceleratorGpu) {
-		backend = string(InferAcceleratorGpu)
+	// the build for the backend's accelerator, else the one every accelerator loads (InferPull pulls the same)
+	modelFile, accelerator, err := inferLocalModelFile(call.Entry, device)
+	if err != nil {
+		return nil, err
 	}
-	// the build for the backend's accelerator, else the one every accelerator loads
-	var modelFile *InferManifestModelFile
-	for _, file := range local.Files {
-		if string(file.Accelerator) == backend || (file.Accelerator == "" && modelFile == nil) {
-			modelFile = file
-		}
-	}
-	if modelFile == nil {
-		return nil, newInferError(InferErrorModelRefused, "no build of %s runs on this device's %s", call.Name, backend)
-	}
+	backend := string(accelerator)
 	pinned := func(directory string, file *InferManifestFile) (*inferEngineFile, error) {
 		path := filepath.Join(directory, file.Name)
 		if _, err := os.Stat(path); err != nil {
@@ -252,10 +249,18 @@ func (self *InferEngineProcess) plan(ctx context.Context, call *InferCall) (*inf
 			return nil, err
 		}
 	}
-	params.Model, err = pinned(self.modelDirectory, &modelFile.InferManifestFile)
-	if err != nil {
-		return nil, err
+	// the model's whole file, which its pull alone marks whole and names by its SHA-256 (INFER-M11-11)
+	if self.modelFiles == nil {
+		return nil, newInferError(InferErrorModelRefused, "%s is not on this device yet: pull it first", modelFile.Name)
 	}
+	modelPath, err := self.modelFiles.WholePath(ctx, modelFile)
+	if err != nil {
+		if errors.Is(err, ErrInferModelNotWhole) {
+			return nil, newInferError(InferErrorModelRefused, "%s is not on this device yet: pull it first", modelFile.Name)
+		}
+		return nil, newInferError(InferErrorEngineFailed, "the model's file does not read: %s", err)
+	}
+	params.Model = &inferEngineFile{Path: modelPath, Sha256: modelFile.Sha256}
 	// a second engine only where the device holds the model twice over
 	instances := 1
 	for count := 2; count <= self.settings.EngineInstanceMaxCount; count += 1 {
