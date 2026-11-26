@@ -17,6 +17,16 @@ import (
 type BridgeSettings struct {
 	// What the bridge reads time from: drains, expiries, pins, idles and the reject bucket. Nil is real time.
 	Clock Clock
+	// The longest the bridge's waits go before they read the clock again (§17.8's after sleep or a clock step, owner
+	// decision 789): run's, for the next time a row's meaning changes, and the link manager's. Each wait is a runtime
+	// timer, which stops while the system sleeps, so one armed for a wall-clock time, a rule's expiry or a drain's end,
+	// comes late by the time slept, or by how far the clock stepped forward. Capped, a wait reads the wall clock again
+	// at least this often while something is timed, and run publishes once a time has passed, so a device that slept is
+	// late by at most this after it wakes. 30 s on a desktop, which has no one wake signal Go reads portably: a read of
+	// the clock each half minute while anything is timed. 0, a phone's (MobileBridgeSettings), caps nothing, so a phone
+	// adds no periodic wakeup, and its platform calls Bridge.CheckClock at each wake and clock change instead.
+	// Non-negative.
+	ClockCheckInterval time.Duration
 	// The posture the bridge embeds. Nil is DefaultPostureSettings.
 	PostureSettings *PostureSettings
 	// Which of §17.6's tables the bridge's provider hook runs: a sidecar-owned host's, the zero value, the sdk exit NAT's
@@ -171,6 +181,7 @@ type BridgeSettings struct {
 // §17's values, for a desktop: a daemon, a desktop network process or a VPS.
 func DefaultBridgeSettings() *BridgeSettings {
 	return &BridgeSettings{
+		ClockCheckInterval:              30 * time.Second,
 		PinSlotCount:                    8192,
 		PinTcpIdleTimeout:               600 * time.Second,
 		PinIdleTimeout:                  5 * time.Minute,
@@ -212,9 +223,12 @@ func DefaultBridgeSettings() *BridgeSettings {
 
 // The defaults adjusted for a phone (§17.5): 1,024 pin slots, which §22.9's mobile churn case runs past, 8 links
 // before one idle for LinkRoomIdleTimeout closes for room, and 256 reach slots and waiting reach events. The iOS tunnel
-// sets LinkCountMax to 0 on top of these until §22.9 measures a link there (owner decision 100).
+// sets LinkCountMax to 0 on top of these until §22.9 measures a link there (owner decision 100). Its waits take no
+// cap, so it wakes only for what is due, and its platform calls Bridge.CheckClock at each wake and clock change
+// (§17.8; owner decision 789).
 func MobileBridgeSettings() *BridgeSettings {
 	settings := DefaultBridgeSettings()
+	settings.ClockCheckInterval = 0
 	settings.PinSlotCount = 1024
 	settings.LinkCountMax = 8
 	settings.ReachQueueCount = 256
@@ -279,6 +293,9 @@ func (self *BridgeSettings) validate() error {
 	}
 	if self.PinTouchInterval < 0 {
 		return errors.Join(ErrBridgeSettingsInvalid, errors.New("PinTouchInterval is negative"))
+	}
+	if self.ClockCheckInterval < 0 {
+		return errors.Join(ErrBridgeSettingsInvalid, errors.New("ClockCheckInterval is negative"))
 	}
 	if 0xFFFF < self.ResolverTcpWindow {
 		return errors.Join(ErrBridgeSettingsInvalid, errors.New("ResolverTcpWindow is past what TCP's header holds"))

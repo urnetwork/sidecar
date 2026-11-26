@@ -90,6 +90,8 @@ func newStateTestWithSettings(
 	clock := sidecartest.NewFakeClock(time.UnixMilli(egressTestTimeMs))
 	settings := device.DefaultBridgeSettings()
 	settings.Clock = clock
+	// run's wait uncapped, so its one timer stands at each time a row's meaning changes; edit may cap it again
+	settings.ClockCheckInterval = 0
 	if edit != nil {
 		edit(settings)
 	}

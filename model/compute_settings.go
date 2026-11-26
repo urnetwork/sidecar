@@ -99,6 +99,14 @@ type ComputeLedgerSettings struct {
 	// How many UTC days of compute_charge partitions compute_rollup_day keeps made ahead of today: 7, so a missed
 	// run or a week of them leaves no charge without its partition. A reading: §14.5 names no figure.
 	ChargePartitionDaysAhead int
+	// The networks one of compute_rollup_day's batches checks and prunes, each batch its own transactions, its indexed
+	// cursor advancing past them: 100, so a batch's 400 days of day rows stay one short transaction's work. Must be
+	// positive. A reading: §14.5 names no figure.
+	RollupNetworkBatchCount int
+	// How long a charge partition's drop waits for its locks on compute_charge: 5 s. A detach waits for an ACCESS
+	// EXCLUSIVE lock, and every booking queues behind it while it waits, so the wait stays short and a busy pass drops
+	// the partition on its next run. Must be positive. A reading: §14.5 names no figure.
+	RollupDropLockTimeout time.Duration
 
 	// §9.7's settlement: compute_settle runs every 2 s and books up to 500 settled operation rows a shard a run.
 	SettleInterval      time.Duration
@@ -280,6 +288,8 @@ func DefaultComputeLedgerSettings() *ComputeLedgerSettings {
 		PayerDayRetention:        30 * day,
 		DisputeRetention:         400 * day,
 		ChargePartitionDaysAhead: 7,
+		RollupNetworkBatchCount:  100,
+		RollupDropLockTimeout:    5 * time.Second,
 
 		SettleInterval:        2 * time.Second,
 		SettleBatchRowCount:   500,
