@@ -9,8 +9,13 @@
 GO ?= go
 OUT ?= build
 TARGETS ?= darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 windows/arm64
+# ur-engine, the local engine's helper (DESIGN-COMPUTE §6.5, D-INFER-2; QD-1401): this package built with the ur_engine
+# tag, which selects main_ur_engine.go's main, for the four targets with an engine build; macOS on Intel and Windows on
+# arm64 get remote models only. `make engine OUT=<directory>` lands each at <directory>/<os>/<arch>/ur-engine, .exe on
+# windows, beside that target's ur.
+ENGINE_TARGETS ?= darwin/arm64 linux/amd64 linux/arm64 windows/amd64
 
-.PHONY: build
+.PHONY: build engine
 
 build:
 	@set -e; for target in $(TARGETS); do \
@@ -19,4 +24,13 @@ build:
 		echo "ur $$os/$$arch"; \
 		env GOFLAGS=-mod=readonly GOWORK=off GOTOOLCHAIN=local CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch GOEXPERIMENT=greenteagc \
 			$(GO) build -trimpath -ldflags "-w -s" -o "$(OUT)/$$os/$$arch/ur$$suffix" . ; \
+	done
+
+engine:
+	@set -e; for target in $(ENGINE_TARGETS); do \
+		os=$${target%/*}; arch=$${target#*/}; suffix=; \
+		if [ "$$os" = windows ]; then suffix=.exe; fi; \
+		echo "ur-engine $$os/$$arch"; \
+		env GOFLAGS=-mod=readonly GOWORK=off GOTOOLCHAIN=local CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch GOEXPERIMENT=greenteagc \
+			$(GO) build -trimpath -tags ur_engine -ldflags "-w -s" -o "$(OUT)/$$os/$$arch/ur-engine$$suffix" . ; \
 	done

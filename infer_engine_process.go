@@ -4,9 +4,11 @@
 // ur's daemon sets on its Sidecar's router, which runs each local model in an ur-engine helper process of its own and
 // speaks the helper's protocol to it (infer_engine_protocol.go).
 //
-// A helper starts beside ur (InferEngineProcessArgs.HelperPath; INFER-M11-05 confines it and ships it inside ur.app on
-// macOS) with only the arguments and the environment its args name, no descriptor but its stdio, and no key, token or
-// keychain access: nothing the daemon holds reaches it but paths, pins and the conversation it answers. One helper
+// A helper starts beside ur (InferEngineProcessArgs.HelperPath; inside ur.app on macOS), confined by its OS to reading
+// its engine and model files (infer_engine_confine.go), with only the arguments and the environment its args name, the
+// confinement's directories before them, no descriptor but its stdio, and no key, token or keychain access: nothing the
+// daemon holds reaches it but paths, pins and the conversation it answers. Where this host cannot confine one, as a
+// Linux kernel without Landlock, Capabilities says why and the router lists no local model. One helper
 // runs one loaded model, up to InferSettings.EngineProcessMaxCount at once, the least recently used idle one stopped to
 // make room. A model's calls share its engines (infer_engine_share.go): up to one a desktop engine, two engines where
 // the device has the memory for both, the rest waiting in arrival order, each call's start sent once it holds a slot.
@@ -32,7 +34,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -59,6 +60,9 @@ type InferEngineProcessArgs struct {
 	// manifest names it.
 	EngineDirectory string
 	ModelDirectory  string
+	// The instance's state directory, which holds the two and which the helper must not read: once confined it proves
+	// it cannot list it before it serves (infer_engine_confine.go).
+	StateDirectory string
 	// The release manifest; nil for this build's.
 	Manifest *InferManifest
 	// The device; nil to read it from the OS.
@@ -78,11 +82,14 @@ type InferEngineProcess struct {
 	helperEnv       []string
 	engineDirectory string
 	modelDirectory  string
-	manifest        *InferManifest
-	capabilities    *InferDeviceCapabilities
-	settings        *InferSettings
-	clock           Clock
-	log             Logger
+	confinement     *inferEngineConfinement
+	// whether this host can confine a helper: inferEngineConfineAvailable, a test's seam
+	confineAvailable func() error
+	manifest         *InferManifest
+	capabilities     *InferDeviceCapabilities
+	settings         *InferSettings
+	clock            Clock
+	log              Logger
 
 	stateLock sync.Mutex
 	// the helper running each loaded model, by the model file's path
@@ -109,8 +116,16 @@ type inferEngineModelProcess struct {
 
 // The desktop engine over args. Starts no helper until a call needs one.
 func NewInferEngineProcess(args *InferEngineProcessArgs) (*InferEngineProcess, error) {
-	if args == nil || args.EngineDirectory == "" || args.ModelDirectory == "" {
-		return nil, errors.New("engine process: an engine and a model directory")
+	if args == nil || args.EngineDirectory == "" || args.ModelDirectory == "" || args.StateDirectory == "" {
+		return nil, errors.New("engine process: an engine, a model and a state directory")
+	}
+	confinement := &inferEngineConfinement{
+		EngineDirectory: filepath.Clean(args.EngineDirectory),
+		ModelDirectory:  filepath.Clean(args.ModelDirectory),
+		DeniedDirectory: filepath.Clean(args.StateDirectory),
+	}
+	if err := confinement.validate(); err != nil {
+		return nil, fmt.Errorf("engine process: %w", err)
 	}
 	settings := args.Settings
 	if settings == nil {
@@ -122,7 +137,7 @@ func NewInferEngineProcess(args *InferEngineProcessArgs) (*InferEngineProcess, e
 		if err != nil {
 			return nil, fmt.Errorf("engine process: where ur runs from: %w", err)
 		}
-		helperPath = filepath.Join(filepath.Dir(executable), inferEngineHelperName())
+		helperPath = inferEngineDefaultHelperPath(executable)
 	}
 	manifest := args.Manifest
 	if manifest == nil {
@@ -137,22 +152,31 @@ func NewInferEngineProcess(args *InferEngineProcessArgs) (*InferEngineProcess, e
 		log = NewNoopLogger()
 	}
 	return &InferEngineProcess{
-		helperPath:      helperPath,
-		helperArgs:      slices.Clone(args.HelperArgs),
-		helperEnv:       slices.Clone(args.HelperEnv),
-		engineDirectory: args.EngineDirectory,
-		modelDirectory:  args.ModelDirectory,
-		manifest:        manifest,
-		capabilities:    args.Capabilities,
-		settings:        settings,
-		clock:           clockOrReal(args.Clock),
-		log:             log,
-		models:          map[string]*inferEngineModelProcess{},
+		helperPath:       helperPath,
+		helperArgs:       slices.Clone(args.HelperArgs),
+		helperEnv:        slices.Clone(args.HelperEnv),
+		engineDirectory:  confinement.EngineDirectory,
+		modelDirectory:   confinement.ModelDirectory,
+		confinement:      confinement,
+		confineAvailable: inferEngineConfineAvailable,
+		manifest:         manifest,
+		capabilities:     args.Capabilities,
+		settings:         settings,
+		clock:            clockOrReal(args.Clock),
+		log:              log,
+		models:           map[string]*inferEngineModelProcess{},
 	}, nil
 }
 
-// See InferLocalEngine: the device as the args gave it, else as its OS reports it.
+// See InferLocalEngine: the device as the args gave it, else as its OS reports it; an error where this host cannot run
+// a confined helper, so the router lists local inference unavailable with why (§6.5).
 func (self *InferEngineProcess) Capabilities(ctx context.Context) (*InferDeviceCapabilities, error) {
+	if err := self.confineAvailable(); err != nil {
+		return nil, err
+	}
+	if _, err := os.Stat(self.helperPath); err != nil {
+		return nil, fmt.Errorf("no ur-engine helper at its place beside ur, so this build runs no local model: %w", err)
+	}
 	if self.capabilities != nil {
 		return self.capabilities.clone(), nil
 	}
@@ -345,7 +369,7 @@ func (self *InferEngineProcess) modelProcess(plan *inferEnginePlan) (*inferEngin
 // Starts model's helper and loads plan's model in it, bounded by EngineLoadTimeout, then says the load answered.
 func (self *InferEngineProcess) load(model *inferEngineModelProcess, plan *inferEnginePlan) {
 	defer close(model.loaded)
-	helper, err := startInferEngineHelperProcess(self.helperPath, self.helperArgs, self.helperEnv, self.engineDirectory, self.settings, self.clock, self.log)
+	helper, err := startInferEngineHelperProcess(self.childSpec(), self.settings, self.clock, self.log)
 	if err != nil {
 		model.helper, model.loadErr = startInferEngineEndedHelper(err), err
 		return
@@ -442,7 +466,7 @@ func (self *InferEngineProcess) Call(ctx context.Context, method string, params 
 		if self.methods != nil && !self.methods.ended() {
 			return self.methods, nil
 		}
-		helper, err := startInferEngineHelperProcess(self.helperPath, self.helperArgs, self.helperEnv, self.engineDirectory, self.settings, self.clock, self.log)
+		helper, err := startInferEngineHelperProcess(self.childSpec(), self.settings, self.clock, self.log)
 		if err != nil {
 			return nil, err
 		}
@@ -489,10 +513,22 @@ type inferEnginePending struct {
 	done chan *inferEngineAnswer
 }
 
+// How every helper of this process is started: its executable, arguments and environment, in the engine's directory,
+// confined to the two directories.
+func (self *InferEngineProcess) childSpec() *inferEngineChildSpec {
+	return &inferEngineChildSpec{
+		Path:        self.helperPath,
+		Args:        self.helperArgs,
+		Env:         self.helperEnv,
+		Directory:   self.engineDirectory,
+		Confinement: self.confinement,
+	}
+}
+
 // One running helper process and its protocol: a goroutine reads its answers and hands each to its request, never
 // waiting on a reader, since a generate's events go to the router's InferEmit, which never blocks.
 type inferEngineHelperProcess struct {
-	command  *exec.Cmd
+	child    *inferEngineChild
 	writer   *inferEngineLineWriter
 	stdin    io.Closer
 	settings *InferSettings
@@ -516,29 +552,20 @@ func startInferEngineEndedHelper(err error) *inferEngineHelperProcess {
 	return helper
 }
 
-// Starts the helper at path with args, env as its whole environment and no descriptor but its stdio, in directory.
-func startInferEngineHelperProcess(path string, args []string, env []string, directory string, settings *InferSettings, clock Clock, log Logger) (*inferEngineHelperProcess, error) {
-	command := exec.Command(path, args...)
-	// a nil Env inherits the daemon's; an empty one passes nothing
-	command.Env = append([]string{}, env...)
-	command.Dir = directory
-	stdin, err := command.StdinPipe()
-	if err != nil {
-		return nil, newInferError(InferErrorEngineFailed, "the engine's input: %s", err)
-	}
-	stdout, err := command.StdoutPipe()
-	if err != nil {
-		return nil, newInferError(InferErrorEngineFailed, "the engine's output: %s", err)
-	}
+// Starts the helper as spec says (inferEngineStartChild: confined, with spec's environment alone and no descriptor but
+// its stdio), its stderr kept to the settings' bound.
+func startInferEngineHelperProcess(spec *inferEngineChildSpec, settings *InferSettings, clock Clock, log Logger) (*inferEngineHelperProcess, error) {
 	stderr := &inferEngineBoundedBuffer{maxByteCount: settings.EngineStderrMaxByteCount}
-	command.Stderr = stderr
-	if err := command.Start(); err != nil {
+	started := *spec
+	started.Stderr = stderr
+	child, err := inferEngineStartChild(&started)
+	if err != nil {
 		return nil, newInferError(InferErrorEngineFailed, "the engine helper does not start: %s", err)
 	}
 	helper := &inferEngineHelperProcess{
-		command:  command,
-		writer:   newInferEngineLineWriter(stdin, settings.EngineRequestMaxByteCount),
-		stdin:    stdin,
+		child:    child,
+		writer:   newInferEngineLineWriter(child.stdin, settings.EngineRequestMaxByteCount),
+		stdin:    child.stdin,
 		settings: settings,
 		clock:    clock,
 		log:      log,
@@ -546,10 +573,10 @@ func startInferEngineHelperProcess(path string, args []string, env []string, dir
 		pending:  map[uint64]*inferEnginePending{},
 	}
 	go func() {
-		err := helper.read(stdout)
+		err := helper.read(child.stdout)
 		// the process is ended for good, whatever ended the reading
-		command.Process.Kill()
-		waitErr := command.Wait()
+		child.kill()
+		waitErr := child.wait()
 		if err == nil {
 			err = waitErr
 		}
@@ -714,7 +741,7 @@ func (self *inferEngineHelperProcess) cancel(pending *inferEnginePending) {
 
 // Ends the helper: closes its input, which it exits at, and past timeout kills it; returns once it has ended.
 func (self *inferEngineHelperProcess) stop(timeout time.Duration) {
-	if self.command == nil {
+	if self.child == nil {
 		<-self.exited
 		return
 	}
@@ -724,7 +751,7 @@ func (self *inferEngineHelperProcess) stop(timeout time.Duration) {
 		return
 	case <-self.clock.After(timeout):
 	}
-	self.command.Process.Kill()
+	self.child.kill()
 	<-self.exited
 }
 
