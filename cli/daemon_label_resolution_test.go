@@ -2,12 +2,12 @@ package main
 
 // ur daemon's label resolution through its composition (daemon_labels.go; sidecar's daemon_labels.go and
 // dns_label_refresh.go): a daemon hosting two networks of one instance, each composed as network.start composes one
-// (its dns component, its label refresh, then its follower) and each label table holding its own network's row,
-// resolves `.ur`'s network under the settings' user root, so ur acl push in a project whose `.ur` names one network's
-// label plans and saves on that network alone, and the other's head keeps what it held; with no `.ur` the push answers
-// ambiguous before planning anything, naming both networks by their labels, where before this the daemon named them
-// by id and no `.ur` could pick either. The engines keep evs and gkm open to both networks, the first bootstrap's after
-// the second's.
+// (its dns component, its label refresh, then its follower) and each label table holding its own network's row, the
+// one its refresh reads from the Net's api (sidecartest's FakeApi serves GET /sidecar/label), resolves `.ur`'s network
+// under the settings' user root, so ur acl push in a project whose `.ur` names one network's label plans and saves on
+// that network alone, and the other's head keeps what it held; with no `.ur` the push answers ambiguous before
+// planning anything, naming both networks by their labels, where before this the daemon named them by id and no `.ur`
+// could pick either. The engines keep evs and gkm open to both networks, the first bootstrap's after the second's.
 
 import (
 	"bytes"
@@ -36,10 +36,15 @@ type testUrLabelNetwork struct {
 	client    *sidecar.ConfigClient
 }
 
-// Enrolls a further network on instance, bootstraps it, composes it and files label as its own row in its own table.
+// Enrolls a further network on instance, its label at the Net's api, bootstraps it, composes it and files label as its
+// own row in its own table.
 func newTestUrLabelNetwork(t *testing.T, ctx context.Context, instance *sidecartest.TestInstance, engines *enginenet.Engines, label string) *testUrLabelNetwork {
 	t.Helper()
 	networkId := sidecar.NewId()
+	// what the composed label refresh reads and files, named before it attaches, so no label is drawn in its place
+	if err := engines.Api().SetNetworkLabel(networkId, &sidecartest.FakeApiNetworkLabel{Label: label}); err != nil {
+		t.Fatal(err)
+	}
 	running, err := instance.AddSidecarIn(networkId, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -69,7 +74,9 @@ func newTestUrLabelNetwork(t *testing.T, ctx context.Context, instance *sidecart
 	if err != nil {
 		t.Fatal(err)
 	}
-	// the row GET /sidecar/label's read files there, which the fake api does not serve
+	// the row the label refresh files from GET /sidecar/label's answer, filed here as well so the push does not wait on
+	// that read, which this leg cannot observe; both write the same label, in either order
+	// (TestDaemonLabelRefreshFilesEachNetworksNamesFromApi waits for the refresh's own write at its barrier)
 	labels, err := running.NetworkLabels()
 	if err != nil {
 		t.Fatal(err)
