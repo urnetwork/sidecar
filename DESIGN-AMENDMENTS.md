@@ -66,6 +66,8 @@ Not folded (2026-11-24, track dr19-support-fold): sidecar/design/UI.md is still 
 
 Not folded (2026-11-25, track dr20-late-fold): sidecar/design/UI.md is still absent; the copy is the owner's step.
 
+Not folded (2026-11-25, track designmd-fold-co47-to-co49): sidecar/design/UI.md is still absent; the copy is the owner's step.
+
 ### QD-1086: How should M2's gate show FS-15, FS-20, FS-24 and FS-104, whose MLS legs owner decision 610 took off the gates?
 *Decided by the owner on 2026-11-18, asked one question at a time; owner decision 627. Folds into §22 Testing and verification.*
 
@@ -86,3 +88,5 @@ Not folded (2026-11-21, track dr9-final-sweep): the rework has not landed, so th
 Not folded (2026-11-24, track dr19-support-fold): KEYS's review-phase rework has not landed, and sidecartest/fault's catalog.yml keeps FS-15, FS-20, FS-24 and FS-104 at M2-out as drafted.
 
 Not folded (2026-11-25, track dr20-late-fold): KEYS's review-phase rework has still not landed, and sidecartest/fault's catalog.yml keeps the four rows at M2-out as drafted.
+
+Not folded (2026-11-25, track designmd-fold-co47-to-co49): KEYS's review-phase rework has not landed, and sidecartest/fault's catalog.yml keeps FS-15, FS-20, FS-24 and FS-104 at M2-out as drafted.
