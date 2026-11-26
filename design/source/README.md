@@ -1577,3 +1577,10 @@ On 2026-11-25 the owner added local models for ur.io's pages to DESIGN-COMPUTE.m
 - **Superseded where they stand.** QD-1317 (Q-HARN-3) and QD-1364 (Q-SSH-1), appendix answers CO-48 changes, each take a line saying so and what replaces them, for the owner's revision to fold: ur.io's page Worker runs the apps' Harness from M13a, and from M14 the person's own devices answer attach by `ur harness rpc` alone, a shell staying Later.
 
 DESIGN.md and DESIGN-DEFER.md are unchanged by this piece.
+
+### The session wire joins §16.8's fences
+
+- **§16.8's fences** take `RecordEntry.body_apart` (6), a session entry's sealed body filed apart from its header, and `Coverage.bodies_dropped` (8) with `SeqRange`, which record.proto declares for context history (CTXH-M11-01, sidecar bd0acc99), two of what the twelfth fold left for their code. The Compute's record primitives paragraph says what record.proto now declares for context history and what waits: kinds 54 `session_entry` and 55 `session_blob` with their bodies and class 8, which RECORD.md's sections 5 to 8 take with record_kind_test.go's `testRecordKindAdditions` and class additions in a fold of their own, since that test is not among this track's files, and kind 56 with its code; `ModelCallBody`'s field 15, `CallContext`, stays in DESIGN-COMPUTE.md's fence that extends RECORD.md section 12's.
+- **The lists.** protocol/design_unfenced_test.go's `testFenceAdditions` loses its two session lines and `testUnfencedFence` `SeqRange`, with the source constant only those lines read; `ApprovalNotice` stays there, since no fence writes owner decision 573's per-request notice yet.
+
+`build.sh` on this folder reproduces DESIGN.md (SHA-256 `09da5c714727454732c56df8810a11d1704cfa8608d150372d6308158f33f2d7`) and DESIGN-DEFER.md (SHA-256 `3af6b10c35e06eaa2230e6232dc953d77f4539fe4065623950425ebab41895a6`, unchanged), and the validation shows the second piece's counts: all 795 rows present and cited, 320 superseded-option hits none live, 12,859 section references with the one unresolved, and 106 DESIGN-DEFER.md entries with 172 pointers.
