@@ -49,13 +49,18 @@ func init() {
 		Name:     inferModelsListToolName,
 		Profiles: []HarnessProfile{HarnessProfileLocal, HarnessProfileEnclave},
 		BuiltIn:  true,
-		New: func(harness *Harness) (HarnessTool, error) {
-			if harness == nil || harness.router == nil {
-				return nil, errors.New("models_list needs the Harness's router")
-			}
-			return &inferModelsListTool{router: harness.router, settings: DefaultInferSettings()}, nil
-		},
+		New:      newInferModelsListTool,
 	})
+}
+
+// models_list for harness, over its router. A function of its own, not a literal in init: the ios_extension legs'
+// closure (check/legs_closure_test.go) reads every name an init holds as run at start, and on the legs the settings'
+// default is sidecar_compute_leg.go's, so a literal naming it would take this file and the harness into the closure.
+func newInferModelsListTool(harness *Harness) (HarnessTool, error) {
+	if harness == nil || harness.router == nil {
+		return nil, errors.New("models_list needs the Harness's router")
+	}
+	return &inferModelsListTool{router: harness.router, settings: DefaultInferSettings()}, nil
 }
 
 // models_list over a router.
