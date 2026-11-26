@@ -433,10 +433,13 @@ Owner decision 4: one client per sidecar, a child of the device client in its ne
 | App device client | counts | counts | — |
 | Sidecar child of a device client | exempt | — | counts |
 | A sidecar's forwarding client and its window clients (§18.6; owner decision 197) | exempt | exempt | — (its sidecar counts once) |
+| A sidecar's egress windows, minted for its compute tools (owner decision 797) | exempt | exempt | — (its sidecar counts once) |
 | Standalone, declared no-egress (the extension worker too, §18.4) | exempt | exempt | counts |
 | Standalone, with `ur proxy` or public exits | counts | counts | counts |
 
-**Declaration** (§5.6, §7.7). A sidecar declares no-egress unless `ur proxy` or a public exit is set; the client JWT carries it, so connect needs no query, and window clients inherit it. `CreateContract` refuses such clients Public contracts (§8.10).
+**Declaration** (§5.6, §7.7). A sidecar declares no-egress unless `ur proxy` or a public exit is set; the client JWT carries it, so connect needs no query, and window clients inherit it, but for its egress windows. `CreateContract` refuses such clients Public contracts (§8.10).
+
+**Egress windows** (owner decision 797). The window clients `SidecarEgress` mints for a sidecar's compute tools, web fetch's `auto` egress, web search, calendars, connected services and the direct inference path (DESIGN-COMPUTE.md §22.4, §22.7), carry no no-egress claim: api's window mint marks an egress window apart from a bridge window and the JWT carries the mark, so connect needs no query, and such a window may take Public contracts, paid from the network's transfer balance as any Public contract is. It is a child of the sidecar's client, counted with it once as the table's row has it, a public-exit user the free tier's concurrent cap does not count, while the sidecar's own client keeps its declaration and its exemptions from `concurrent_clients`, the create cap and the peer list; each window's own claim says what it is, so the refusal stays exact for everything else. Decided ahead of its code, which the compute plan's track fetch-m13-01 builds in api's window mint, the JWT and connect's contract gate; until then every window inherits its sidecar's declaration, failing closed.
 
 **Peer list.** Declared clients get a new peer category, unlisted and without peer subscriptions like isolated clients (server/model/peer_model.go:59-76), which the create cap's and peer valve's `NOT EXISTS` clauses (20.3) also skip. Other clients' create cap moves into pro.yml per tier, as `top_level_client_limit` (20.4), read in place of `LimitTopLevelClientIdsPerNetwork`, a `network_top_level_client_limit` row still overriding it.
 

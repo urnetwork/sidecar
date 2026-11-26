@@ -210,7 +210,8 @@ step  check                                                                     
 6     its own evaluation of the config repo, at the ticket's log position or        denied
       later (§7.9), allows the dial
 7     ACCEPT, keeping the ticket as reach evidence (§16); the stream ends at
-      grant_expire_time_millis or revocation
+      grant_expire_time_millis or revocation, its wait read again after a sleep or a
+      clock step (§17.8; owner decision 798)
 ```
 
 **Replay set (owner decision 694).** Step 4's seen ticket_ids are held in memory, per listener, each until its ticket expires. A listener draws a new listen_id at every Listen (9.5) and nothing stores one, so after a restart every listener is new: an open connect replays from before the restart (§6.9's session recovery) carries a ticket naming the old process's listen and meets step 2's retry, or no target before the daemon listens again, and its opener resets the stream on any reject after its open was answered. Within a process, listeners and their replay sets outlive a reconnect, so a replay onto the same listen meets step 4. A listener that ever keeps its listen_id across a restart must keep its replay set with it; the sockets component's restart test fails the day one does.
@@ -333,8 +334,9 @@ get     getter -> version[1] = 1 ‖ secret[32] ‖ get_id[16] ‖ u64be offset
         sharer -> status[1] (0 ok, 1 spent, 2 changed); ok adds u64be size ‖ sha256[32], then bytes [offset, size)
         getter: SHA-256 over [0, size) equals sha256; it renames <out>.part to <out> and sends done[1] = 1,
         and the sharer appends Done
-end     a Remove, a Done for each of `uses` Reserves, or expire_millis (by timer, and at start for a sharer
-        offline then): reset the share's streams, unlisten and delete the record
+end     a Remove, a Done for each of `uses` Reserves, or expire_millis (by timer, read again after a sleep or
+        a clock step, §17.8 and owner decision 798, and at start for a sharer offline then): reset the
+        share's streams, unlisten and delete the record
 ```
 
 Served uses never exceed `uses`, counted by Reserves, and no get starts, resumes or keeps streaming at or past `expire_millis`; a crash or a lost stream never frees a Reserve (burn on uncertainty), and only its own getter resumes it.
