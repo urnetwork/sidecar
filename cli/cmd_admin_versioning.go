@@ -7,6 +7,11 @@
 // --rules is JSON, rules in order, each selector optional, as in
 //
 //	{"rules": [{"kinds": ["general"], "path_glob": "build/**", "size_above_bytes": 1048576, "versioning": "off"}]}
+//
+// The show prints the rules on stdout as --rules takes them, and on stderr, where the record is carried under a signer
+// who no longer stands as an Owner's, Admin's or Network admin's device, that signer, why, and that a fresh record is
+// filed with --rules (D-TEAM-26; owner decision 699; QD-1207): the record stands under that signer, as every reader
+// holds it, until one of them files another.
 
 package main
 
@@ -37,6 +42,8 @@ func init() {
 type urAdminVersioningTarget interface {
 	versioningRules() (*protocol.VersioningRules, bool, error)
 	saveVersioningRules(ctx context.Context, rules *protocol.VersioningRules) error
+	// The head's records whose signer no longer stands (sidecar.CarriedConfigRecords).
+	carriedConfigRecords(ctx context.Context) ([]*sidecar.ConfigCarriedRecord, error)
 }
 
 func (self *urDaemonNetwork) versioningRules() (*protocol.VersioningRules, bool, error) {
@@ -45,6 +52,14 @@ func (self *urDaemonNetwork) versioningRules() (*protocol.VersioningRules, bool,
 		return nil, false, err
 	}
 	return running.VersioningRules()
+}
+
+func (self *urDaemonNetwork) carriedConfigRecords(ctx context.Context) ([]*sidecar.ConfigCarriedRecord, error) {
+	running, err := self.onlySidecar()
+	if err != nil {
+		return nil, err
+	}
+	return running.CarriedConfigRecords(ctx)
 }
 
 // A confirmed control call.
@@ -138,6 +153,11 @@ type urVersioningReply struct {
 	Rules string `json:"rules,omitempty"`
 	// No record: the platform rule holds, versionless above 64 MiB.
 	Platform bool `json:"platform,omitempty"`
+	// The record is carried under a signer who no longer stands as one who may sign it (QD-1207); nil while its signer
+	// stands.
+	Carried *sidecar.ConfigCarriedRecord `json:"carried,omitempty"`
+	// The daemon could not read the head's records now, so Carried says nothing.
+	CarriedUnknown bool `json:"carried_unknown,omitempty"`
 }
 
 type urVersioningParams struct {
@@ -164,7 +184,18 @@ func urAdminVersioningMethods(target urDaemonTarget) []*sidecar.DaemonMethod {
 				if rules == nil {
 					return &urVersioningReply{Platform: true}, nil
 				}
-				return &urVersioningReply{Rules: urFormatVersioningRules(rules)}, nil
+				reply := &urVersioningReply{Rules: urFormatVersioningRules(rules)}
+				carried, err := versioning.carriedConfigRecords(ctx)
+				if err != nil {
+					reply.CarriedUnknown = true
+					return reply, nil
+				}
+				for _, record := range carried {
+					if record != nil && record.Record == sidecar.ConfigHeadVersioningRulesPath {
+						reply.Carried = record
+					}
+				}
+				return reply, nil
 			},
 		},
 		{
@@ -198,6 +229,13 @@ func runUrAdminVersioning(ctx context.Context, cli *urCli, options docopt.Opts) 
 			return nil
 		}
 		cli.printf("%s\n", reply.Rules)
+		// on stderr, so stdout stays the rules as --rules takes them
+		switch {
+		case reply.CarriedUnknown:
+			fmt.Fprintf(cli.stderr, "ur admin versioning: whether these rules' signer still stands is not known here, since this device could not read the config head's records now\n")
+		case reply.Carried != nil:
+			fmt.Fprintf(cli.stderr, "ur admin versioning: these rules stand under a signer who no longer stands until another record is filed: %s\n", urAdminCarriedLine(reply.Carried))
+		}
 		return nil
 	}
 	rules, err := urParseVersioningRules(text)

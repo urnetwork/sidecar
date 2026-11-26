@@ -5,12 +5,14 @@ package main
 // anything is asked; with no option the settings print; and the change is a Confirm method, the show not. --feature
 // (DESIGN-COMPUTE §16.6, CACL-M11-03) likewise: confirmed on a yes alone, through its own Confirm method, the question
 // naming what would pause; a name that is no feature's, a feature this device may not turn on and one already on each
-// ask nothing and send no turning-on.
+// ask nothing and send no turning-on. The show and a filed change list the head's carried records (QD-1207), each with
+// its signer, its member, why the signer no longer stands and who files another, or say they could not be read.
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"sync"
@@ -26,6 +28,8 @@ type testUrAdminSettingsStand struct {
 	confirmed []bool
 	params    []json.RawMessage
 	show      *urAdminSettingsReply
+	// what a filed change lists as still carried
+	changeCarried []*sidecar.ConfigCarriedRecord
 }
 
 func (self *testUrAdminSettingsStand) methods() []*sidecar.DaemonMethod {
@@ -46,7 +50,7 @@ func (self *testUrAdminSettingsStand) methods() []*sidecar.DaemonMethod {
 	return []*sidecar.DaemonMethod{
 		answer(urMethodAdminSettingsShow, false, func(params *urAdminSettingsParams) any { return self.show }),
 		answer(urMethodAdminSettings, true, func(params *urAdminSettingsParams) any {
-			return &urAdminSettingsReply{Team: true, MailStrict: "off", RecordCost: params.RecordCost, RecordRequired: params.RecordRequired}
+			return &urAdminSettingsReply{Team: true, MailStrict: "off", RecordCost: params.RecordCost, RecordRequired: params.RecordRequired, Carried: self.changeCarried}
 		}),
 		answer(urMethodAdminSettingsFeature, true, func(params *urAdminSettingsParams) any {
 			return &sidecar.AuthFeatureStatus{Name: params.Feature, On: true, Implemented: true, Supported: true, SupportKnown: true}
@@ -291,5 +295,122 @@ func TestUrAdminSettingsShowsTheFeatures(t *testing.T) {
 		if !strings.Contains(text, line) {
 			t.Errorf("it printed no %q:\n%s", line, text)
 		}
+	}
+}
+
+// A carried ServiceSettings whose signer was revoked with its member's removal, and carried VersioningRules whose
+// signer's member is now a Member.
+func testUrAdminCarried() (*sidecar.ConfigCarriedRecord, *sidecar.ConfigCarriedRecord) {
+	removedMemberId, demotedMemberId := sidecar.NewId(), sidecar.NewId()
+	settings := &sidecar.ConfigCarriedRecord{
+		Record: sidecar.ConfigHeadServiceSettingsPath, SignerId: sidecar.NewId(), MemberId: &removedMemberId,
+		Why: sidecar.ConfigCarriedRevoked, At: 42, MemberRemoved: true,
+	}
+	rules := &sidecar.ConfigCarriedRecord{
+		Record: sidecar.ConfigHeadVersioningRulesPath, SignerId: sidecar.NewId(), MemberId: &demotedMemberId,
+		Why: sidecar.ConfigCarriedRole, Role: "member",
+	}
+	return settings, rules
+}
+
+// With no option the show lists each carried record: the record, its signer and the signer's member, why the signer no
+// longer stands, and who files another with which command.
+func TestUrAdminSettingsListsTheCarriedRecords(t *testing.T) {
+	settings, rules := testUrAdminCarried()
+	stand := &testUrAdminSettingsStand{show: &urAdminSettingsReply{
+		Team: true, MailStrict: "off", RecordCost: "on", RecordRequired: "off",
+		Carried: []*sidecar.ConfigCarriedRecord{settings, rules},
+	}}
+	cli, stdout := testUrAdminSettingsCli(t, stand)
+	if code := cli.main(context.Background(), []string{"ur", "admin", "settings"}); code != urExitOk {
+		t.Fatalf("exit %d", code)
+	}
+	text := stdout.String()
+	for _, line := range []string{
+		"carried records, each standing under a signer who no longer stands until another is filed:\n",
+		"  service_settings: signed by " + settings.SignerId.String() + " of member " + settings.MemberId.String() +
+			", revoked at position 42, its member no longer the network's; an Owner or Admin files another: ur admin settings with any option\n",
+		"  versioning_rules: signed by " + rules.SignerId.String() + " of member " + rules.MemberId.String() +
+			", its member's role is now member, which does not sign it; an Owner, Admin or Network admin files another: ur admin versioning --rules\n",
+	} {
+		if !strings.Contains(text, line) {
+			t.Errorf("it printed no %q:\n%s", line, text)
+		}
+	}
+}
+
+// A show whose records could not be read says so; one whose every record's signer stands, and one whose settings are
+// not known here, list nothing.
+func TestUrAdminSettingsSaysWhenItCannotListTheCarriedRecords(t *testing.T) {
+	stand := &testUrAdminSettingsStand{show: &urAdminSettingsReply{Team: true, MailStrict: "off", RecordCost: "on", RecordRequired: "off", CarriedUnknown: true}}
+	cli, stdout := testUrAdminSettingsCli(t, stand)
+	if code := cli.main(context.Background(), []string{"ur", "admin", "settings"}); code != urExitOk ||
+		!strings.Contains(stdout.String(), "carried records: not known here, since this device could not read the config head's records now") {
+		t.Fatalf("exit %d, printed:\n%s", code, stdout.String())
+	}
+	for _, show := range []*urAdminSettingsReply{
+		{Team: true, MailStrict: "off", RecordCost: "on", RecordRequired: "off"},
+		{Team: true, Unknown: true},
+	} {
+		stdout.Reset()
+		stand.stateLock.Lock()
+		stand.show = show
+		stand.stateLock.Unlock()
+		if code := cli.main(context.Background(), []string{"ur", "admin", "settings"}); code != urExitOk || strings.Contains(stdout.String(), "carried records") {
+			t.Errorf("%+v: exit %d, printed:\n%s", show, code, stdout.String())
+		}
+	}
+}
+
+// A change, once filed, lists what its head still carries: the settings it filed are no longer listed, the rules are.
+func TestUrAdminSettingsChangeListsTheRecordsStillCarried(t *testing.T) {
+	_, rules := testUrAdminCarried()
+	stand := &testUrAdminSettingsStand{changeCarried: []*sidecar.ConfigCarriedRecord{rules}}
+	cli, stdout := testUrAdminSettingsCli(t, stand)
+	cli.openTty = func() (urTty, error) { return &testTty{lines: []string{"yes"}}, nil }
+	if code := cli.main(context.Background(), []string{"ur", "admin", "settings", "--mail-strict=off"}); code != urExitOk {
+		t.Fatalf("exit %d", code)
+	}
+	text := stdout.String()
+	filed := strings.Index(text, "ServiceSettings filed")
+	listed := strings.Index(text, "  versioning_rules: signed by "+rules.SignerId.String())
+	if filed < 0 || listed < filed || strings.Contains(text, "service_settings: signed by") {
+		t.Errorf("it printed:\n%s", text)
+	}
+}
+
+// A lister of fixed records, or of an error.
+type testUrAdminCarriedLister struct {
+	records []*sidecar.ConfigCarriedRecord
+	err     error
+	calls   int
+}
+
+func (self *testUrAdminCarriedLister) CarriedConfigRecords(ctx context.Context) ([]*sidecar.ConfigCarriedRecord, error) {
+	self.calls += 1
+	return self.records, self.err
+}
+
+// The methods' listing: the lister's records into the reply, an error as not known, and nothing asked where the
+// settings are not known, since such a device opens no head.
+func TestUrAdminSettingsListCarriedFillsTheReply(t *testing.T) {
+	settings, rules := testUrAdminCarried()
+	lister := &testUrAdminCarriedLister{records: []*sidecar.ConfigCarriedRecord{settings, rules}}
+	reply := &urAdminSettingsReply{MailStrict: "off"}
+	urAdminSettingsListCarried(context.Background(), lister, reply)
+	if len(reply.Carried) != 2 || reply.Carried[0] != settings || reply.Carried[1] != rules || reply.CarriedUnknown {
+		t.Errorf("the reply lists %v, unknown %t", reply.Carried, reply.CarriedUnknown)
+	}
+	failing := &testUrAdminCarriedLister{err: errors.New("the head is not cached and evs does not answer")}
+	reply = &urAdminSettingsReply{MailStrict: "off"}
+	urAdminSettingsListCarried(context.Background(), failing, reply)
+	if reply.Carried != nil || !reply.CarriedUnknown {
+		t.Errorf("a failed listing gave %v, unknown %t", reply.Carried, reply.CarriedUnknown)
+	}
+	unknown := &testUrAdminCarriedLister{records: []*sidecar.ConfigCarriedRecord{settings}}
+	reply = &urAdminSettingsReply{Unknown: true}
+	urAdminSettingsListCarried(context.Background(), unknown, reply)
+	if unknown.calls != 0 || reply.Carried != nil || reply.CarriedUnknown {
+		t.Errorf("settings not known asked %d times and gave %v, unknown %t", unknown.calls, reply.Carried, reply.CarriedUnknown)
 	}
 }
