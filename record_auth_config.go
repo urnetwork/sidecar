@@ -50,6 +50,13 @@ func (self *configRecordAuth) Pin() *bridge.AuthPin {
 	return self.state.Pin()
 }
 
+// Whether the sidecar's admission is an enclave incarnation's, its capability bit 3 (DESIGN-COMPUTE §11.4): what the
+// record's trust rules ask to tell the member's own enclave from another tagged sidecar (D-CTXH-9).
+func (self *configRecordAuth) Enclave(sidecarId Id) bool {
+	row := self.state.SidecarRow(sidecarId)
+	return row != nil && configRowEnclave(row)
+}
+
 // The verified snapshot at the complete pin, including the chain value.
 func (self *configRecordAuth) At(pin *bridge.AuthPin) (RecordAuthView, error) {
 	state, err := self.state.StateAt(pin)

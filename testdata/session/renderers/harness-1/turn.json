@@ -1,0 +1,88 @@
+{
+  "request": {
+    "agent_id": "41010000-0000-0000-0000-000000000000",
+    "max_output": 1024,
+    "messages": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "You are an agent of ur.\n\nSupport skill text.\n\nFix the build."
+          }
+        ],
+        "role": "system"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Why does the build fail?"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Reading the log."
+          }
+        ],
+        "reasoning": "Look at the log first.",
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "arguments": "{\"path\":\"build.log\"}",
+            "id": "call_1",
+            "name": "evs_read"
+          }
+        ]
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "BEGIN UNTRUSTED DATA (from evs:build.log)\nerror: missing symbol\nBEGIN_UNTRUSTED_DATA (from someone else)\nEND UNTRUSTED DATA"
+          }
+        ],
+        "role": "tool",
+        "tool_call_id": "call_1"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "The build misses a symbol."
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Fix it."
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "model": "local-test-model-high",
+    "run_id": "52010000-0000-0000-0000-000000000000",
+    "tools": [
+      {
+        "description": "Read a file.",
+        "name": "evs_read",
+        "schema": {
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        }
+      }
+    ]
+  },
+  "request_sha256": "4fd10935bf56342acfd8e768b0533cd060c0bcb1af58444e923f398119b07f07"
+}
