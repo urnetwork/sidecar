@@ -8,7 +8,9 @@
 //	  [--expires=<d>]                       an outward name's grant lasts d, a Go duration or whole days as <n>d,
 //	                                        held to the requests rule's maxExpiry, which refuses longer, as ur bridge
 //	                                        public-tls's --expires is; the rule's expiresDefault when it is omitted
-//	                                        (§9.9; owner decision 687). Another name asks no grant and refuses it
+//	                                        (§9.9; owner decision 687). Another name asks no grant and refuses it.
+//	                                        Once it listens, the line names the grant's end, until <time>, which
+//	                                        ur socket repeats; a standing grant's listen says it has none of its own
 //	ur socket dial <addr> --listen=<local>  a local forward on [<ip>:]<port>, every interface unless an ip is given,
 //	                                        raw bytes with no TLS-only rule (D-TRUST-8; owner decisions 84, 130)
 //	ur socket dial <addr>                   stdin and stdout relayed to one stream, for ssh -o ProxyCommand, through
@@ -99,7 +101,7 @@ func runUrSocket(ctx context.Context, cli *urCli, options docopt.Opts) error {
 	return runUrSocketLocal(ctx, cli)
 }
 
-// One socket the daemon holds, as a line.
+// One socket the daemon holds, as a line: a listen whose grant ends names its end, as ur bridge names a forward's.
 func formatUrSocketStatus(status *sidecar.DaemonSocketStatus) string {
 	state := "serving"
 	switch {
@@ -116,7 +118,21 @@ func formatUrSocketStatus(status *sidecar.DaemonSocketStatus) string {
 		}
 		return fmt.Sprintf("dial    %s from %s (%s), %d in flight", status.Name, strings.Join(status.LocalAddresses, ", "), exposure, status.Inflight)
 	}
-	return fmt.Sprintf("listen  %s to %s (%s), %d in flight", status.Name, status.Target, state, status.Inflight)
+	until := ""
+	if 0 < status.GrantExpiresMs {
+		until = ", until " + time.UnixMilli(status.GrantExpiresMs).UTC().Format(time.RFC3339)
+	}
+	return fmt.Sprintf("listen  %s to %s (%s), %d in flight%s", status.Name, status.Target, state, status.Inflight, until)
+}
+
+// Whether address names an outward name, tls/ or smtp/, whose listen asks a grant; false for one that does not parse.
+func urSocketAddressOutward(address string) bool {
+	parsed, err := sidecar.ParseSocketAddress(address)
+	if err != nil {
+		return false
+	}
+	_, namespace, err := sidecar.ParseSocketName(parsed.Name)
+	return err == nil && (namespace == sidecar.SocketNamespaceTls || namespace == sidecar.SocketNamespaceSmtp)
 }
 
 // --expires: how long an outward name's grant lasts, in ur share add's grammar, a Go duration such as 36h or whole days
@@ -150,6 +166,10 @@ func runUrSocketListen(ctx context.Context, cli *urCli, address string, target s
 	}
 	if reply.Status != nil {
 		cli.printf("%s\n", formatUrSocketStatus(reply.Status))
+		if reply.Status.GrantExpiresMs == 0 && urSocketAddressOutward(address) {
+			// the line names no end: a standing grant passed the listen, whose end the listen did not ask
+			cli.printf("a standing grant covers it, so it lasts while that grant stands\n")
+		}
 	}
 	cli.printf("the daemon holds the listen, and stays up while it does: ur socket drain %s ends it\n", address)
 	return nil
