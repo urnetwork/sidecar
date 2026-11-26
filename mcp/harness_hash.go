@@ -7,7 +7,8 @@
 //
 //	seal       one JSON file per install under <state>/harness/, the user's <harness>.json and a project's
 //	           <harness>.project.<hash of its directory>.json: the template's inputs (ur's path, the agent, the
-//	           instance, the outward tools, the directory, the telemetry port), each file's path and the SHA-256 of
+//	           instance, the outward tools, the directory, the telemetry port, the skills' profile), each file's path
+//	           and the SHA-256 of
 //	           ur's entries in it as the template renders them, and config_sha256, RECORD.md's, SHA-256 over those in
 //	           order. Local state, never synced, never sent. The telemetry pair itself is telemetry.json beside them
 //	           (harness_telemetry.go), which no seal copies: a seal naming a port renders its template from the pair
@@ -74,6 +75,9 @@ type HarnessSeal struct {
 	// The telemetry pair's port the exporter's settings name, 0 for an install that wrote none (QD-822). The token is
 	// the pair file's alone.
 	TelemetryPort int `json:"telemetry_port,omitempty"`
+	// The recurd skill's installed-enclave rendering was installed, and support's skill beside it (SKILL-M11-06).
+	SkillEnclave bool `json:"skill_enclave,omitempty"`
+	SupportSkill bool `json:"support_skill,omitempty"`
 	// In the install's order.
 	Files []*HarnessSealFile `json:"files"`
 	// SHA-256 over the files' hashes in order, hex: RECORD.md's config_sha256.
@@ -98,6 +102,8 @@ func newHarnessSeal(args *HarnessInstallArgs, template *harnessTemplate, adapter
 		OutwardTools:     slices.Clone(template.outwardTools),
 		CloudKeyFile:     template.cloudKeyFile,
 		RecordRequired:   template.recordRequired,
+		SkillEnclave:     template.skillEnclave,
+		SupportSkill:     template.supportSkill,
 	}
 	if template.telemetry != nil {
 		seal.TelemetryPort = template.telemetry.Port
@@ -105,11 +111,12 @@ func newHarnessSeal(args *HarnessInstallArgs, template *harnessTemplate, adapter
 	if args.ProjectDirectory == "" {
 		seal.Home = args.Home
 	}
-	hashes, err := harnessTemplateHashes(adapter.files(seal.Home, seal.ProjectDirectory), template)
+	files := harnessInstallFiles(adapter, seal.Home, seal.ProjectDirectory, template)
+	hashes, err := harnessTemplateHashes(files, template)
 	if err != nil {
 		return nil, err
 	}
-	for i, file := range adapter.files(seal.Home, seal.ProjectDirectory) {
+	for i, file := range files {
 		seal.Files = append(seal.Files, &HarnessSealFile{Path: file.path, Sha256: hex.EncodeToString(hashes[i][:])})
 	}
 	configSha256 := harnessConfigSha256(hashes)
@@ -362,6 +369,8 @@ func (self *HarnessConfigHashes) templateOf(seal *HarnessSeal) (*harnessTemplate
 	template := newHarnessTemplate(seal.Harness, seal.UrPath, seal.Agent, seal.Instance, seal.OutwardTools, self.args.Ingest)
 	template.cloudKeyFile = seal.CloudKeyFile
 	template.recordRequired = seal.RecordRequired
+	template.skillEnclave = seal.SkillEnclave
+	template.supportSkill = seal.SupportSkill
 	if seal.TelemetryPort != 0 {
 		telemetry, err := ReadHarnessTelemetry(self.args.StateDirectory, self.args.Ingest.HarnessConfigByteCount)
 		if err != nil {
@@ -429,7 +438,7 @@ func (self *HarnessConfigHashes) checkSeal(seal *HarnessSeal, adapter harnessIns
 	if err != nil {
 		return true, err
 	}
-	files := adapter.files(seal.Home, seal.ProjectDirectory)
+	files := harnessInstallFiles(adapter, seal.Home, seal.ProjectDirectory, template)
 	if len(files) != len(seal.Files) {
 		return true, nil
 	}

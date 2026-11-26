@@ -58,6 +58,11 @@ func (self *cursorInstallAdapter) files(home string, projectDirectory string) []
 	}
 }
 
+// ~/.cursor, or a project's .cursor: Cursor's skills are under its skills/.
+func (self *cursorInstallAdapter) skillDirectory(home string, projectDirectory string) string {
+	return self.directory(home, projectDirectory)
+}
+
 func (self *cursorInstallAdapter) projectSettingsFiles(cwd string) []*harnessFile {
 	return []*harnessFile{
 		{path: filepath.Join(cwd, ".cursor", "hooks.json"), kind: &cursorHooksFile{}},

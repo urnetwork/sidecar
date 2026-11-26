@@ -71,6 +71,11 @@ func (self *codexInstallAdapter) files(home string, projectDirectory string) []*
 	}
 }
 
+// ~/.codex, or a project's .codex: Codex's skills are under its skills/.
+func (self *codexInstallAdapter) skillDirectory(home string, projectDirectory string) string {
+	return self.directory(home, projectDirectory)
+}
+
 func (self *codexInstallAdapter) projectSettingsFiles(cwd string) []*harnessFile {
 	return []*harnessFile{
 		{path: filepath.Join(cwd, ".codex", "hooks.json"), kind: &harnessHooksFile{events: codexHookEvents}},

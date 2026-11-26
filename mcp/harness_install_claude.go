@@ -75,6 +75,14 @@ func (self *claudeInstallAdapter) files(home string, projectDirectory string) []
 	}
 }
 
+// ~/.claude, or a project's .claude: Claude Code's skills are under its skills/.
+func (self *claudeInstallAdapter) skillDirectory(home string, projectDirectory string) string {
+	if projectDirectory != "" {
+		return filepath.Join(projectDirectory, ".claude")
+	}
+	return filepath.Join(home, ".claude")
+}
+
 func (self *claudeInstallAdapter) projectSettingsFiles(cwd string) []*harnessFile {
 	settings := &harnessHooksFile{askRules: true, events: claudeHookEvents}
 	return []*harnessFile{
