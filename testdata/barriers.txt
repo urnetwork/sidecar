@@ -882,6 +882,10 @@ barrier stream.keepalive_reset.after stream_keepalive.go
 barrier stream.keepalive_reset.before stream_keepalive.go
 barrier stream.open.after stream_open.go
 barrier stream.open.before stream_open.go
+barrier stream.read_wait.after stream_conn.go
+barrier stream.read_wait.before stream_conn.go
+barrier stream.write_wait.after stream_conn.go
+barrier stream.write_wait.before stream_conn.go
 barrier team_directory.file.after config_directory.go
 barrier team_directory.file.before config_directory.go
 barrier tls.cert_install.after tls_cert_manager.go
