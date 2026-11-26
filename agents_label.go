@@ -8,8 +8,9 @@
 //	       32 B. K_ref derives from the config repo's RK_1 with g = 1 at every generation (§10.5, D-KEYS-22), so every
 //	       admitted sidecar, each a reader of the config repo, derives the same K_label for the network's life from any
 //	       generation it holds, its ladder giving RK_1, and a label filed under one generation verifies under every later
-//	       one. A reader that has lost the network can still test a guessed name against a label it saw, as with the
-//	       config's ref ids, and nothing more
+//	       one. A reader that has left the network keeps the key, as it keeps the config's ref key, so with api's help it
+//	       can test a guessed name against a label; which config key K_label derives from is question
+//	       skill-m11-01-agent-label-key-source's, until whose answer no reader takes another member's agent name by it
 //	label  label_mac = the first 16 bytes of HMAC-SHA256(K_label, "agent/" || name), the agent repo's label as §20.4 writes
 //	       it, filed by the creating device in the agent repo's RepoCreate
 //	check  a reader recomputes it for the name a card or message gives and compares it in constant time with the row the

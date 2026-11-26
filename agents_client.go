@@ -245,7 +245,8 @@ func (self *AgentsClient) agentRepoLabelMac(ctx context.Context, name AgentName)
 // QD-1434): a standing agent repo the log binds to memberId whose RepoCreate filed name's keyed label, recomputed under
 // this sidecar's K_label. What SKILL-M13-01's reader asks before it takes another member's agent's name; within a member
 // a card binds its name to its repo (§20.5). ErrAgentReposOff while the feature is off, ErrAgentsUnavailable where this
-// sidecar derives no K_label, and false, nil for a repo that is not one.
+// sidecar derives no K_label, and false, nil for a repo that is not one. K_label's source waits for question
+// skill-m11-01-agent-label-key-source, and SKILL-M13-01 takes no name across members by this until its answer.
 func (self *AgentsClient) AgentRepoLabeled(ctx context.Context, memberId Id, name AgentName, repoId Id) (bool, error) {
 	place, err := self.place()
 	if err != nil {
