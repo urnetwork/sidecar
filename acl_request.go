@@ -21,7 +21,7 @@
 // An ip: prefix is refused: a dial or route grant's prefixes and ports ride its action's sealed_detail (owner
 // decision 220; QD-740), a CanonicalActionDetail no server opens, and its clear grant_dst names subjects alone. This
 // parse reads the clear fields, so a version-4 grant's ask names no port, and its fold is port-limited by its
-// sealed_detail's presence (acl_grant.go); reading the detail's ports on the device is ACL-M4-02's. grant_allow
+// sealed_detail's presence (acl_grant.go); the device reads the detail's ports (AclEngine.ActiveGrant). grant_allow
 // holds §8.4's action names.
 //
 // A share's grant (§8.11; the owner's answer to acl-m6-03-share-grant-subject, QD-820) names the other network in

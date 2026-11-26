@@ -8,9 +8,10 @@
 // refuses one with no detail, one its caller sealed already, a port or a prefix in the grant_dst it is asked, and a
 // grant no rule takes.
 //
-// A forward's grant is a dial grant, so its action is version 4 and its activation folds port-limited (QD-740): until
-// a device reads a grant's ports from its sealed_detail (ACL-M4-02's), no activated forward stands for a later one,
-// which is the closed direction, and only a rule that limits no ports covers a forward. A publish's grant seals
+// A forward's grant is a dial grant, so its action is version 4 and its activation folds port-limited (QD-740). This
+// world's engine installs with no opener, so it reads neither a grant's ports from its sealed_detail nor a forward's
+// own: here no activated forward stands for a later one, the closed direction, and only a rule that limits no ports
+// covers a forward (acl_grant_port_consistency_test.go reads both through an opener). A publish's grant seals
 // nothing, so it carries what an activated grant covers.
 
 package sidecar

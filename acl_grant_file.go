@@ -80,9 +80,16 @@ func (self *AclEngine) StandingRule(rule *BridgeLedgerRule, spender Id, now time
 // applies to (§8.4: publish on a dns host and listen on its tls/ socket, as one publish's grant asks both) by a rule or
 // activated grant in force until now plus the clock skew, ports matching where the grant names one; a destination no
 // asked action applies to, or an action that applies to no destination, is covered by nothing. So is an action with no
-// grant fields, a route (whose prefix rides sealed_detail, which this does not open) and another network's
-// destination. A version-4 action's ports ride sealed_detail too, so its ask names none, and only a rule that limits
-// no ports covers it. A share's grant (QD-820) is covered by none: its inbound half is another network's reach, not
+// grant fields, a route (whose prefixes ride sealed_detail, which this reads for ports alone) and another network's
+// destination. A version-4 action's ports ride sealed_detail too (QD-740): its ask at each sidecar is the ports its
+// detail names there, read by the dial reader the engine reads an activated dial grant by (aclGrantDialPortsOf), its
+// detail opened in the state's network under the config keys the installed opener holds (aclActionDetails); a detail
+// that does not open here, naming no port at a sidecar, or an opener that cannot open an action, asks every port
+// there, which only a rule limiting none covers, the closed direction. A rule's ports take an asked port as AllowInbound
+// and the host's dial rows read them: a document rule's its local detail, a port-limited activated dial grant's the
+// ports its sealed detail names at that sidecar, as InstallWithGrants read it (QD-1428, owner decision 804), so a
+// forward asked again once its own grant is in force, or one another grant covers, passes on that grant (§16.6's step
+// 2). A share's grant (QD-820) is covered by none: its inbound half is another network's reach, not
 // the spender's, so the spender's own standing reach to the same sidecars says nothing of it, and each share is its
 // own admin-approved activation (§8.11). A listen or a publish that no requests rule takes names no rule_id
 // (socket_listen.go, socket_listen_grant.go, tls_publish.go): what covers a grant is its subject, destinations and
@@ -90,7 +97,8 @@ func (self *AclEngine) StandingRule(rule *BridgeLedgerRule, spender Id, now time
 // standing grant can cover it. A publish binds its audience, app mode and a raw link's pin besides, which the
 // listener's front enforces from the grant (§8.10, §13.7): only a grant that gives exactly those, by PublishGrant's
 // agreement rule, covers it (acl_grant_publish.go), so a publish never passes on a grant that would serve it to
-// another audience than it asked. Reads the installed state with no lock.
+// another audience than it asked. Reads the installed state with no lock; a version-4 action's detail is opened here,
+// testHookSecret running where its key derives, inside OpenConfigBody, which no packet path reaches.
 func (self *AclEngine) ActiveGrant(action *StoredCanonicalAction, spender Id, now time.Time) bool {
 	installed := self.installed.Load()
 	if installed == nil || action == nil || action.Action == nil {
@@ -110,6 +118,7 @@ func (self *AclEngine) ActiveGrant(action *StoredCanonicalAction, spender Id, no
 	// a use is reserved only until the skew before its grant ends (§16.6)
 	nowMs := now.UnixMilli() + max(0, self.settings.ClockSkew.Milliseconds())
 	subject := AclSidecarSubject(spender)
+	asked := installed.askedPorts(action, ask)
 	appliedActions := map[protocol.AclAction]bool{}
 	for _, target := range ask.Dst {
 		applied := false
@@ -119,7 +128,7 @@ func (self *AclEngine) ActiveGrant(action *StoredCanonicalAction, spender Id, no
 			}
 			applied = true
 			appliedActions[allow] = true
-			if !installed.covers(subject, target, allow, ask.Ports, nowMs) {
+			if !installed.covers(subject, target, allow, asked.at(target), nowMs) {
 				return false
 			}
 		}
@@ -156,29 +165,114 @@ func aclGrantActionApplies(target *protocol.AclTarget, action protocol.AclAction
 	return false
 }
 
-// Whether a rule in force at nowMs allows the subject one action on one grant destination.
+// An opener of the state's activated grants' details that also opens an action's own sealed detail, in the state's
+// network under the same config keys: aclStateGrantDetails, which the acl follower installs with
+// (newAclStateGrantDetails). ActiveGrant reads a forward's asked ports through it; an opener without it opens no
+// action, so a forward asks every port.
+type aclActionDetails interface {
+	actionDetail(action *StoredCanonicalAction) (*protocol.CanonicalActionDetail, error)
+}
+
+var _ aclActionDetails = (*aclStateGrantDetails)(nil)
+
+// Opens action's own sealed detail in the state's network under the keys repoKeyAt answers, held to the action
+// (OpenCanonicalActionDetail): nil with no error for an action that seals none. testHookSecret runs where the detail's
+// key derives, inside OpenConfigBody.
+func (self *aclStateGrantDetails) actionDetail(action *StoredCanonicalAction) (*protocol.CanonicalActionDetail, error) {
+	return OpenCanonicalActionDetail(action, self.networkId, self.repoKeyAt)
+}
+
+// The ports a grant's action asks at each of its destinations (ActiveGrant's comment): for an action that seals a
+// detail, the ports the opened detail names at each sidecar, by the dial reader (aclGrantDialPortsOf); otherwise the
+// ports its clear grant_dst names, which apply to every destination and which no action builds since QD-740.
+type aclAskedPorts struct {
+	// whether the ports are the detail's
+	sealed bool
+	// the detail's ports by sidecar, none where the detail does not open here
+	dial aclGrantDialPorts
+	// the clear grant_dst's, for an action sealing no detail
+	clear []*protocol.AclPortRange
+}
+
+// The ports action asks, given its ask: its sealed detail's where it seals one, opened through the installed opener
+// where that opens actions (aclActionDetails), and none, every port, where the detail does not open here.
+func (self *aclEngineInstall) askedPorts(action *StoredCanonicalAction, ask *AclGrantAsk) aclAskedPorts {
+	if len(action.Action.GetSealedDetail()) == 0 {
+		return aclAskedPorts{clear: ask.Ports}
+	}
+	asked := aclAskedPorts{sealed: true}
+	opener, ok := self.grants.(aclActionDetails)
+	if !ok {
+		return asked
+	}
+	detail, err := opener.actionDetail(action)
+	if err != nil || detail == nil {
+		return asked
+	}
+	asked.dial = aclGrantDialPortsOf(detail)
+	return asked
+}
+
+// The ports asked at one grant destination: a sealed detail's at a sidecar it names a port at, none, every port,
+// anywhere else; the clear ones at every destination.
+func (self aclAskedPorts) at(target *protocol.AclTarget) []*protocol.AclPortRange {
+	if !self.sealed {
+		return self.clear
+	}
+	sidecarId, ok := aclTargetId(target.GetSidecarId())
+	if !ok {
+		return nil
+	}
+	ports := []*protocol.AclPortRange{}
+	for _, dialPort := range self.dial {
+		if dialPort.sidecarId == sidecarId {
+			ports = append(ports, &protocol.AclPortRange{Protocol: dialPort.ports.Protocol, First: dialPort.ports.First, Last: dialPort.ports.Last})
+		}
+	}
+	if len(ports) == 0 {
+		return nil
+	}
+	return ports
+}
+
+// Whether a rule in force at nowMs allows the subject one action on one grant destination, the ports asked there each
+// taken where ports is not empty.
 func (self *aclEngineInstall) covers(subject AclSubject, target *protocol.AclTarget, action protocol.AclAction, ports []*protocol.AclPortRange, nowMs int64) bool {
 	state := self.state
 	at := time.UnixMilli(nowMs)
-	// a rule's ports take each port the grant names, or with none every port, which only a rule limiting none gives
-	portsMatch := func(rule *aclRule) bool {
-		if len(ports) == 0 {
-			return !rule.portsLimited
-		}
-		for _, port := range ports {
-			if !aclLocalPortsMatch(rule.portsLimited, self.localRules[rule.index], port.GetProtocol(), port.GetFirst()) {
-				return false
+	// a rule's ports at the destination take each port the grant names, a single port by §8.4's grammar, or with none
+	// every port, which only a rule limiting none gives: a document rule's ports are its local detail's, and a
+	// port-limited activated dial grant's those its sealed detail names at that destination, as InstallWithGrants read
+	// them and as AllowInbound and the host's dial rows take them (aclGrantDialPorts)
+	portsMatch := func(destination AclSubject) func(rule *aclRule) bool {
+		return func(rule *aclRule) bool {
+			if len(ports) == 0 {
+				return !rule.portsLimited
 			}
+			read := self.grantDials[rule.index]
+			for _, port := range ports {
+				if read != nil {
+					if destination.Kind != AclSubjectSidecar || !read.dial.takes(destination.Id, port.GetProtocol(), port.GetFirst()) {
+						return false
+					}
+					continue
+				}
+				if !aclLocalPortsMatch(rule.portsLimited, self.localRules[rule.index], port.GetProtocol(), port.GetFirst()) {
+					return false
+				}
+			}
+			return true
 		}
-		return true
 	}
 	switch {
 	case len(target.GetSidecarId()) != 0 && action == protocol.AclAction_ACL_ACTION_DIAL:
 		destinationId, ok := aclTargetId(target.GetSidecarId())
-		return ok && state.mayDial(subject, AclSidecarSubject(destinationId), nowMs, portsMatch).Allowed
+		destination := AclSidecarSubject(destinationId)
+		return ok && state.mayDial(subject, destination, nowMs, portsMatch(destination)).Allowed
 	case len(target.GetClientId()) != 0 && action == protocol.AclAction_ACL_ACTION_DIAL:
 		clientId, ok := aclTargetId(target.GetClientId())
-		return ok && state.mayDial(subject, AclClientSubject(clientId, Id{}, nil, ""), nowMs, portsMatch).Allowed
+		destination := AclClientSubject(clientId, Id{}, nil, "")
+		return ok && state.mayDial(subject, destination, nowMs, portsMatch(destination)).Allowed
 	case len(target.GetSocketTokens()) == 1 && action == protocol.AclAction_ACL_ACTION_DIAL:
 		return state.MayDialSocket(subject, target.GetSocketTokens()[0], at).Allowed
 	case len(target.GetSocketTokens()) == 1 && action == protocol.AclAction_ACL_ACTION_LISTEN:
