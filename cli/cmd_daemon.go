@@ -594,14 +594,22 @@ func (self *urSidecarHost) TokenSource() sidecar.SidecarTokenSource {
 	return nil
 }
 
-// Fills settings' service urls from §18.9's embedded host table, the one copy of those names (QD-119). A table that
-// does not parse or misses a service fills nothing, and validate refuses the empty urls on every leg.
+// Fills settings' service urls from §18.9's embedded host table, the one copy of those names (QD-119), and the compute
+// broker's, which no url of SidecarSettings holds (DESIGN-COMPUTE §14.2): empty where the table names no compute host,
+// which leaves remote models unavailable and local inference running. A table that does not parse or misses a service
+// fills nothing, and validate refuses the empty urls on every leg.
 func urServiceUrlsFromHostTable(settings *sidecar.SidecarSettings) error {
 	list, err := sidecar.SidecarHostListV1()
 	if err != nil {
 		return fmt.Errorf("no service urls: %w", err)
 	}
-	return list.ApplyServiceUrls(settings)
+	if err := list.ApplyServiceUrls(settings); err != nil {
+		return err
+	}
+	if settings.Infer != nil {
+		settings.Infer.ComputeServiceUrl = list.ComputeUrl()
+	}
+	return nil
 }
 
 // Runs the daemon until ctx ends, Close, or an auto-spawned daemon's idle exit.
