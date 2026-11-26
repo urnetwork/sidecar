@@ -7,7 +7,7 @@
 | Path | What it is |
 |---|---|
 | `sections/01-CTX.md` … `sections/23-PHASE.md` | DESIGN.md §1-§23, one file per section. The build copies them verbatim, adding only links. |
-| `owner/DECISIONS.md` | The owner's record, entries 1-796. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
+| `owner/DECISIONS.md` | The owner's record, entries 1-805. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
 | `owner/APPLY.md` | The rules for applying the owner's decisions: precedence (§1), supersession, where two decisions disagree (§2), notation (§3), editing rules (§4), and the follow-up decisions 112-136 with the sections each binds (§6-§8). |
 | `CONVENTIONS.md` | The writing conventions every section follows: the owner directive (§0), the owner rules (§1), the section template (§2) and the X registry (§7), which DESIGN.md's X1-X20 table replaced. |
 | `OUTLINE.md` | The original outline: section codes, scope boundaries, and the word budgets that G0's density rule replaced on 2026-11-04. |
@@ -44,7 +44,7 @@ It needs only `python3`; it was built and checked with Python 3.13. The steps, a
 
 The data files are layered. Each `data_*N.py` loads its predecessor with `runpy` and patches it: `data_front10.py` loads `data_front9.py`, back to `data_front3.py`, and the registers, glossary and appendices go the same way. Change the top layer (the `*10` files), or add an `*11` layer that loads them. Comments in the scripts cite working files from the design sessions (the reconcilers' orders, `peer/`, `review/`, `snap/`), which were not imported; they are history.
 
-## Adding owner decision N (797 onward)
+## Adding owner decision N (806 onward)
 
 1. Add entry N to `owner/DECISIONS.md`: the question, the answer, its cost, the options not taken, and what raised it.
 2. In `asm/data_front10.py`, append `(N, "<what it settles>", "<one line>")` to `INDEX`, add `DATES[N]`, and raise the `assert` to `list(range(1, N + 1))`. Update `STATUS` and `DECISIONS_INTRO` where they name a range. `@@OD:k@@` writes a link to decision k.
@@ -1624,7 +1624,7 @@ The owner answered one more question the build raised, QD-1420, on 2026-11-25 wh
 
 ## Validation after the fourteenth fold: the answers since the thirteenth fold, and what was built (2026-11-26)
 
-The design-records track dr22-late-fold (lane slot mail, wave f48m) brings the design up to what was decided or built after the thirteenth fold (sidecar 0d9b970d to e9287531): the owner's answers recorded since, QD-1421 to QD-1426, and the builds of owner decisions 789 and 790, which the twelfth and thirteenth folds stated ahead of their code. DESIGN-UI.md's changes to this design wait for the DESIGN-UI phase (owner, 2026-11-26: "The implementation needs to start working on DESIGN-UI.md after DESIGN-COMPUTE.md"), so none is folded here. It lands in pieces, each a commit of its own, recorded below as each lands.
+The design-records track dr22-late-fold (lane slot mail, wave f48m) brings the design up to what was decided or built after the thirteenth fold (sidecar 0d9b970d to e9287531): the owner's answers recorded since, QD-1421 to QD-1430, four of them while it ran, and the builds of owner decisions 789 and 790, which the twelfth and thirteenth folds stated ahead of their code. DESIGN-UI.md's changes to this design wait for the DESIGN-UI phase (owner, 2026-11-26: "The implementation needs to start working on DESIGN-UI.md after DESIGN-COMPUTE.md"), so none is folded here. It lands in pieces, each a commit of its own, recorded below as each lands.
 
 ### What was built since the thirteenth fold
 
@@ -1638,4 +1638,60 @@ The design-records track dr22-late-fold (lane slot mail, wave f48m) brings the d
 - **Owner decisions.** All 796 rows are present and cited; APPLY.md's section pairs hold. One open owner question, Q-REPO-6.
 - **Superseded options.** 320 grep hits, none on a changed line unread, none live.
 - **Text.** No bare placeholders or HTML tags; the one research-sheet id stands; 12,867 section references, with the one unresolved as before. `v7/words.json` was regenerated, and `v7/text_checks.json` regenerated unchanged.
+- **DESIGN-DEFER.md.** 106 entries and 172 pointers, unchanged.
+
+### Owner decisions 797 to 804: the answers recorded after the thirteenth fold
+
+The answers to the questions recorded after the thirteenth fold's last number, QD-1421 to QD-1428, which the owner answered on 2026-11-25 and 2026-11-26, one at a time, accepting each recommendation under the owner's standing acceptance of recommended options, take numbers here in ledger order. The first was raised by the thirteenth fold itself, which left it for the next, and the last two, QD-1427 and QD-1428, were recorded while this fold ran:
+
+| Ledger id | Owner decision | What it settles |
+|---|---|---|
+| QD-1421 | 797 | The window clients `SidecarEgress` mints for a sidecar's compute tools carry no no-egress claim and may take Public contracts, counted with their sidecar once; api's window mint marks them and the JWT carries the mark. |
+| QD-1422 | 798 | The core's own wall-clock ends, a `tls/` or `smtp/` stream's grant end, a daemon forward's expiry, a share's `expire_millis` and the forwarding role's follow, compile and overdue-alarm points, take owner decision 789's seam. |
+| QD-1423 | 799 | The C ABI carries the sdk's `MemoryTeardownObservation` as a handle. |
+| QD-1424 | 800 | Where no general config writer runs, `ur admin settings`, `versioning`, `directory` and `scopes` save through the writer for confirmed saves, EXACT_HEAD. |
+| QD-1425 | 801 | A wait for a time is set on the clock itself, through the root's `clockAfterAt` and `clockAfterFuncAt`. |
+| QD-1426 | 802 | Kinds 56 `auto_verdict` and 57 `enclave`, class action, keep their numbers: RECORD.md section 6.1's blocks take an exception. |
+| QD-1427 | 803 | An app's sidecar role takes a clock check of its own, the sdk's `Sidecar.CheckClock()`. |
+| QD-1428 | 804 | A save's dial tests with ports count an activated dial grant at the ports its sealed detail names, as owner decision 679's `ip:` tests count route grants. |
+
+- **Compute egress windows (797).** §20.8's table takes a row for a sidecar's egress windows, exempt as its other window clients are, its declaration paragraph says window clients inherit the declaration but for those, and a paragraph of their own gives them, stated as decided ahead of its code, which the compute plan's track fetch-m13-01 builds in api's window mint, the JWT and connect's gate; until then every window inherits the declaration, failing closed. §8.10's refusal names the exception. No §2.8 row changes, since the answer puts the mark in the JWT; were fetch-m13-01 to store it in a column, that column would take api-4's words first (I-18).
+- **The core's own ends (798), as built.** core-wall-clock-wake landed (sidecar 4eca0452, e1cc7a97, a3b7cc46; sdk d5781686, eff09887): §17.8 takes a paragraph after owner decision 789's, naming each owner's check, who calls it and what stays relative, and §9.6's step 7 and §9.9's share end say their waits are read again after a sleep or a clock step.
+- **An app's sidecar role (803).** Decided while this fold ran, ahead of its code, which fix track sdk-sidecar-check-clock builds: §17.8's new paragraph, §13.17's v0 paragraph on app listeners and §18.5's API sketch take the sdk's `Sidecar.CheckClock()`, `urnet_sidecar_check_clock` in the C ABI, which the app calls at its foreground and at a clock change; until then a new stream is still refused at its end by its ticket's expiry. Owner decision 798's entry and index row point at it.
+- **The memory teardown observation (799), as built** (sdk-cabi-memory-teardown-handle, sdk 69dc2342, 622d0cb7): §18.5's C ABI row says the sdk's `MemoryTeardownObservation` joins `behavioralTypes`, its constructor answering a handle.
+- **Admin commands' confirmed saves (800), as built** (carried-records-admin-listing, sidecar 7d00b361): §7.9's native ACL confirmation names the fourth kind and the reader-upgrade note's reach, and owner decision 719's entry and index row point at it.
+- **Waits for a time (801), as built** (stream-deadline-passed-before-read, sidecar f5d09267, 20dca42e): §22.8's determinism row and §4.5's `Clock` comment say how a wait for a time is set, fix track clock-wait-at-sweep moving the other sites. The answer asked no design text, but it sets a rule for every fake-clock test, as owner decision 549 did, so it takes a number and a line in each section that names the seam.
+- **The compute record kinds (802).** RECORD.md section 6.1 takes an `exception` row, and section 21 a sentence in its lead and a bullet, "Enclave entries and SSH sessions": record.proto and record_kind.go declare kind 57 `enclave` with `EnclaveEntryBody` and `ReachReceipt`'s kind 7 `ssh` with fields 12 to 16 (CTXH-M11-08, sidecar d54fa1f7), which sections 6.2 to 6.4 and 8 take with their writers, ENC-M14-08 and SSH-M14-02, as section 6.3 takes kind 56 with SAFE-M13-08's, so record_kind_test.go's and protocol/design_unfenced_test.go's additions lines for them stay. §16.8's compute's record primitives paragraph says the same and cites 802. QD-1426 has the exception written when section 6.3 takes the two kinds; it is written now, as the run's working list asked, since the code already follows it and no test reads section 6.1's blocks row, and section 6.3's rows wait for the writers.
+- **Dial tests (804).** Decided while this fold ran, ahead of its code, which track acl-engine-followups builds in acl_tests.go: §8.8's saving paragraph takes a sentence after owner decision 679's, and 679's entry and index row point at it.
+- **Outside this folder.** DESIGN-COMPUTE-AMENDMENTS.md's QD-1366 takes a paragraph on the enclave kinds and QD-1243 an as-built line, reading 3 built as `ReachReceipt`'s kind 7 `ssh`, the reach kind `.stack/plan/CONTRACTS.md`'s C-26 settled, rather than a message of its own; DESIGN-AMENDMENTS.md's lead says what this fold wrote, and QD-024's and QD-1086's items each take a "Not folded" line.
+
+`build.sh` on this folder reproduces DESIGN.md (SHA-256 `482890d1c3189e2ff78135e35c180fe95c08cb1bb166f4d714fcbf0a832312f3`) and DESIGN-DEFER.md (SHA-256 `3af6b10c35e06eaa2230e6232dc953d77f4539fe4065623950425ebab41895a6`, unchanged), and the validation shows:
+
+- **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item and no §2.8 row, so no guard line.
+- **Owner decisions.** All 804 rows are present and cited; APPLY.md's section pairs hold. `MAXD`, the two range checks and `LATE_DATES` take 804, 797 to 801 dated 2026-11-25 and 802 to 804 dated 2026-11-26, which joins `decision_rows`' date pattern with 802. One open owner question, Q-REPO-6.
+- **Superseded options.** 320 grep hits, none on a changed line unread, none live.
+- **Text.** No bare placeholders or HTML tags; the one research-sheet id stands; 12,894 section references, with the one unresolved as before. `v7/words.json` was regenerated, and `v7/text_checks.json` regenerated with its one id's line moved.
+- **DESIGN-DEFER.md.** 106 entries and 172 pointers, unchanged: none of the eight defers anything.
+
+Outside this folder the fold touched DESIGN.md (rebuilt), RECORD.md (sections 6.1 and 21), DESIGN-AMENDMENTS.md's lead and its two "Later decisions" items' lines, and DESIGN-COMPUTE-AMENDMENTS.md (QD-1366 and QD-1243); outside git, .stack/decisions/folded.txt. Left for the tracks that own them: owner decision 797's code (fetch-m13-01), 803's (sdk-sidecar-check-clock) and 804's (acl-engine-followups); kinds 56 and 57 in RECORD.md's sections 6.3, 6.4 and 8 and the `ssh` reach kind in section 6.2 and §16.8's `ReachReceipt` fence, with their writers (SAFE-M13-08, ENC-M14-08, SSH-M14-02), whose fold also moves record_kind_test.go's block check off the additions list; record.proto's header, which still names body_apart, bodies_dropped and SeqRange among what no fence writes (ctxh-m11-07's file); and QD-024 and QD-1086, as before.
+
+### Owner decision 805 and QD-1430: the answers recorded after the second piece
+
+The owner answered two more questions the build raised on 2026-11-26, after the second piece landed, one at a time, accepting each recommendation under the owner's standing acceptance of recommended options:
+
+| Ledger id | Owner decision | What it settles |
+|---|---|---|
+| QD-1429 | 805 | Linux's advertising proxy answers mDNS over ff02::fb on `ur tun`'s link from `<block>.0.53`'s address in the translator's /96. |
+| QD-1430 | none | Each instance's engine and model files live under one per-user parent, `<ur>/_local/<instance>/`, which the macOS `ur-engine` entitlement names once; a compute answer. |
+
+- **The Linux proxy's IPv6 answers (805), as built** (discovery-proxy-ipv6-mdns, sidecar 5aa5a01c): §17.7.1's as built paragraph says the proxy answers IPv6 mDNS from `<block>.0.53`'s address in the translator's /96, where it said the fix would answer from the link's IPv6 address, with what the track built beside it: both groups for announcements and goodbyes, each family's own split bound and no IPv6 answer with the translator off. Owner decision 778's index row notes it.
+- **Dial tests (804), built.** acl-engine-followups landed it while this piece ran (sidecar 9733c975): §8.8's sentence and owner decision 804's entry say it is built where they said decided ahead of its code.
+- **Asked of the compute document.** QD-1430, where each instance's engine and model files live so the macOS sandbox can name them, amends DESIGN-COMPUTE.md §6.5 alone, so it takes no number: DESIGN-COMPUTE-AMENDMENTS.md files it under its §6 as the build's, beside QD-1386 and QD-1401, its lead and index naming it, and infer-m11-05 builds it.
+
+`build.sh` on this folder reproduces DESIGN.md (SHA-256 `474cf22d8f415ec628017d3014de1edecf2171e582c4bb2730c89c9a475d2366`) and DESIGN-DEFER.md (SHA-256 `3af6b10c35e06eaa2230e6232dc953d77f4539fe4065623950425ebab41895a6`, unchanged), and the validation shows:
+
+- **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item and no §2.8 row, so no guard line.
+- **Owner decisions.** All 805 rows are present and cited; APPLY.md's section pairs hold. `MAXD`, the two range checks and `LATE_DATES` take 805, dated 2026-11-26. One open owner question, Q-REPO-6.
+- **Superseded options.** 320 grep hits, none on a changed line unread, none live.
+- **Text.** No bare placeholders or HTML tags; the one research-sheet id stands; 12,895 section references, with the one unresolved as before. `v7/words.json` was regenerated, and `v7/text_checks.json` regenerated unchanged.
 - **DESIGN-DEFER.md.** 106 entries and 172 pointers, unchanged.

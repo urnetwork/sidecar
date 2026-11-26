@@ -582,7 +582,8 @@ func (self *ConfigState) grantActionsAtHead(head *ConfigHead) map[string][]byte 
 }
 
 // Only the ports authorized for this particular destination are eligible. A receipt, row or key on its own
-// supplies no port. Never infer a protocol from target_port, which alone does not name one.
+// supplies no port. Never infer a protocol from target_port, which alone does not name one. The ports are read by
+// acl_grant_route.go's dial counterpart (aclGrantDialPortsOf), which AclEngine's AllowInbound reads them by too.
 func (self *ConfigState) grantPortRule(encoded []byte, target Id, repoKeyAt func(uint64) *EvsRepoKey) *AclLocalRule {
 	if len(encoded) == 0 {
 		return nil
@@ -595,13 +596,5 @@ func (self *ConfigState) grantPortRule(encoded []byte, target Id, repoKeyAt func
 	if err != nil || detail == nil {
 		return nil
 	}
-	local := &AclLocalRule{}
-	for _, destination := range detail.GetGrantDst() {
-		recipient, ports, err := ParseAclGrantDst(destination)
-		if err == nil && ports != nil && bytes.Equal(recipient.GetSidecarId(), target[:]) &&
-			(detail.GetTargetPort() == 0 || ports.GetFirst() == detail.GetTargetPort()) {
-			local.Ports = append(local.Ports, AclPortRange{Protocol: ports.GetProtocol(), First: ports.GetFirst(), Last: ports.GetLast()})
-		}
-	}
-	return local
+	return aclGrantDialPortsOf(detail).at(target)
 }

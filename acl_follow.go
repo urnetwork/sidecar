@@ -8,10 +8,13 @@
 //	install  the state's AclState and the AclLocalPolicy of the config head its base names; a newer head's local
 //	         policy is read and compiled off the callback. Until it lands the new rows carry no local detail, so
 //	         port-limited and prefix-socket rules cannot authorize destinations from their public rows alone. With
-//	         them, the opener of the state's activated route grants' sealed details (AclEngine.InstallWithGrants),
-//	         under the config keys this device already holds (HeldRepoKey), never a fetch, and from that head's
-//	         folds where a grant landed before the base: a grant is opened at the first install that holds it, and
-//	         one whose action or key is not here yet reaches nothing until an install that has them
+//	         them, the opener of the state's activated route and dial grants' sealed details
+//	         (AclEngine.InstallWithGrants), under the config keys this device already holds (HeldRepoKey), never a
+//	         fetch, and from that head's folds where a grant landed before the base: a grant is opened at the first
+//	         install that holds it, and one whose action is not here yet reaches nothing until an install that has it
+//	keys     a grant whose detail is sealed to a config key generation the keychain did not hold at its install is
+//	         read again when the keychain takes a generation of the config repo (RepoKeyHeld's signal;
+//	         AclEngine.ReadWaitingGrants), so it stands from its key's arrival, not from the next entry or base
 //	refuse   §7.9's BASE row owns the rows-hash check: a base whose rows do not compile from its head forks the client,
 //	         which raises head_alarm and applies nothing, so nothing reaches here; a state whose acl part does not
 //	         build raises refused, and a second A_n at the installed n head_alarm fork, each installing nothing and
@@ -67,9 +70,15 @@ type AclFollowerArgs struct {
 	// no port, the closed direction.
 	Heads ConfigHeadReader
 	// The config repo's key of a generation this device already holds, read with no fetch and no group flow
-	// (Sidecar.GkmHeldKey), nil for one it does not: what activated route grants' sealed details open under at each
-	// install. Nil opens none, so every activated route grant reaches nothing at the engine, the closed direction.
+	// (Sidecar.GkmHeldKey), nil for one it does not: what activated route and dial grants' sealed details open under
+	// at each install. Nil opens none, so every activated route grant and port-limited dial grant reaches nothing at
+	// the engine, the closed direction.
 	HeldRepoKey func(repoId Id, generation uint64) *EvsRepoKey
+	// Whether the keychain holds a generation of the repo, and a channel closed once it next takes one, armed before
+	// the look (GkmConfigJoiner.RepoKeyHeld): what wakes the follower to read again, under HeldRepoKey, the activated
+	// grants whose detail waited on a config key generation this device did not hold (AclEngine.ReadWaitingGrants).
+	// Nil reads them again at the next install only.
+	RepoKeyHeld func(repoId Id) (bool, <-chan struct{})
 	// Raises refused and head_alarm. Nil drops them.
 	Emit     SidecarEventFunction
 	Settings *AclSettings
@@ -118,6 +127,9 @@ type AclFollower struct {
 	wantedHead *MonitorValue[[sha256.Size]byte]
 	// the local policy the engine holds with its state, which Local reports
 	localInstalled *MonitorValue[*AclLocalPolicy]
+	// whether the engine's state holds an activated grant whose detail waits on a config key generation, which the key
+	// watch reads; set under applyLock after each install and each read of the waiting grants
+	keyWaits *MonitorValue[bool]
 
 	// the newest installed position, which the ack loop sends and GrantsChanged reports
 	installed *MonitorValue[aclAckPosition]
@@ -149,6 +161,7 @@ func NewAclFollower(ctx context.Context, args *AclFollowerArgs) (*AclFollower, e
 		cancel:         cancel,
 		wantedHead:     NewMonitorValue([sha256.Size]byte{}),
 		localInstalled: NewMonitorValue[*AclLocalPolicy](nil),
+		keyWaits:       NewMonitorValue(false),
 		installed:      NewMonitorValue(aclAckPosition{}),
 	}
 	self.remove = args.Source.AddEntryCallback(func(entry *SidecarAuthorityEntry) {
@@ -158,6 +171,9 @@ func NewAclFollower(ctx context.Context, args *AclFollowerArgs) (*AclFollower, e
 	go self.run()
 	if args.Heads != nil {
 		go self.readHeads()
+	}
+	if args.HeldRepoKey != nil && args.RepoKeyHeld != nil {
+		go self.watchKeys()
 	}
 	return self, nil
 }
@@ -236,6 +252,7 @@ func (self *AclFollower) installWithLock(state *ConfigState) bool {
 	self.installCount.Add(1)
 	self.grants.Store(newAclGrants(acl))
 	self.localInstalled.Set(local)
+	self.keyWaits.Set(self.args.Engine.grantsWaitForKey())
 	return true
 }
 
@@ -269,13 +286,58 @@ func (self *AclFollower) grantDetails(state *ConfigState, head *ConfigHead) AclG
 	if self.args.HeldRepoKey == nil {
 		return nil
 	}
-	configRepoId, err := IdFromBytes(state.Genesis().GetConfigRepoId())
-	if err != nil {
+	configRepoId, ok := aclFollowerConfigRepoId(state)
+	if !ok {
 		return nil
 	}
 	return newAclStateGrantDetails(state, head, func(generation uint64) *EvsRepoKey {
 		return self.args.HeldRepoKey(configRepoId, generation)
 	})
+}
+
+// The config repo state's genesis names, false for no state or a genesis naming none.
+func aclFollowerConfigRepoId(state *ConfigState) (Id, bool) {
+	if state == nil {
+		return Id{}, false
+	}
+	configRepoId, err := IdFromBytes(state.Genesis().GetConfigRepoId())
+	return configRepoId, err == nil
+}
+
+// The key watch: while the engine's state holds an activated grant whose detail waits on a config key generation, it
+// arms the keychain's signal for the config repo and only then reads the waiting grants again, so a generation taken
+// between the two is in the read and one taken after it wakes the watch for another; an install that changes whether
+// anything waits wakes it too. Each round waits for one of those edges, so a quiet keychain costs nothing.
+func (self *AclFollower) watchKeys() {
+	for {
+		waits, waitsChanged := self.keyWaits.Get()
+		var keyTaken <-chan struct{}
+		if waits {
+			if configRepoId, ok := aclFollowerConfigRepoId(self.args.Source.State()); ok {
+				_, keyTaken = self.args.RepoKeyHeld(configRepoId)
+				self.readWaitingGrants()
+			}
+		}
+		select {
+		case <-self.ctx.Done():
+			return
+		case <-waitsChanged:
+		case <-keyTaken:
+		}
+	}
+}
+
+// Reads the engine's waiting grants again under the keys held now, serialized with installs, and records whether any
+// still waits.
+func (self *AclFollower) readWaitingGrants() {
+	self.applyLock.Lock()
+	defer self.applyLock.Unlock()
+	if waits := self.args.Engine.ReadWaitingGrants(); !waits && self.log.V(1).Enabled() {
+		if state := self.args.Source.State(); state != nil {
+			self.log.Infof("[acl]%s every activated grant that waited on a config key reads", state.NetworkId())
+		}
+	}
+	self.keyWaits.Set(self.args.Engine.grantsWaitForKey())
 }
 
 // Raises an event, when the host takes them.
