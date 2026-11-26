@@ -12,6 +12,11 @@
 // before anything is asked or signed, by what the daemon's show method says of the directory; the daemon refuses the
 // same again before it signs anything of the call. The daemon refuses a caller with a harness process among its
 // ancestors, by the pid it read off the socket, and no MCP tool reaches any of it.
+//
+// The show also lists the ServiceSettings record holding the directory's settings where its signer no longer stands as
+// an Owner's or Admin's device (D-TEAM-26; owner decision 699; QD-1207; admin_carried_cmd.go): the settings stand under
+// that signer, as every reader holds them, until an Owner or Admin files another record, which --runs or --workers
+// does too; a device that could not read the head's records now says so.
 
 package main
 
@@ -73,6 +78,11 @@ type urAdminDirectoryReply struct {
 	WindowDays    uint32 `json:"window_days,omitempty"`
 	WindowRoots   int    `json:"window_roots,omitempty"`
 	WindowWaiting bool   `json:"window_waiting,omitempty"`
+	// The show's: the ServiceSettings record holding the settings, where its signer no longer stands (QD-1207); nil
+	// while its signer stands.
+	Carried *sidecar.ConfigCarriedRecord `json:"carried,omitempty"`
+	// The daemon could not read the head's records now, so Carried says nothing.
+	CarriedUnknown bool `json:"carried_unknown,omitempty"`
 }
 
 // ServiceSettings.directory's runs as the head carries it.
@@ -125,10 +135,12 @@ func urAdminDirectoryMethods(target urDaemonTarget) []*sidecar.DaemonMethod {
 				directory := call.Sidecar.Directory()
 				reply := &urAdminDirectoryReply{WindowReady: directory != nil && directory.Format2()}
 				if !known {
+					// a device that opens no head holds no record, so none is listed
 					reply.Unknown = true
 					return reply, nil
 				}
 				reply.Runs, reply.Workers = urAdminDirectoryModeName(settings.Runs.String()), urAdminDirectoryModeName(settings.Workers.String())
+				reply.Carried, reply.CarriedUnknown = urAdminCarriedServiceSettings(ctx, call.Sidecar)
 				return reply, nil
 			},
 		},
@@ -276,6 +288,9 @@ func runUrAdminDirectory(ctx context.Context, cli *urCli, options docopt.Opts) e
 			return nil
 		}
 		cli.printf("directory settings: runs %s, workers %s\n", reply.Runs, reply.Workers)
+		if line := urAdminCarriedServiceSettingsLine("these settings", reply.Carried, reply.CarriedUnknown); line != "" {
+			cli.printf("%s\n", line)
+		}
 		return nil
 	}
 	changes := []string{}
