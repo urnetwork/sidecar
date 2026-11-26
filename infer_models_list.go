@@ -189,7 +189,7 @@ func (self *inferModelsListTool) Execute(ctx context.Context, callId string, arg
 		answer.Models = append(answer.Models, listed)
 	}
 	slices.SortStableFunc(answer.Models, func(a *inferModelsListEntry, b *inferModelsListEntry) int {
-		// local first, as the picker shows them, then by name
+		// local first, as the picker shows them, each group in the catalog's order
 		aLocal, bLocal := a.Label == ComputeLabelLocal, b.Label == ComputeLabelLocal
 		switch {
 		case aLocal && !bLocal:
