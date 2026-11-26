@@ -7,7 +7,7 @@
 | Path | What it is |
 |---|---|
 | `sections/01-CTX.md` … `sections/23-PHASE.md` | DESIGN.md §1-§23, one file per section. The build copies them verbatim, adding only links. |
-| `owner/DECISIONS.md` | The owner's record, entries 1-789. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
+| `owner/DECISIONS.md` | The owner's record, entries 1-792. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
 | `owner/APPLY.md` | The rules for applying the owner's decisions: precedence (§1), supersession, where two decisions disagree (§2), notation (§3), editing rules (§4), and the follow-up decisions 112-136 with the sections each binds (§6-§8). |
 | `CONVENTIONS.md` | The writing conventions every section follows: the owner directive (§0), the owner rules (§1), the section template (§2) and the X registry (§7), which DESIGN.md's X1-X20 table replaced. |
 | `OUTLINE.md` | The original outline: section codes, scope boundaries, and the word budgets that G0's density rule replaced on 2026-11-04. |
@@ -44,7 +44,7 @@ It needs only `python3`; it was built and checked with Python 3.13. The steps, a
 
 The data files are layered. Each `data_*N.py` loads its predecessor with `runpy` and patches it: `data_front10.py` loads `data_front9.py`, back to `data_front3.py`, and the registers, glossary and appendices go the same way. Change the top layer (the `*10` files), or add an `*11` layer that loads them. Comments in the scripts cite working files from the design sessions (the reconcilers' orders, `peer/`, `review/`, `snap/`), which were not imported; they are history.
 
-## Adding owner decision N (790 onward)
+## Adding owner decision N (793 onward)
 
 1. Add entry N to `owner/DECISIONS.md`: the question, the answer, its cost, the options not taken, and what raised it.
 2. In `asm/data_front10.py`, append `(N, "<what it settles>", "<one line>")` to `INDEX`, add `DATES[N]`, and raise the `assert` to `list(range(1, N + 1))`. Update `STATUS` and `DECISIONS_INTRO` where they name a range. `@@OD:k@@` writes a link to decision k.
@@ -1519,3 +1519,31 @@ The answers to the questions the build raised after the eleventh fold, QD-1399 t
 - **DESIGN-DEFER.md.** 107 entries and 175 pointers, unchanged.
 
 Outside this folder the fold touched DESIGN.md and DESIGN-DEFER.md (rebuilt), RECORD.md (sections 6.2, 6.3, 6.4, 7.2, 8 and 21), DESIGN-AMENDMENTS.md's lead and its two "Later decisions" items' lines, DESIGN-COMPUTE-AMENDMENTS.md (QD-1401 and QD-1247's note), metadata_list.yml (v71), protocol/design_unfenced_test.go and record_kind_test.go (the support lines and the seven declarations fenced), and protocol/push.proto with push.pb.go (the comment); outside git, QD-216's resolution, QUOTA-M1-04's Build line and .stack/decisions/folded.txt. Left for the tracks that own them: the `support` push topic (support-push-topic), which §6.8 keeps as prose; owner decision 788's slots (all-process-store-slots); owner decision 789's wake seam (bridge-wall-clock-wake); the Linux proxy's IPv6 mDNS (discovery-proxy-ipv6-mdns); `Coverage`'s field 8, `ModelCallBody`'s field 15, kinds 54 to 56 and class 8, which DESIGN-COMPUTE.md's fences hold until their compute tracks declare them; and QD-024 and QD-1086, as before.
+
+## Validation after the thirteenth fold: CO-47 to CO-49, the answers since the twelfth fold, and what was built (2026-11-25)
+
+The design-records track designmd-fold-co47-to-co49 (lane slot edge, wave f46g), named so because the compute plan's ur.io tracks wait on a track of that name, brings the design up to DESIGN-COMPUTE.md's CO-47 to CO-49 (origin 63bc7063 and e85a3718, merged into sidecar as 3425c340), the owner's answers recorded after the twelfth fold, QD-1405 to QD-1419, and what listen-expires-surfaces built (sidecar ac71b6d0 to f9bef7e7, sdk dc12408a to ca41bb26). It lands in pieces, each a commit of its own, recorded below as each lands.
+
+### Owner decisions 790 to 792: the build's answers since the twelfth fold
+
+The answers to the questions the build raised after the twelfth fold that are not the compute plan's own, QD-1405 to QD-1407 and QD-1419, which the owner answered on 2026-11-25, one at a time, accepting each recommendation under the owner's standing acceptance of recommended options, take numbers here, before CO-47 to CO-49, as the eleventh fold numbered its answers before the support skill's statements; answers of one topic share an entry numbered by its first ledger id:
+
+| Ledger id | Owner decision | What it settles |
+|---|---|---|
+| QD-1405, QD-1406 | 790 | A 503 or a cancel at its own deadline marks no host when the request reached its connection with less than `FileClusterSettings.DeadlineHostMinimum` (1 s) left; the clusters' checks and evs's and gkm's store probes go through each host's uncapped transport. |
+| QD-1407 | 791 | §18.9's embedded host table carries `user_root`, which `PublishedJson` leaves out, and `ApplyServiceUrls` fills `SidecarSettings.UserRoot` from it, so `<net>` labels resolve under it from M2. |
+| QD-1419 | 792 | The sdk binds `SidecarSockets.ListenExpires` and `SidecarSocketListener.GetGrantExpiresMillis` beside `Listen`, which stays as it is. |
+
+- **The file clusters' cap (790).** §11.15's fan-out paragraph takes the floor in `DeadlineClockMargin`'s place and the checks' and probes' path through the paced client, and §19.4's evs row says the sentinel HEAD, the admin info read and the probes go outside the cap, both stated as decided ahead of their code, which fix track file-cluster-probes-and-floor builds; until it lands the band stays the margin's 100 ms and the checks stay capped, failing closed.
+- **The user root (791).** §18.9's embedded table paragraph and §12.5's label row, stated as decided ahead of its code, which track daemon-label-resolution builds; the published v1 list does not change.
+- **The listen's lifetime in the sdk (792), as built.** §18.5's API list takes `ListenExpires` and `GetGrantExpiresMillis`; owner decision 687's index row notes the extension, as 282's notes 791's and 780's 790's.
+- **What listen-expires-surfaces built for owner decision 687.** §16.5's `socket_listen` takes `expires?`, an RFC 3339 end held to the requests rule's `maxExpiry`, and a result `expires`, the refusal past the maximum carrying it in the error's data as `max_expiry_millis` (mcp's `McpErrorData`, sidecar 3af7debf); §9.9's Go sketch takes `SocketListener.GrantExpires` (sidecar f9bef7e7) and its CLI paragraph `ur socket listen`'s and `ur socket`'s `until <time>`, from the daemon's socket status, `grant_expires_ms` (sidecar 37263969); and §13.17's app listeners `TlsListenSettings.Expires` and `TlsListener.GrantExpires` (sidecar ac71b6d0, f9bef7e7). None is a proto field: the MCP error data and the daemon's socket status are JSON, and no fence moves.
+- **Asked of the compute document.** QD-1408 to QD-1418, the compute plan's answers to its questions on CO-47 to CO-49, take no number, as QD-1388 to QD-1392 took none; DESIGN-COMPUTE-AMENDMENTS.md files them, and what they change here rides with CO-47 to CO-49 (below).
+
+`build.sh` on this folder reproduces DESIGN.md (SHA-256 `ec638d8ea6920dd575f4aa9cd48de18e9795a43d2c94f936962f0a9d36a3aa38`) and DESIGN-DEFER.md (SHA-256 `749042be18fd33e2a87c087fe0824b4224b52f37cc5def707e0de03854ac07a3`, unchanged), and the validation shows:
+
+- **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item and no §2.8 row, so no guard line.
+- **Owner decisions.** All 792 rows are present and cited; APPLY.md's section pairs hold. `MAXD`, the two range checks and `LATE_DATES` take 792, each of 790 to 792 dated 2026-11-25, which joins `decision_rows`' date pattern with 790. One open owner question, Q-REPO-6.
+- **Superseded options.** 320 grep hits, none on a changed line unread, none live.
+- **Text.** No bare placeholders or HTML tags; the one research-sheet id stands; 12,816 section references, with the one unresolved as before. `v7/words.json` was regenerated, and `v7/text_checks.json` regenerated with its one id's line moved.
+- **DESIGN-DEFER.md.** 107 entries and 175 pointers, unchanged: none of the three defers anything.

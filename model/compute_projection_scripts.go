@@ -27,7 +27,9 @@
 // caller's clock, and so do the hold's UTC day and month.
 //
 // No script reads or builds a key its call did not declare: a subject's counters are found among KEYS by name, and a
-// call that declares none of a hold's subjects is an error, which changes nothing it has not already.
+// call that declares none of a hold's subjects is an error, which changes nothing it has not already. The helpers
+// take a key by its index in KEYS (cmp_get(1, …) for the projection, cmp_budget_index's answer for a subject's
+// counters), so every command names KEYS[…] itself, which sidecartest/crossslot's lint reads.
 
 package model
 
@@ -43,7 +45,8 @@ import (
 // cmp_check_balance takes a class: call (a remote call: held down to zero, refused in grace or worse), search (as a
 // call, less the unexpired promotional credit, which pays no search, §9.11) and interval (an enclave interval: down
 // to minus the floor, kept running in grace, refused once suspended); cmp_check_budgets bounds calls and searches,
-// never an enclave's running time (§16.4).
+// never an enclave's running time (§16.4), and answers budget with the index, from 0, of the first line refused, so
+// the refusal names its budget and period (§6.6).
 const computeHoldPrelude = `
 local function cmp_int(value, what)
 	if type(value) ~= 'string' or 16 < #value or not string.match(value, '^%-?%d+$') then
@@ -59,25 +62,25 @@ local function cmp_str(number)
 	return string.format('%.0f', number)
 end
 
-local function cmp_get(key, field)
-	local value = redis.call('HGET', key, field)
+local function cmp_get(ki, field)
+	local value = redis.call('HGET', KEYS[ki], field)
 	if not value then
 		return 0
 	end
 	return cmp_int(value, field)
 end
 
-local function cmp_add(key, field, delta)
+local function cmp_add(ki, field, delta)
 	if delta == 0 then
-		return cmp_get(key, field)
+		return cmp_get(ki, field)
 	end
-	return redis.call('HINCRBY', key, field, cmp_str(delta))
+	return redis.call('HINCRBY', KEYS[ki], field, cmp_str(delta))
 end
 
-local function cmp_add_or_delete(key, field, delta)
-	local value = cmp_add(key, field, delta)
+local function cmp_add_or_delete(ki, field, delta)
+	local value = cmp_add(ki, field, delta)
 	if value <= 0 then
-		redis.call('HDEL', key, field)
+		redis.call('HDEL', KEYS[ki], field)
 	end
 	return value
 end
@@ -162,30 +165,30 @@ local function cmp_hold_format(hold)
 	return table.concat(parts, '|')
 end
 
-local function cmp_budget_key(subject)
+local function cmp_budget_index(subject)
 	local wanted = KEYS[1] .. ':b:' .. subject
 	for i = 3, #KEYS do
 		if KEYS[i] == wanted then
-			return KEYS[i]
+			return i
 		end
 	end
 	return error('compute: the counters of ' .. subject .. ' are not declared')
 end
 
-local function cmp_prune(key, now)
+local function cmp_prune(ki, now)
 	local periods = cmp_periods(now)
-	for _, field in ipairs(redis.call('HKEYS', key)) do
+	for _, field in ipairs(redis.call('HKEYS', KEYS[ki])) do
 		local period = string.match(field, '^[rc]:[%w_]+:(.+)$')
 		if period ~= periods.d and period ~= periods.pd and period ~= periods.m and period ~= periods.pm then
-			redis.call('HDEL', key, field)
+			redis.call('HDEL', KEYS[ki], field)
 		end
 	end
 end
 
-local function cmp_touch(key, now, ttl)
-	cmp_prune(key, now)
-	if redis.call('EXISTS', key) == 1 then
-		redis.call('PEXPIRE', key, ttl)
+local function cmp_touch(ki, now, ttl)
+	cmp_prune(ki, now)
+	if redis.call('EXISTS', KEYS[ki]) == 1 then
+		redis.call('PEXPIRE', KEYS[ki], ttl)
 	end
 end
 
@@ -195,16 +198,16 @@ local function cmp_memo(op, outcome, ttl)
 end
 
 local function cmp_release_unconfirmed(hold)
-	cmp_add(KEYS[1], 'holds', -hold.amount)
+	cmp_add(1, 'holds', -hold.amount)
 	for _, line in ipairs(hold.lines) do
-		cmp_add_or_delete(KEYS[1], 'ur:' .. line.subject .. ':' .. line.budget .. ':' .. line.period, -hold.reserve)
+		cmp_add_or_delete(1, 'ur:' .. line.subject .. ':' .. line.budget .. ':' .. line.period, -hold.reserve)
 	end
 end
 
 local function cmp_release_confirmed(hold)
-	cmp_add(KEYS[1], 'holds', -hold.amount)
+	cmp_add(1, 'holds', -hold.amount)
 	for _, line in ipairs(hold.lines) do
-		cmp_add_or_delete(cmp_budget_key(line.subject), 'r:' .. line.budget .. ':' .. line.period, -hold.reserve)
+		cmp_add_or_delete(cmp_budget_index(line.subject), 'r:' .. line.budget .. ':' .. line.period, -hold.reserve)
 	end
 end
 
@@ -247,23 +250,23 @@ local function cmp_lines(first)
 end
 
 local function cmp_check_balance(class, amount)
-	local state = cmp_get(KEYS[1], 'state')
+	local state = cmp_get(1, 'state')
 	local floor = 0
 	if class == 'interval' then
 		if state ~= 1 and state ~= 2 and state ~= 3 then
 			return 'balance'
 		end
-		floor = cmp_get(KEYS[1], 'floor')
+		floor = cmp_get(1, 'floor')
 	elseif state ~= 1 and state ~= 2 then
 		return 'balance'
 	end
 	local promo = 0
 	if class == 'search' then
-		promo = cmp_get(KEYS[1], 'promo')
+		promo = cmp_get(1, 'promo')
 	end
-	local settled = cmp_get(KEYS[1], 'settled')
-	local unsettled = cmp_get(KEYS[1], 'unsettled')
-	local holds = cmp_get(KEYS[1], 'holds')
+	local settled = cmp_get(1, 'settled')
+	local unsettled = cmp_get(1, 'unsettled')
+	local holds = cmp_get(1, 'holds')
 	if settled - unsettled - holds - promo - amount < -floor then
 		if -floor <= settled - unsettled - promo - amount then
 			return 'held'
@@ -275,14 +278,14 @@ end
 
 local function cmp_check_budgets(lines, reserve, periods)
 	local held = false
-	for _, line in ipairs(lines) do
+	for i, line in ipairs(lines) do
 		local period = periods[line.letter]
-		local key = cmp_budget_key(line.subject)
-		local charged = cmp_get(key, 'c:' .. line.budget .. ':' .. period)
-		local reserved = cmp_get(key, 'r:' .. line.budget .. ':' .. period) +
-			cmp_get(KEYS[1], 'ur:' .. line.subject .. ':' .. line.budget .. ':' .. period)
+		local ki = cmp_budget_index(line.subject)
+		local charged = cmp_get(ki, 'c:' .. line.budget .. ':' .. period)
+		local reserved = cmp_get(ki, 'r:' .. line.budget .. ':' .. period) +
+			cmp_get(1, 'ur:' .. line.subject .. ':' .. line.budget .. ':' .. period)
 		if line.cap < charged + reserve then
-			return 'budget'
+			return 'budget', i - 1
 		end
 		if line.cap < charged + reserved + reserve then
 			held = true
@@ -299,11 +302,11 @@ local function cmp_take(op, kind, amount, reserve, lines, periods, now)
 	for _, line in ipairs(lines) do
 		local period = periods[line.letter]
 		table.insert(hold.lines, {subject = line.subject, budget = line.budget, period = period})
-		cmp_add(KEYS[1], 'ur:' .. line.subject .. ':' .. line.budget .. ':' .. period, reserve)
+		cmp_add(1, 'ur:' .. line.subject .. ':' .. line.budget .. ':' .. period, reserve)
 		redis.call('HSET', KEYS[1], 's:' .. line.subject, '1')
 	end
 	redis.call('HSET', KEYS[1], 'h:' .. op, cmp_hold_format(hold))
-	cmp_add(KEYS[1], 'holds', amount)
+	cmp_add(1, 'holds', amount)
 	redis.call('ZADD', KEYS[2], cmp_str(now), op)
 end
 
@@ -340,8 +343,9 @@ var (
 	// ARGV: op, kind, amount, reserve, unconfirmed max age ms, memo ttl ms, held retry ms, rebuild retry ms, the line
 	// count, then per line its subject, budget, period letter (d or m) and cap.
 	// Reply: {outcome, retry ms, time ms}: taken (time is the hold's Redis TIME), held (with its retry: the
-	// projection absent or marked, or open holds or reservations in the way), balance, budget; a repeat answers
-	// taken, or void or dropped once the operation was released or booked.
+	// projection absent or marked, or open holds or reservations in the way), balance, budget, whose reply adds a
+	// fourth value, the index of the line refused; a repeat answers taken, or void or dropped once the operation was
+	// released or booked.
 	computeProjectionHoldScript = &operator.RedisScript{
 		Name: "compute-projection-hold",
 		Source: computeHoldPrelude + `
@@ -363,11 +367,15 @@ if first then
 end
 local periods = cmp_periods(now)
 local refused = cmp_check_balance('call', amount)
+local refusedLine = nil
 if not refused then
-	refused = cmp_check_budgets(lines, reserve, periods)
+	refused, refusedLine = cmp_check_budgets(lines, reserve, periods)
 end
 if refused == 'held' then
 	return {'held', ARGV[7], cmp_str(now)}
+end
+if refused == 'budget' then
+	return {refused, '0', cmp_str(now), cmp_str(refusedLine)}
 end
 if refused then
 	return {refused, '0', cmp_str(now)}
@@ -413,10 +421,10 @@ if hold.state == 'c' then
 end
 local ttl = cmp_int(ARGV[4], 'the counter ttl')
 for _, line in ipairs(hold.lines) do
-	local key = cmp_budget_key(line.subject)
-	cmp_add_or_delete(KEYS[1], 'ur:' .. line.subject .. ':' .. line.budget .. ':' .. line.period, -hold.reserve)
-	cmp_add(key, 'r:' .. line.budget .. ':' .. line.period, hold.reserve)
-	cmp_touch(key, now, ttl)
+	local ki = cmp_budget_index(line.subject)
+	cmp_add_or_delete(1, 'ur:' .. line.subject .. ':' .. line.budget .. ':' .. line.period, -hold.reserve)
+	cmp_add(ki, 'r:' .. line.budget .. ':' .. line.period, hold.reserve)
+	cmp_touch(ki, now, ttl)
 end
 hold.state = 'c'
 redis.call('HSET', KEYS[1], 'h:' .. op, cmp_hold_format(hold))
@@ -488,14 +496,14 @@ if reserve < counted then
 end
 local ttl = cmp_int(ARGV[9], 'the counter ttl')
 for _, line in ipairs(lines) do
-	local key = cmp_budget_key(line.subject)
+	local ki = cmp_budget_index(line.subject)
 	if 0 < counted then
-		cmp_add(key, 'c:' .. line.budget .. ':' .. line.period, counted)
+		cmp_add(ki, 'c:' .. line.budget .. ':' .. line.period, counted)
 	end
 	redis.call('HSET', KEYS[1], 's:' .. line.subject, '1')
-	cmp_touch(key, now, ttl)
+	cmp_touch(ki, now, ttl)
 end
-cmp_add(KEYS[1], 'unsettled', charged)
+cmp_add(1, 'unsettled', charged)
 redis.call('HSET', KEYS[1], 'c:' .. op, kind .. '|' .. cmp_str(charged))
 return {'settled'}
 `,
@@ -573,7 +581,7 @@ for i = 0, count - 1 do
 	local amount = cmp_int(ARGV[11 + 2 * i], 'a booked amount')
 	local charge = redis.call('HGET', KEYS[1], 'c:' .. op)
 	if charge then
-		cmp_add(KEYS[1], 'unsettled', -cmp_int(cmp_split(charge, '|')[2], 'a charge'))
+		cmp_add(1, 'unsettled', -cmp_int(cmp_split(charge, '|')[2], 'a charge'))
 		redis.call('HDEL', KEYS[1], 'c:' .. op)
 		dropped = dropped + 1
 	end
@@ -592,11 +600,11 @@ for i = 0, count - 1 do
 			counted = hold.reserve
 		end
 		for _, line in ipairs(hold.lines) do
-			local key = cmp_budget_key(line.subject)
+			local ki = cmp_budget_index(line.subject)
 			if 0 < counted then
-				cmp_add(key, 'c:' .. line.budget .. ':' .. line.period, counted)
+				cmp_add(ki, 'c:' .. line.budget .. ':' .. line.period, counted)
 			end
-			cmp_touch(key, now, ttl)
+			cmp_touch(ki, now, ttl)
 		end
 	end
 	cmp_memo(op, 'd', memo_ttl)
@@ -654,19 +662,19 @@ for _ = 1, count do
 		end
 		local line = {subject = ARGV[at], budget = ARGV[at + 1], period = periods[letter]}
 		table.insert(hold.lines, line)
-		cmp_add(cmp_budget_key(line.subject), 'r:' .. line.budget .. ':' .. line.period, hold.reserve)
+		cmp_add(cmp_budget_index(line.subject), 'r:' .. line.budget .. ':' .. line.period, hold.reserve)
 		redis.call('HSET', KEYS[1], 's:' .. line.subject, '1')
 		at = at + 3
 	end
 	redis.call('HSET', KEYS[1], 'h:' .. op, cmp_hold_format(hold))
-	cmp_add(KEYS[1], 'holds', hold.amount)
+	cmp_add(1, 'holds', hold.amount)
 end
 count = cmp_int(ARGV[at], 'the charge count')
 at = at + 1
 for _ = 1, count do
 	local amount = cmp_int(ARGV[at + 2], 'a charge amount')
 	redis.call('HSET', KEYS[1], 'c:' .. ARGV[at], ARGV[at + 1] .. '|' .. cmp_str(amount))
-	cmp_add(KEYS[1], 'unsettled', amount)
+	cmp_add(1, 'unsettled', amount)
 	at = at + 3
 end
 count = cmp_int(ARGV[at], 'the counter count')
@@ -676,7 +684,7 @@ for _ = 1, count do
 	if not string.match(period, '^[dm]:%d+$') then
 		return error('compute: a counter period is d:YYYYMMDD or m:YYYYMM')
 	end
-	cmp_add(cmp_budget_key(ARGV[at]), 'c:' .. ARGV[at + 1] .. ':' .. period, cmp_int(ARGV[at + 3], 'a counter'))
+	cmp_add(cmp_budget_index(ARGV[at]), 'c:' .. ARGV[at + 1] .. ':' .. period, cmp_int(ARGV[at + 3], 'a counter'))
 	redis.call('HSET', KEYS[1], 's:' .. ARGV[at], '1')
 	at = at + 4
 end

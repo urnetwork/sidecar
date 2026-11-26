@@ -108,6 +108,32 @@ type ComputeLedgerSettings struct {
 	SettleShardCount int
 	// §9.7's handoff: a hold still unconfirmed after 60 s is dropped by the network's next script.
 	UnconfirmedHoldMaxAge time.Duration
+	// The most an admission waits for PostgreSQL to take its operation's row before it voids its hold and refuses
+	// capacity: 10 s, well inside UnconfirmedHoldMaxAge, so a confirm follows the hold it confirms. A reading: §9.7
+	// gives no figure.
+	OpRowWriteMaxTime time.Duration
+	// The retry a capacity refusal carries where PostgreSQL could not take the row (§9.7, §6.6): 5 s, a few of
+	// compute_settle's runs. A reading: §9.7 asks for a retry time and gives none.
+	CapacityRetry time.Duration
+	// How long after its outcome's commit a settlement still turns its hold into an unsettled charge: 5 minutes, half
+	// of ProjectionMemoTtl, so a script that runs late never meets a booked operation whose memo has gone, and
+	// counts it twice. Past it, compute_settle's drop releases the hold with its charge counted. Must stay below
+	// ProjectionMemoTtl.
+	SettleScriptWindow time.Duration
+	// The grain a search's and a direct call's times are kept to, and a search's key is timed to: a minute (§9.7,
+	// §14.6's compute-1 and compute-10).
+	OpMinuteGrain time.Duration
+	// The period of kind 4's charges, an enclave's host egress, and of an egress hour's key: an hour (§9.6).
+	EnclaveHostEgressInterval time.Duration
+	// The longest catalog id a row may name, in bytes: 96, the device's label bound (ComputeClientSettings'
+	// LabelMaxCharacterCount), past which the device refuses an answer naming it.
+	CatalogIdMaxByteCount int
+	// The longest provider reference a row keeps, a TEE call's instance and provider nonce, in bytes: 256. A
+	// reading: §9.4 gives no figure.
+	ProviderRefMaxByteCount int
+	// The most open rows compute_op_recover examines in a run: 500, as a settle batch, so a backlog is worked through
+	// run by run rather than in one pass.
+	RecoverBatchRowCount int
 	// §14.7: a row settled and unbooked past 60 s pages.
 	SettledUnbookedPageAge time.Duration
 	// §9.7's recovery: a TEE call open 10 minutes settles from its provider's usage record; any row open 24 hours is
@@ -255,10 +281,20 @@ func DefaultComputeLedgerSettings() *ComputeLedgerSettings {
 		DisputeRetention:         400 * day,
 		ChargePartitionDaysAhead: 7,
 
-		SettleInterval:         2 * time.Second,
-		SettleBatchRowCount:    500,
-		SettleShardCount:       16,
-		UnconfirmedHoldMaxAge:  60 * time.Second,
+		SettleInterval:        2 * time.Second,
+		SettleBatchRowCount:   500,
+		SettleShardCount:      16,
+		UnconfirmedHoldMaxAge: 60 * time.Second,
+		OpRowWriteMaxTime:     10 * time.Second,
+		CapacityRetry:         5 * time.Second,
+		SettleScriptWindow:    5 * time.Minute,
+		OpMinuteGrain:         time.Minute,
+
+		EnclaveHostEgressInterval: time.Hour,
+		CatalogIdMaxByteCount:     96,
+		ProviderRefMaxByteCount:   256,
+		RecoverBatchRowCount:      500,
+
 		SettledUnbookedPageAge: 60 * time.Second,
 		TeeRecoverAfter:        10 * time.Minute,
 		OpReleaseAfter:         24 * time.Hour,

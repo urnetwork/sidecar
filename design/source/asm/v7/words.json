@@ -74,11 +74,11 @@
  {
   "num": 9,
   "code": "SOCK",
-  "words": 6600,
-  "code_words": 1823,
+  "words": 6681,
+  "code_words": 1876,
   "ceiling": 3000,
-  "over": 3600,
-  "over_pct": 120.0
+  "over": 3681,
+  "over_pct": 122.7
  },
  {
   "num": 10,
@@ -92,29 +92,29 @@
  {
   "num": 11,
   "code": "EVS",
-  "words": 23571,
+  "words": 23822,
   "code_words": 56877,
   "ceiling": 5000,
-  "over": 18571,
-  "over_pct": 371.4
+  "over": 18822,
+  "over_pct": 376.4
  },
  {
   "num": 12,
   "code": "DNS",
-  "words": 7709,
+  "words": 7745,
   "code_words": 2646,
   "ceiling": 3000,
-  "over": 4709,
-  "over_pct": 157.0
+  "over": 4745,
+  "over_pct": 158.2
  },
  {
   "num": 13,
   "code": "TLS",
-  "words": 10868,
+  "words": 10918,
   "code_words": 1421,
   "ceiling": 3800,
-  "over": 7068,
-  "over_pct": 186.0
+  "over": 7118,
+  "over_pct": 187.3
  },
  {
   "num": 14,
@@ -138,7 +138,7 @@
   "num": 16,
   "code": "MCP",
   "words": 17033,
-  "code_words": 23572,
+  "code_words": 23665,
   "ceiling": 3500,
   "over": 13533,
   "over_pct": 386.7
@@ -155,20 +155,20 @@
  {
   "num": 18,
   "code": "SDK",
-  "words": 10785,
-  "code_words": 11759,
+  "words": 10881,
+  "code_words": 11870,
   "ceiling": 3000,
-  "over": 7785,
-  "over_pct": 259.5
+  "over": 7881,
+  "over_pct": 262.7
  },
  {
   "num": 19,
   "code": "OPS",
-  "words": 10988,
+  "words": 11021,
   "code_words": 11130,
   "ceiling": 3500,
-  "over": 7488,
-  "over_pct": 213.9
+  "over": 7521,
+  "over_pct": 214.9
  },
  {
   "num": 20,
