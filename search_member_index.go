@@ -367,7 +367,12 @@ type memberSettingsHash struct {
 
 // Versioned settings attest a Git blob OID and size. For the supported canonical encodings this fixes their SHA-256
 // before a body fetch. The table contains only identifiers and is built once per process.
-var memberSearchSettingsDigests = sync.OnceValue(func() map[EvsGitOid]memberSettingsHash {
+var memberSearchSettingsDigests = sync.OnceValue(newMemberSearchSettingsDigests)
+
+// The table, at its first read. A function of its own, not a literal in the variable's initializer: the ios_extension
+// legs' closure (check/legs_closure_test.go) reads every call an initializer holds as run at start, and evsGitObjectOid
+// is on the legs, so a literal calling it would take this file and the index it reads into the closure.
+func newMemberSearchSettingsDigests() map[EvsGitOid]memberSettingsHash {
 	table := make(map[EvsGitOid]memberSettingsHash)
 	for days := uint32(0); days <= indexMaxWindowDays; days++ {
 		for _, off := range []bool{false, true} {
@@ -378,7 +383,7 @@ var memberSearchSettingsDigests = sync.OnceValue(func() map[EvsGitOid]memberSett
 		}
 	}
 	return table
-})
+}
 
 // Only the sealed fields of the signed settings version can identify a supported input for its receipt.
 func memberSearchSettingsDigest(fields *protocol.EvsSealedFields) [sha256.Size]byte {
