@@ -5,9 +5,8 @@
 // alone, and every head carries it forward byte for byte. Readers judge it once, at the base whose head first holds it,
 // and keep it unjudged after, so it stands under its first signer whatever befalls that signer, until an Owner or Admin,
 // or for VersioningRules a Network admin, files another. No writer signs it again, which would put an admin's signature
-// on choices a revoked device made. Instead each surface that shows a network's config state, ur admin settings and ur
-// admin versioning with their control methods, lists every such record whose signer no longer stands, naming the signer
-// and why, so an admin can file a fresh one:
+// on choices a revoked device made. Instead ur admin settings and ur admin versioning, with their control methods, list
+// every such record whose signer no longer stands, naming the signer and why, so an admin can file a fresh one:
 //
 //	stands  the signer is judged by the rule a new record of its kind meets at the newest verified state
 //	        (configHeadRecordSignedByRole): standing, untagged, of a member whose role signs it, its signature
@@ -189,9 +188,9 @@ func (self *ConfigState) CarriedRecords(head *ConfigHead) ([]*ConfigCarriedRecor
 }
 
 // The records of the newest verified state's config head whose signer no longer stands at that state
-// (ConfigState.CarriedRecords), the head read through the client's head reader, which keeps the heads it read last.
-// ErrSidecarActNoAuthority before the first verified state, CarriedRecords' errors, and the reader's own where the head
-// cannot be read now.
+// (ConfigState.CarriedRecords), the head read through the client's head reader, and only where the state holds a
+// record. ErrSidecarActNoAuthority before the first verified state, CarriedRecords' errors, and the reader's own where
+// the head cannot be read now.
 func (self *ConfigClient) CarriedRecords(ctx context.Context) ([]*ConfigCarriedRecord, error) {
 	state := self.State()
 	if state == nil {
