@@ -292,7 +292,7 @@ figure.shot figcaption .src{display:block;color:var(--muted);font-size:12px;marg
   <p class="meta">The questions these screens raise, each with a recommended answer, are at the end of this page and in DESIGN-UI.md. Captions name the design sections each screen follows: DESIGN for DESIGN.md, COMPUTE for DESIGN-COMPUTE.md.</p>
   <div class="tabstrip"><span>Tabs today:</span><span class="was">Connect · Account · Leaderboard · Feedback</span><span>→</span><b>Connect · Burner · Bot · Support · Account</b></div>
   <nav class="toc" aria-label="Sections">
-    <a href="#connect">Connect</a><a href="#burner">Burner (20)</a><a href="#bot">Bot (11)</a><a href="#support">Support (3)</a><a href="#account">Account (3)</a><a href="#team">Account › Team (10)</a><a href="#bridge">Account › Bridge (4)</a><a href="#questions">Questions</a>
+    <a href="#connect">Connect</a><a href="#burner">Burner (20)</a><a href="#bot">Bot (12)</a><a href="#support">Support (3)</a><a href="#account">Account (3)</a><a href="#team">Account › Team (10)</a><a href="#bridge">Account › Bridge (4)</a><a href="#questions">Questions</a>
   </nav>
 </div>
 <style>
@@ -1194,6 +1194,14 @@ mark{background:rgba(237,143,255,.28);color:var(--ink);border-radius:3px;padding
 .bigmeter .l{display:flex;justify-content:space-between;font-size:13.5px;color:var(--ink-2)}
 .bigmeter .l b{color:var(--ink);font-weight:600}
 .bigmeter .meter{height:8px;border-radius:4px;margin-top:9px}
+/* web search (UI-17) */
+.sres{padding:4px 10px 2px;font-family:var(--f-text)}
+.sr{padding:7px 0;border-top:1px solid #1d1d1d}
+.sr:first-child{border-top:none}
+.sr .t{font-size:13.5px;color:var(--blue)}
+.sr .h{font-size:11.5px;color:var(--muted);margin-top:1px}
+.sr .x{font-size:12.5px;color:var(--ink-2);margin-top:2px;line-height:1.4}
+.sfoot{padding:7px 10px;border-top:1px solid #1d1d1d;font:11.5px var(--f-text);color:var(--muted)}
 /* compute */
 .hero{background:var(--card);border-radius:18px;padding:16px}
 .hero .lb{font-size:13px;color:var(--muted)}
@@ -1233,7 +1241,7 @@ details.tbl td:last-child,details.tbl th:last-child{text-align:right}
 <section class="tab" id="bot">
 <header>
   <h2>Bot</h2>
-  <p>The Harness as a CLI made for a phone. Four pills across the top: the current harness, the current model, the agent count and the compute balance. Each opens its own screen: harnesses (switch, or create a remote one), models (modes, names and cost), the agents' feed (every agent's updates, with a chat that can @mention one agent or speak to all) and where the balance went (30 days and all time). Each agent is tagged with its harness, the device or client name it runs on, and its card shows its IP, email address and public TLS names (UI-4). A session pill shows the current session and opens every session, by recency, with the harnesses using each; a harness can switch into a session no harness is using, sessions can be shared by several harnesses, started and compacted (UI-8, UI-9).</p>
+  <p>The Harness as a CLI made for a phone. Four pills across the top: the current harness, the current model, the agent count and the compute balance. Each opens its own screen: harnesses (switch, or create a remote one), models (modes, names and cost), the agents' feed (every agent's updates, with a chat that can @mention one agent or speak to all) and where the balance went (30 days and all time). Each agent is tagged with its harness, the device or client name it runs on, and its card shows its IP, email address and public TLS names (UI-4). The person and every agent can search the web privately, through Parallel (UI-17). A session pill shows the current session and opens every session, by recency, with the harnesses using each; a harness can switch into a session no harness is using, sessions can be shared by several harnesses, started and compacted (UI-8, UI-9).</p>
 </header>
 <div class="shots">
 
@@ -1356,10 +1364,14 @@ FAIL  3 of 20 runs</pre><div class="more">Show 14 more lines</div></div>
     <div class="card">
       <div class="mdl"><div class="n">engy-qwen3.8-235b-a22b-high</div><div class="d">$0.20 in · $0.80 out per million tokens</div><div class="cl"><span class="chip c">none: the provider can read this</span></div><div class="dl1">Asks you to read engy's disclosure before the first use. <a>Read it</a></div></div>
     </div>
+    <div class="lbl">Web search</div>
+    <div class="card">
+      <div class="mdl"><div class="n">search/parallel/fast</div><div class="d">$0.012 a search · for you and your agents</div><div class="dl1">Parallel sees the query, never who asked; results aren't saved. <a>Read more</a></div></div>
+    </div>
   </div>
   <nav class="tabs" data-on="bot"></nav><i class="home"></i>
 </div></div>
-<figcaption><b><span class="id">T4</span>Models</b>The model pill opens the catalog by mode (local, TEE, direct) with each model's full name and price per million tokens; local ones show size and speed on this device, and ones it can't run say why. Every remote model shows its label and its provider's disclosure line.<span class="src">COMPUTE §6.3 (catalog: kind, label, prices), §6.5, §16.4 (TEE only), §2.8 · names and prices illustrative</span></figcaption>
+<figcaption><b><span class="id">T4</span>Models</b>The model pill opens the catalog by mode (local, TEE, direct) with each model's full name and price per million tokens; local ones show size and speed on this device, and ones it can't run say why. Every remote model shows its label and its provider's disclosure line. Web search is listed with its price per search.<span class="src">COMPUTE §6.3 (catalog: kind, label, prices), §6.5, §16.4 (TEE only), §2.8 · names and prices illustrative</span></figcaption>
 </figure>
 
 <!-- T5 feed -->
@@ -1531,6 +1543,38 @@ FAIL  3 of 20 runs</pre><div class="more">Show 14 more lines</div></div>
   <i class="home"></i>
 </div></div>
 <figcaption><b><span class="id">T11</span>Compact</b>/compact, or Compact on the current session in the session screen, opens this: how much of the model's window the session uses, Compact with an optional focus for the summary, and automatic compaction near the limit. What a summary replaced stays in the record.<span class="src">UI-8 · COMPUTE §7.4 (Pi's compaction), §7.6 (compaction events), §24 (CO-25: summaries and what they replaced are kept) · see Q-UI-37</span></figcaption>
+</figure>
+
+<!-- T12 web search -->
+<figure class="shot">
+<div class="phone"><div class="screen">
+  <div class="sb"></div>
+  <div class="pills">
+    <span class="pl"><svg class="i"><use href="#i-chip"/></svg><span class="n">build1</span></span>
+    <span class="pl sh"><svg class="i" style="color:var(--green)"><use href="#i-shield"/></svg><span class="n">qwen3.8-27b</span></span>
+    <span class="pl"><svg class="i"><use href="#i-users"/></svg>5</span>
+    <span class="pl money"><svg class="i"><use href="#i-wallet"/></svg>$12.38</span>
+  </div>
+  <div class="pills p2"><span class="pl sess"><svg class="i"><use href="#i-note"/></svg><span class="n">Fix the flaky limiter test</span><span class="xx"><span class="meter"><i style="width:66%"></i></span>66%<svg class="i"><use href="#i-chevd"/></svg></span></span></div>
+  <div class="tx" data-bottom>
+    <div class="prm"><span class="g">›</span><span>how do other limiters handle clock jumps? find two good write-ups</span></div>
+    <div class="say">I'll search for that.</div>
+    <div class="tc"><div class="th"><b>web_search</b><span class="cmd">token bucket clock jump · monotonic clock limiter</span><span class="st">5 results</span></div>
+      <div class="sres">
+        <div class="sr"><div class="t">Rate limiting with a monotonic clock</div><div class="h">engineering.kestrel.dev · Aug 2026</div><div class="x">Wall-clock jumps make refill counts drift; measure elapsed time with a monotonic source instead.</div></div>
+        <div class="sr"><div class="t">Token buckets under NTP slew</div><div class="h">notes.cobaltlabs.io · Nov 2025</div><div class="x">When the clock steps backward, a naive bucket refuses traffic until it catches up.</div></div>
+        <div class="sr"><div class="t">Testing limiters with an injected clock</div><div class="h">docs.quarry.sh · Mar 2026</div><div class="x">Pass a clock interface so tests move time deterministically.</div></div>
+      </div>
+      <div class="sfoot">Parallel answered without learning who asked · results not saved · $0.012</div>
+    </div>
+    <div class="say">Both write-ups say the same thing: refill from a monotonic clock and inject it for tests. That matches the fix; I'll cite the first in the PR.</div>
+    <div class="meta"><span class="tee"><svg class="i"><use href="#i-check"/></svg>TEE verified · Chutes · AP</span><span>this run $0.06</span></div>
+  </div>
+  <div class="cmds"><span>/new</span><span>/sessions</span><span>/compact</span><span>/model</span></div>
+  <div class="comp"><span class="plus"><svg class="i"><use href="#i-plus"/></svg></span><span class="in">Reply to limiter-fix</span><span class="go"><svg class="i"><use href="#i-up"/></svg></span></div>
+  <nav class="tabs" data-on="bot"></nav><i class="home"></i>
+</div></div>
+<figcaption><b><span class="id">T12</span>Private web search</b>Agents and the person search the web through Parallel. A search shows as a results card with titles, sites and excerpts, each link opened only when tapped. Parallel answers without learning who asked, no URnetwork server sees the query, results aren't saved, and each search costs $0.012. Before the first search, the person reads what stays private and what Parallel sees.<span class="src">UI-17 · COMPUTE §21 (Parallel's keyless gateway, CO-28), §21.6 (the tool), §21.8 ($0.012), §7.6 (results list; no remote loads)</span></figcaption>
 </figure>
 
 <!-- T7 compute -->
