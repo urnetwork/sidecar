@@ -9,8 +9,11 @@
 //     target refuses, the listener sets serving false, keeping its lease and taking no tickets (§9.5), and dials it
 //     again every TargetProbeInterval until it answers. An outward name (tls/, smtp/) passes §5.4's gate inside
 //     Listen first, which may answer pending; the reply then names the approval, for ur approve <id>. Its grant asks
-//     ur socket listen's --expires from now, else the requests rule's expiresDefault (owner decision 687); the
-//     socket_listen tool asks none.
+//     ur socket listen's --expires from now, else the requests rule's expiresDefault (owner decision 687), and once
+//     it listens its status carries when that grant ends, which ur socket listen and ur socket print: the action's
+//     expiry where the grant is the one a decision on the listen activated, none where a standing grant passed it.
+//     The socket_listen tool listens application names alone, whose grant its own gate asks with the tool's expires
+//     (mcp/tools_socket.go), so it asks the listen here for none.
 //   - A dial forward (ur socket dial <addr> --listen=[<ip>:]<port>) is a DaemonLocalListen of the forward service, on
 //     every interface unless <ip> or the daemon's --listen narrows it, raw bytes with no TLS-only rule (D-TRUST-8;
 //     owner decisions 84, 130), each local conn spliced to a fresh Sidecar.Dial. ur status lists it, LAN-exposed when
@@ -119,9 +122,14 @@ type DaemonSocketStatus struct {
 	Draining bool `json:"draining"`
 	// The streams in flight.
 	Inflight int `json:"inflight"`
+	// A tls/ or smtp/ listen forward's grant end, in milliseconds since the epoch: the end its listen asked, where its
+	// grant is the one a decision on that listen activated (owner decision 687), after which the service ends the
+	// listen. 0 where a standing grant passed it and for a name whose listen asks no grant.
+	GrantExpiresMs int64 `json:"grant_expires_ms,omitempty"`
 }
 
-// socket.listen's reply: the forward, or the approval its outward name waits on.
+// socket.listen's reply: the forward, its status carrying when its grant ends, or the approval its outward name
+// waits on.
 type DaemonSocketListenReply struct {
 	Status *DaemonSocketStatus `json:"status,omitempty"`
 	// §5.4's gate is waiting on a person for this tls/ or smtp/ listen: ur approve <id> on an approval-capable device
@@ -214,6 +222,8 @@ type daemonSocketListener interface {
 	Drain(ctx context.Context) error
 	Close() error
 	inflightCount() int
+	// When the grant it registered under ends, zero for none it asked (SocketListener's).
+	GrantExpires() time.Time
 }
 
 // The production backend: a hosted Sidecar and its sockets component, which answer unavailable until the daemon's
@@ -1173,7 +1183,7 @@ func (self *daemonSocketListen) status() *DaemonSocketStatus {
 	self.stateLock.Lock()
 	serving, draining := self.serving, self.draining
 	self.stateLock.Unlock()
-	return &DaemonSocketStatus{
+	status := &DaemonSocketStatus{
 		NetworkId: self.networkId,
 		Kind:      DaemonSocketKindListen,
 		Name:      self.name,
@@ -1182,6 +1192,10 @@ func (self *daemonSocketListen) status() *DaemonSocketStatus {
 		Draining:  draining,
 		Inflight:  self.listener.inflightCount(),
 	}
+	if grantExpires := self.listener.GrantExpires(); !grantExpires.IsZero() {
+		status.GrantExpiresMs = grantExpires.UnixMilli()
+	}
+	return status
 }
 
 // One dial forward: a local listener whose conns each splice to a fresh Dial.

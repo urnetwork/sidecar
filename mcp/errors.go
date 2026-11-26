@@ -42,6 +42,9 @@ type McpError struct {
 	// The drop an EVS_DROPPED refusal names, which its data carries beside the constant text: ids only (I-13). Nil
 	// for every other error.
 	Drop *McpErrorDrop
+	// The requests rule's maxExpiry, ms, which the refusal of an expires past it carries in its data beside the
+	// constant text, so the agent can ask an end within it (owner decision 687). 0 for every other error.
+	MaxExpiryMillis int64
 }
 
 // The text, which is constant.
@@ -51,10 +54,10 @@ func (self *McpError) Error() string {
 
 // The wire error go-sdk answers with.
 func (self *McpError) wire() *jsonrpc.Error {
-	if self.Drop == nil {
+	if self.Drop == nil && self.MaxExpiryMillis == 0 {
 		return newMcpError(self.Code, self.Message, self.Retryable)
 	}
-	data, _ := json.Marshal(&McpErrorData{Retryable: self.Retryable, Drop: self.Drop})
+	data, _ := json.Marshal(&McpErrorData{Retryable: self.Retryable, Drop: self.Drop, MaxExpiryMillis: self.MaxExpiryMillis})
 	return &jsonrpc.Error{Code: self.Code, Message: self.Message, Data: data}
 }
 
