@@ -950,6 +950,7 @@ secret ClientKey api_dpop.go
 secret ClientKey identity_binding_retry.go
 secret ClientKey identity_keys.go
 secret KEK_e mls_engine.go
+secret K_agent_label agents_label.go
 secret K_dep evs_slot.go
 secret K_keychain_wrap keys_root.go
 secret K_local keys_keychain.go
