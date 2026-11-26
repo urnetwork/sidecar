@@ -279,70 +279,105 @@ func TestInstalledApproverLogStandsInForTheRecord(t *testing.T) {
 	}
 }
 
-// A fake leaser: each log's lease, its callbacks and its renewals, and what a commit to a log hints.
+// A fake leaser: each lease, its callbacks and its renewals, the leases standing at evs that no process holds, and
+// what a commit under a lease hints.
 type testApprovalPhoneLeaser struct {
 	stateLock sync.Mutex
-	// the lease count each log's leases took, renewals included, and the callbacks live on each
-	leaseCalls   map[Id]int
-	callbacks    map[Id]map[int]func(logId Id)
+	// the lease count each lease took, renewals included, and the callbacks live on each
+	leaseCalls   map[ApprovalPhoneLease]int
+	callbacks    map[ApprovalPhoneLease]map[int]func(lease ApprovalPhoneLease)
 	nextCallback int
 	releases     int
+	// leases evs holds that no callback of this process holds, as an earlier process left them, and those dropped
+	standing []ApprovalPhoneLease
+	dropped  []ApprovalPhoneLease
 	// refuses every lease while set
 	refuse bool
 }
 
 func newTestApprovalPhoneLeaser() *testApprovalPhoneLeaser {
-	return &testApprovalPhoneLeaser{leaseCalls: map[Id]int{}, callbacks: map[Id]map[int]func(logId Id){}}
+	return &testApprovalPhoneLeaser{
+		leaseCalls: map[ApprovalPhoneLease]int{},
+		callbacks:  map[ApprovalPhoneLease]map[int]func(lease ApprovalPhoneLease){},
+	}
 }
 
-func (self *testApprovalPhoneLeaser) Lease(logId Id, callback func(logId Id)) (func(), error) {
+func (self *testApprovalPhoneLeaser) Lease(lease ApprovalPhoneLease, callback func(lease ApprovalPhoneLease)) (func(), error) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	if self.refuse {
 		return nil, errors.New("evs is unreachable")
 	}
-	self.leaseCalls[logId] += 1
-	if self.callbacks[logId] == nil {
-		self.callbacks[logId] = map[int]func(logId Id){}
+	self.leaseCalls[lease] += 1
+	if self.callbacks[lease] == nil {
+		self.callbacks[lease] = map[int]func(lease ApprovalPhoneLease){}
 	}
+	self.standing = slices.DeleteFunc(self.standing, func(standing ApprovalPhoneLease) bool { return standing == lease })
 	self.nextCallback += 1
 	callbackId := self.nextCallback
-	self.callbacks[logId][callbackId] = callback
+	self.callbacks[lease][callbackId] = callback
 	var once sync.Once
 	return func() {
 		once.Do(func() {
 			self.stateLock.Lock()
 			defer self.stateLock.Unlock()
-			delete(self.callbacks[logId], callbackId)
+			delete(self.callbacks[lease], callbackId)
 			self.releases += 1
 		})
 	}, nil
 }
 
-// A commit to logId: each live callback, with no lock held.
-func (self *testApprovalPhoneLeaser) commit(logId Id) {
-	callbacks := func() []func(logId Id) {
+func (self *testApprovalPhoneLeaser) Standing(repoId Id) ([]ApprovalPhoneLease, error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	standing := []ApprovalPhoneLease{}
+	for _, lease := range self.standing {
+		if lease.RepoId == repoId {
+			standing = append(standing, lease)
+		}
+	}
+	return standing, nil
+}
+
+func (self *testApprovalPhoneLeaser) Drop(lease ApprovalPhoneLease) error {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.standing = slices.DeleteFunc(self.standing, func(standing ApprovalPhoneLease) bool { return standing == lease })
+	self.dropped = append(self.dropped, lease)
+	return nil
+}
+
+// A commit under lease: each live callback, with no lock held.
+func (self *testApprovalPhoneLeaser) commit(lease ApprovalPhoneLease) {
+	callbacks := func() []func(lease ApprovalPhoneLease) {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
-		callbacks := []func(logId Id){}
-		for _, callback := range self.callbacks[logId] {
+		callbacks := []func(lease ApprovalPhoneLease){}
+		for _, callback := range self.callbacks[lease] {
 			callbacks = append(callbacks, callback)
 		}
 		return callbacks
 	}()
 	for _, callback := range callbacks {
-		callback(logId)
+		callback(lease)
 	}
 }
 
-func (self *testApprovalPhoneLeaser) counts(logId Id) (int, int, int) {
+func (self *testApprovalPhoneLeaser) counts(lease ApprovalPhoneLease) (int, int, int) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
-	return self.leaseCalls[logId], len(self.callbacks[logId]), self.releases
+	return self.leaseCalls[lease], len(self.callbacks[lease]), self.releases
+}
+
+// The approver world's vault as a phone follows it.
+func testApprovalPhoneVaultLogs(world *testApproverWorld) func() ([]ApprovalPhoneLog, error) {
+	return func() ([]ApprovalPhoneLog, error) {
+		return []ApprovalPhoneLog{{LogId: world.vaultId, Vault: true}}, nil
+	}
 }
 
 // The approver world's sidecar as a phone: the world's log installed as its approver log, its phone part bound over
-// leaser, leasing the world's vault, each hint counted.
+// leaser, leasing the world's vault's notices, each hint counted.
 func newTestApprovalPhone(t *testing.T, world *testApproverWorld, leaser *testApprovalPhoneLeaser) (*ApprovalPhone, *alarmTestEvents, *int) {
 	t.Helper()
 	t.Cleanup(world.sidecar.InstallApproverLog(world.log))
@@ -352,7 +387,7 @@ func newTestApprovalPhone(t *testing.T, world *testApproverWorld, leaser *testAp
 	var hintLock sync.Mutex
 	phone, err := world.sidecar.BindApprovalPhone(&ApprovalPhoneArgs{
 		Leaser: leaser,
-		Logs:   func() ([]Id, error) { return []Id{world.vaultId}, nil },
+		Logs:   testApprovalPhoneVaultLogs(world),
 		Hinted: func() {
 			hintLock.Lock()
 			defer hintLock.Unlock()
@@ -366,13 +401,14 @@ func newTestApprovalPhone(t *testing.T, world *testApproverWorld, leaser *testAp
 	return phone, events, &hints
 }
 
-// A phone leases its approval log at its first resync; a request filed there hints it and, at the resync the hint
-// cues, raises approval_pending once with the request's ids; a second resync raises nothing more; a second request
-// raises once more; a request decided elsewhere leaves the pending list.
+// A phone leases its vault's a/ notices at its first resync, never the vault whole; a request's notice hints it and,
+// at the resync the hint cues, raises approval_pending once with the request's ids; a second resync raises nothing
+// more; a second request raises once more; a request decided elsewhere leaves the pending list.
 func TestPhoneLeasesItsApprovalLogAndRaisesOnce(t *testing.T) {
 	world := newTestApproverWorld(t)
 	leaser := newTestApprovalPhoneLeaser()
 	phone, events, hints := newTestApprovalPhone(t, world, leaser)
+	notices := approvalPhoneNoticeLease(world.vaultId)
 	if world.sidecar.ApprovalPhone() != phone {
 		t.Fatal("the sidecar does not hold its phone part")
 	}
@@ -380,20 +416,28 @@ func TestPhoneLeasesItsApprovalLogAndRaisesOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resynced.LeasesTaken != 1 || !slices.Equal(resynced.Leased, []Id{world.vaultId}) || len(resynced.Pending) != 0 || len(resynced.Raised) != 0 ||
-		!slices.Equal(resynced.Due, []Id{world.vaultId}) {
+	if resynced.LeasesTaken != 1 || !slices.Equal(resynced.Leased, []ApprovalPhoneLease{notices}) || len(resynced.Pending) != 0 || len(resynced.Raised) != 0 ||
+		!slices.Equal(resynced.Due, []ApprovalPhoneLease{notices}) {
 		t.Fatalf("the first resync: %+v", resynced)
 	}
+	if notices.Prefix != "a/" || notices.EveryRef || notices.Ref != "" {
+		t.Fatalf("the notice lease: %+v", notices)
+	}
 	first := world.put(world.requesterId, testApproverDnsSet(t, "198.51.100.7"), "")
-	leaser.commit(world.vaultId)
+	// a session push of the vault commits under no lease the phone holds
+	leaser.commit(ApprovalPhoneLease{RepoId: world.vaultId, EveryRef: true})
+	if *hints != 0 {
+		t.Fatalf("%d hints for a push under no lease", *hints)
+	}
+	leaser.commit(notices)
 	if *hints != 1 {
-		t.Fatalf("%d hints for one commit", *hints)
+		t.Fatalf("%d hints for one notice", *hints)
 	}
 	resynced, err = phone.Resync(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(resynced.Raised, []Id{first.ApprovalId()}) || !slices.Equal(resynced.Due, []Id{world.vaultId}) || resynced.LeasesTaken+resynced.LeasesRenewed != 0 {
+	if !slices.Equal(resynced.Raised, []Id{first.ApprovalId()}) || !slices.Equal(resynced.Due, []ApprovalPhoneLease{notices}) || resynced.LeasesTaken+resynced.LeasesRenewed != 0 {
 		t.Fatalf("the hinted resync: %+v", resynced)
 	}
 	raised := events.of(SidecarEventApprovalPending)
@@ -422,11 +466,12 @@ func TestPhoneLeasesItsApprovalLogAndRaisesOnce(t *testing.T) {
 }
 
 // A lease is renewed once ApprovalPhoneLeaseRenewAge old, the new one taken before the old goes, and one held past
-// ApprovalPhoneLeaseExpiry had lapsed, so its log is due; a lease evs refused is taken at the next resync.
+// ApprovalPhoneLeaseExpiry had lapsed, so its lease is due; a lease evs refused is taken at the next resync.
 func TestPhoneLeaseRenewsAtItsAgeAndLapses(t *testing.T) {
 	world := newTestApproverWorld(t)
 	leaser := newTestApprovalPhoneLeaser()
 	phone, _, _ := newTestApprovalPhone(t, world, leaser)
+	notices := approvalPhoneNoticeLease(world.vaultId)
 	clock := world.sidecar.clock.(*identityTestClock)
 	settings := world.sidecar.settings.Mcp
 
@@ -447,11 +492,11 @@ func TestPhoneLeaseRenewsAtItsAgeAndLapses(t *testing.T) {
 	if err != nil || resynced.LeasesRenewed != 1 || len(resynced.Due) != 0 {
 		t.Fatalf("a lease at its renewal age: %+v, %v", resynced, err)
 	}
-	if calls, live, releases := leaser.counts(world.vaultId); calls != 2 || live != 1 || releases != 1 {
+	if calls, live, releases := leaser.counts(notices); calls != 2 || live != 1 || releases != 1 {
 		t.Fatalf("leases taken %d, live %d, released %d", calls, live, releases)
 	}
 	clock.advance(settings.ApprovalPhoneLeaseExpiry)
-	if resynced, err := phone.Resync(t.Context()); err != nil || resynced.LeasesRenewed != 1 || !slices.Equal(resynced.Due, []Id{world.vaultId}) {
+	if resynced, err := phone.Resync(t.Context()); err != nil || resynced.LeasesRenewed != 1 || !slices.Equal(resynced.Due, []ApprovalPhoneLease{notices}) {
 		t.Fatalf("a lapsed lease: %+v, %v", resynced, err)
 	}
 }
@@ -462,14 +507,15 @@ func TestPhoneCloseReleasesNothing(t *testing.T) {
 	world := newTestApproverWorld(t)
 	leaser := newTestApprovalPhoneLeaser()
 	phone, _, hints := newTestApprovalPhone(t, world, leaser)
+	notices := approvalPhoneNoticeLease(world.vaultId)
 	if _, err := phone.Resync(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	phone.Close()
-	if calls, live, releases := leaser.counts(world.vaultId); calls != 1 || live != 1 || releases != 0 {
+	if calls, live, releases := leaser.counts(notices); calls != 1 || live != 1 || releases != 0 {
 		t.Fatalf("after Close: leases taken %d, live %d, released %d", calls, live, releases)
 	}
-	leaser.commit(world.vaultId)
+	leaser.commit(notices)
 	if *hints != 0 {
 		t.Errorf("a closed part cued the host %d times", *hints)
 	}
@@ -479,7 +525,7 @@ func TestPhoneCloseReleasesNothing(t *testing.T) {
 	if world.sidecar.ApprovalPhone() != nil {
 		t.Error("the sidecar still holds a closed part")
 	}
-	next, err := world.sidecar.BindApprovalPhone(&ApprovalPhoneArgs{Leaser: leaser, Logs: func() ([]Id, error) { return []Id{world.vaultId}, nil }})
+	next, err := world.sidecar.BindApprovalPhone(&ApprovalPhoneArgs{Leaser: leaser, Logs: testApprovalPhoneVaultLogs(world)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -489,8 +535,8 @@ func TestPhoneCloseReleasesNothing(t *testing.T) {
 	}
 }
 
-// A device that is no approval-capable device of its member, a page Worker here, leases no approval log and raises
-// nothing; one that becomes one releases what it held.
+// A device that is no approval-capable device of its member, a page Worker here, leases nothing and raises nothing;
+// one that becomes one releases what it held.
 func TestNonCapablePhoneLeasesNothing(t *testing.T) {
 	world := newTestApproverWorld(t)
 	leaser := newTestApprovalPhoneLeaser()
@@ -509,5 +555,45 @@ func TestNonCapablePhoneLeasesNothing(t *testing.T) {
 	}
 	if count := len(events.of(SidecarEventApprovalPending)); count != 1 {
 		t.Errorf("%d approval_pending events", count)
+	}
+}
+
+// A whole-vault lease an older release left standing at evs is dropped at the phone's next renew, never renewed, while
+// its own notice lease standing from an earlier process is taken again; the inbox prefixes the host names are leased
+// beside the notices, and the team record, a log that is no vault, whole.
+func TestPhoneDropsStandingWholeLogLeaseAndLeasesInboxes(t *testing.T) {
+	world := newTestApproverWorld(t)
+	leaser := newTestApprovalPhoneLeaser()
+	whole := ApprovalPhoneLease{RepoId: world.vaultId, EveryRef: true}
+	notices := approvalPhoneNoticeLease(world.vaultId)
+	leaser.standing = []ApprovalPhoneLease{whole, notices}
+	t.Cleanup(world.sidecar.InstallApproverLog(world.log))
+	teamRecordId := NewId()
+	inbox := ApprovalPhoneLease{RepoId: NewId(), Prefix: "inbox/"}
+	phone, err := world.sidecar.BindApprovalPhone(&ApprovalPhoneArgs{
+		Leaser: leaser,
+		Logs: func() ([]ApprovalPhoneLog, error) {
+			return []ApprovalPhoneLog{{LogId: world.vaultId, Vault: true}, {LogId: teamRecordId}}, nil
+		},
+		Inboxes: func() ([]ApprovalPhoneLease, error) { return []ApprovalPhoneLease{inbox}, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer phone.Close()
+	resynced, err := phone.Resync(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	team := ApprovalPhoneLease{RepoId: teamRecordId, EveryRef: true}
+	want := slices.SortedFunc(slices.Values([]ApprovalPhoneLease{notices, team, inbox}), approvalPhoneLeaseCmp)
+	if resynced.LeasesTaken != 3 || resynced.LeasesDropped != 1 || !slices.Equal(resynced.Leased, want) {
+		t.Fatalf("the first resync: %+v", resynced)
+	}
+	if !slices.Equal(leaser.dropped, []ApprovalPhoneLease{whole}) || leaser.leaseCalls[whole] != 0 {
+		t.Fatalf("dropped %+v, the whole lease taken %d times", leaser.dropped, leaser.leaseCalls[whole])
+	}
+	if resynced, err := phone.Resync(t.Context()); err != nil || resynced.LeasesDropped != 0 || resynced.LeasesTaken != 0 {
+		t.Fatalf("a second resync: %+v, %v", resynced, err)
 	}
 }

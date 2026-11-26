@@ -16,6 +16,15 @@
 //	alarms    the sink's decision names the next time its posture raises an alarm, and the loop reads the decision
 //	          then
 //
+// Those times are the wall clock's: the next follow FollowInterval after the last, a compile's due time, and the
+// posture's overdue-alarm points (DESIGN-DETAILS 4.2.5's narrowing_overdue, at 10 min of an entry's age and at the
+// repeats), and the loop waits for the earliest on a runtime timer, which stops while the device sleeps, so a phone that
+// slept past one would follow, compile or raise the alarm only when the timer's remaining awake time ran out (§17.8's
+// after sleep or a clock step, owner decision 789's seam; QD-1422). CheckClock has the loop read the clock again at
+// once: it does what has come due and arms its wait anew from now. The VPN component's DeviceLocal.CheckClock calls it
+// at each wake and clock change, and on a desktop at the bridges' ClockCheckInterval (the sdk's forwarding roles). A
+// revocation needs none: the posture applies what it can check as a denial as each page arrives.
+//
 // head_alarm is raised once per condition (§17.8; owner decision 716): each is keyed by what it is about, a generation
 // gkm lists off the held chain, a GroupForm, a GenRotate or a DelegationWrap pinned off the judged one, a head served for
 // a base that names another, a genesis or a page api serves off the anchored chain, a pin the app's sidecar role
@@ -518,10 +527,13 @@ type Forwarder struct {
 
 	// work a caller hands the loop: a witness
 	requests chan func()
-	hint     *MonitorValue[forwarderHint]
-	records  *forwarderRecords
-	bindings *BridgeBindingCache
-	lateAsks *GkmLateAsks
+	// has the loop read the clock again at once (CheckClock), holding one check, so checks that come while one waits
+	// are one
+	clockCheck chan struct{}
+	hint       *MonitorValue[forwarderHint]
+	records    *forwarderRecords
+	bindings   *BridgeBindingCache
+	lateAsks   *GkmLateAsks
 
 	stateLock sync.Mutex
 	// what run owns, read by Status, LinkTargets and RepoKeyAt under stateLock
@@ -582,19 +594,20 @@ func NewForwarder(ctx context.Context, args *ForwarderArgs) (*Forwarder, error) 
 	}
 	cancelCtx, cancel := context.WithCancel(ctx)
 	self := &Forwarder{
-		args:     args,
-		settings: settings,
-		clock:    clockOrReal(args.Clock),
-		log:      loggerOrDefault(args.Log),
-		ctx:      cancelCtx,
-		cancel:   cancel,
-		done:     make(chan struct{}),
-		requests: make(chan func()),
-		hint:     NewMonitorValue(forwarderHint{}),
-		records:  &forwarderRecords{store: args.Store},
-		bindings: NewBridgeBindingCache(settings.BindingRetainTimeout, settings.BindingMaxCount),
-		lateAsks: NewGkmLateAsks(settings.Gkm),
-		keyWaits: map[uint64]*forwarderKeyWait{},
+		args:       args,
+		settings:   settings,
+		clock:      clockOrReal(args.Clock),
+		log:        loggerOrDefault(args.Log),
+		ctx:        cancelCtx,
+		cancel:     cancel,
+		done:       make(chan struct{}),
+		requests:   make(chan func()),
+		clockCheck: make(chan struct{}, 1),
+		hint:       NewMonitorValue(forwarderHint{}),
+		records:    &forwarderRecords{store: args.Store},
+		bindings:   NewBridgeBindingCache(settings.BindingRetainTimeout, settings.BindingMaxCount),
+		lateAsks:   NewGkmLateAsks(settings.Gkm),
+		keyWaits:   map[uint64]*forwarderKeyWait{},
 
 		headConditions: map[string]SidecarHeadAlarm{},
 	}
@@ -612,6 +625,17 @@ func (self *Forwarder) ReceiveHint(position uint64) {
 		}
 		return hint
 	})
+}
+
+// Has the loop read the clock again at once after a sleep or a clock step (the file's comment): it follows, compiles
+// or reads the sink's decision, where the posture raises narrowing_overdue, for each time that has passed, and arms
+// its wait again from now. Hands the check to the loop and returns at once, so it never blocks and is safe from any
+// goroutine; checks that come while one waits are one, and after Close it does nothing.
+func (self *Forwarder) CheckClock() {
+	select {
+	case self.clockCheck <- struct{}{}:
+	default:
+	}
 }
 
 // The app's sidecar role, a full reader, witnessed pin, and found a fork or none (DESIGN-DETAILS 4.2.5's Witness): the
@@ -738,6 +762,8 @@ func (self *Forwarder) run() {
 		case work := <-self.requests:
 			work()
 		case <-hintChanged:
+		case <-self.clockCheck:
+			// the next turn reads the clock again and arms the wait anew from it
 		case <-self.clock.After(wake.Sub(now)):
 		}
 	}

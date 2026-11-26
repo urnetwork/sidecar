@@ -1,0 +1,56 @@
+{
+  "request": {
+    "agent_id": "41010000-0000-0000-0000-000000000000",
+    "max_output": 1024,
+    "messages": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "You are an agent of ur.\n\nSupport skill text."
+          }
+        ],
+        "role": "system"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "The conversation before this point was compacted into this summary:\n\nWe spoke of one, then two."
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "second"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "answer two"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "third"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "model": "local-test-model-high",
+    "run_id": "52010000-0000-0000-0000-000000000000"
+  },
+  "request_sha256": "2737d951e119fded5042f74df3b739c7c3b53213e6af014f7b07ef0e2b8626ff"
+}

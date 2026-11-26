@@ -8,6 +8,7 @@ package sidecar
 
 import (
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -136,7 +137,14 @@ type testRecordEnumerationAddition struct {
 // The values the compute extension adds to section 6.2's rows, which RECORD.md section 21 leaves to the fold while
 // record.proto takes them with their code (QD-1366, compute-plan-record-registry-fold). A line whose value section 6.2
 // comes to give fails until it leaves.
-var testRecordEnumerationAdditions = []testRecordEnumerationAddition{}
+var testRecordEnumerationAdditions = []testRecordEnumerationAddition{
+	// DESIGN-COMPUTE.md §12.7's SSH session receipt (CTXH-M11-08; compute-plan-enc-readings (3), QD-1243)
+	{key: "ReachReceipt.kind", number: 7, name: "ssh", source: testRecordEnclaveSshSource},
+}
+
+// Where kind 57 and reach kind 7 come from, which a design-records fold writes into RECORD.md sections 6.2 to 6.4 and
+// 8 (the compute plan's CA-75 enclave entries; compute-plan-enc-readings, QD-1243; QD-1366).
+const testRecordEnclaveSshSource = "DESIGN-COMPUTE.md §11.12, §12.7; COMPUTE-AMENDMENTS.md CA-75; QD-1243; QD-1366"
 
 // One kind DESIGN-COMPUTE.md adds to section 6.3 ahead of a design-records fold, with the section that writes it, and
 // where it gives the body, that body's message, which section 6.4 takes at the fold.
@@ -151,7 +159,10 @@ type testRecordKindAddition struct {
 // The kinds the compute extension adds to section 6.3's registry, which record_kind.go takes with their code while
 // RECORD.md waits for the fold (QD-1366, compute-plan-record-registry-fold). A line whose kind section 6.3 comes to
 // give fails until it leaves.
-var testRecordKindAdditions = []testRecordKindAddition{}
+var testRecordKindAdditions = []testRecordKindAddition{
+	// DESIGN-COMPUTE.md §11.12's enclave entries (CTXH-M11-08; compute-plan-enc-readings (2))
+	{number: 57, name: "enclave", class: "action", body: "EnclaveEntryBody", source: testRecordEnclaveSshSource},
+}
 
 // One class DESIGN-COMPUTE.md adds to section 8 ahead of a design-records fold.
 type testRecordClassAddition struct {
@@ -243,10 +254,23 @@ func TestRecordEnumerationsMatchSectionSixTwo(t *testing.T) {
 	if len(reachKinds) != 6 {
 		t.Errorf("section 6.2 gives %d reach kinds", len(reachKinds))
 	}
+	for _, addition := range testRecordEnumerationAdditions {
+		if addition.key != "ReachReceipt.kind" {
+			continue
+		}
+		if written, ok := reachKinds[addition.number]; ok {
+			t.Errorf("section 6.2's ReachReceipt.kind now gives %d %s: drop its line from testRecordEnumerationAdditions (%s)", addition.number, written, addition.source)
+			continue
+		}
+		reachKinds[addition.number] = addition.name
+	}
 	for number, name := range reachKinds {
 		if reachKind := RecordReachKind(number); reachKind.String() != name || !reachKind.Known() {
 			t.Errorf("reach kind %d reads %q here and %s in section 6.2", number, reachKind, name)
 		}
+	}
+	if known := RecordReachKind(len(reachKinds) + 1); known.Known() {
+		t.Errorf("reach kind %d reads as known, and neither section 6.2 nor an addition gives it", uint32(known))
 	}
 
 	// The four record.proto enums section 6.2 numbers (plan-MCP-wire-enum-numbers): every value it writes, and no other
@@ -343,6 +367,13 @@ func TestRecordKindNumbersKeepSectionSixOne(t *testing.T) {
 		case kind <= 63:
 			// DESIGN-COMPUTE.md §24.5's session_blob is raw capture of class bulk
 			inBlock = class == RecordClassCapture || class == RecordClassBulk
+		}
+		// DESIGN-COMPUTE.md's kinds from 56 take the numbers after 55 whatever their class, as §27.9 numbers
+		// auto_verdict (CONTRACTS C-26): an addition says so until a fold writes section 6.1's blocks for them
+		if !inBlock && slices.ContainsFunc(testRecordKindAdditions, func(addition testRecordKindAddition) bool {
+			return addition.number == int(kind) && 56 <= addition.number && addition.number <= 63
+		}) {
+			inBlock = class == RecordClassAction
 		}
 		if !inBlock {
 			t.Errorf("kind %d %s of class %s sits outside its block", kind, kind, class)

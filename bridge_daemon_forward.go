@@ -18,6 +18,12 @@
 //   - A forward stops at its grant's expiry, by the clock, and when a reread of the grant finds it no longer active
 //     (DaemonBridges.GrantsChanged), which is how a GrantRevoke closes its listener. Stopping closes the listener
 //     and resets every connection it carries.
+//   - The expiry is a wall-clock time and its wait a runtime timer, which stops while the host sleeps, so a forward
+//     the host slept past, or a step of its clock passed, would carry its connections for the timer's remaining awake
+//     time (§17.8's after sleep or a clock step, owner decision 789's seam; QD-1422). DaemonBridges.CheckClock arms
+//     each forward's wait again from the clock's now and closes at once each whose expiry has passed; ur daemon calls
+//     it when the host resumes and at its desktop cap (core_clock_check.go). A connection accepted, or a UDP source
+//     first seen, after the expiry is refused either way, since each reads the clock.
 //
 // Logs name the forward's opaque id alone (I-13).
 
@@ -262,22 +268,83 @@ func daemonBridgeUdpListen(listen []string, port int) ([]net.PacketConn, error) 
 
 // Arms the forward's stop at expiresAt, replacing an earlier one; zero is none.
 func (self *daemonBridgeForward) setExpiry(expiresAt time.Time) {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	if self.closed || self.expiresAt.Equal(expiresAt) && (self.stopExpiry != nil || expiresAt.IsZero()) {
-		return
-	}
-	if self.stopExpiry != nil {
-		self.stopExpiry()
+	previous, arm := func() (func() bool, bool) {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		if self.closed || self.expiresAt.Equal(expiresAt) && (self.stopExpiry != nil || expiresAt.IsZero()) {
+			return nil, false
+		}
+		previous := self.stopExpiry
 		self.stopExpiry = nil
+		self.expiresAt = expiresAt
+		return previous, !expiresAt.IsZero()
+	}()
+	if previous != nil {
+		previous()
 	}
-	self.expiresAt = expiresAt
-	if expiresAt.IsZero() {
+	if arm {
+		self.armExpiry(expiresAt)
+	}
+}
+
+// Arms the stop at the expiry held again, counted from the clock's now, in place of the wait armed before, so a wait
+// the host slept through is not left to run late (the file's comment); an expiry already passed closes the forward at
+// once. A forward with no expiry, a closed one, and one whose wait has fired and is closing it are left as they are.
+func (self *daemonBridgeForward) checkClock() {
+	previous, expiresAt := func() (func() bool, time.Time) {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		if self.closed || self.stopExpiry == nil {
+			return nil, time.Time{}
+		}
+		previous := self.stopExpiry
+		self.stopExpiry = nil
+		return previous, self.expiresAt
+	}()
+	if previous == nil || !previous() {
 		return
 	}
-	self.stopExpiry = self.bridges.clock.AfterFunc(expiresAt.Sub(self.bridges.clock.Now()), func() {
+	self.armExpiry(expiresAt)
+}
+
+// Arms the forward's close at expiresAt from the clock's now. The clock arms with no lock held, since it may call the
+// close at once; the wait is kept unless the forward closed, another wait was armed meanwhile or the expiry moved, and
+// is stopped then.
+func (self *daemonBridgeForward) armExpiry(expiresAt time.Time) {
+	stop := self.bridges.clock.AfterFunc(expiresAt.Sub(self.bridges.clock.Now()), func() {
 		self.close(ErrDaemonBridgeGrantEnded)
 	})
+	kept := func() bool {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		if self.closed || self.stopExpiry != nil || !self.expiresAt.Equal(expiresAt) {
+			return false
+		}
+		self.stopExpiry = stop
+		return true
+	}()
+	if !kept {
+		stop()
+	}
+}
+
+// Reads the wall clock again after a sleep or a clock step (the file's comment; core_clock_check.go): each forward the
+// daemon holds arms the wait for its grant's expiry again from now, and each whose expiry has passed closes at once,
+// its connections reset. Safe from any goroutine and never waits on a forward: a close the clock calls at once runs
+// where the clock runs it.
+func (self *DaemonBridges) CheckClock() {
+	forwards := func() []*daemonBridgeForward {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		forwards := make([]*daemonBridgeForward, 0, len(self.forwards))
+		for _, forward := range self.forwards {
+			forwards = append(forwards, forward)
+		}
+		return forwards
+	}()
+	for _, forward := range forwards {
+		forward.checkClock()
+	}
 }
 
 // Whether the grant's expiry has come, by the clock.

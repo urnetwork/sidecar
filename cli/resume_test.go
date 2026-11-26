@@ -1,17 +1,22 @@
 // The daemon's resume watch (resume.go): at each resume the platform's watch reports, every bridge the daemon holds
 // reads the clock again, a network added after the watch began included and one forgotten not; the watch runs for the
-// daemon's life and close waits for it; and a wire's network hands the daemon its device.Bridge's own check.
+// daemon's life and close waits for it; and a wire's network hands the daemon its device.Bridge's own check. The core's
+// checks (QD-1422) run beside the bridges' at each resume until removed, and at the desktop's cap, every interval of
+// the daemon's clock, alone, the bridges capping their own waits; the daemon's forwards' check joins them; and a
+// daemon's args take the bridges' own interval.
 
 package main
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/device"
+	"github.com/urnetwork/sidecar/sidecartest"
 )
 
 // A watch a test drives: it hands the test the resumed it is given, and returns once its context ends.
@@ -154,4 +159,119 @@ func TestWireNetworkHandsTheBridgesCheck(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("the network's check did not reach its bridge")
 	}
+}
+
+// A core check added runs at each resume beside every bridge's check, and not once removed.
+func TestDaemonResumeChecksTheCoresClocksBesideTheBridges(t *testing.T) {
+	watch := newTestResumeWatch()
+	bridges := newUrBridgeDaemon(context.Background(), &urBridgeDaemonArgs{
+		Instance:    "test",
+		Settings:    testUrTunSettings(),
+		ResumeWatch: watch.watch,
+	})
+	t.Cleanup(bridges.close)
+	resumed := watch.awaitStarted(t)
+	bridgeChecks, coreChecks := &atomic.Int64{}, &atomic.Int64{}
+	if _, err := bridges.addNetwork(testResumeNetwork(bridgeChecks)); err != nil {
+		t.Fatal(err)
+	}
+	remove := bridges.addClockCheck(func() {
+		coreChecks.Add(1)
+	})
+	resumed()
+	if bridgeChecks.Load() != 1 || coreChecks.Load() != 1 {
+		t.Fatalf("a resume checked the bridge %d times and the core %d", bridgeChecks.Load(), coreChecks.Load())
+	}
+	remove()
+	resumed()
+	if bridgeChecks.Load() != 2 || coreChecks.Load() != 1 {
+		t.Fatalf("after the core's check was removed a resume checked the bridge %d times and the core %d", bridgeChecks.Load(), coreChecks.Load())
+	}
+}
+
+// The desktop's cap: every interval of the daemon's clock the core's checks run, never the bridges', which cap their
+// own waits; nothing runs a second short of the interval; and close waits for the cap.
+func TestDaemonClockCapChecksTheCoreEachInterval(t *testing.T) {
+	clock := sidecartest.NewFakeClock(sidecartest.DefaultClockStart())
+	interval := 30 * time.Second
+	bridges := newUrBridgeDaemon(context.Background(), &urBridgeDaemonArgs{
+		Instance:           "test",
+		Settings:           testUrTunSettings(),
+		ClockCheckInterval: interval,
+		Clock:              clock,
+	})
+	closed := false
+	t.Cleanup(func() {
+		if !closed {
+			bridges.close()
+		}
+	})
+	bridgeChecks := &atomic.Int64{}
+	if _, err := bridges.addNetwork(testResumeNetwork(bridgeChecks)); err != nil {
+		t.Fatal(err)
+	}
+	coreChecked := make(chan struct{}, 16)
+	bridges.addClockCheck(func() {
+		coreChecked <- struct{}{}
+	})
+	awaitCapWait := func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		if err := clock.AwaitTimers(ctx, 1); err != nil {
+			t.Fatal("the cap armed no wait")
+		}
+	}
+	awaitCoreCheck := func() {
+		select {
+		case <-coreChecked:
+		case <-time.After(time.Minute):
+			t.Fatal("the cap checked no core clock")
+		}
+	}
+	for range 2 {
+		awaitCapWait()
+		clock.Advance(interval - time.Second)
+		select {
+		case <-coreChecked:
+			t.Fatal("the cap checked short of its interval")
+		default:
+		}
+		clock.Advance(time.Second)
+		awaitCoreCheck()
+	}
+	if bridgeChecks.Load() != 0 {
+		t.Fatalf("the cap checked the bridges %d times", bridgeChecks.Load())
+	}
+	bridges.close()
+	closed = true
+	select {
+	case <-bridges.clockCapDone:
+	default:
+		t.Fatal("close returned before the cap")
+	}
+}
+
+// The daemon's forwards' check joins the core's checks once the daemon's root bridge methods are built, and a resume
+// reaches it; and a daemon's args take the bridges' own interval as the cap.
+func TestDaemonForwardsCheckJoinsTheCoresChecks(t *testing.T) {
+	if interval := urBridgeDaemonArgsOf("test", sidecar.NewNoopLogger()).ClockCheckInterval; interval != device.DefaultBridgeSettings().ClockCheckInterval || interval <= 0 {
+		t.Fatalf("a daemon's cap is %v", interval)
+	}
+	bridges := newUrBridgeDaemon(context.Background(), &urBridgeDaemonArgs{Instance: "test", Settings: testUrTunSettings()})
+	t.Cleanup(bridges.close)
+	if _, err := newUrDaemonBridges(bridges, func(args *sidecar.DaemonLocalListenArgs) (*sidecar.DaemonLocalListener, error) {
+		return nil, errors.New("no listener in this test")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	count := func() int {
+		bridges.stateLock.Lock()
+		defer bridges.stateLock.Unlock()
+		return len(bridges.coreClockChecks)
+	}()
+	if count != 1 {
+		t.Fatalf("%d core checks with the forwards'", count)
+	}
+	// the forwards' check, over none, at a resume
+	bridges.checkClock()
 }
