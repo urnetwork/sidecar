@@ -77,6 +77,16 @@ const (
 	inferEngineDirectoryName = "engine"
 )
 
+// The directory of <state> the model files are kept in: <state>/models.
+func InferModelDirectory(state string) string {
+	return filepath.Join(state, inferModelDirectoryName)
+}
+
+// The directory of <state> a desktop's engine files are kept in: <state>/engine.
+func InferEngineDirectory(state string) string {
+	return filepath.Join(state, inferEngineDirectoryName)
+}
+
 // No directory to keep model files in: this Sidecar's state is not on a disk, as the page Worker's and a test's
 // memory store are not.
 var ErrInferNoModelDirectory = errors.New("this sidecar keeps no files on a disk, so it pulls and loads no local model")
@@ -159,7 +169,7 @@ func (self *sidecarInferLocal) inferPull() (*InferPull, error) {
 	pull, err := NewInferPull(&InferPullArgs{
 		ApiUrl:         self.sidecar.settings.ApiUrl,
 		Transport:      self.sidecar.sidecarApi.Transport(),
-		ModelDirectory: filepath.Join(state, inferModelDirectoryName),
+		ModelDirectory: InferModelDirectory(state),
 		Device:         self.sidecar.inferLocalDevice,
 		Settings:       settings,
 		Clock:          self.sidecar.clock,

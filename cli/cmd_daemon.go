@@ -747,6 +747,15 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) (runErr e
 	}
 	network := &urDaemonNetwork{instance: instance, daemon: daemon, stop: closeSidecar, tlsSettings: urDesktopTlsSettings(),
 		dnsWatchSettings: sidecar.DefaultDnsWatchComponentSettings()}
+	// §6.5's local engine, ur-engine's process client, and the pull its models come through: one for the instance, which
+	// every network it hosts shares (cmd_models.go); none on a daemon whose state is in memory
+	if !ephemeral && urlsErr == nil {
+		urDaemonLocalInference = startUrLocalInference(ctx, stateDirectory, settings, daemon, log)
+		defer func() {
+			urDaemonLocalInference.close()
+			urDaemonLocalInference = nil
+		}()
+	}
 	if settings.Search.RemoteServe {
 		network.searchBudget, err = sidecar.NewSidecarRemoteBudget(settings.Search, settings.Clock)
 		if err != nil {
@@ -802,6 +811,8 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) (runErr e
 			// its events reach the events method's ring (daemon_events.go) for as long as it runs, a logout's last
 			// state among them, so it stays attached
 			daemon.Events().Attach(running)
+			// its router's local calls run on the instance's engine (§6.5)
+			urDaemonLocalInference.attach(running, log)
 			// the network's label table, which every zone its DnsClient fetches writes, and the zone's hints, from its
 			// first client generation on, and D-TRUST-9's zone watch (daemon_dns.go); added before the follower, so a
 			// generation attaches them first
