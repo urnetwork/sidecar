@@ -1375,7 +1375,16 @@ func TestComputeFenceCatchesAPlantedNumberChange(t *testing.T) {
 		return testPlantedFiles(t, func(fileProtos testFileProtos) {
 			var message *descriptorpb.DescriptorProto
 			if file := fileProtos[header.path]; file != nil {
-				message = testPlantedMessage(t, fileProtos, header.path, "ComputeInferHeader")
+				// infer.proto stands with the catalog's messages (INFER-M12-01) before the header joins it (INFER-M15-02)
+				index := slices.IndexFunc(file.GetMessageType(), func(declared *descriptorpb.DescriptorProto) bool {
+					return declared.GetName() == "ComputeInferHeader"
+				})
+				if index < 0 {
+					message = &descriptorpb.DescriptorProto{Name: proto.String("ComputeInferHeader")}
+					file.MessageType = append(file.MessageType, message)
+				} else {
+					message = file.GetMessageType()[index]
+				}
 			} else {
 				message = &descriptorpb.DescriptorProto{Name: proto.String("ComputeInferHeader")}
 				// as protoc registers a file of this package, go_package and all

@@ -1030,10 +1030,10 @@ compute-6:
   ttl: "while set; a raise until its expiry; a day's counters a day, a month's a month"
   owner: DESIGN-COMPUTE §14.6 (§16.4)
 compute-7:
-  service: compute (K_P's signer) and taskworker (compute_gamma_mint, compute_gamma_spend, compute_gamma_watch, compute_provider_prices, compute_reconcile)
-  store: compute_provider, compute_provider_price, compute_provider_ledger, compute_gamma_deposit and compute_gamma_op (MG-C2); Redis {cmpv_<provider_id>} (each provider's capacity)
-  sees: "URnetwork's provider balances, gamma deposits, mints, spends and hotkeys (public on chain); per provider, its id, kind, status and gate results and its hourly price reads; and each provider's account as last read less the cost of what it served and the holds open there since, with no network (DESIGN-COMPUTE §10.4)"
-  why: paying providers in gamma and holding no call or enclave past what a provider's account can serve (DESIGN-COMPUTE §10.4, §10.5, §10.7)
+  service: compute (K_P's signer and the catalog route) and taskworker (compute_gamma_mint, compute_gamma_spend, compute_gamma_watch, compute_provider_prices, compute_reconcile)
+  store: compute_provider, compute_provider_price, compute_catalog_version, compute_provider_ledger, compute_gamma_deposit and compute_gamma_op (MG-C2); Redis {cmpv_<provider_id>} (each provider's capacity)
+  sees: "URnetwork's provider balances, gamma deposits, mints, spends and hotkeys (public on chain); per provider, its id, kind, status and gate results and its hourly price reads; each published version of the remote catalog and when it was published, every model's provider, name, kind, label, efforts, limits, tools, modalities, license, provider model id and prices, a direct model's host, receiver and targets, the areas' sections, and each direct provider's costliest worst case (DESIGN-COMPUTE §6.3, §6.6; QD-1237); and each provider's account as last read less the cost of what it served and the holds open there since, with no network (DESIGN-COMPUTE §10.4)"
+  why: paying providers in gamma and holding no call or enclave past what a provider's account can serve (DESIGN-COMPUTE §10.4, §10.5, §10.7); one catalog every device lists and every remote charge is priced from (§6.3, §9.6)
   ttl: "7 years; a capacity until the provider's next account read replaces it"
   owner: DESIGN-COMPUTE §14.6 (§10)
 compute-8:

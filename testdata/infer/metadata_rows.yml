@@ -1,0 +1,38 @@
+# DESIGN-COMPUTE.md §6.3's remote catalog (INFER-M12-01): GET compute/v1/catalog's answer, which the broker builds from
+# its providers' hourly reads and keeps per version in compute_catalog_version, public models, limits and prices with no
+# user data, under compute-7 (compute-plan-catalog-versions, QD-1237; compute-plan-infer-wire-format, QD-1246). Each
+# field's row is the one whose store holds the version it rides in.
+
+InferCatalogAnswer.version: {number: 1, type: uint64, row: compute-7, sees: "each published version of the remote catalog"}
+InferCatalogAnswer.published_ms: {number: 2, type: int64, row: compute-7, sees: "each published version of the remote catalog and when it was published"}
+InferCatalogAnswer.broker_time_ms: {number: 3, type: int64, row: compute-7, sees: "each published version of the remote catalog"}
+InferCatalogAnswer.models: {number: 4, type: repeated InferCatalogModel, row: compute-7, sees: "every model's provider, name, kind, label"}
+InferCatalogAnswer.sections: {number: 5, type: repeated InferCatalogSection, row: compute-7, sees: "the areas' sections"}
+
+InferCatalogModel.provider: {number: 1, type: string, row: compute-7, sees: "every model's provider"}
+InferCatalogModel.model: {number: 2, type: string, row: compute-7, sees: "name"}
+InferCatalogModel.kind: {number: 3, type: InferCatalogModelKind, row: compute-7, sees: "kind"}
+InferCatalogModel.label: {number: 4, type: string, row: compute-7, sees: "label"}
+InferCatalogModel.efforts: {number: 5, type: repeated string, row: compute-7, sees: "efforts"}
+InferCatalogModel.default_effort: {number: 6, type: string, row: compute-7, sees: "efforts"}
+InferCatalogModel.context_window: {number: 7, type: int64, row: compute-7, sees: "limits"}
+InferCatalogModel.max_output: {number: 8, type: int64, row: compute-7, sees: "limits"}
+InferCatalogModel.tools: {number: 9, type: bool, row: compute-7, sees: "tools"}
+InferCatalogModel.structured_output: {number: 10, type: bool, row: compute-7, sees: "tools"}
+InferCatalogModel.modalities: {number: 11, type: repeated string, row: compute-7, sees: "modalities"}
+InferCatalogModel.license: {number: 12, type: string, row: compute-7, sees: "license"}
+InferCatalogModel.provider_model_id: {number: 13, type: string, row: compute-7, sees: "provider model id"}
+InferCatalogModel.input_nano_usd_per_million: {number: 14, type: int64, row: compute-7, sees: "prices"}
+InferCatalogModel.output_nano_usd_per_million: {number: 15, type: int64, row: compute-7, sees: "prices"}
+InferCatalogModel.cached_input_nano_usd_per_million: {number: 16, type: int64, row: compute-7, sees: "prices"}
+InferCatalogModel.price_varies: {number: 17, type: bool, row: compute-7, sees: "prices"}
+InferCatalogModel.serving_code_unmeasured: {number: 18, type: bool, row: compute-7, sees: "label"}
+InferCatalogModel.host: {number: 19, type: string, row: compute-7, sees: "a direct model's host, receiver and targets"}
+InferCatalogModel.receiver_hotkey: {number: 20, type: string, row: compute-7, sees: "a direct model's host, receiver and targets"}
+InferCatalogModel.targets: {number: 21, type: repeated InferCatalogTarget, row: compute-7, sees: "a direct model's host, receiver and targets"}
+
+InferCatalogTarget.method: {number: 1, type: string, row: compute-7, sees: "a direct model's host, receiver and targets"}
+InferCatalogTarget.path: {number: 2, type: string, row: compute-7, sees: "a direct model's host, receiver and targets"}
+
+InferCatalogSection.name: {number: 1, type: string, row: compute-7, sees: "the areas' sections"}
+InferCatalogSection.body: {number: 2, type: bytes, row: compute-7, sees: "the areas' sections"}

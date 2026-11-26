@@ -75,7 +75,25 @@ type metadataListAddition struct {
 // QD-1186's with the sixth late fold's (owner decision 709), and DESIGN-COMPUTE.md's rows with the eighth late
 // fold's, which takes its Appendix D: compute-1 to compute-11 and api-7's and evs-1's compute words, which
 // CARCH-M11-03 published as v68 (QD-1252, QD-1367). Each entry here waits for the next fold.
-var metadataListAdditions = []metadataListAddition{}
+var metadataListAdditions = []metadataListAddition{
+	{
+		// compute-plan-catalog-versions (QD-1237): the remote catalog's versions in compute_catalog_version, MG-C2's,
+		// under compute-7 (INFER-M12-01)
+		question: "compute-plan-catalog-versions",
+		block: `compute-7:
+  service: compute (K_P's signer) and taskworker (compute_gamma_mint, compute_gamma_spend, compute_gamma_watch, compute_provider_prices, compute_reconcile)
+  store: compute_provider, compute_provider_price, compute_provider_ledger, compute_gamma_deposit and compute_gamma_op (MG-C2); Redis {cmpv_<provider_id>} (each provider's capacity)
+  sees: "URnetwork's provider balances, gamma deposits, mints, spends and hotkeys (public on chain); per provider, its id, kind, status and gate results and its hourly price reads; and each provider's account as last read less the cost of what it served and the holds open there since, with no network (DESIGN-COMPUTE §10.4)"
+  why: paying providers in gamma and holding no call or enclave past what a provider's account can serve (DESIGN-COMPUTE §10.4, §10.5, §10.7)
+`,
+		list: `compute-7:
+  service: compute (K_P's signer and the catalog route) and taskworker (compute_gamma_mint, compute_gamma_spend, compute_gamma_watch, compute_provider_prices, compute_reconcile)
+  store: compute_provider, compute_provider_price, compute_catalog_version, compute_provider_ledger, compute_gamma_deposit and compute_gamma_op (MG-C2); Redis {cmpv_<provider_id>} (each provider's capacity)
+  sees: "URnetwork's provider balances, gamma deposits, mints, spends and hotkeys (public on chain); per provider, its id, kind, status and gate results and its hourly price reads; each published version of the remote catalog and when it was published, every model's provider, name, kind, label, efforts, limits, tools, modalities, license, provider model id and prices, a direct model's host, receiver and targets, the areas' sections, and each direct provider's costliest worst case (DESIGN-COMPUTE §6.3, §6.6; QD-1237); and each provider's account as last read less the cost of what it served and the holds open there since, with no network (DESIGN-COMPUTE §10.4)"
+  why: paying providers in gamma and holding no call or enclave past what a provider's account can serve (DESIGN-COMPUTE §10.4, §10.5, §10.7); one catalog every device lists and every remote charge is priced from (§6.3, §9.6)
+`,
+	},
+}
 
 // §2.8's block with each addition in place, in order, and a finding for each that does not apply.
 func applyMetadataListAdditions(block []byte, additions []metadataListAddition) ([]byte, []string) {
