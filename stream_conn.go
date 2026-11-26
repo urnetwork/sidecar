@@ -18,6 +18,11 @@
 //   - Deadlines are net.Conn's: absolute, on the dispatcher's clock, os.ErrDeadlineExceeded once passed,
 //     and the stream survives them, so clearing one lets I/O go on. A Write that has handed its frames
 //     to connect sends them whatever its deadline, since a byte sent cannot be taken back.
+//   - A deadline's wait is set on that clock when the deadline is, as net.Pipe's is, and wakes every call
+//     waiting when it fires. A call reads its deadline against the clock as it begins and at each wake,
+//     in the locked scope that subscribes it to the stream's changes, so a deadline passed before the
+//     call, or one whose wait fired before the call began waiting, ends it at once, and a wait firing
+//     between the call's check and its wait still wakes it.
 //
 // Safe for concurrent use, as net.Conn is. Writes are serialized, so two never interleave their bytes.
 
@@ -107,15 +112,18 @@ type SubprotocolStream struct {
 	ticket   []byte
 	// the send option every frame rides: an acceptor's the open's lane, an opener's none
 	opts []any
+	// what this stream's barriers carry: its peer's id and its own, both opaque (I-13)
+	barrierKey string
 	// serializes writes, so StreamData goes in offset order and StreamClose after the last of it
 	writeLock sync.Mutex
 
 	stateLock sync.Mutex
 	state     *streamState
-	// closed and replaced at each change, so a waiting Read, Write or open looks again
+	// closed and replaced at each change, a deadline's wait firing among them, so a waiting Read, Write or
+	// open looks again
 	changed       chan struct{}
-	readDeadline  time.Time
-	writeDeadline time.Time
+	readDeadline  streamDeadline
+	writeDeadline streamDeadline
 	// Close has run: Read and Write answer net.ErrClosed
 	closed bool
 	// the newest window to send, and whether the sender holds an item for it
@@ -127,6 +135,17 @@ type SubprotocolStream struct {
 
 var _ net.Conn = (*SubprotocolStream)(nil)
 
+// One direction's deadline, with the wait set for it on the dispatcher's clock. The wait only wakes the
+// stream's calls; each then reads the deadline against the clock itself.
+type streamDeadline struct {
+	// zero for none
+	at time.Time
+	// the deadline's sets so far, which its wait carries, so a wait a later set replaced wakes nothing
+	setCount uint64
+	// stops the wait while it is still to fire; nil when none is set
+	stop func() bool
+}
+
 // A stream over state with the peer behind peer, not yet in its table.
 func newSubprotocolStream(subprotocol *Subprotocol, peer *streamPeer, streamId uint64, state *streamState) *SubprotocolStream {
 	return &SubprotocolStream{
@@ -135,6 +154,7 @@ func newSubprotocolStream(subprotocol *Subprotocol, peer *streamPeer, streamId u
 		peerId:      peer.peerId,
 		streamId:    streamId,
 		edge:        peer.edge,
+		barrierKey:  fmt.Sprintf("%s/%d", peer.peerId, streamId),
 		state:       state,
 		changed:     make(chan struct{}),
 	}
@@ -189,15 +209,15 @@ func (self *SubprotocolStream) expiredWithLock(deadline time.Time) bool {
 	return !deadline.IsZero() && !self.subprotocol.clock.Now().Before(deadline)
 }
 
-// Waits for changed, deadline on the dispatcher's clock, a zero one being none, or the dispatcher's end.
-func (self *SubprotocolStream) wait(changed chan struct{}, deadline time.Time) {
-	var expire <-chan time.Time
-	if !deadline.IsZero() {
-		expire = self.subprotocol.clock.After(deadline.Sub(self.subprotocol.clock.Now()))
-	}
+// Whether no call of the stream waits any more: it has ended, or Close has run. Under stateLock.
+func (self *SubprotocolStream) endedWithLock() bool {
+	return self.closed || self.state.phase == streamPhaseDone
+}
+
+// Waits for changed, which a deadline's wait closes as it fires, or for the dispatcher's end.
+func (self *SubprotocolStream) wait(changed chan struct{}) {
 	select {
 	case <-changed:
-	case <-expire:
 	case <-self.subprotocol.ctx.Done():
 	}
 }
@@ -225,7 +245,6 @@ func (self *SubprotocolStream) Read(b []byte) (int, error) {
 		var n int
 		var err error
 		var changed chan struct{}
-		var deadline time.Time
 		done := func() bool {
 			self.stateLock.Lock()
 			defer self.stateLock.Unlock()
@@ -237,7 +256,7 @@ func (self *SubprotocolStream) Read(b []byte) (int, error) {
 			case self.closed:
 				err = net.ErrClosed
 				return true
-			case self.expiredWithLock(self.readDeadline):
+			case self.expiredWithLock(self.readDeadline.at):
 				err = os.ErrDeadlineExceeded
 				return true
 			case len(b) == 0:
@@ -257,15 +276,18 @@ func (self *SubprotocolStream) Read(b []byte) (int, error) {
 					return true
 				}
 			}
+			// in the scope that read the deadline against the clock, so its wait firing from here on wakes
+			// the wait below
 			changed = self.changed
-			deadline = self.readDeadline
 			return false
 		}()
 		if done {
 			self.removeIfDone()
 			return n, err
 		}
-		self.wait(changed, deadline)
+		testHookBarrier("stream.read_wait.before", self.barrierKey)
+		self.wait(changed)
+		testHookBarrier("stream.read_wait.after", self.barrierKey)
 	}
 }
 
@@ -279,7 +301,6 @@ func (self *SubprotocolStream) Write(b []byte) (int, error) {
 		var n int
 		var err error
 		var changed chan struct{}
-		var deadline time.Time
 		wait := false
 		func() {
 			self.stateLock.Lock()
@@ -292,7 +313,7 @@ func (self *SubprotocolStream) Write(b []byte) (int, error) {
 			case self.closed || state.sendClosed:
 				err = net.ErrClosed
 				return
-			case self.expiredWithLock(self.writeDeadline):
+			case self.expiredWithLock(self.writeDeadline.at):
 				err = os.ErrDeadlineExceeded
 				return
 			case written == len(b):
@@ -308,15 +329,18 @@ func (self *SubprotocolStream) Write(b []byte) (int, error) {
 				wait = n == 0
 			}
 			if wait {
+				// as Read subscribes, in the scope that read the deadline
 				changed = self.changed
-				deadline = self.writeDeadline
 			}
 		}()
 		switch {
 		case err != nil:
 			return written, err
 		case wait:
-			self.wait(changed, deadline)
+			// writeLock is held here, as it is through the wait itself: other writes wait behind this one
+			testHookBarrier("stream.write_wait.before", self.barrierKey)
+			self.wait(changed)
+			testHookBarrier("stream.write_wait.after", self.barrierKey)
 			continue
 		case n == 0:
 			return written, nil
@@ -378,6 +402,7 @@ func (self *SubprotocolStream) Close() error {
 	if alreadyClosed {
 		return net.ErrClosed
 	}
+	self.stopDeadlines()
 	// after a Write that waits has seen closed and let go
 	self.writeLock.Lock()
 	defer self.writeLock.Unlock()
@@ -448,6 +473,7 @@ func (self *SubprotocolStream) resetLocal(code protocol.StreamResetCode) bool {
 		return false
 	}
 	self.cancelAccept()
+	self.stopDeadlines()
 	self.queueFrame(protocol.MessageType_STREAM_RESET, frames.reset)
 	self.subprotocol.removeStream(self)
 	return true
@@ -462,6 +488,7 @@ func (self *SubprotocolStream) endLocal(code protocol.StreamResetCode) {
 		self.notifyWithLock()
 	}()
 	self.cancelAccept()
+	self.stopDeadlines()
 }
 
 // Ends an accept function's wait, if one runs.
@@ -487,6 +514,7 @@ func (self *SubprotocolStream) removeIfDone() {
 	}()
 	if done {
 		self.cancelAccept()
+		self.stopDeadlines()
 		self.subprotocol.removeStream(self)
 	}
 }
@@ -503,30 +531,101 @@ func (self *SubprotocolStream) RemoteAddr() net.Addr {
 
 // Both deadlines. See net.Conn.
 func (self *SubprotocolStream) SetDeadline(t time.Time) error {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	self.readDeadline = t
-	self.writeDeadline = t
-	self.notifyWithLock()
+	self.setDeadline(&self.readDeadline, t)
+	self.setDeadline(&self.writeDeadline, t)
 	return nil
 }
 
 // See net.Conn. A passed deadline fails Read with os.ErrDeadlineExceeded, and the stream survives it.
 func (self *SubprotocolStream) SetReadDeadline(t time.Time) error {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	self.readDeadline = t
-	self.notifyWithLock()
+	self.setDeadline(&self.readDeadline, t)
 	return nil
 }
 
 // See net.Conn, as SetReadDeadline for Write.
 func (self *SubprotocolStream) SetWriteDeadline(t time.Time) error {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	self.writeDeadline = t
-	self.notifyWithLock()
+	self.setDeadline(&self.writeDeadline, t)
 	return nil
+}
+
+// Sets deadline to t, with its wait on the dispatcher's clock, and has every waiting call look again, so a
+// passed deadline ends one at once and a cleared one lets it wait on. A stream that has ended or closed gets
+// no wait, since no call of it waits.
+//
+// The wait is timed off the clock and then set, with no lock held, since a clock may call back on the
+// setting goroutine. Another goroutine moving the clock between the two sets the wait late, past t, so once
+// it is set the deadline is read against the clock again: a clock that reached t meanwhile wakes the calls
+// now, as the wait would have. A move that stops short of t leaves the wait late by that move, since a Clock
+// sets a wait by a timeout and not by a time; only a set running beside another goroutine's move of a fake
+// clock meets it.
+func (self *SubprotocolStream) setDeadline(deadline *streamDeadline, t time.Time) {
+	clock := self.subprotocol.clock
+	var setCount uint64
+	var previousStop func() bool
+	var timeout time.Duration
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		deadline.at = t
+		deadline.setCount += 1
+		setCount = deadline.setCount
+		previousStop = deadline.stop
+		deadline.stop = nil
+		if !t.IsZero() && !self.endedWithLock() {
+			timeout = t.Sub(clock.Now())
+		}
+		self.notifyWithLock()
+	}()
+	if previousStop != nil {
+		previousStop()
+	}
+	if timeout <= 0 {
+		// no deadline, one already passed, which each call's own check sees, or a stream no call waits on
+		return
+	}
+	stop := clock.AfterFunc(timeout, func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		if deadline.setCount == setCount {
+			self.notifyWithLock()
+		}
+	})
+	kept := func() bool {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		if deadline.setCount != setCount || self.endedWithLock() {
+			// a later set, or the stream's end, came while the wait was set
+			return false
+		}
+		deadline.stop = stop
+		if self.expiredWithLock(t) {
+			// the clock reached t while the wait was set, which set it late
+			self.notifyWithLock()
+		}
+		return true
+	}()
+	if !kept {
+		stop()
+	}
+}
+
+// Stops both deadlines' waits once the stream has ended or closed: no call of it waits any more, so none is
+// kept to fire.
+func (self *SubprotocolStream) stopDeadlines() {
+	var readStop func() bool
+	var writeStop func() bool
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		readStop, self.readDeadline.stop = self.readDeadline.stop, nil
+		writeStop, self.writeDeadline.stop = self.writeDeadline.stop, nil
+	}()
+	if readStop != nil {
+		readStop()
+	}
+	if writeStop != nil {
+		writeStop()
+	}
 }
 
 // One stream frame of messageType carrying body, as this stream sends it: NO_REPLY, never a response
