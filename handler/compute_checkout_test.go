@@ -134,7 +134,7 @@ func TestComputeCheckoutRefusesBadRequestsAndUnbuiltModes(t *testing.T) {
 		code   string
 	}{
 		`{"auto_renew":"monthly","monthly_credits":25}`: {http.StatusServiceUnavailable, ComputeApiRefusalUnavailable},
-		`{"pack_credits":25,"auto_renew":"threshold"}`:   {http.StatusConflict, string(controller.ComputeCheckoutRefusalSalesClosed)},
+		`{"pack_credits":25,"auto_renew":"threshold"}`:  {http.StatusConflict, string(controller.ComputeCheckoutRefusalSalesClosed)},
 	} {
 		answer := route.Serve(context.Background(), owner, nil, []byte(body))
 		if code, _ := testComputeApiCode(t, answer); answer.Status != want.status || code != want.code {
