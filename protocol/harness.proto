@@ -1,0 +1,51 @@
+// The attach link's origin (DESIGN-COMPUTE §7.10, §12.5, D-HARN-6; HARN-M14-01): the statement a caller's sidecar signs
+// before an exec of ur harness rpc, which the receiving SSH server verifies outside the agents' container and hands the
+// Harness as the session's verified header, and the origin each command carries. It is the body of a §6.9 Signed of
+// purpose attach-origin and type SIGNED_ATTACH_ORIGIN (0x1808, §6.11, Appendix D), by the caller's identity key, over
+// the session's own exchange hash, so no origin moves to another session or is chosen by a line's writer. The
+// statement rides only in an origin@ur.io request on a session of the bundled SSH, over a Required overlay connection
+// between a member's sidecar and its enclave (§12, IC-2), and a stamped line's origin rides inside that session as JSON
+// (harness_rpc.go), so no server reads a field.
+
+syntax = "proto3";
+package urnetwork.sidecar;
+
+option go_package = "github.com/urnetwork/sidecar/protocol";
+
+// How a session carries its origin (§7.10's origin row).
+enum HarnessAttachMode {
+  HARNESS_ATTACH_MODE_UNSPECIFIED = 0;
+  // one origin for the whole session, whose bytes the caller's sidecar only carries (ur ssh); the daemon ends it when
+  // that run is tainted
+  HARNESS_ATTACH_MODE_CARRIED = 1;
+  // the caller's own Harness stamps each line with its origin
+  HARNESS_ATTACH_MODE_STAMPED = 2;
+}
+
+// Who a command comes from (§7.10): the person, a run with its agent and taint bit, or any other caller, an unknown
+// run's.
+enum HarnessOriginKind {
+  HARNESS_ORIGIN_KIND_UNSPECIFIED = 0;
+  HARNESS_ORIGIN_KIND_PERSON = 1;
+  HARNESS_ORIGIN_KIND_RUN = 2;
+  HARNESS_ORIGIN_KIND_UNKNOWN = 3;
+}
+
+// One origin.
+message HarnessOrigin {
+  HarnessOriginKind kind = 1;
+  bytes run_id = 2;                     // a run's alone
+  bytes agent_id = 3;                   // a run's alone
+  bool tainted = 4;                     // a run's alone: its taint bit as the caller's Harness keeps it
+}
+
+// §12.5's origin@ur.io statement.
+message HarnessAttachOrigin {
+  bytes network_id = 1;
+  bytes sidecar_id = 2;                 // S, the calling sidecar, whose identity key signs
+  bytes enclave_id = 3;                 // the enclave the session reaches
+  uint64 incarnation = 4;               // its running incarnation
+  bytes exchange_hash = 5;              // this SSH session's exchange hash, its session id
+  HarnessAttachMode mode = 6;
+  HarnessOrigin origin = 7;             // carried's one origin; absent when stamped
+}

@@ -47,6 +47,7 @@ var testProtoFiles = []string{
 	"protocol/evs.proto",
 	"protocol/evsindex.proto",
 	"protocol/gkm.proto",
+	"protocol/harness.proto",
 	"protocol/mail.proto",
 	"protocol/push.proto",
 	"protocol/record.proto",

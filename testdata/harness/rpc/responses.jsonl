@@ -1,0 +1,11 @@
+{"id": "req-1", "type": "response", "command": "prompt", "success": true, "data": {"disposition": "started"}}
+{"type": "response", "command": "steer", "success": true, "data": {"disposition": "queued"}}
+{"type": "response", "command": "follow_up", "success": true, "data": {"disposition": "queued"}}
+{"type": "response", "command": "abort", "success": true}
+{"type": "response", "command": "switch_session", "success": true, "data": {"cancelled": false}}
+{"id":"req-1","type":"response","command":"get_state","success":true,"data":{"...":"..."}}
+{"id":"req-2","type":"response","command":"prompt","success":true,"data":{"disposition":"started"}}
+{"id":"req-3","type":"response","command":"set_model","success":false,"error":"Model not found: invalid/model"}
+{"type":"response","command":"parse","success":false,"error":"Failed to parse command: Unexpected token..."}
+{"id":"test-id","type":"response","command":"does_not_exist","success":false,"error":"Unknown command: does_not_exist"}
+{"type":"response","command":"hello","success":false,"error":"Unknown command: hello"}

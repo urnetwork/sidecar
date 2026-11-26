@@ -1258,6 +1258,8 @@ The tests that hold the record's code to RECORD.md and DESIGN.md, record_kind_te
 
 Builds: CTXH-M11-01, CTXH-M11-02, CTXH-M11-08, SAFE-M13-08. Question: `compute-plan-record-registry-fold.md`.
 
+**Carried for context history (2026-11-25; DESIGN.md's thirteenth fold).** RECORD.md's sections 5.2 to 5.7, 6.1, 6.3, 6.4, 7.1 and 8 give kinds 54 and 55, class 8 and the body filed apart at `s/<n>`, which CTXH-M11-01 and CTXH-M11-02 built, and DESIGN §16.8's fences `body_apart` and `Coverage`'s field 8, so record_kind_test.go's kind and class lines and design_unfenced_test.go's two field lines left in the commits that wrote them; the lists stay, empty, for kind 56 and CTXH-M11-08's enclave kinds, which this rule still lands.
+
 ### QD-1410: Which build leg and size gate hold ur.io's page Worker once it links the Harness and a js connect client, and is that client C17 or the full one?
 *Amends §7.5 and Appendix D's rows for DESIGN §4.6's C17 and §18.10's page Worker build. Option 1.*
 
