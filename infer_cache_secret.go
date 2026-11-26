@@ -1060,6 +1060,7 @@ type inferCacheBoundedBuffer struct {
 	over         bool
 }
 
+// Keeps data while the whole stays within the bound; past it keeps nothing more and errs.
 func (self *inferCacheBoundedBuffer) Write(data []byte) (int, error) {
 	if self.maxByteCount < self.buffer.Len()+len(data) {
 		self.over = true
