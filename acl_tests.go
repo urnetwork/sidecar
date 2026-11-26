@@ -44,7 +44,11 @@
 //	                   named by its grant id
 //	ports              a dial check with ports holds at every port of the range for an accept and at none for a deny,
 //	                   at a sidecar destination, whose own engine checks ports; with none it is the rows' dial alone;
-//	                   a route check's ports meet a rule's ports before its prefixes do
+//	                   a route check's ports meet a rule's ports before its prefixes do. A surviving port-limited
+//	                   activated dial grant counts at the destination by the ports its sealed detail names there, as
+//	                   the engine and the bridge compile read them (aclGrantDialPortsOf; QD-1428), and one whose
+//	                   detail does not open here may open any port, so it establishes no accept and fails a deny it
+//	                   may apply to as indeterminate, named by its grant id as an ip: check's is
 //
 // A check this runner cannot judge, a user resolve does not hold, a repo label the labels file does not hold, a set,
 // fails its test: a test passes only on what was shown. Failures name the test and its check by index, never a value
@@ -81,7 +85,8 @@ type AclPolicyTestFailure struct {
 	// Why: refused and its reason for an accept, allowed for a deny, or what could not be judged.
 	Reason string
 	// The activated grant whose sealed detail did not open here, for a check it left indeterminate or kept from an
-	// accept (QD-1164); nil otherwise. An opaque id, as rule ids are (I-13).
+	// accept: an ip: check's (QD-1164) or a dial check's with ports (QD-1428); nil otherwise. An opaque id, as rule ids
+	// are (I-13).
 	GrantId []byte
 }
 
@@ -129,8 +134,9 @@ type AclPolicyTestInput struct {
 	View    AclAuthView
 	// The time the tests judge at.
 	Now time.Time
-	// Opens the sealed detail of each activated grant the compile carries, which its ip: checks judge by (QD-1164);
-	// nil opens none, so every such grant whose action seals a detail leaves the checks it may apply to indeterminate.
+	// Opens the sealed detail of each activated grant the compile carries, which its ip: checks (QD-1164) and its dial
+	// checks with ports (QD-1428) judge by; nil opens none, so every such grant whose action seals a detail leaves the
+	// checks it may apply to indeterminate.
 	GrantDetails AclGrantDetails
 }
 
@@ -489,16 +495,40 @@ func (self *aclTestRun) addRouteStandIns(plans []aclTestPlan) {
 }
 
 // An engine whose own sidecar is sidecarId, over the run's state and local policy, made once: what checks a dial to that
-// sidecar with ports. Its clock skew is none, so a test judges at exactly its time.
+// sidecar with ports, its activated grants' details opened through the run's opener (QD-1428). Its clock skew is none,
+// so a test judges at exactly its time.
 func (self *aclTestRun) engineFor(sidecarId Id) *AclEngine {
 	if engine, found := self.engines[sidecarId]; found {
 		return engine
 	}
 	engine := NewAclEngine(sidecarId, nil, nil, &AclEngineSettings{ClockSkew: 0})
 	// the run's own state and policy, which nothing else holds, install at any pin
-	_ = engine.Install(self.state, self.compiler.local)
+	_ = engine.InstallWithGrants(self.state, self.compiler.local, self.grantDetails)
 	self.engines[sidecarId] = engine
 	return engine
+}
+
+// The first port-limited activated dial grant in force that takes the source's dial to the destination, whose sealed
+// detail did not open at the destination's engine, so it may open any port there (QD-1428): its grant id and why its
+// detail does not read, nil for none.
+func (self *aclTestRun) unreadDialGrant(engine *AclEngine, source AclSubject, destinationId Id) ([]byte, string) {
+	installed := engine.installed.Load()
+	if installed == nil {
+		return nil, ""
+	}
+	var unread aclGrantRouteUnread
+	decision := installed.state.mayDial(source, AclSidecarSubject(destinationId), self.nowMs, func(rule *aclRule) bool {
+		read := installed.grantDials[rule.index]
+		if read == nil || read.opened == aclGrantRouteUnreadNone {
+			return false
+		}
+		unread = read.opened
+		return true
+	})
+	if !decision.Allowed {
+		return nil, ""
+	}
+	return decision.Rule.GetRuleId(), unread.String()
 }
 
 // Judges one test's checks, recording each failure.
@@ -559,8 +589,8 @@ func (self *aclTestRun) holds(source AclSubject, check AclPolicyCheck, destinati
 	switch resource.Kind {
 	case AclResourceSubject:
 		for _, destination := range destinations {
-			if reason := self.holdsSubject(source, destination, check, want); reason != "" {
-				return reason, nil
+			if reason, grantId := self.holdsSubject(source, destination, check, want); reason != "" {
+				return reason, grantId
 			}
 		}
 		return "", nil
@@ -621,8 +651,9 @@ func (self *aclTestRun) ruleName(rule *protocol.AclRule) string {
 }
 
 // One subject check at one destination: dial through the destination's own engine where it is a sidecar and the
-// check names ports, else the rows' dial; route through the rows.
-func (self *aclTestRun) holdsSubject(source AclSubject, destination AclSubject, check AclPolicyCheck, want bool) string {
+// check names ports, else the rows' dial; route through the rows. With the failure, the activated grant whose detail
+// did not open that it stands on, nil for none (QD-1428).
+func (self *aclTestRun) holdsSubject(source AclSubject, destination AclSubject, check AclPolicyCheck, want bool) (string, []byte) {
 	now := time.UnixMilli(self.nowMs)
 	answer := func(allowed bool, reason AclReason) string {
 		switch {
@@ -635,23 +666,42 @@ func (self *aclTestRun) holdsSubject(source AclSubject, destination AclSubject, 
 	}
 	if check.Action == protocol.AclAction_ACL_ACTION_ROUTE {
 		decision := self.state.MayRoute(source, netip.Addr{}, destination, now)
-		return answer(decision.Allowed, decision.Reason)
+		return answer(decision.Allowed, decision.Reason), nil
 	}
 	if check.Ports == nil {
 		decision := self.state.MayDial(source, destination, now)
-		return answer(decision.Allowed, decision.Reason)
+		return answer(decision.Allowed, decision.Reason), nil
 	}
 	if destination.Kind != AclSubjectSidecar {
-		return "ports at a destination that is no sidecar, whose own device checks them"
+		return "ports at a destination that is no sidecar, whose own device checks them", nil
 	}
 	engine := self.engineFor(destination.Id)
+	// a grant whose detail did not open here may open any port: it establishes no accept, and a deny falls back on it
+	unreadGrantId, unread := self.unreadDialGrant(engine, source, destination.Id)
+	grant := ""
+	if unreadGrantId != nil {
+		grant = "grant " + hex.EncodeToString(unreadGrantId)
+	}
 	for port := uint64(check.Ports.First); port <= uint64(check.Ports.Last); port += 1 {
 		decision := engine.AllowInbound(&AclInbound{Source: source, IpProtocol: check.Ports.Protocol, Port: uint32(port)}, now)
-		if reason := answer(decision.Allowed, decision.Reason); reason != "" {
-			return reason + " at port " + strconv.FormatUint(port, 10)
+		at := " at port " + strconv.FormatUint(port, 10)
+		switch {
+		case want == decision.Allowed:
+			continue
+		case want && unreadGrantId != nil:
+			return answer(decision.Allowed, decision.Reason) + at + "; " + grant + " may dial it, but its sealed detail " + unread +
+				", so it establishes no accept", unreadGrantId
+		case !want && len(decision.Rule.GetSourceRuleId()) != 0:
+			// an activated grant its opened detail matched
+			return "allowed by " + self.ruleName(decision.Rule) + at, nil
 		}
+		return answer(decision.Allowed, decision.Reason) + at, nil
 	}
-	return ""
+	if !want && unreadGrantId != nil {
+		return "indeterminate: " + grant + " may let its source dial it, but its sealed detail " + unread +
+			": restore this device's config keys, remove the test or wait for the grant to end", unreadGrantId
+	}
+	return "", nil
 }
 
 // A route to a prefix: for an accept, a route rule in force whose prefixes hold the whole of it, at every port of the
