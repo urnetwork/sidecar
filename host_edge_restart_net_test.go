@@ -147,6 +147,7 @@ func edgeRestartRead(t *testing.T, ctx context.Context, stream *sidecar.Subproto
 // the pool from.
 type edgeRestartNet struct {
 	settings         *edgeRestartNetSettings
+	net              *sidecartest.Net
 	listenerClientId connect.Id
 	// each stream the listener accepts, in order
 	incomings <-chan *sidecar.StreamIncoming
@@ -215,6 +216,7 @@ func newEdgeRestartNet(t *testing.T, settings *edgeRestartNetSettings) *edgeRest
 	edgeRestartRead(t, stepCtx, stream, "before", "the edge before the restart")
 	return &edgeRestartNet{
 		settings:         settings,
+		net:              net,
 		listenerClientId: listenerClientId,
 		incomings:        incomings,
 		args:             args,
@@ -297,9 +299,12 @@ func (self *edgeRestartHoldPlatform) OpenClient(ctx context.Context, args *sidec
 // verifies and the backlog comes in. A client that provided Service only once the pool had it open would refuse that
 // copy, and connect would drop the listener's sequence until the client's modes changed, which the held window keeps
 // from happening: its backlog would never arrive. Then the restarted client's own stream to the listener opens and
-// carries bytes both ways within RecoveryTimeout. The hold is a step, bounded as one: a client that sends nothing, as
-// a held one does, hears the listener's backlog only at the listener's own resends, which on connect's restart path
-// took up to 1.2 s here, where the pool's first open would have had the listener write it at once.
+// carries bytes both ways within RecoveryTimeout. The Net partitions the pair across the restart, and the hold lifts the
+// partition once its callback is on, so no frame of the listener's reaches the client before the hold listens for it.
+// The hold is a step, bounded as one: a client that sends nothing, as a held one does, hears the listener's backlog
+// only at the listener's own resends, which on connect's restart path took up to 1.2 s here, where the pool's first
+// open would have had the listener write it at once. sidecartest's TestRestartedSidecarTakesItsPeersNetworkContractAtOnce
+// holds a restarted daemon's generation client the same way.
 func TestEdgeClientPoolRestartedInPlaceTakesItsListenersContractAtOnce(t *testing.T) {
 	settings := defaultEdgeRestartNetSettings()
 	restart := newEdgeRestartNet(t, settings)
@@ -308,6 +313,8 @@ func TestEdgeClientPoolRestartedInPlaceTakesItsListenersContractAtOnce(t *testin
 	holdCtx := edgeRestartBound(t, settings.StepTimeout)
 	// why the hold failed the open, which the pool's error leaves out; read once NewEdgeClientPool has returned
 	var holdErr error
+	// nothing of the listener's reaches the restarted client before the hold listens for it
+	restart.net.SetLink(restart.listenerClientId, restart.edgeClientId, &sidecartest.LinkConditions{Partition: true})
 	restartedArgs := *restart.args
 	restartedArgs.Platform = &edgeRestartHoldPlatform{
 		platform: restart.args.Platform,
@@ -315,6 +322,8 @@ func TestEdgeClientPoolRestartedInPlaceTakesItsListenersContractAtOnce(t *testin
 			defer func() {
 				holdErr = err
 			}()
+			// the listener's frames reach the client again however the hold ends
+			defer restart.net.SetLink(restart.listenerClientId, restart.edgeClientId, nil)
 			if modes := client.Client.ContractManager().GetProvideModes(); len(modes) != 1 || !modes[connectprotocol.ProvideMode_Service] {
 				return fmt.Errorf("the restarted client was handed over providing %v", modes)
 			}
@@ -333,6 +342,7 @@ func TestEdgeClientPoolRestartedInPlaceTakesItsListenersContractAtOnce(t *testin
 				return err
 			}
 			defer remove()
+			restart.net.SetLink(restart.listenerClientId, restart.edgeClientId, nil)
 			select {
 			case <-backlog:
 				return nil
