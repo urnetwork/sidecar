@@ -11,6 +11,7 @@ package sidecar_test
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
 
@@ -118,6 +119,59 @@ func TestRecordKindEnclaveAndReachSshRegistered(t *testing.T) {
 	}
 	if sidecar.RecordReachKindSsh != 7 || sidecar.RecordReachKindSsh.String() != "ssh" || !sidecar.RecordReachKindSsh.Known() {
 		t.Errorf("reach kind 7 reads %q", sidecar.RecordReachKindSsh)
+	}
+}
+
+// The writer refuses, and every reader holds at step 5, an enclave body off its rules (an event or cause it does not
+// name, a run's id for another cause, a provider past its cap, an egress mode off an egress change) and a receipt's
+// SSH session fields off kind 7 or with no user; each honest form passes.
+func TestEnclaveAndSshBodiesHeldToTheirRules(t *testing.T) {
+	settings := sidecar.DefaultRecordBodySettings()
+	good := &protocol.EnclaveEntryBody{EnclaveId: sidecar.NewId().Bytes(), Incarnation: 2, Event: 3, Cause: 2, CauseRunId: sidecar.NewId().Bytes(), CauseRunTainted: true}
+	if err := sidecar.RecordBodyValidate(sidecar.RecordKindEnclave, good); err != nil {
+		t.Fatalf("an honest enclave entry: %v", err)
+	}
+	for _, bad := range []func(body *protocol.EnclaveEntryBody){
+		func(body *protocol.EnclaveEntryBody) { body.EnclaveId = nil },
+		func(body *protocol.EnclaveEntryBody) { body.Event = 0 },
+		func(body *protocol.EnclaveEntryBody) { body.Event = 9 },
+		func(body *protocol.EnclaveEntryBody) { body.Cause = 7 },
+		func(body *protocol.EnclaveEntryBody) { body.Cause = 1 },
+		func(body *protocol.EnclaveEntryBody) { body.CauseRunId = body.CauseRunId[:8] },
+		func(body *protocol.EnclaveEntryBody) { body.Role = 3 },
+		func(body *protocol.EnclaveEntryBody) {
+			body.Provider = strings.Repeat("p", settings.EnclaveProviderByteCount+1)
+		},
+		func(body *protocol.EnclaveEntryBody) { body.Egress = "direct" },
+		func(body *protocol.EnclaveEntryBody) { body.ApprovalId = []byte{1, 2, 3} },
+	} {
+		body := proto.Clone(good).(*protocol.EnclaveEntryBody)
+		bad(body)
+		if err := sidecar.RecordBodyValidate(sidecar.RecordKindEnclave, body); !errors.Is(err, sidecar.ErrRecordBodyOverCap) {
+			t.Errorf("an enclave entry %+v passed: %v", body, err)
+		}
+	}
+	egress := &protocol.EnclaveEntryBody{EnclaveId: sidecar.NewId().Bytes(), Event: 8, Egress: "direct"}
+	if err := sidecar.RecordBodyValidate(sidecar.RecordKindEnclave, egress); err != nil {
+		t.Errorf("an egress change: %v", err)
+	}
+	session := &protocol.ReachReceipt{Kind: uint32(sidecar.RecordReachKindSsh), SshUser: "agent", OpenedMillis: 10, ClosedMillis: 20, ClientByteCount: 1}
+	if err := sidecar.RecordBodyValidate(sidecar.RecordKindReach, session); err != nil {
+		t.Fatalf("an honest session receipt: %v", err)
+	}
+	for _, bad := range []*protocol.ReachReceipt{
+		{Kind: uint32(sidecar.RecordReachKindListen), SshUser: "agent"},
+		{Kind: uint32(sidecar.RecordReachKindForward), ClientByteCount: 1},
+		{Kind: uint32(sidecar.RecordReachKindSsh)},
+		{Kind: uint32(sidecar.RecordReachKindSsh), SshUser: strings.Repeat("u", settings.SshUserByteCount+1)},
+		{Kind: uint32(sidecar.RecordReachKindSsh), SshUser: "root", OpenedMillis: 20, ClosedMillis: 10},
+	} {
+		if err := sidecar.RecordBodyValidate(sidecar.RecordKindReach, bad); !errors.Is(err, sidecar.ErrRecordBodyOverCap) {
+			t.Errorf("a receipt %+v passed: %v", bad, err)
+		}
+	}
+	if err := sidecar.RecordBodyValidate(sidecar.RecordKindReach, &protocol.ReachReceipt{Kind: uint32(sidecar.RecordReachKindListen), ByteCount: 7}); err != nil {
+		t.Errorf("a listen receipt: %v", err)
 	}
 }
 
