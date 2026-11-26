@@ -6,7 +6,8 @@ package main
 // resolves `.ur`'s network under the settings' user root, so ur acl push in a project whose `.ur` names one network's
 // label plans and saves on that network alone, and the other's head keeps what it held; with no `.ur` the push answers
 // ambiguous before planning anything, naming both networks by their labels, where before this the daemon named them
-// by id and no `.ur` could pick either.
+// by id and no `.ur` could pick either. The engines keep evs and gkm open to both networks, the first bootstrap's after
+// the second's.
 
 import (
 	"bytes"
@@ -107,14 +108,9 @@ func TestDaemonPushesToTheNetworkDotUrNamesByLabel(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(instance.Close)
+	// each bootstrap opens evs and gkm to its network beside the other's, so both push from here on
 	alpha := newTestUrLabelNetwork(t, ctx, instance, engines, "a7q2m9x4k1")
 	bravo := newTestUrLabelNetwork(t, ctx, instance, engines, "b3k8p2r6t0")
-	// the engines open their services to the network each bootstrap names alone (FakeServiceGates.OpenService replaces
-	// a service's list), so the second bootstrap closed them to the first: open them to both, as sidecar.yml's dark
-	// gates list every network a test runs
-	for _, service := range []string{sidecar.ServiceGateEvs, sidecar.ServiceGateGkm} {
-		net.Fakes().Gates.OpenService(service, connect.Id(alpha.networkId), connect.Id(bravo.networkId))
-	}
 	// a team tier for each, as the single network's push has (daemon_dns_test.go)
 	quota := net.Fakes().Quota
 	quota.SetEnforced(true)

@@ -23,14 +23,9 @@ import (
 func TestDaemonSearchReadsVerifiedFilesOnlyInTheirHostedNetwork(t *testing.T) {
 	world := newTestUrFollowWorld(t, 2)
 	engines := enginenet.NewEngines(t, world.net, nil)
-	var networks []connect.Id
+	// each opening keeps evs and gkm open to the networks opened before it, so both hosted networks stay admitted
 	for _, network := range world.networks {
 		engines.OpenNetwork(network.NetworkId())
-		networks = append(networks, connect.Id(network.NetworkId()))
-	}
-	// Opening an individual engine fixture replaces its service allowlist. Keep both hosted networks admitted.
-	for _, service := range []string{sidecar.ServiceGateEvs, sidecar.ServiceGateGkm} {
-		world.net.Fakes().Gates.OpenService(service, networks...)
 	}
 	var hosted []*sidecar.Sidecar
 	var repoId sidecar.Id

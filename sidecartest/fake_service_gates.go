@@ -3,11 +3,18 @@
 // testdata/gates/table.yml, so the fake cannot drift from the real reader without a test failing.
 // It starts with every gate closed, as an absent file is. Set refuses text the real reader could not
 // read, and keeps what it held, as a process does after a good read.
+//
+// A test's shorthands edit one service's gate as an edit of the file would: OpenService writes its
+// list anew, so a service opened to some networks is closed to every other it listed, and
+// AddServiceNetworks adds to the list, so a world that opens its networks one at a time keeps each
+// open. Each read keeps the networks every gate lists, as the file spells them, for the next add.
 
 package sidecartest
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"sync"
 	"time"
 
@@ -76,18 +83,36 @@ type fakeSidecarYaml struct {
 
 // What one Set answers. Immutable once built.
 type fakeGatesRead struct {
-	services         map[string]sidecar.ServiceGate
-	format2          sidecar.Format2Gate
-	switches         map[string]bool
-	placeNew         string
-	reseed           bool
-	drained          []string
-	socketsRate      float64
-	socketsBurst     int
-	socketsSet       bool
-	urnetworkEdge    connect.Id
-	urnetworkEdgeSet bool
-	fileClusters     map[string]sidecar.FileClusterGate
+	services map[string]sidecar.ServiceGate
+	// each service's listed networks, as its gate names them, enabled or not: what an add keeps
+	serviceNetworkIds map[string][]connect.Id
+	format2           sidecar.Format2Gate
+	switches          map[string]bool
+	placeNew          string
+	reseed            bool
+	drained           []string
+	socketsRate       float64
+	socketsBurst      int
+	socketsSet        bool
+	urnetworkEdge     connect.Id
+	urnetworkEdgeSet  bool
+	fileClusters      map[string]sidecar.FileClusterGate
+}
+
+// The networks a gate's yaml lists, none for an absent gate: one bad id costs only its own entry.
+func fakeServiceGateNetworkIds(gate *fakeGateYaml) []connect.Id {
+	networkIds := []connect.Id{}
+	if gate == nil {
+		return networkIds
+	}
+	for _, networkIdStr := range gate.Networks {
+		networkId, err := connect.ParseId(networkIdStr)
+		if err != nil {
+			continue
+		}
+		networkIds = append(networkIds, networkId)
+	}
+	return networkIds
 }
 
 // A gate from its yaml: absent is closed; one bad id costs only its own entry.
@@ -96,15 +121,7 @@ func fakeServiceGate(gate *fakeGateYaml) sidecar.ServiceGate {
 		return sidecar.ServiceGate{}
 	}
 	writes := gate.Writes == nil || *gate.Writes
-	networkIds := []connect.Id{}
-	for _, networkIdStr := range gate.Networks {
-		networkId, err := connect.ParseId(networkIdStr)
-		if err != nil {
-			continue
-		}
-		networkIds = append(networkIds, networkId)
-	}
-	return sidecar.NewServiceGate(gate.Enabled, writes, networkIds, gate.Percent)
+	return sidecar.NewServiceGate(gate.Enabled, writes, fakeServiceGateNetworkIds(gate), gate.Percent)
 }
 
 // Reads the text of a sidecar.yml as server's reader does (server/sidecar_config.go).
@@ -113,17 +130,19 @@ func parseFakeGates(text string) (*fakeGatesRead, error) {
 	if err := yaml.Unmarshal([]byte(text), y); err != nil {
 		return nil, err
 	}
+	serviceYamls := map[string]*fakeGateYaml{
+		sidecar.ServiceGateEvs:      y.Sidecar.Evs,
+		sidecar.ServiceGateGkm:      y.Sidecar.Gkm,
+		sidecar.ServiceGateSockets:  y.Sidecar.Sockets,
+		sidecar.ServiceGateTlsedge:  y.Sidecar.Tlsedge,
+		sidecar.ServiceGateMxedge:   y.Sidecar.Mxedge,
+		sidecar.ServiceGateSmtpedge: y.Sidecar.Smtpedge,
+		sidecar.ServiceGateDns:      y.Sidecar.Dns,
+		sidecar.ServiceGateCompute:  y.Sidecar.Compute,
+	}
 	read := &fakeGatesRead{
-		services: map[string]sidecar.ServiceGate{
-			sidecar.ServiceGateEvs:      fakeServiceGate(y.Sidecar.Evs),
-			sidecar.ServiceGateGkm:      fakeServiceGate(y.Sidecar.Gkm),
-			sidecar.ServiceGateSockets:  fakeServiceGate(y.Sidecar.Sockets),
-			sidecar.ServiceGateTlsedge:  fakeServiceGate(y.Sidecar.Tlsedge),
-			sidecar.ServiceGateMxedge:   fakeServiceGate(y.Sidecar.Mxedge),
-			sidecar.ServiceGateSmtpedge: fakeServiceGate(y.Sidecar.Smtpedge),
-			sidecar.ServiceGateDns:      fakeServiceGate(y.Sidecar.Dns),
-			sidecar.ServiceGateCompute:  fakeServiceGate(y.Sidecar.Compute),
-		},
+		services:          map[string]sidecar.ServiceGate{},
+		serviceNetworkIds: map[string][]connect.Id{},
 		switches: map[string]bool{
 			sidecar.GateSwitchPush:            y.Sidecar.Push != nil && y.Sidecar.Push.Enabled,
 			sidecar.GateSwitchWake:            y.Sidecar.Wake != nil && y.Sidecar.Wake.Enabled,
@@ -133,6 +152,10 @@ func parseFakeGates(text string) (*fakeGatesRead, error) {
 		placeNew:     y.Sidecar.PlaceNew,
 		reseed:       y.Sidecar.Reseed,
 		fileClusters: map[string]sidecar.FileClusterGate{},
+	}
+	for service, gate := range serviceYamls {
+		read.services[service] = fakeServiceGate(gate)
+		read.serviceNetworkIds[service] = fakeServiceGateNetworkIds(gate)
 	}
 	if format2 := y.Sidecar.Format2; format2 != nil {
 		read.format2 = sidecar.NewFormat2Gate(fakeServiceGate(format2), format2.Purge, format2.Drop)
@@ -192,18 +215,47 @@ func (self *FakeServiceGates) Set(text string) error {
 	return nil
 }
 
-// Opens one service to the networks given, keeping everything else: a test's shorthand for a file
-// that lists them.
+// Opens one service to the networks given and to no other it listed, keeping every other service: a
+// test's shorthand for a file whose gate lists them alone, writes on and no percent. So it replaces
+// the gate's list, and opening with none darkens every network the gate listed. AddServiceNetworks
+// keeps the list.
 func (self *FakeServiceGates) OpenService(service string, networkIds ...connect.Id) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
-	next := *self.read
-	next.services = map[string]sidecar.ServiceGate{}
-	for name, gate := range self.read.services {
-		next.services[name] = gate
+	listed := slices.Clone(networkIds)
+	self.read = self.read.withService(service, sidecar.NewServiceGate(true, true, listed, 0), listed)
+}
+
+// Opens one service to the networks given beside every network its gate lists, keeping everything
+// else: a test's shorthand for adding them to the file's list, so a world opening a second network
+// keeps the first open. An enabled gate keeps its writes switch and its percent. A gate the file
+// leaves disabled or absent opens as OpenService opens one, writes on and no percent, listing what it
+// listed and these.
+func (self *FakeServiceGates) AddServiceNetworks(service string, networkIds ...connect.Id) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	listed := slices.Clone(self.read.serviceNetworkIds[service])
+	for _, networkId := range networkIds {
+		if !slices.Contains(listed, networkId) {
+			listed = append(listed, networkId)
+		}
 	}
-	next.services[service] = sidecar.NewServiceGate(true, true, networkIds, 0)
-	self.read = &next
+	writes, percent := true, 0
+	if gate := self.read.services[service]; gate.Enabled() {
+		writes, percent = gate.Writes(), gate.Percent()
+	}
+	self.read = self.read.withService(service, sidecar.NewServiceGate(true, writes, listed, percent), listed)
+}
+
+// A read whose service has gate, listing networkIds, every other answer this read's. A read is never
+// changed once built, so readers holding this one keep it whole.
+func (self *fakeGatesRead) withService(service string, gate sidecar.ServiceGate, networkIds []connect.Id) *fakeGatesRead {
+	next := *self
+	next.services = maps.Clone(self.services)
+	next.services[service] = gate
+	next.serviceNetworkIds = maps.Clone(self.serviceNetworkIds)
+	next.serviceNetworkIds[service] = networkIds
+	return &next
 }
 
 func (self *FakeServiceGates) current() *fakeGatesRead {
