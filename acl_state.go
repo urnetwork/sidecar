@@ -799,6 +799,9 @@ func (self *AclState) indexRepos() error {
 		if !aclRepoInboxFits(row.GetKind(), row.GetInbox()) {
 			return aclRowsRefusal("%s has an invalid inbox role", field)
 		}
+		if !aclRepoLabelMacFits(row.GetKind(), row.GetLabelMac()) {
+			return aclRowsRefusal("%s has a label_mac that does not fit its kind", field)
+		}
 		if row.GetInbox() == protocol.RepoInbox_REPO_INBOX_ADMIN {
 			if adminInbox {
 				return aclRowsRefusal("%s repeats the network admin inbox", field)

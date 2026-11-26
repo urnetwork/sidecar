@@ -26,6 +26,7 @@
 package sidecar
 
 import (
+	"bytes"
 	"context"
 	cryptorand "crypto/rand"
 	"errors"
@@ -354,6 +355,9 @@ type EvsCreateRepoArgs struct {
 	Inbox protocol.RepoInbox
 	// GroupInbox selects the group role for callers predating the signed marker.
 	GroupInbox bool
+	// An agent repo's keyed label, which its RepoCreate files (QD-1434): AgentRepoLabelKey.Mac of the agent's name,
+	// exactly AgentRepoLabelMacByteCount bytes on the agent kind and nil on every other.
+	LabelMac []byte
 	// A person confirmed the creating command on /dev/tty or in an app's UI (§5.8).
 	Confirmed bool
 }
@@ -391,10 +395,13 @@ func (self *EvsClient) CreateRepo(ctx context.Context, args *EvsCreateRepoArgs) 
 	if !AclRepoKindOwnerFits(args.Kind, args.OwnerMemberId != nil) {
 		return nil, fmt.Errorf("%w: an owner member for an owner-bound kind and a Team scope's mailcfg alone", errInvalidSettings)
 	}
+	if !aclRepoLabelMacFits(args.Kind, args.LabelMac) {
+		return nil, fmt.Errorf("%w: a keyed label on an agent repo alone, of %d bytes", errInvalidSettings, AgentRepoLabelMacByteCount)
+	}
 	if self.args.FileStatement == nil {
 		return nil, ErrEvsNoStatementPoster
 	}
-	if args.ResumeRepoId == nil && aclRepoCreateUsesAgentRepos(&protocol.RepoCreate{Kind: args.Kind, Inbox: args.inboxRole()}) {
+	if args.ResumeRepoId == nil && aclRepoCreateUsesAgentRepos(&protocol.RepoCreate{Kind: args.Kind, Inbox: args.inboxRole(), LabelMac: args.LabelMac}) {
 		// §16.6's before row: a device files no entry that uses a feature its network has not turned on
 		if err := self.checkAgentReposOn(); err != nil {
 			return nil, err
@@ -480,7 +487,7 @@ func (self *EvsClient) placeRepo(ctx context.Context, args *EvsCreateRepoArgs) (
 		if args.proposedRepoId != nil {
 			repoId = *args.proposedRepoId
 		}
-		create := &protocol.RepoCreate{RepoId: repoId.Bytes(), Kind: args.Kind, Inbox: args.inboxRole()}
+		create := &protocol.RepoCreate{RepoId: repoId.Bytes(), Kind: args.Kind, Inbox: args.inboxRole(), LabelMac: bytes.Clone(args.LabelMac)}
 		if err := self.args.FileStatement(ctx, bridge.SignedType_SIGNED_REPO_CREATE, create); err != nil {
 			return Id{}, fmt.Errorf("evs: RepoCreate: %w", err)
 		}

@@ -8,6 +8,7 @@ package sidecar
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"slices"
 	"strings"
@@ -218,6 +219,13 @@ func (self *testAgentsAuthority) MemberAgentRepo(memberId Id, repoId Id) bool {
 	return found && owner == memberId
 }
 
+func (self *testAgentsAuthority) MemberAgentRepoLabeled(memberId Id, repoId Id, labelMac []byte) bool {
+	self.world.stateLock.Lock()
+	defer self.world.stateLock.Unlock()
+	owner, found := self.world.agentRepos[repoId]
+	return found && owner == memberId && len(labelMac) == AgentRepoLabelMacByteCount && bytes.Equal(self.world.agentRepoLabels[repoId], labelMac)
+}
+
 func (self *testAgentsAuthority) AgentReposOn() bool {
 	self.world.stateLock.Lock()
 	defer self.world.stateLock.Unlock()
@@ -238,17 +246,20 @@ type testAgentCardsWorld struct {
 	otherMember Id
 	otherDevice Id
 
-	stateLock    sync.Mutex
-	featureOn    bool
-	members      map[Id]Id
-	consented    map[Id]bool
-	agentsRepos  map[Id]Id
-	agentRepos   map[Id]Id
-	repos        map[Id]*testAgentsRepo
-	created      []protocol.RepoKind
-	writeRefused map[Id]bool
-	writeCount   int
-	beforeWrite  func()
+	stateLock   sync.Mutex
+	featureOn   bool
+	members     map[Id]Id
+	consented   map[Id]bool
+	agentsRepos map[Id]Id
+	agentRepos  map[Id]Id
+	repos       map[Id]*testAgentsRepo
+	created     []protocol.RepoKind
+	// each agent repo's keyed label as its RepoCreate filed it, and the network's K_label, nil where none derives
+	agentRepoLabels map[Id][]byte
+	labelKey        *AgentRepoLabelKey
+	writeRefused    map[Id]bool
+	writeCount      int
+	beforeWrite     func()
 	// each device's agent ids by label, as its keychain keeps them
 	agentIds map[Id]map[string]Id
 	revoked  map[Id]bool
@@ -277,6 +288,12 @@ func newTestAgentCardsWorld(t *testing.T) *testAgentCardsWorld {
 	}
 	world.members = map[Id]Id{world.laptop: world.member, world.phone: world.member, world.cloud: world.member, world.otherDevice: world.otherMember}
 	world.consented = map[Id]bool{world.laptop: true, world.phone: true, world.otherDevice: true}
+	world.agentRepoLabels = map[Id][]byte{}
+	labelKey, err := newAgentRepoLabelKey(testConfigId("agents network"), bytes.Repeat([]byte{0x5a}, agentRepoLabelKeyByteCount))
+	if err != nil {
+		t.Fatal(err)
+	}
+	world.labelKey = labelKey
 	return world
 }
 
@@ -324,6 +341,9 @@ func (self *testAgentCardsWorld) client(sidecarId Id) *AgentsClient {
 		CreateRepo: func(ctx context.Context, args *EvsCreateRepoArgs) (Id, error) {
 			self.stateLock.Lock()
 			defer self.stateLock.Unlock()
+			if !aclRepoLabelMacFits(args.Kind, args.LabelMac) {
+				return Id{}, fmt.Errorf("%w: a label of %d bytes on a %s repo", errInvalidSettings, len(args.LabelMac), args.Kind)
+			}
 			repoId := NewId()
 			memberId := self.members[sidecarId]
 			self.created = append(self.created, args.Kind)
@@ -334,9 +354,18 @@ func (self *testAgentCardsWorld) client(sidecarId Id) *AgentsClient {
 				}
 			case protocol.RepoKind_REPO_KIND_AGENT:
 				self.agentRepos[repoId] = memberId
+				self.agentRepoLabels[repoId] = bytes.Clone(args.LabelMac)
 			}
 			self.repo(repoId)
 			return repoId, nil
+		},
+		LabelKey: func(ctx context.Context) (*AgentRepoLabelKey, error) {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			if self.labelKey == nil {
+				return nil, ErrAgentRepoLabelKey
+			}
+			return self.labelKey, nil
 		},
 		AgentId: func(label string) (Id, error) {
 			self.stateLock.Lock()

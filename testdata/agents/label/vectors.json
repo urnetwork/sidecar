@@ -1,0 +1,26 @@
+{
+  "comment": "QD-1434's agent repo label: K_ref = HKDF-SHA256(RK_1, salt config_repo_id, info 'UR evs 1.0 ref' || u64be(1)); K_label = HKDF-SHA256(K_ref, salt network_id, info 'urnetwork-sidecar-v1/agent-repo-label'), 32 bytes; label_mac = HMAC-SHA256(K_label, 'agent/' || name)[:16]. Computed by an implementation apart from the Go one.",
+  "network_id": "0102030405060708090a0b0c0d0e0f10",
+  "config_repo_id": "2122232425262728292a2b2c2d2e2f30",
+  "rk1": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+  "k_ref": "8d60319382fb8fab3612b22f4adfb96917ac0a5b03bb1d21bb2872d1eab5e508",
+  "k_label": "ff989c6909a34444a48b75350e5f036e233c6e67a2e62fda7dfd32cbd7567aa6",
+  "labels": [
+    {
+      "name": "me",
+      "label_mac": "e4866f9738a5cd905f6e83d11c06bc8c"
+    },
+    {
+      "name": "scout",
+      "label_mac": "aaafbbdb4e23642bf0027fcc8c85bfde"
+    },
+    {
+      "name": "code-review-2",
+      "label_mac": "75e2c00b1622e27d291260379989976d"
+    },
+    {
+      "name": "a",
+      "label_mac": "c2484871e068a0d4d6d765ace7ccbe4b"
+    }
+  ]
+}

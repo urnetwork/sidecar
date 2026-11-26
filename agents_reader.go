@@ -51,6 +51,8 @@ type AgentsAuthority interface {
 	AgentsRepo(memberId Id) (Id, bool)
 	// Whether repoId is a standing agent repo the log binds to memberId (AclState.MemberAgentRepo).
 	MemberAgentRepo(memberId Id, repoId Id) bool
+	// Whether it is one whose RepoCreate filed labelMac, an agent name's keyed label (AclState.MemberAgentRepoLabeled).
+	MemberAgentRepoLabeled(memberId Id, repoId Id, labelMac []byte) bool
 	// Whether the network's agent_repos feature is on (ConfigState.AuthFeatureOn).
 	AgentReposOn() bool
 }
@@ -98,6 +100,11 @@ func (self *agentsStateAuthority) AgentsRepo(memberId Id) (Id, bool) {
 // Whether the log binds the standing agent repo to memberId.
 func (self *agentsStateAuthority) MemberAgentRepo(memberId Id, repoId Id) bool {
 	return self.acl.MemberAgentRepo(memberId, repoId)
+}
+
+// Whether the log binds the standing agent repo to memberId under labelMac.
+func (self *agentsStateAuthority) MemberAgentRepoLabeled(memberId Id, repoId Id, labelMac []byte) bool {
+	return self.acl.MemberAgentRepoLabeled(memberId, repoId, labelMac)
 }
 
 // Whether the state's newest base turns agent_repos on.

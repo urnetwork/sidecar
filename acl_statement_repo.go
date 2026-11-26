@@ -12,8 +12,10 @@
 //	                api alone the team tier (AclStatementNeedsTeamTier); config: none, since §7.9's bootstrap creates
 //	                it (plan-ACL-small-readings #4). The inbox marker: group or admin on a general repo, admin a config
 //	                writer's once a network; team, the Team inbox (DESIGN-COMPUTE §20.4), a config writer's general
-//	                repo, one standing a network. A kind or marker of the agent_repos feature only past the base that
-//	                turns it on (configAclAgentReposFeature)
+//	                repo, one standing a network. label_mac, an agent repo's keyed label (QD-1434), on the agent kind
+//	                exactly AgentRepoLabelMacByteCount bytes and on every other none, read by its length alone. A kind,
+//	                marker or label of the agent_repos feature only past the base that turns it on
+//	                (configAclAgentReposFeature)
 //	RepoAdmin       a repo admin or a config writer; in an owner-bound repo an add only by a consented device of its
 //	                owner, of a consented device of its owner (§15.7); never an add in the directory
 //	RepoGrant       a repo admin or a config writer, in general, record, team_record and the network's mailcfg
@@ -234,10 +236,26 @@ func AclRepoIsTeamInbox(repo *protocol.AclRepo) bool {
 	return repo != nil && repo.GetInbox() == protocol.RepoInbox_REPO_INBOX_TEAM && aclRepoInboxFits(repo.GetKind(), repo.GetInbox())
 }
 
-// Whether a RepoCreate uses the agent_repos feature (DESIGN-COMPUTE §16.6's table): a kind agents or agent, or the
-// team inbox marker, which every reader refuses at a position before the base that turns the feature on.
+// Whether a RepoCreate uses the agent_repos feature (DESIGN-COMPUTE §16.6's table): a kind agents or agent, the team
+// inbox marker or an agent repo's label (QD-1434), which every reader refuses at a position before the base that turns
+// the feature on.
 func aclRepoCreateUsesAgentRepos(create *protocol.RepoCreate) bool {
-	return aclRepoKindAgentRepos(create.GetKind()) || create.GetInbox() == protocol.RepoInbox_REPO_INBOX_TEAM
+	return aclRepoKindAgentRepos(create.GetKind()) || create.GetInbox() == protocol.RepoInbox_REPO_INBOX_TEAM ||
+		len(create.GetLabelMac()) != 0
+}
+
+// An agent repo's keyed label's size (QD-1434): the first 16 bytes of HMAC-SHA256 of agent/<name> under K_label
+// (agents_label.go), a format constant every reader and api hold alike.
+const AgentRepoLabelMacByteCount = 16
+
+// Whether a RepoCreate's or a row's label_mac fits its kind: exactly AgentRepoLabelMacByteCount bytes on an agent repo,
+// which every one carries, and none on any other kind. api reads its length alone; only the network's sidecars, which
+// derive K_label, read what it binds.
+func aclRepoLabelMacFits(kind protocol.RepoKind, labelMac []byte) bool {
+	if kind == protocol.RepoKind_REPO_KIND_AGENT {
+		return len(labelMac) == AgentRepoLabelMacByteCount
+	}
+	return len(labelMac) == 0
 }
 
 // RepoCreate: who may create this kind and inbox role, becoming its admin.
@@ -256,6 +274,9 @@ func (self *AclState) checkRepoCreate(statement *AclStatement, create *protocol.
 	verdict := &AclStatementVerdict{Signer: signer.id}
 	if !aclRepoInboxFits(create.GetKind(), create.GetInbox()) {
 		return nil, fmt.Errorf("%w: invalid inbox role for the repo kind", ErrConfigRule)
+	}
+	if !aclRepoLabelMacFits(create.GetKind(), create.GetLabelMac()) {
+		return nil, fmt.Errorf("%w: a label_mac of %d bytes on a %s repo", ErrConfigRule, len(create.GetLabelMac()), create.GetKind())
 	}
 	if create.GetInbox() == protocol.RepoInbox_REPO_INBOX_ADMIN {
 		if !signer.configWriter {

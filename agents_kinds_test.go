@@ -71,6 +71,9 @@ func newTestAgentsKindsCast(hasDocument bool) *testAgentsKindsCast {
 	for _, kind := range []protocol.RepoKind{protocol.RepoKind_REPO_KIND_AGENTS, protocol.RepoKind_REPO_KIND_AGENT} {
 		repoId, row := fixture.repo(kind, cast.owner)
 		row.ConsentedSidecarIds = consented
+		if kind == protocol.RepoKind_REPO_KIND_AGENT {
+			row.LabelMac = testAgentRepoLabelMac("cast agent")
+		}
 		row.Admins = []*protocol.AclRepoAdminRow{{SidecarId: cast.laptop.Bytes(), Signer: cast.laptop.Bytes(), At: fixture.next()}}
 		row.Shares = []*protocol.AclRepoShareRow{{Subject: cast.cloud.Bytes(), Signer: cast.laptop.Bytes(), At: fixture.next()}}
 		if kind == protocol.RepoKind_REPO_KIND_AGENTS {
@@ -261,6 +264,13 @@ func TestTeamInboxReadersAndWriters(t *testing.T) {
 	}
 }
 
+// A 16-byte stand-in for an agent repo's keyed label, fixed by its text: the form every agent repo's RepoCreate and row
+// carry (QD-1434), whose key agents_label_test.go holds.
+func testAgentRepoLabelMac(text string) []byte {
+	digest := sha256.Sum256([]byte("agents test label " + text))
+	return digest[:AgentRepoLabelMacByteCount]
+}
+
 // The creations the agent_repos feature turns on, at the tip of net: an agents and an agent repo by the member's
 // consented device, and the Team inbox by the network's owner device, a config writer.
 func testAgentReposCreations(net *testConfigNet, device testConfigDevice, label string) [][]byte {
@@ -270,7 +280,8 @@ func testAgentReposCreations(net *testConfigNet, device testConfigDevice, label 
 	}
 	return [][]byte{
 		statement(device, &protocol.RepoCreate{RepoId: testConfigId(label + " agents").Bytes(), Kind: protocol.RepoKind_REPO_KIND_AGENTS}),
-		statement(device, &protocol.RepoCreate{RepoId: testConfigId(label + " agent").Bytes(), Kind: protocol.RepoKind_REPO_KIND_AGENT}),
+		statement(device, &protocol.RepoCreate{RepoId: testConfigId(label + " agent").Bytes(), Kind: protocol.RepoKind_REPO_KIND_AGENT,
+			LabelMac: testAgentRepoLabelMac(label)}),
 		statement(net.owner, &protocol.RepoCreate{RepoId: testConfigId(label + " team inbox").Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL,
 			Inbox: protocol.RepoInbox_REPO_INBOX_TEAM}),
 	}
@@ -520,10 +531,13 @@ func TestTeamInboxMarkerOnlyConfigWriterOnce(t *testing.T) {
 	}
 }
 
-// Gives a world's owner-bound repos consentedId as their consented device.
+// Gives a world's owner-bound repos consentedId as their consented device, and each agent repo its label.
 func testAgentsWorldRepos(world *aclCompileWorld, consentedId Id) {
 	for _, row := range world.statements.Repos {
 		row.ConsentedSidecarIds = [][]byte{consentedId.Bytes()}
+		if row.Kind == protocol.RepoKind_REPO_KIND_AGENT {
+			row.LabelMac = testAgentRepoLabelMac(Id(row.RepoId).String())
+		}
 	}
 }
 
@@ -643,7 +657,7 @@ func TestAgentReposImplicitDepositRule(t *testing.T) {
 	// a repo the rows gain after the base takes the rule at once: the same rows, one agent repo more
 	laterId := NewId()
 	onRows.Repos = append(onRows.Repos, &protocol.AclRepo{RepoId: laterId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_AGENT,
-		OwnerMemberId: owner.Bytes(), ConsentedSidecarIds: [][]byte{laptop.Bytes()}})
+		OwnerMemberId: owner.Bytes(), ConsentedSidecarIds: [][]byte{laptop.Bytes()}, LabelMac: testAgentRepoLabelMac("later")})
 	later, err := NewAclState(onRows, world.view())
 	if err != nil {
 		t.Fatal(err)
@@ -739,5 +753,85 @@ func TestAgentRepoKindRowsRefused(t *testing.T) {
 	rule.Via = []*protocol.AclTarget{{RepoKind: protocol.RepoKind_REPO_KIND_AGENT}}
 	if _, err := NewAclState(fixture.rows, fixture.view); !errors.Is(err, ErrAclRowsInvalid) {
 		t.Errorf("a via naming a repo kind: %v", err)
+	}
+}
+
+// QD-1434's keyed label on the log (DESIGN-COMPUTE §20.4, §20.7): past the feature's base an agent repo's RepoCreate
+// carries exactly AgentRepoLabelMacByteCount bytes and every other kind's none, each refused otherwise; the fold keeps
+// the label in the repo's row, and a reader that recomputes it finds the repo the member's, refusing another label,
+// another member and a repo of another kind. Before the base a label on any RepoCreate uses the feature, refused alike
+// by every reader, and rows holding a label that does not fit its kind build no state.
+func TestAgentRepoLabelOnTheLog(t *testing.T) {
+	net := newTestConfigNet(t)
+	member, device := net.consentedMember("labels member")
+	other, _ := net.consentedMember("labels other member")
+	create := func(label string, kind protocol.RepoKind, labelMac []byte) *protocol.RepoCreate {
+		return &protocol.RepoCreate{Header: net.header(), RepoId: testConfigId(label).Bytes(), Kind: kind, LabelMac: labelMac}
+	}
+	scout := testAgentRepoLabelMac("scout")
+	// before the base a label is the feature's, on a general repo too
+	net.mustRefuse(device, bridge.SignedType_SIGNED_REPO_CREATE, create("early labeled general", protocol.RepoKind_REPO_KIND_GENERAL, scout), ErrAuthFeatureOff)
+	net.statesAt[net.n] = net.log.State()
+	base := testFeatureBase(t, net, AuthFeatureAgentRepos)
+	if _, err := net.log.Apply(base, net.source); err != nil {
+		t.Fatal(err)
+	}
+	net.statesAt[net.n] = net.log.State()
+	net.verdicts[net.n] = ConfigVerdict{Kind: bridge.AuthEntryKindBase}
+
+	for _, refused := range []*protocol.RepoCreate{
+		create("unlabeled agent", protocol.RepoKind_REPO_KIND_AGENT, nil),
+		create("short label", protocol.RepoKind_REPO_KIND_AGENT, scout[:AgentRepoLabelMacByteCount-1]),
+		create("long label", protocol.RepoKind_REPO_KIND_AGENT, append(bytes.Clone(scout), 0)),
+		create("labeled agents", protocol.RepoKind_REPO_KIND_AGENTS, scout),
+		create("labeled general", protocol.RepoKind_REPO_KIND_GENERAL, scout),
+	} {
+		net.mustRefuse(device, bridge.SignedType_SIGNED_REPO_CREATE, refused, ErrConfigRule)
+		if net.log.State().Repo(Id(refused.GetRepoId())) != nil {
+			t.Fatalf("%x folded", refused.GetRepoId())
+		}
+	}
+	net.mustPost(device, bridge.SignedType_SIGNED_REPO_CREATE, create("agent scout", protocol.RepoKind_REPO_KIND_AGENT, scout))
+	scoutId := testConfigId("agent scout")
+	row := net.log.State().Repo(scoutId)
+	if row == nil || !bytes.Equal(row.GetLabelMac(), scout) || !bytes.Equal(row.GetOwnerMemberId(), member.Bytes()) {
+		t.Fatalf("the agent repo's row: %v", row)
+	}
+	acl, err := net.log.State().Acl()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !acl.MemberAgentRepoLabeled(member, scoutId, scout) {
+		t.Fatal("the reader does not find scout's repo labeled scout")
+	}
+	for _, c := range []struct {
+		name     string
+		memberId Id
+		labelMac []byte
+	}{
+		{name: "another name's label", memberId: member, labelMac: testAgentRepoLabelMac("reviewer")},
+		{name: "another member", memberId: other, labelMac: scout},
+		{name: "a short label", memberId: member, labelMac: scout[:8]},
+		{name: "no label", memberId: member},
+	} {
+		if acl.MemberAgentRepoLabeled(c.memberId, scoutId, c.labelMac) {
+			t.Errorf("%s: taken", c.name)
+		}
+	}
+	net.mustPost(device, bridge.SignedType_SIGNED_REPO_CREATE, create("agents", protocol.RepoKind_REPO_KIND_AGENTS, nil))
+	if acl, err = net.log.State().Acl(); err != nil || acl.MemberAgentRepoLabeled(member, testConfigId("agents"), scout) {
+		t.Fatalf("an agents repo reads as labeled: %v", err)
+	}
+
+	// rows whose label does not fit their kind build no state
+	for _, row := range []*protocol.AclRepo{
+		{RepoId: NewId().Bytes(), Kind: protocol.RepoKind_REPO_KIND_AGENT, OwnerMemberId: member.Bytes()},
+		{RepoId: NewId().Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL, LabelMac: scout},
+	} {
+		fixture := newAclTestFixture()
+		fixture.rows.Repos = append(fixture.rows.Repos, row)
+		if _, err := NewAclState(fixture.rows, fixture.view); !errors.Is(err, ErrAclRowsInvalid) {
+			t.Errorf("rows with %v: %v", row, err)
+		}
 	}
 }
