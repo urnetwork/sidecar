@@ -2945,3 +2945,36 @@ _S784 = "and DESIGN-COMPUTE.md's support skill, 783 and 784. "
 assert STATUS.count(_S784) == 1, 'status moved'
 STATUS = STATUS.replace(_S784, "and DESIGN-COMPUTE.md's support skill, 783 and 784, and the build's answers after "
                         "it, owner decisions 785 to 789. ")
+
+# Owner decisions 790-792 (2026-11-25): the build's answers recorded after the twelfth fold (QD-1405 to QD-1407 and
+# QD-1419), folded by the thirteenth fold, track designmd-fold-co47-to-co49; QD-1408 to QD-1418, the compute plan's,
+# take no number.
+INDEX += [
+    (790, "The file clusters' cap judges no host or store",
+     "A request the cap's queue left under a second marks no host; the clusters' checks and the stores' probes go "
+     'uncapped.'),
+    (791, 'The user root in the embedded host table',
+     "The embedded host table carries user_root, which the published list leaves out, so labels resolve from M2."),
+    (792, "A listen's grant lifetime in the sdk",
+     "SidecarSockets.ListenExpires asks a tls/ or smtp/ listen's grant lifetime; GetGrantExpiresMillis reads its end."),
+]
+for _n, _note in [
+        (282, ' Extended by @@OD:791@@: the table also carries the user root.'),
+        (687, ' Extended by @@OD:792@@: an app asks it through the sdk\'s `ListenExpires`.'),
+        (780, ' Narrowed by @@OD:790@@: a request the queue left under a second marks no host, and checks go uncapped.'),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 793))
+DATES.update({_n: '2026-11-25' for _n in range(790, 793)})
+_D789 = "and the bridge reading the wall clock again on a wake or a clock step (789). "
+assert DECISIONS_INTRO.count(_D789) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D789, _D789 + "A thirteenth fold numbers the build's answers recorded after the twelfth: the file clusters' cap "
+    "judging no host or store (790), narrowing @@OD:780@@ beside @@OD:787@@; the user root in the embedded host table "
+    "(791), extending @@OD:282@@; and a listen's grant lifetime in the sdk (792), extending @@OD:687@@. ")
+_S789 = "and the build's answers after it, owner decisions 785 to 789. "
+assert STATUS.count(_S789) == 1, 'status moved'
+STATUS = STATUS.replace(_S789, "and the build's answers after it, owner decisions 785 to 789, and the build's answers "
+                        "of 2026-11-25, owner decisions 790 to 792. ")
