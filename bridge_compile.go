@@ -314,11 +314,13 @@ type bridgeCompiler struct {
 	// Each activated grant's action as stored, by grant id, those recovered from the authenticated head at this pin
 	// for a cold start included: the sealed details of dial grants' ports and route grants' prefixes and ports.
 	grantActions map[string][]byte
-	// The opener of those actions' details in S's network under the view's keys, which route grants are read through
-	// (aclReadGrantRoute), and each activated route grant's opened detail, nil for one that did not open here, by grant
-	// id: read once a compile (bridge_compile_grants.go).
-	grantDetails *aclStateGrantDetails
-	grantRoutes  map[string]*AclLocalRule
+	// The opener of those actions' details in S's network under the view's keys, which dial and route grants are read
+	// through (aclOpenGrantDetail); each activated grant's opening by grant id, made when first asked; and each activated
+	// route grant's route reading, nil for one that did not read here, by grant id: each made once a compile
+	// (bridge_compile_grants.go).
+	grantDetails  *aclStateGrantDetails
+	grantOpenings map[string]*bridgeCompileGrantOpening
+	grantRoutes   map[string]*AclLocalRule
 	// t, S(n)'s time, as ms and as a time
 	t   int64
 	now time.Time
@@ -362,20 +364,21 @@ func CompileBridgeState(view BridgeConfigView, local *BridgeCompileLocal, settin
 	}
 	state := view.State()
 	compiler := &bridgeCompiler{
-		view:         view,
-		local:        local,
-		settings:     compileSettings,
-		state:        state,
-		acl:          view.Acl(),
-		aclLocal:     view.AclLocal(),
-		grantActions: state.grantActionsAtHead(view.Head()),
-		grantRoutes:  map[string]*AclLocalRule{},
-		t:            state.TimeMs(),
-		now:          time.UnixMilli(state.TimeMs()),
-		self:         local.SidecarId,
-		selfSubject:  AclSidecarSubject(local.SidecarId),
-		bindings:     local.Bindings,
-		compiled:     &BridgeCompiled{},
+		view:          view,
+		local:         local,
+		settings:      compileSettings,
+		state:         state,
+		acl:           view.Acl(),
+		aclLocal:      view.AclLocal(),
+		grantActions:  state.grantActionsAtHead(view.Head()),
+		grantOpenings: map[string]*bridgeCompileGrantOpening{},
+		grantRoutes:   map[string]*AclLocalRule{},
+		t:             state.TimeMs(),
+		now:           time.UnixMilli(state.TimeMs()),
+		self:          local.SidecarId,
+		selfSubject:   AclSidecarSubject(local.SidecarId),
+		bindings:      local.Bindings,
+		compiled:      &BridgeCompiled{},
 
 		ledgerSettings: settings,
 	}

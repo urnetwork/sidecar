@@ -13,8 +13,9 @@
 //	served     S's routes in force, an exposed prefix read into the block, a withdrawn one until its drain's end
 //	subjects   each sidecar that reaches S, its member, tag, client ids and dial, route and exit rows, one a rule and
 //	           port range, ports and prefixes from AclLocalPolicy or an activated grant's sealed detail (a dial
-//	           grant's ports at S, a route grant's prefixes and ports: bridge_compile_grants.go); a port-limited rule
-//	           whose ports the device cannot open gives no row
+//	           grant's ports at S, a route grant's prefixes and ports: bridge_compile_grants.go, whose detail that
+//	           does not open here waits or alarms alike for both); a port-limited rule whose ports the device cannot
+//	           open gives no row
 //	egress     S's mode from the rows' BridgeRows, and under exits the exits of S's own spec, else of the first atom S
 //	           holds that has one, each a link, and whether that spec requires default egress on (QD-1053)
 //	untagged   autogroup:untagged's rows at S, what an sdk provider gives a sealed subject no row binds (QD-733)
@@ -697,9 +698,10 @@ const (
 
 // The rows of a list of reach rules, by grant id, prefix, protocol and first port: each rule's protocols and port
 // ranges, and on route rows its CIDRs' parts of what S serves, or for a rule with no CIDR that names S a destination
-// what S serves whole (routeRowPrefixes). An activated grant's ports and prefixes are its sealed detail's: a dial
-// grant's the ports it names at S (grantPortRule), and a route or exit grant's its prefixes and ports
-// (grantRouteRule). A rule expired at t gives none.
+// what S serves whole (routeRowPrefixes). An activated grant's ports and prefixes are its sealed detail's, opened once
+// a compile for both readings, each detail that does not open here waiting or alarming as bridge_compile_grants.go
+// says: a port-limited dial grant's the ports it names at S (grantDialRule), and a route or exit grant's its prefixes
+// and ports (grantRouteRule). A rule expired at t gives none.
 func (self *bridgeCompiler) reachRows(rules []AclReachRule, kind bridgeCompileRowKind) []*bridge.BridgeRuleReach {
 	rows := []*bridge.BridgeRuleReach{}
 	for _, rule := range rules {
@@ -713,7 +715,7 @@ func (self *bridgeCompiler) reachRows(rules []AclReachRule, kind bridgeCompileRo
 		case kind != bridgeCompileRowDial:
 			rule, local = self.grantRouteRule(rule)
 		case rule.PortsLimited:
-			local = self.state.grantPortRule(self.grantActions[string(rule.GrantId)], self.self, self.view.RepoKeyAt)
+			local = self.grantDialRule(rule)
 		}
 		ports, ok := bridgeCompilePortRows(rule, local)
 		if !ok {
