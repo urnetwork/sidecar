@@ -17,8 +17,21 @@
 // connect 634825b4, 1c3ee536 and c9105b02 the encryption layer on that path waits for no resend either: the listener
 // opens the restarted client's first sealed Pack as soon as it holds the client's identity proof, a new session seals
 // nothing before the peer can open it, and what the listener sealed under the old session is sealed again under the
-// new one as soon as the restarted client seals under it. So the
-// edge's dispatcher reads the Net's clock, as the listener's does, and nothing here moves it: no deadline of a
+// new one as soon as the restarted client seals under it. Since connect 7ef220fd, 8b49af6a, 668988dc and 30597f8c the
+// listener takes the restarted client's nack, or its handshake on a carrier that replaced a live one, as the loss of
+// its session: it writes again at once what went out in plaintext, heads each sequence the client lost with its whole
+// contract rather than waiting to be asked for it, and seals again under the new session once that session seals.
+//
+// The listener's contract to the id is for Service, under the slot's Service key, and connect verifies a contract only
+// under a mode its receiver provides. The restarted client provides Service under that key from before it can receive
+// (SidecarPlatformClientArgs.ApplyProvide), so the first copy of the contract that reaches it verifies. Before, the
+// pool set Service only once its platform client was open, while the Net already delivered to it: a head that reached
+// it first was refused, which left the listener's sequence dropped until the restarted open had no answer at the edge's
+// 15 s DefaultCallTimeout, in about one run in 6,400, and, from connect ccf9e38a, which hears the sequence again once
+// the client's modes change, until the listener's next copy, one resend of about 0.6 s, in about one run in 1,400.
+// TestEdgeClientPoolRestartedInPlaceTakesItsListenersContractAtOnce holds that window open.
+//
+// The edge's dispatcher reads the Net's clock, as the listener's does, and nothing here moves it: no deadline of a
 // dispatcher's, its DefaultCallTimeout, a read's or its keepalive's, ends a wait that connect has yet to answer, as the
 // edge's 15 s DefaultCallTimeout did in listen-expires' landcheck (2026-11-23). Each wait ends on its event, the open's
 // answer or the bytes, or at its step's bound, a broken run's, in real time.
@@ -27,7 +40,10 @@ package sidecar_test
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
+	"sync"
 	"testing"
 	"time"
 
@@ -38,7 +54,7 @@ import (
 	"github.com/urnetwork/sidecar/sidecartest"
 )
 
-// The restart test's bounds (QD-702), each in real time and each a broken run's.
+// The restart tests' bounds (QD-702), each in real time and each a broken run's.
 type edgeRestartNetSettings struct {
 	// How long after the restart the restarted pool's stream has to open and carry bytes both ways: the edge dialer's
 	// AcceptTimeout, 5 s (D-SOCK-6), after which a ticket's open goes to the backup, so a run past it is one whose first
@@ -50,10 +66,10 @@ type edgeRestartNetSettings struct {
 	// at the 99th percentile, and past 0.5 s in none of 6,400 runs at load 37 to 40, one of 6,399 beside 28 CPU burners
 	// and none of 320 under the race detector, where the build before took it in 45, 86 and, earlier, 6 of 320
 	// (2026-11-24). In about one run in 6,400, with those fixes and without, the restarted open had no answer at the
-	// edge's DefaultCallTimeout: open, not yet traced. Each pool keeps the edge's own DefaultCallTimeout, 15 s, past this
-	// bound: an open hands connect what its own deadline leaves, which on a clock nothing moves is all of it, and connect
-	// holds the open's send that long, in real time, for the restarted client's session, so only this bound ends a
-	// broken run.
+	// edge's DefaultCallTimeout, which connect-restart-latency-followups traced to the refused contract the file header
+	// describes. Each pool keeps the edge's own DefaultCallTimeout, 15 s, past this bound: an open hands connect what its
+	// own deadline leaves, which on a clock nothing moves is all of it, and connect holds the open's send that long, in
+	// real time, for the restarted client's session, so only this bound ends a broken run.
 	RecoveryTimeout time.Duration
 	// Each step before the restart.
 	StepTimeout time.Duration
@@ -118,12 +134,24 @@ func edgeRestartRead(t *testing.T, ctx context.Context, stream *sidecar.Subproto
 	}
 }
 
-// The edge's pool closes mid-stream, as a crash or a deploy's SIGTERM ends it, and is made again on the same source, so
-// its client has the same id. The listener's last write before the restart is still waiting for its ack, so its send
-// sequence to that id lives through the restart with the old process's contract, as a live listener's does. The
-// restarted client's stream to the listener opens, and carries bytes both ways, within RecoveryTimeout.
-func TestEdgeClientPoolRestartedInPlaceReachesItsListenerAgain(t *testing.T) {
-	settings := defaultEdgeRestartNetSettings()
+// A listener on the Net, providing Service and listening on the target for edges, and an edge pool of one client, the
+// two providing Service to each other, whose stream to the listener has carried bytes: what a restart test restarts
+// the pool from.
+type edgeRestartNet struct {
+	settings         *edgeRestartNetSettings
+	listenerClientId connect.Id
+	// each stream the listener accepts, in order
+	incomings <-chan *sidecar.StreamIncoming
+	// what the pool was made on, which a restart makes it again on
+	args         *sidecar.EdgeClientPoolArgs
+	edgeClientId connect.Id
+	pool         *sidecar.EdgeClientPool
+	// the listener's end of the pool's stream
+	incoming *sidecar.StreamIncoming
+}
+
+func newEdgeRestartNet(t *testing.T, settings *edgeRestartNetSettings) *edgeRestartNet {
+	t.Helper()
 	net := sidecartest.NewNet(t.Context(), nil)
 	t.Cleanup(net.Close)
 	sidecars, _, err := net.AddSubprotocolSidecars("listener")
@@ -177,31 +205,138 @@ func TestEdgeClientPoolRestartedInPlaceReachesItsListenerAgain(t *testing.T) {
 		t.Fatal(err)
 	}
 	edgeRestartRead(t, stepCtx, stream, "before", "the edge before the restart")
+	return &edgeRestartNet{
+		settings:         settings,
+		listenerClientId: listenerClientId,
+		incomings:        incomings,
+		args:             args,
+		edgeClientId:     edgeClientId,
+		pool:             pool,
+		incoming:         incoming,
+	}
+}
 
-	// the edge goes away mid-stream; the listener's next write waits for an ack that the old process never sends
-	pool.Close()
-	if _, err := incoming.Stream.Write([]byte("held")); err != nil {
+// The edge goes away mid-stream, as a crash or a deploy's SIGTERM ends it, and the listener writes to it: the write
+// waits for an ack that the old process never sends, so the listener's send sequence to the id lives through the
+// restart with the old process's contract, as a live listener's does.
+func (self *edgeRestartNet) closeMidStream(t *testing.T) {
+	t.Helper()
+	self.pool.Close()
+	if _, err := self.incoming.Stream.Write([]byte("held")); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// The restarted pool's client has the old one's id, and its stream to the listener opens and carries bytes both ways,
+// each within ctx.
+func (self *edgeRestartNet) reachAgain(t *testing.T, ctx context.Context, restarted *sidecar.EdgeClientPool) {
+	t.Helper()
+	if connect.Id(restarted.Clients()[0].ClientId) != self.edgeClientId {
+		t.Fatal("the restarted pool's client took another id")
+	}
+	restartedStream, restartedIncoming := edgeRestartOpen(t, ctx, restarted, self.listenerClientId, self.settings.Target, self.incomings)
+	if _, err := restartedIncoming.Stream.Write([]byte("after")); err != nil {
+		t.Fatal(err)
+	}
+	edgeRestartRead(t, ctx, restartedStream, "after", "the restarted edge")
+	if _, err := restartedStream.Write([]byte("visitor")); err != nil {
+		t.Fatal(err)
+	}
+	edgeRestartRead(t, ctx, restartedIncoming.Stream, "visitor", "the listener after the restart")
+}
+
+// The edge's pool closes mid-stream and is made again on the same source, so its client has the same id. The restarted
+// client's stream to the listener opens, and carries bytes both ways, within RecoveryTimeout.
+func TestEdgeClientPoolRestartedInPlaceReachesItsListenerAgain(t *testing.T) {
+	settings := defaultEdgeRestartNetSettings()
+	restart := newEdgeRestartNet(t, settings)
+	restart.closeMidStream(t)
 
 	restartTime := time.Now()
 	recoveryCtx := edgeRestartBound(t, settings.RecoveryTimeout)
-	restarted, err := sidecar.NewEdgeClientPool(t.Context(), args)
+	restarted, err := sidecar.NewEdgeClientPool(t.Context(), restart.args)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(restarted.Close)
-	if connect.Id(restarted.Clients()[0].ClientId) != edgeClientId {
-		t.Fatal("the restarted pool's client took another id")
-	}
-	restartedStream, restartedIncoming := edgeRestartOpen(t, recoveryCtx, restarted, listenerClientId, settings.Target, incomings)
-	if _, err := restartedIncoming.Stream.Write([]byte("after")); err != nil {
-		t.Fatal(err)
-	}
-	edgeRestartRead(t, recoveryCtx, restartedStream, "after", "the restarted edge")
-	if _, err := restartedStream.Write([]byte("visitor")); err != nil {
-		t.Fatal(err)
-	}
-	edgeRestartRead(t, recoveryCtx, restartedIncoming.Stream, "visitor", "the listener after the restart")
+	restart.reachAgain(t, recoveryCtx, restarted)
 	t.Logf("the restarted edge's stream carried bytes both ways %s after the restart", time.Since(restartTime))
+}
+
+// A platform that hands the pool each client it opens only once hold has returned for it: the window between a
+// client's becoming reachable and the pool's own steps after the open, held open as long as hold takes. An error from
+// hold fails the open, and the client is closed.
+type edgeRestartHoldPlatform struct {
+	platform sidecar.SidecarPlatform
+	hold     func(client *sidecar.SidecarPlatformClient) error
+}
+
+func (self *edgeRestartHoldPlatform) OpenClient(ctx context.Context, args *sidecar.SidecarPlatformClientArgs) (*sidecar.SidecarPlatformClient, error) {
+	client, err := self.platform.OpenClient(ctx, args)
+	if err != nil {
+		return nil, err
+	}
+	if err := self.hold(client); err != nil {
+		return nil, errors.Join(err, client.CloseAndWait(ctx))
+	}
+	return client, nil
+}
+
+// The restarted pool's platform hands it its client only once the listener's backlog, the write held across the
+// restart, has reached the client, so nothing the pool does after the open is something the client's taking of the
+// listener's contract waits for. The Net delivers to the client from within the open, and the client already provides
+// Service there, under the slot's key the listener's contract was signed with, so the first copy of that contract
+// verifies and the backlog comes in. A client that provided Service only once the pool had it open would refuse that
+// copy, and connect would drop the listener's sequence until the client's modes changed, which the held window keeps
+// from happening: its backlog would never arrive. Then the restarted client's own stream to the listener opens and
+// carries bytes both ways within RecoveryTimeout. The hold is a step, bounded as one: a client that sends nothing, as
+// a held one does, hears the listener's backlog only at the listener's own resends, which on connect's restart path
+// took up to 1.2 s here, where the pool's first open would have had the listener write it at once.
+func TestEdgeClientPoolRestartedInPlaceTakesItsListenersContractAtOnce(t *testing.T) {
+	settings := defaultEdgeRestartNetSettings()
+	restart := newEdgeRestartNet(t, settings)
+	restart.closeMidStream(t)
+
+	holdCtx := edgeRestartBound(t, settings.StepTimeout)
+	// why the hold failed the open, which the pool's error leaves out; read once NewEdgeClientPool has returned
+	var holdErr error
+	restartedArgs := *restart.args
+	restartedArgs.Platform = &edgeRestartHoldPlatform{
+		platform: restart.args.Platform,
+		hold: func(client *sidecar.SidecarPlatformClient) (err error) {
+			defer func() {
+				holdErr = err
+			}()
+			if modes := client.Client.ContractManager().GetProvideModes(); len(modes) != 1 || !modes[connectprotocol.ProvideMode_Service] {
+				return fmt.Errorf("the restarted client was handed over providing %v", modes)
+			}
+			// a frame of the subprotocol is delivered only from a sequence whose contract verified, and only once the
+			// client's new session with the listener has opened it
+			backlog := make(chan struct{})
+			var backlogOnce sync.Once
+			remove, err := client.Client.AddSubprotocolRawCallback(sidecar.SubprotocolId, func(source connect.TransferPath, subprotocolId connect.SubprotocolId, messageBytes []byte, peer connect.Peer) {
+				if source.SourceId == restart.listenerClientId {
+					backlogOnce.Do(func() {
+						close(backlog)
+					})
+				}
+			})
+			if err != nil {
+				return err
+			}
+			defer remove()
+			select {
+			case <-backlog:
+				return nil
+			case <-holdCtx.Done():
+				return errors.New("the listener's backlog never reached the restarted client")
+			}
+		},
+	}
+	restarted, err := sidecar.NewEdgeClientPool(t.Context(), &restartedArgs)
+	if err != nil {
+		t.Fatalf("%v: %v", err, holdErr)
+	}
+	t.Cleanup(restarted.Close)
+	restart.reachAgain(t, edgeRestartBound(t, settings.RecoveryTimeout), restarted)
 }
