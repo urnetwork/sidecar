@@ -9,9 +9,11 @@
 //
 // The stock daemon and native SDK use Sidecar.NewSocketComponent. Its application and share names use only the
 // network's verified config head's K_sock ring. It follows the standing ACL engine for admissions and revocations,
-// builds a tls/ or smtp/ listen's grant and its effect on that engine (socket_listen.go), registers the listen kind's
-// Lookup on its host while it lives, and resolves labels through the authenticated network APIs. Each prerequisite is
-// required by its consumer. Connect legs only. Safe for concurrent use.
+// builds a tls/ or smtp/ listen's grant and its effect on that engine, and waits for a grant the listen's approval
+// activates in its host's config client, the one whose follower installs that engine's states, before the listen
+// registers (socket_listen.go), registers the listen kind's Lookup on its host while it lives, and resolves labels
+// through the authenticated network APIs. Each prerequisite is required by its consumer. Connect legs only. Safe for
+// concurrent use.
 
 package sidecar
 
@@ -200,8 +202,11 @@ type SocketComponent struct {
 	// the live listeners, each taking its target on every generation's dispatcher
 	listeners map[*SocketListener]bool
 	// the grant filer a tls/ or smtp/ listen's action is built and activated by where the component has no host, which
-	// a test sets; nil reads the host's (listenGrantFiler)
+	// a test sets; nil reads the host's (listenGrants)
 	grants *AclGrantFiler
+	// the config a grant that filer's use activates is waited on in before the listen registers, beside grants, which a
+	// test sets; nil waits on none (listenGrants)
+	grantConfig AclGrantConfig
 	// the §5.4 action a tls/ or smtp/ listen goes through Authorize as: socketListenAction, which a test replaces
 	listenAction func(ctx context.Context, generation *socketGeneration, name string, settings *SocketListenSettings) (*SidecarAction, error)
 }
