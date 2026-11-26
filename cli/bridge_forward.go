@@ -114,7 +114,10 @@ func newUrDaemonBridges(bridges *urBridgeDaemon, listen func(args *sidecar.Daemo
 		return nil, err
 	}
 	backends.grantsChanged = daemonBridges.GrantsChanged
+	// the forwards' grant expiries read the clock again with the bridges' at each resume and at the cap (resume.go)
+	removeClockCheck := bridges.addClockCheck(daemonBridges.CheckClock)
 	context.AfterFunc(bridges.ctx, func() {
+		removeClockCheck()
 		daemonBridges.Close()
 		backends.close()
 	})
