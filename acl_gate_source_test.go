@@ -223,14 +223,19 @@ func TestAclGateCacheOverTheDirectSource(t *testing.T) {
 	settings.Log = sidecar.NewNoopLogger()
 	loads := make(chan *bridge.AuthPin, 64)
 	settings.OnLoad = func(loadedNetworkId sidecar.Id, pin *bridge.AuthPin, err error) {
-		if err != nil {
+		// the cleanup's close, after the test's end, cancels a load still owed, which fails nothing; it waits for every
+		// loader, so none reports once the test has completed
+		if err != nil && t.Context().Err() == nil {
 			t.Errorf("a load failed: %v", err)
 		}
-		loads <- pin
+		select {
+		case loads <- pin:
+		case <-t.Context().Done():
+		}
 	}
 	cache := sidecar.NewAclGateCache(world.ctx, sidecar.NewAclGateDirectSource(world.redis, world.sourceBlobs, settings),
 		sidecartest.NewFakeClock(sidecartest.DefaultClockStart()), settings)
-	defer cache.Close()
+	t.Cleanup(cache.CloseAndWait)
 	remove, err := cache.Watch(world.redis)
 	if err != nil {
 		t.Fatal(err)

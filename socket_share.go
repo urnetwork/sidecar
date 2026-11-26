@@ -30,7 +30,11 @@
 // Ends. A Remove, a Done for each of uses' Reserves, or expire_millis, by a timer on the clock and at load for a
 // sharer that was offline then: the share's streams reset, it unlistens, and its record is deleted. Records survive a
 // restart, and a share whose listen cannot run yet, a locked store or sockets not ready, is tried again every
-// ResumeInterval until it serves or ends.
+// ResumeInterval until it serves or ends. expire_millis is a wall-clock time and its timer a runtime one, which stops
+// while the host sleeps, so a share the host slept past would serve a get begun before the sleep for the timer's
+// remaining awake time; DaemonSockets.CheckClock arms each live share's end again from the clock's now and ends at once
+// each whose expiry has passed (QD-1422, owner decision 789's seam; core_clock_check.go), which ur daemon calls when the
+// host resumes and at its desktop cap. A get that starts after the expiry is reset either way, by the first match.
 //
 // The getter's half (ShareLink, SharePart) runs in the ur process over a socket session that dialed the share holding
 // the link's sidecar_id, so the dialer refused before OPEN any listener whose verified Hello names another sidecar,
@@ -665,6 +669,74 @@ func (self *socketShares) adopt(share *socketShare) {
 		defer share.stateLock.Unlock()
 		share.stopExpiry = stop
 	}()
+}
+
+// Arms the share's end at its expire_millis again, counted from the clock's now, in place of the wait armed before, so
+// a wait the host slept through is not left to run late (the file's Ends); an expiry already passed ends the share at
+// once. A share whose wait has fired, or that has ended, is left as it is; one an end races keeps at most a wait that
+// then ends nothing.
+func (self *socketShare) checkClock() {
+	previous := func() func() bool {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		previous := self.stopExpiry
+		self.stopExpiry = nil
+		return previous
+	}()
+	if previous == nil || !previous() {
+		return
+	}
+	// the Share row's, read before the share went live and never written again, so the check waits on no Reserve's
+	// fsync; armed with no lock held, since the clock may call the end at once
+	expiresAt := time.UnixMilli(self.state.share.ExpireMillis)
+	stop := self.shares.clock.AfterFunc(expiresAt.Sub(self.shares.clock.Now()), self.end)
+	kept := func() bool {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		if self.stopExpiry != nil {
+			return false
+		}
+		self.stopExpiry = stop
+		return true
+	}()
+	if !kept {
+		stop()
+	}
+}
+
+// Reads the clock again for every live share's expiry (socketShare.checkClock).
+func (self *socketShares) checkClock() {
+	shares := func() []*socketShare {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		shares := make([]*socketShare, 0, len(self.tokenShares))
+		for _, share := range self.tokenShares {
+			shares = append(shares, share)
+		}
+		return shares
+	}()
+	for _, share := range shares {
+		share.checkClock()
+	}
+}
+
+// Reads the wall clock again after a sleep or a clock step (the file's Ends; core_clock_check.go): every hosted
+// network's live shares arm the wait for their expire_millis again from now, and each the host slept past ends at once,
+// its streams reset, since nothing serves at or past it (§9.9, D-SOCK-16). Safe from any goroutine and never waits on a
+// share: an end the clock calls at once runs where the clock runs it.
+func (self *DaemonSockets) CheckClock() {
+	shares := func() []*socketShares {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		shares := make([]*socketShares, 0, len(self.networkIdShares))
+		for _, networkShares := range self.networkIdShares {
+			shares = append(shares, networkShares)
+		}
+		return shares
+	}()
+	for _, networkShares := range shares {
+		networkShares.checkClock()
+	}
 }
 
 // Forgets share once it has ended.

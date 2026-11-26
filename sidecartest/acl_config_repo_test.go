@@ -23,7 +23,8 @@
 //	drop       a config writer's admin drops nothing in the config: MayDrop refuses it in the gate's own state
 //	           (D-ACL-25)
 //
-// No sleeps: each load is awaited by the cache's OnLoad, and the clock is the Net's.
+// No sleeps: each load is awaited by the cache's OnLoad, and the clock is the Net's. The world's cleanup closes its
+// cache and waits for every loader, so no load reports on a test that has completed.
 
 package sidecartest
 
@@ -97,13 +98,19 @@ func newAclConfigRepoWorld(t *testing.T) *aclConfigRepoWorld {
 	gateSettings.PollInterval = 0
 	gateSettings.FailureBackoff = 0
 	gateSettings.OnLoad = func(networkId sidecar.Id, pin *bridge.AuthPin, err error) {
-		if err != nil {
+		// the test's end cancels the cache's loads, which fails nothing; the cleanup below waits for every loader, so
+		// none reports once the test has completed
+		if err != nil && t.Context().Err() == nil {
 			t.Errorf("the gate's load: %v", err)
 		}
-		world.loads <- pin
+		select {
+		case world.loads <- pin:
+		case <-t.Context().Done():
+		}
 	}
 	world.cache = sidecar.NewAclGateCache(admission.Context(), sidecar.NewAclGateDirectSource(net.Host().Redis, net.Host().Blobs, gateSettings),
 		net.Clock(), gateSettings)
+	t.Cleanup(world.cache.CloseAndWait)
 
 	settings := evsservice.DefaultEvsSettings()
 	settings.RepoCacheTtl = 0
