@@ -5,13 +5,15 @@
 // and a daemon forward's grant expiry, the host slept past are left to their standing timers with no check, and the
 // check ends them at once, a stream reset with RST_REVOKED and a forward closed with its connections, while one whose
 // end is still ahead is armed again from the wall clock and ends at its end, not later; Sidecar.CheckClock reaches the
-// sockets component and passes over a component with no clock; and a revocation acts at once with no check, which a
-// check after it keeps.
+// sockets component and passes over a component with no clock; a revocation acts at once with no check, which a check
+// after it keeps; and ur share's expiry the host slept past ends the share at the check, its stream reset.
 
 package sidecar
 
 import (
+	"bytes"
 	"errors"
+	"io"
 	"net"
 	"os"
 	"sync/atomic"
@@ -292,5 +294,52 @@ func TestDaemonBridgesCheckClockKeepsWhatIsNotDueAndARevocation(t *testing.T) {
 	world.bridges.CheckClock()
 	if forwards := world.bridges.Forwards(world.networkId); len(forwards) != 0 {
 		t.Fatalf("%d forwards after a check following the revocation", len(forwards))
+	}
+}
+
+// ur share's expire_millis the host slept past, a get under way: with no check the share keeps its listener, its
+// record and the get's stream, its wait standing on the awake clock; DaemonSockets.CheckClock ends it at once, the
+// stream reset, the record deleted and the name unlistened (§9.9: nothing serves at or past expire_millis). A share
+// whose expiry is still ahead is armed again from the wall clock and ends there, not later.
+func TestShareCheckClockEndsAShareTheHostSleptPast(t *testing.T) {
+	fixture := newTestShareFixture(t)
+	clock := newTestSleepingClock(fixture.clock)
+	// before any share reads it, on this goroutine
+	fixture.shares.clock = clock
+	sockets := &DaemonSockets{networkIdShares: map[Id]*socketShares{testNetworkId: fixture.shares}}
+	big := bytes.Repeat([]byte{0x5a}, 1024*1024)
+	near := fixture.add(fixture.file("near.bin", big), 1, 10*time.Minute)
+	far := fixture.add(fixture.file("far.bin", testShareContent), 1, 3*time.Hour)
+	conn, err := fixture.net.dialAs(socketShareNamePrefix+near.Token, testSocketId("getter"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	conn.Write(testShareHeader(near.Secret, NewId(), 0))
+	answer := make([]byte, socketShareOkByteCount+4096)
+	if _, err := io.ReadFull(conn, answer); err != nil || answer[0] != socketShareStatusOk {
+		t.Fatalf("the stream's start: %v", err)
+	}
+
+	clock.sleep(time.Hour)
+	if fixture.shares.liveCount() != 2 || fixture.record(near.Token) == nil {
+		t.Fatal("the share ended with no check")
+	}
+	sockets.CheckClock()
+	// the check's end ran on this goroutine, the test clock calling a wait already due at once
+	if fixture.shares.liveCount() != 1 || fixture.record(near.Token) != nil || fixture.net.listening(socketShareNamePrefix+near.Token) {
+		t.Fatal("the share the host slept past outlived the check")
+	}
+	if _, err := io.Copy(io.Discard, conn); !errors.Is(err, ErrSocketReset) {
+		t.Errorf("the get under way at the check: %v", err)
+	}
+
+	fixture.clock.advance(2*time.Hour - time.Second)
+	if fixture.shares.liveCount() != 1 || fixture.record(far.Token) == nil {
+		t.Fatal("a second before its expiry the later share ended")
+	}
+	fixture.clock.advance(time.Second)
+	if fixture.shares.liveCount() != 0 || fixture.record(far.Token) != nil {
+		t.Fatal("the later share outlived its expiry")
 	}
 }

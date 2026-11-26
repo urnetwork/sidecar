@@ -53,6 +53,7 @@ import (
 	"time"
 
 	"github.com/urnetwork/sidecar"
+	"github.com/urnetwork/sidecar/model"
 )
 
 // The two routes, by the limit each counts under.
@@ -61,29 +62,25 @@ const (
 	ComputeModelRouteChunk = "chunk"
 )
 
-// A file's state in the mirror (compute-plan-model-mirror-store, QD-1409), as its state object records it.
-type ComputeModelFileState string
+// A file's state in the mirror (compute-plan-model-mirror-store, QD-1409), as its state object records it: the
+// mirror's own, model's, which writes it (CSRV-M11-02), so one store serves the routes and the mirror alike.
+type ComputeModelFileState = model.ComputeModelFileState
 
 const (
 	// compute_model_mirror copied the file's chunks from Hugging Face at its pinned commit (§14.5)
-	ComputeModelFileStateCopied ComputeModelFileState = "copied"
+	ComputeModelFileStateCopied = model.ComputeModelFileStateCopied
 	// the release tooling computed the file's index from the copied chunks (§6.5's mirror row)
-	ComputeModelFileStateIndexed ComputeModelFileState = "indexed"
+	ComputeModelFileStateIndexed = model.ComputeModelFileStateIndexed
 	// Serve checked every chunk against the index and the index against the signed manifest's pin: the one state the
 	// routes answer
-	ComputeModelFileStateServed ComputeModelFileState = "served"
+	ComputeModelFileStateServed = model.ComputeModelFileStateServed
 )
 
-// What a file's state object records.
-type ComputeModelFileRecord struct {
-	State ComputeModelFileState
-	// The index's SHA-256, lowercase hex, once the file is indexed: for a served file, the pin Serve checked the
-	// index against.
-	IndexSha256 string
-}
+// What a file's state object records: the mirror's record, model's.
+type ComputeModelFileRecord = model.ComputeModelFileRecord
 
-// An object the mirror does not hold: a file with no state, or a missing index or chunk.
-var ErrComputeModelObjectAbsent = errors.New("compute model mirror: no such object")
+// An object the mirror does not hold: a file with no state, or a missing index or chunk. The mirror's, model's.
+var ErrComputeModelObjectAbsent = model.ErrComputeModelObjectAbsent
 
 // The mirror's objects as the routes read them; server's ComputeModelBlobStore over its blob store. An opened reader
 // streams its object rather than holding it whole, and its caller closes it. Safe for concurrent use.
