@@ -13,17 +13,18 @@
 //	             (bridge_daemon_forward.go)
 //	forwarding   Forwarder.CheckClock: the forwarding role's follow, compile and the posture's overdue-alarm points
 //	             (bridge_forward.go), which the VPN component's DeviceLocal.CheckClock reaches in the sdk
+//	shares       DaemonSockets.CheckClock: ur share's shares, ended at their expire_millis (socket_share.go)
 //
 // Revocations need none: each acts at once, by a policy change, a reread of a grant or the posture's own denial. New
 // work needs none either, since each edge reads the wall clock as it admits: a ticket's expiry, a forward's expiry for
-// each connection, a flow's rules in the hook. Relative waits, timeouts and retries, stay as they are: lateness only
-// makes them wait longer.
+// each connection, a share's expire_millis for each get, a flow's rules in the hook. Relative waits, timeouts and
+// retries, stay as they are: lateness only makes them wait longer.
 //
-// Who calls. ur daemon calls every hosted Sidecar's CheckClock and its DaemonBridges' beside its bridges' checks at the
-// host's resume (cli/resume.go: logind's PrepareForSleep(false), powrprof's resume), and, since a desktop has no one
-// wake signal Go reads portably and none reaches it on a step of the clock, at the desktop's
-// device.BridgeSettings.ClockCheckInterval, the one interval that caps the bridges' own waits, so a desktop is late
-// by at most that interval after it wakes. An app's VPN component calls DeviceLocal.CheckClock at each wake and clock
+// Who calls. ur daemon calls every hosted Sidecar's CheckClock, its DaemonBridges' and its DaemonSockets' beside its
+// bridges' checks at the host's resume (cli/resume.go: logind's PrepareForSleep(false), powrprof's resume), and, since
+// a desktop has no one wake signal Go reads portably and none reaches it on a step of the clock, at the desktop's
+// device.BridgeSettings.ClockCheckInterval, the one interval that caps the bridges' own waits, so a desktop is late by
+// at most that interval after it wakes. An app's VPN component calls DeviceLocal.CheckClock at each wake and clock
 // change, which reaches the bridges and every forwarding role; its forwarding roles take the same desktop interval on
 // a desktop, and none on a phone, which adds no periodic wakeup.
 

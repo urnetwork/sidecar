@@ -113,7 +113,7 @@ func (self *netExchange) close() {
 	for _, resident := range residents {
 		resident.Close()
 	}
-	// each client's worker joins it once it has ended (attachClientWithProvideKeys)
+	// each client's worker joins it once it has ended (attachReadiedClient)
 	for _, client := range clients {
 		client.Client.Close()
 	}
@@ -358,27 +358,30 @@ func (self *netExchange) addClientWithControl(ctx context.Context, name string, 
 	return self.attachClient(ctx, name, clientId, settings, control)
 }
 
-// addClient whose contract manager holds provideSecretKeys before the client is on the exchange, as a platform loads a
-// client's kept keys before it can connect (sidecar.SidecarPlatformClientArgs.ProvideSecretKeys). Nil keys: addClient.
-func (self *netExchange) addClientWithProvideKeys(ctx context.Context, name string, clientId connect.Id, settings *connect.ClientSettings, provideSecretKeys map[protocol.ProvideMode][]byte) *NetClient {
+// addClient readied by ready before it is on the exchange, as a platform readies a client before its transport exists
+// (sidecar.SidecarPlatformClientArgs.ApplyProvide): the keys and modes its opener asked for, so no frame reaches it
+// first. It provides those modes and no other, as on connect's platform, which sets no mode of its own: a client ready
+// leaves providing none provides none until its opener sets one, so the Net never covers for an opener that asks late.
+func (self *netExchange) addReadiedClient(ctx context.Context, name string, clientId connect.Id, settings *connect.ClientSettings, ready func(client *connect.Client)) *NetClient {
 	requireRequiredClient(name, settings)
-	return self.attachClientWithProvideKeys(ctx, name, clientId, settings, nil, provideSecretKeys)
+	return self.attachReadiedClient(ctx, name, clientId, settings, nil, ready)
 }
 
 // addClientWithControl whatever settings' encryption mode: only a test of the refusal of an unsealed peer, the
 // adversary I-3 shuts out, attaches a client that is not Required (bridge_net.go).
 func (self *netExchange) attachClient(ctx context.Context, name string, clientId connect.Id, settings *connect.ClientSettings, control connect.OutOfBandControl) *NetClient {
-	return self.attachClientWithProvideKeys(ctx, name, clientId, settings, control, nil)
+	return self.attachReadiedClient(ctx, name, clientId, settings, control, nil)
 }
 
-// attachClient with provideSecretKeys loaded before the client is on the exchange, so no frame reaches it first.
-func (self *netExchange) attachClientWithProvideKeys(ctx context.Context, name string, clientId connect.Id, settings *connect.ClientSettings, control connect.OutOfBandControl, provideSecretKeys map[protocol.ProvideMode][]byte) *NetClient {
+// attachClient readied by ready before the client is on the exchange, so no frame reaches it first. Nil readies
+// nothing, and the client provides Network once it is on, as a test's own client does.
+func (self *netExchange) attachReadiedClient(ctx context.Context, name string, clientId connect.Id, settings *connect.ClientSettings, control connect.OutOfBandControl, ready func(client *connect.Client)) *NetClient {
 	if control == nil {
 		control = &netContractIssuer{exchange: self, sourceId: clientId, settings: connect.DefaultContractManagerSettings()}
 	}
 	client := connect.NewClient(ctx, clientId, control, settings)
-	if 0 < len(provideSecretKeys) {
-		client.ContractManager().LoadProvideSecretKeys(provideSecretKeys)
+	if ready != nil {
+		ready(client)
 	}
 	netClient := &NetClient{
 		Name:          name,
@@ -400,7 +403,10 @@ func (self *netExchange) attachClientWithProvideKeys(ctx context.Context, name s
 	controlRoute := make(connect.Route)
 	client.RouteManager().UpdateTransport(newNetSendTransport(true), []connect.Route{controlRoute})
 	netClient.receiveRoute(connect.TransportTypeH1)
-	client.ContractManager().SetProvideModes(map[protocol.ProvideMode]bool{protocol.ProvideMode_Network: true})
+	if ready == nil {
+		// a test's own client; a platform's provides what its opener readied it with (addReadiedClient)
+		client.ContractManager().SetProvideModes(map[protocol.ProvideMode]bool{protocol.ProvideMode_Network: true})
+	}
 
 	self.workers.Add(3)
 	go func() {

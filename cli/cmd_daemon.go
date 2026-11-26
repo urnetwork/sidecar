@@ -773,12 +773,14 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) (runErr e
 	}
 	network.bridges = newUrBridgeDaemon(ctx, bridgeArgs)
 	defer network.bridges.close()
-	// each hosted Sidecar's own wall-clock ends, its socket listeners' streams' grant ends among them, read the clock
-	// again beside the bridges' at each resume and at the desktop's cap (resume.go; sidecar's core_clock_check.go)
+	// each hosted Sidecar's own wall-clock ends, its socket listeners' streams' grant ends among them, and ur share's
+	// expiries read the clock again beside the bridges' at each resume and at the desktop's cap (resume.go; sidecar's
+	// core_clock_check.go)
 	network.bridges.addClockCheck(func() {
 		for _, hosted := range daemon.Sidecars() {
 			hosted.Sidecar.CheckClock()
 		}
+		daemon.Sockets().CheckClock()
 	})
 	// §16.7's restore points, which ingest and run_restore share, and which each network's executed drops reach
 	// (MCP-M10-01's restore_drop.go)

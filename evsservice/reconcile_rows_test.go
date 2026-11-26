@@ -96,14 +96,19 @@ func (self *evsDeletionRowWorld) newGate() *evsDeletionRowGate {
 	gateSettings.PollInterval = 0
 	gateSettings.FailureBackoff = 0
 	gateSettings.OnLoad = func(networkId sidecar.Id, pin *bridge.AuthPin, err error) {
-		if err != nil {
+		// the test's end cancels the cache's loads, which fails nothing; the cleanup below waits for every loader, so
+		// none reports once the test has completed
+		if err != nil && self.t.Context().Err() == nil {
 			self.t.Errorf("the gate's load: %v", err)
 		}
-		gate.loads <- pin
+		select {
+		case gate.loads <- pin:
+		case <-self.t.Context().Done():
+		}
 	}
 	source := sidecar.NewAclGateDirectSource(self.net.Host().Redis, self.net.Host().Blobs, gateSettings)
 	gate.cache = sidecar.NewAclGateCache(self.admission.Context(), source, self.net.Clock(), gateSettings)
-	self.t.Cleanup(gate.cache.Close)
+	self.t.Cleanup(gate.cache.CloseAndWait)
 	return gate
 }
 

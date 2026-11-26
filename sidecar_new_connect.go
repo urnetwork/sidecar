@@ -6,7 +6,8 @@
 // ClientKey seed from the keychain, the out-of-band control and PlatformTransport its SidecarPlatform opens with
 // ClientAuth{ByJwt, InstanceId, AppVersion, ClientInfo, StreamLeaseVersion: 1}, AuthorizationClosed wired to the
 // refresher, a BringYourApi on the same token, and §6's Subprotocol, which constructing registers on id 21842. It
-// provides Network only; Service and FriendsAndFamily are their owners' to add, and Public never (§6).
+// provides Network only, from before it can receive (SidecarPlatformClientArgs.ApplyProvide); Service and
+// FriendsAndFamily are their owners' to add, and Public never (§6).
 //
 // The persisted connect InstanceId (sidecar.json's network record) keeps the resident across restarts (§5.9), and the
 // connect identity the core keeps with the generation (identity_connect.go) keeps the contracts its peers hold: the
@@ -18,6 +19,7 @@
 package sidecar
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/hkdf"
@@ -28,6 +30,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"maps"
 	"math/big"
 	"net/http"
 	"strconv"
@@ -152,7 +155,9 @@ func newSidecarConnectIdentity(seed []byte) (*sidecarConnectIdentity, error) {
 // ApiOutOfBandControl to ApiUrl and a PlatformTransport to PlatformUrl. sidecartest's Net stands its in-process
 // exchange in here, so T2 runs the Sidecar a host runs. Implementations are safe for concurrent use.
 type SidecarPlatform interface {
-	// A client for one generation, connecting as args.Auth, until ctx ends or the answer's CloseAndWait.
+	// A client for one generation, connecting as args.Auth, until ctx ends or the answer's CloseAndWait. The platform
+	// builds it on args.ClientSettings and readies it with args.ApplyProvide before anything can reach it; the openers
+	// apply what a platform did not only once the client is open, after a peer's contract may have been refused.
 	OpenClient(ctx context.Context, args *SidecarPlatformClientArgs) (*SidecarPlatformClient, error)
 }
 
@@ -169,10 +174,53 @@ type SidecarPlatformClientArgs struct {
 	// connect's transport settings with AuthorizationClosed and Log set, a copy the platform may keep.
 	PlatformTransportSettings *connect.PlatformTransportSettings
 	// Provide secret keys by mode that the platform loads into the client's contract manager after it builds the
-	// client and before anything can reach it (ContractManager.LoadProvideSecretKeys), so a contract a peer holds from
-	// an earlier process with the same identity verifies from the first frame (host_edge_identity.go). Borrowed for the
-	// client's life. Nil: connect draws each key as its mode is first provided.
+	// client and before anything can reach it (ApplyProvide), so a contract a peer holds from an earlier process with
+	// the same identity verifies from the first frame (host_edge_identity.go). Borrowed for the client's life. Nil:
+	// connect draws each key as its mode is first provided.
 	ProvideSecretKeys map[connectprotocol.ProvideMode][]byte
+	// The modes the client provides from its start, which the platform sets after the keys and before anything can
+	// reach the client (ApplyProvide): a contract is verified only under a mode its receiver provides, so a contract for
+	// one of these that reached the client before its opener set them would be refused, and verify only at its
+	// sender's next copy. Read once. Nil: the client provides nothing until its opener sets its modes.
+	ProvideModes map[connectprotocol.ProvideMode]bool
+}
+
+// Readies a client a platform has just built on these args, before anything can reach it: the provide keys, then the
+// modes it provides from its start (ContractManager.LoadProvideSecretKeys and SetProvideModes, as connect's own restart
+// tests ready a client before its transports). The keys go first, so the provide frame names no key the client does
+// not keep, and the modes before the client's way in exists, so the first copy of a contract a peer holds for one of
+// them, signed for an earlier process under the same key, verifies. The provide frame waits on the client's control
+// sequence until the client connects. A SidecarPlatform calls it between building a client and giving it a transport.
+func (self *SidecarPlatformClientArgs) ApplyProvide(client *connect.Client) {
+	if 0 < len(self.ProvideSecretKeys) {
+		client.ContractManager().LoadProvideSecretKeys(self.ProvideSecretKeys)
+	}
+	if 0 < len(self.ProvideModes) {
+		client.ContractManager().SetProvideModes(self.ProvideModes)
+	}
+}
+
+// ApplyProvide for a client its platform has opened, unless the platform readied it as it built it, which leaves the
+// client providing exactly args.ProvideModes and holding every key args names. A platform that did not leaves the
+// window ApplyProvide closes open until now, and this closes it as early as an opener can. What a platform readied
+// is left alone, so its client sends one provide frame.
+func applyProvideAfterOpen(client *connect.Client, args *SidecarPlatformClientArgs) {
+	readied := func() bool {
+		contractManager := client.ContractManager()
+		if !maps.Equal(contractManager.GetProvideModes(), args.ProvideModes) {
+			return false
+		}
+		provideSecretKeys := contractManager.GetProvideSecretKeys()
+		for mode, provideSecretKey := range args.ProvideSecretKeys {
+			if !bytes.Equal(provideSecretKeys[mode], provideSecretKey) {
+				return false
+			}
+		}
+		return true
+	}
+	if !readied() {
+		args.ApplyProvide(client)
+	}
 }
 
 // One generation's client and what connects it.
@@ -202,10 +250,8 @@ func (self connectSidecarPlatform) OpenClient(ctx context.Context, args *Sidecar
 	oob := connect.NewApiOutOfBandControl(ctx, args.ClientStrategy, args.Auth.ByJwt, args.ApiUrl)
 	clientSettings := connect.NewOperatorClientSettings(args.ClientSettings, args.ApiUrl, args.ClientStrategy)
 	client := connect.NewClient(ctx, args.ClientId, oob, clientSettings)
-	if 0 < len(args.ProvideSecretKeys) {
-		// before the transport, the client's only way in, exists
-		client.ContractManager().LoadProvideSecretKeys(args.ProvideSecretKeys)
-	}
+	// before the transport, the client's only way in, exists
+	args.ApplyProvide(client)
 	transport := connect.NewPlatformTransport(
 		ctx,
 		args.ClientStrategy,
@@ -351,7 +397,7 @@ func (self *sidecarConnectLeg) startGeneration(generation *sidecarGeneration) (s
 		generation.authorizationClosed(cause == connect.AuthorizationCloseUnavailable)
 	}
 
-	platformClient, err := self.platform.OpenClient(generation.ctx, &SidecarPlatformClientArgs{
+	platformArgs := &SidecarPlatformClientArgs{
 		ClientId:                  connect.Id(generation.identity.ClientId),
 		ClientSettings:            &clientSettings,
 		Auth:                      auth,
@@ -359,9 +405,12 @@ func (self *sidecarConnectLeg) startGeneration(generation *sidecarGeneration) (s
 		ApiUrl:                    settings.ApiUrl,
 		PlatformUrl:               settings.PlatformUrl,
 		PlatformTransportSettings: &transportSettings,
-		// so a contract a peer holds from an earlier start of this generation verifies from the first frame
+		// so a contract a peer holds from an earlier start of this generation verifies from the first frame: its
+		// keys, and Network, the dispatcher's own mode, from before the client can receive
 		ProvideSecretKeys: connectIdentity.provideSecretKeys,
-	})
+		ProvideModes:      baseProvideModes(SubprotocolRoleSidecar),
+	}
+	platformClient, err := self.platform.OpenClient(generation.ctx, platformArgs)
 	clear(clientSettings.ClientKeySeed)
 	if err != nil {
 		return nil, err
@@ -371,12 +420,9 @@ func (self *sidecarConnectLeg) startGeneration(generation *sidecarGeneration) (s
 			self.sidecar.log.Warningf("[sidecar]generation %d's client did not close cleanly: %s", generation.generation, err)
 		}
 	}
-	// a platform that loads no keys as it builds a client gets them here, still before any mode is provided, so no
-	// provide frame ever names a key the generation does not keep
-	platformClient.Client.ContractManager().LoadProvideSecretKeys(connectIdentity.provideSecretKeys)
-	platformClient.Client.ContractManager().SetProvideModes(map[connectprotocol.ProvideMode]bool{
-		connectprotocol.ProvideMode_Network: true,
-	})
+	// a platform that did not ready the client as it built it gets the keys and Network here, the keys still before any
+	// mode is provided, so no provide frame ever names a key the generation does not keep
+	applyProvideAfterOpen(platformClient.Client, platformArgs)
 
 	api := connect.NewBringYourApi(generation.ctx, self.strategy, settings.ApiUrl)
 	api.SetByJwt(generation.byJwt)
