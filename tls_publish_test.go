@@ -602,29 +602,49 @@ func (self *tlsPublishStuckConfig) WaitFor(ctx context.Context, n uint64) (*Conf
 	return nil, ctx.Err()
 }
 
-// A publish's grant the engine does not hold answers uncertain, and its listen does not run: with no receipt, with no
-// config to wait on, and with a config whose follow does not reach the receipt's position within
-// PublishGrantLandTimeout, here none at all.
-func TestTlsPublishConfirmGrantAnswersUncertainWithoutItsGrant(t *testing.T) {
+// A publish's grant the engine does not hold answers uncertain, naming the grant, and its listen does not run: with no
+// receipt, with no config to wait on, and with a config whose follow does not reach the receipt's position within
+// PublishGrantLandTimeout, here none at all. The publish's grant effect waits as AclGrantFiler.awaitGrant does, the one
+// wait it shares with the listens, on the backend's config and the tls settings' timeout.
+func TestTlsPublishGrantWaitAnswersUncertainWithoutItsGrant(t *testing.T) {
 	running := newTestSidecar(t)
 	backend := &sidecarTlsPublishBackend{
 		sidecar: running,
 		args:    &TlsPublishArgs{Grants: NewAclGrantFiler(running, NewAclEngine(tlsCertTestId("a publishing sidecar"), nil, nil, nil))},
 	}
 	grantId := make([]byte, sha256.Size)
-	if err := backend.confirmGrant(t.Context(), nil, nil, grantId); !errors.Is(err, ErrTlsPublishUnavailable) {
+	grantId[0] = 0x5a
+	// the wait the publish's grant effect runs once its GrantActivate's post answers with pin
+	confirm := func(pin *bridge.AuthPin) error {
+		t.Helper()
+		effect, ok := backend.grantEffect(&StoredCanonicalAction{}).(*aclGrantEffect)
+		if !ok || effect.confirm == nil {
+			t.Fatal("the publish's grant effect waits on nothing")
+		}
+		return effect.confirm(t.Context(), pin, nil, grantId)
+	}
+	named := func(err error) bool {
+		var unconfirmed *AclGrantUnconfirmedError
+		return errors.Is(err, ErrAclGrantUnconfirmed) && errors.As(err, &unconfirmed) && bytes.Equal(unconfirmed.GrantId, grantId)
+	}
+	if err := confirm(nil); !named(err) {
 		t.Errorf("no receipt: %v", err)
 	}
 	receipt := &bridge.AuthPin{Version: 3, Chain: make([]byte, sha256.Size)}
-	if err := backend.confirmGrant(t.Context(), receipt, nil, grantId); !errors.Is(err, ErrTlsPublishUnavailable) {
+	if err := confirm(receipt); !named(err) {
 		t.Errorf("no config to wait on: %v", err)
 	}
 	stuck := &tlsPublishStuckConfig{}
 	settings := DefaultSidecarTlsSettings()
 	settings.PublishGrantLandTimeout = 0
 	backend.args.Config, backend.settings = stuck, settings
-	if err := backend.confirmGrant(t.Context(), receipt, nil, grantId); !errors.Is(err, ErrTlsPublishUnavailable) || !errors.Is(err, context.DeadlineExceeded) || stuck.waited != 1 {
+	if err := confirm(receipt); !named(err) || !errors.Is(err, context.DeadlineExceeded) || stuck.waited != 1 {
 		t.Errorf("a follow that does not reach the receipt: %v, waited %d times", err, stuck.waited)
+	}
+	// the publish's answer for that use's outcome is unavailable, the grant named
+	outcome := &SidecarOutcome{State: ApprovalOutcomeUncertain, Err: confirm(receipt)}
+	if err := tlsPublishOutcomeError(outcome); !errors.Is(err, ErrTlsPublishUnavailable) || !named(err) {
+		t.Errorf("the publish's answer: %v", err)
 	}
 }
 

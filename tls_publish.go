@@ -18,8 +18,9 @@
 //  3. The device's certificate is got if missing, the target is probed (tls_probe.go), and the listener and its front
 //     start: Listen("tls/<port>/<host>") with the ALPN ids and the app mode, then §13.7's front on it. The listen asks
 //     its own grant at the gate, which the publish's grant covers, so it carries no decision of the publish's; and the
-//     publish's use is done only once this device's engine holds the grant it activated (confirmGrant), so the listen
-//     right after it finds the grant rather than being refused or filing a request of its own.
+//     publish's use is done only once this device's engine holds the grant it activated (AclGrantFiler.awaitGrant, the
+//     one wait MCP's socket_listen and Sidecar.Listen's own tls/ and smtp/ listens take), so the listen right after it
+//     finds the grant rather than being refused or filing a request of its own.
 //  4. The result is the URL, the expiry, the audience and "passthrough: key on this device"; for a raw link the path
 //     of the client-certificate file.
 //
@@ -759,19 +760,15 @@ type TlsPublishArgs struct {
 	ClientCertificateDirectory string
 	// Records a probe's refusal. nil records none.
 	RecordProbeRefusal func(refusal TlsProbeRefusal)
-	// The network's verified config, which a publish's GrantActivate is waited on in before its listen (confirmGrant):
-	// a ConfigClient, whose follower installs each state in Grants' engine before WaitFor answers. nil reads the
-	// Sidecar's standing config follower's client.
+	// The network's verified config, which a publish's GrantActivate is waited on in before its listen
+	// (AclGrantFiler.awaitGrant): a ConfigClient, whose follower installs each state in Grants' engine before WaitFor
+	// answers. nil reads the Sidecar's standing config follower's client.
 	Config TlsPublishConfig
 }
 
-// What a publish waits on for its grant to reach this device's engine: TEAM-M2-10's ConfigClient is one.
-type TlsPublishConfig interface {
-	// The state at or past n, once the follow reaches it.
-	WaitFor(ctx context.Context, n uint64) (*ConfigState, error)
-}
-
-var _ TlsPublishConfig = (*ConfigClient)(nil)
+// What a publish waits on for its grant to reach this device's engine: the config every grant-backed action's use
+// waits on (AclGrantConfig), TEAM-M2-10's ConfigClient among them.
+type TlsPublishConfig = AclGrantConfig
 
 // The Sidecar's parts as a publish runs on them.
 type sidecarTlsPublishBackend struct {
@@ -822,10 +819,22 @@ func (self *sidecarTlsPublishBackend) grantAction(ctx context.Context, base *pro
 	return self.args.Grants.Action(ctx, base, request, now)
 }
 
-// See tlsPublishBackend: the grant component, whose GrantActivate is confirmed in this device's engine before its use
-// is done (confirmGrant). Called only after grantAction answered, so the filer is there.
+// See tlsPublishBackend: the grant component, whose use is done only once this device's engine holds the grant it
+// activated in force (AclGrantFiler.landedEffect). §13.10 step 3 listens right after step 2's grant activates, and that
+// listen's own action and the gate's standing grants read this device's engine (socket_listen.go), which installs a
+// state only as the device's config follows the log: until the engine holds the grant, the listen finds none and is
+// refused, or files a request of its own. So the network's config, read as the post answers (config), is waited on
+// within PublishGrantLandTimeout until it reaches the receipt's position, as a forward's is
+// (BridgeFiler.confirmForwardGrant), whose follower installs each state in the engine before that position shows
+// (acl_follow.go). A grant the engine does not hold by then answers uncertain, naming the grant, which the same publish
+// asked again completes under its use's key, and no listen runs meanwhile. Called only after grantAction answered, so
+// the filer is there.
 func (self *sidecarTlsPublishBackend) grantEffect(action *StoredCanonicalAction) SidecarEffect {
-	return &aclGrantEffect{filer: self.args.Grants, action: action, confirm: self.confirmGrant}
+	settings := self.settings
+	if settings == nil {
+		settings = DefaultSidecarTlsSettings()
+	}
+	return self.args.Grants.landedEffect(action, self.config, settings.PublishGrantLandTimeout)
 }
 
 // See tlsPublishBackend: AclEngine.ActiveGrant on the grant filer's engine, for this sidecar. False with no filer or
@@ -847,49 +856,6 @@ func (self *sidecarTlsPublishBackend) priorGrant(action *StoredCanonicalAction, 
 		return nil, false
 	}
 	return self.args.Grants.priorGrant(action, detail, runId, agentId, now)
-}
-
-// §13.10 step 3 listens right after step 2's grant activates, and that listen's own action and the gate's standing
-// grants read this device's engine (socket_listen.go), which installs a state only as the device's config follows the
-// log: until the engine holds the grant, the listen finds none and is refused, or files a request of its own. So the
-// publish's use is done only once the engine holds the grant in force, as a forward's is once its receipt is on the
-// verified log (BridgeFiler.confirmForwardGrant): the network's config is waited on, within PublishGrantLandTimeout,
-// until it reaches the receipt's position, whose follower installs each state in the engine before that position shows
-// (acl_follow.go). A grant the engine does not hold by then answers uncertain, which the same publish asked again
-// completes under its use's key, and no listen runs meanwhile.
-func (self *sidecarTlsPublishBackend) confirmGrant(ctx context.Context, pin *bridge.AuthPin, signed []byte, grantId []byte) error {
-	engine := self.args.Grants.engine
-	stands := func() bool {
-		state := engine.State()
-		if state == nil {
-			return false
-		}
-		rule := state.grantRule(grantId)
-		return rule != nil && rule.activeAt(self.now().UnixMilli())
-	}
-	if stands() {
-		return nil
-	}
-	if pin == nil || pin.GetVersion() == 0 {
-		return fmt.Errorf("%w: no receipt for the publish's grant", ErrTlsPublishUnavailable)
-	}
-	config := self.config()
-	if config == nil {
-		return fmt.Errorf("%w: no verified config to wait on for the publish's grant", ErrTlsPublishUnavailable)
-	}
-	settings := self.settings
-	if settings == nil {
-		settings = DefaultSidecarTlsSettings()
-	}
-	waitCtx, cancel := context.WithTimeout(ctx, settings.PublishGrantLandTimeout)
-	defer cancel()
-	if _, err := config.WaitFor(waitCtx, pin.GetVersion()); err != nil {
-		return fmt.Errorf("%w: waiting for the publish's grant: %w", ErrTlsPublishUnavailable, err)
-	}
-	if !stands() {
-		return fmt.Errorf("%w: the publish's grant is not in force in this device's engine", ErrTlsPublishUnavailable)
-	}
-	return nil
 }
 
 // The config a publish's grant is waited on in: TlsPublishArgs.Config, else the Sidecar's standing config follower's
