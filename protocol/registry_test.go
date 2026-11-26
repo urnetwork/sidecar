@@ -235,9 +235,10 @@ func TestEveryCodeStartsAtAZeroNoSenderSets(t *testing.T) {
 
 // §6.11: services 0x80-0xFF are unreleased experiments, so no released number sits there, and 0 is no
 // message. A value's service byte has to be one the registry gives an owner: 0x19 since DESIGN-COMPUTE's listeners
-// (§26.8, Appendix D's §6.11 row; CARCH-M11-05).
+// (§26.8, Appendix D's §6.11 row; CARCH-M11-05), and 0x18 since DESIGN-COMPUTE's support hint (§28.9;
+// support-push-topic-hint-bytes).
 func TestMessageTypesStayInReleasedServices(t *testing.T) {
-	services := []int32{0x00, 0x01, 0x02, 0x10, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x19, 0x1A, 0x1B}
+	services := []int32{0x00, 0x01, 0x02, 0x10, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B}
 	for number, name := range MessageType_name {
 		if number == 0 {
 			if name != "MESSAGE_TYPE_NONE" {

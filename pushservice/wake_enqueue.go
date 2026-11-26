@@ -9,12 +9,12 @@
 //	                 hint_millis that id's milliseconds and due_millis when the sender checks it; the shard is
 //	                 the client id's FNV-1a hash mod 16, and the sender reads every shard
 //
-// Only a hint of a wake class enqueues, mail, team, evs (every evs:<repo_id>) or core, and only while tok
-// is present and sidecar.yml's wake switch is on. It is due now when the hint is forced (§15.6's router
-// on a receiver miss, POST /sidecar/wake) or live is absent, the client's resident gone, else
-// DeferTimeout (15 s) on, a deferred check by which the publisher has most likely delivered the hint and
-// raised ack past it. An entry carries the topic's class, never its id, and the version: the sender's
-// payload is a class and a version only (WK4), so nothing more is stored for it.
+// Only a hint of a wake class enqueues, mail, team, evs (every evs:<repo_id>), core or support (DESIGN-COMPUTE
+// §28.9, which wakes the apps as mail does), and only while tok is present and sidecar.yml's wake switch is on.
+// It is due now when the hint is forced (§15.6's router on a receiver miss, POST /sidecar/wake) or live is
+// absent, the client's resident gone, else DeferTimeout (15 s) on, a deferred check by which the publisher has
+// most likely delivered the hint and raised ack past it. An entry carries the topic's class, never its id, and
+// the version: the sender's payload is a class and a version only (WK4), so nothing more is stored for it.
 //
 // An XADD that fails is tried RetryCount (3) more times within RetryWindow (1 s), and then the wake is
 // counted (urnetwork_wake_enqueue_dropped_total) and dropped, the hint state as the script left it: a lost
@@ -106,11 +106,12 @@ func WakeQueueShard(clientId connect.Id, shardCount int) int {
 	return int(hash.Sum32() % uint32(shardCount))
 }
 
-// The wake class of topic (§18.7's mail, team, evs or core), and false for a topic that wakes no one:
-// sock, tls, dns and the gkm family resync at the client's next start or hourly refetch.
+// The wake class of topic (§18.7's mail, team, evs or core, and DESIGN-COMPUTE §28.9's support, which wakes the apps
+// as mail does so the app can tell its person support replied), and false for a topic that wakes no one: sock, tls,
+// dns, compute and the gkm family resync at the client's next start or hourly refetch.
 func WakeTopicClass(topic string) (string, bool) {
 	switch topic {
-	case sidecar.PushTopicCore, sidecar.PushTopicTeam, sidecar.PushTopicMail:
+	case sidecar.PushTopicCore, sidecar.PushTopicTeam, sidecar.PushTopicMail, sidecar.PushTopicSupport:
 		return topic, true
 	}
 	if strings.HasPrefix(topic, sidecar.PushTopicEvsPrefix) && sidecar.PushTopicClassOf(topic) != sidecar.PushTopicUnknown {
@@ -122,7 +123,7 @@ func WakeTopicClass(topic string) (string, bool) {
 // One wake-queue entry as the push sender reads it.
 type WakeEntry struct {
 	ClientId connect.Id
-	// The topic's wake class: mail, team, evs or core.
+	// The topic's wake class: mail, team, evs, core or support.
 	TopicClass string
 	Version    uint64
 	// The hint's id in the client's stream, which the sender compares with {scp_<C>}ack.
@@ -166,7 +167,7 @@ func ParseWakeEntry(entry *sidecar.RedisStreamEntry) (*WakeEntry, error) {
 		return nil, err
 	}
 	switch topicClass {
-	case sidecar.PushTopicCore, sidecar.PushTopicTeam, sidecar.PushTopicMail, "evs":
+	case sidecar.PushTopicCore, sidecar.PushTopicTeam, sidecar.PushTopicMail, "evs", sidecar.PushTopicSupport:
 	default:
 		return nil, fmt.Errorf("%w: %s's topic class", ErrWakeEntryMalformed, entry.Id)
 	}

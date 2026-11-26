@@ -1,0 +1,18 @@
+// The support push topic's hint (DESIGN-COMPUTE §28.9; owner decision 783): what the feedback service tells each of a
+// member's sidecars, and a tagged sender's own, when the member's support conversation gains an event, in
+// PushHint.hint on topic support with PushHint.kind SUPPORT_HINT. It names the event and nothing of it: no text, no
+// sender and no status, which the device reads from the service over its own session (§28.10), so the residents that
+// carry the hint, and Apple and Google, who see only its wake, learn an entry id and a seq at most (§2.8's support-2).
+// The fields are §28.9's list, numbered in the order it writes them (question support-push-topic-hint-bytes). No
+// oneof, as in push.proto. The forwarding role never links it (owner decision 197).
+
+syntax = "proto3";
+package urnetwork.sidecar;
+
+option go_package = "github.com/urnetwork/sidecar/protocol";
+
+message SupportHint {
+  string product = 1;  // FB section 5's product, urnetwork for the apps' conversation (§28.5)
+  string entry = 2;    // FB section 3's entry id, its digits as the wire carries them
+  uint32 seq = 3;      // the event's place on the entry (FB section 4)
+}

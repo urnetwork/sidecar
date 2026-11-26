@@ -8,9 +8,9 @@
 //	         canary, a forbidden value or a hooked key in any is a finding of CC4/wake
 //	shape    WakeSubmissionErrors holds a submission to WK4 by decoding the vendor's body strictly: APNs' is
 //	         {"aps":{"content-available":1},"t":<class>,"v":<digits>} and FCM's a data message of t and v at high
-//	         priority to its token, the class one of mail, team, evs and core, the version its canonical digits and
-//	         never 0, and no other field anywhere, so a body that gained a run id, a repo id, a sender or a preview
-//	         fails whatever it is called
+//	         priority to its token, the class one of mail, team, evs, core and support, the version its canonical
+//	         digits and never 0, and no other field anywhere, so a body that gained a run id, a repo id, a sender or
+//	         a preview fails whatever it is called
 //
 // The scan and the shape are two checks on purpose: an id is no canary, so only the shape refuses it, and a canary
 // inside an allowed field (a topic class that is user text) is the scan's. privacy_wake_leak.go holds the class's leak
@@ -34,8 +34,8 @@ var PrivacyClassWake = RegisterPrivacyClass("CC4/wake")
 var _ = RegisterPrivacyAssert("wake-payloads", &PrivacyAssertTest{Repo: "sidecar", Package: "github.com/urnetwork/sidecar/sidecartest", Name: "TestWakePayloadsCarryOnlyATopicClassAndVersion"})
 var _ = RegisterPrivacyAssert("wake-payloads", &PrivacyAssertTest{Repo: "sidecar", Package: "github.com/urnetwork/sidecar/sidecartest", Name: "TestAWakePayloadCarryingAnIdFails"})
 
-// The classes a wake names (§18.7): pushservice.WakeTopicClass answers no other.
-var wakeTopicClasses = []string{"mail", "team", "evs", "core"}
+// The classes a wake names (§18.7, and DESIGN-COMPUTE §28.9's support): pushservice.WakeTopicClass answers no other.
+var wakeTopicClasses = []string{"mail", "team", "evs", "core", "support"}
 
 // Adds every submission vendor takes to the capture, read at each scan: its body as the vendor's API would have
 // received it, and its token.

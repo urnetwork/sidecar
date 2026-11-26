@@ -55,6 +55,7 @@ var testProtoFiles = []string{
 	"protocol/smtp.proto",
 	"protocol/socket.proto",
 	"protocol/stream.proto",
+	"protocol/support.proto",
 	"protocol/tls.proto",
 	"protocol/types.proto",
 	"protocol/bridge/auth.proto",
@@ -249,7 +250,8 @@ func TestEnumNumbersStable(t *testing.T) {
 				"SMTP_PREAMBLE": 0x1601, "SMTP_PREAMBLE_RESULT": 0x1602, "SMTP_OUTCOME": 0x1603, "SMTP_STATUS": 0x1604,
 				"SMTP_PROOF": 0x1605, "SMTP_PROOF_RESULT": 0x1606, "SMTP_HANDSHAKE": 0x1607, "SMTP_HANDSHAKE_RESULT": 0x1608,
 				"MAIL_INGRESS": 0x1701, "MAIL_HINT": 0x1702,
-				"LISTENERS": 0x1901, "LISTENERS_RESULT": 0x1902, // DESIGN-COMPUTE §26.8 (CARCH-M11-05)
+				"SUPPORT_HINT": 0x1801,                             // DESIGN-COMPUTE §28.9 (support-push-topic-hint-bytes)
+				"LISTENERS":    0x1901, "LISTENERS_RESULT": 0x1902, // DESIGN-COMPUTE §26.8 (CARCH-M11-05)
 				"CORE_HINT":        0x1A01,
 				"DNS_ZONE_CHANGED": 0x1B01, "DNS_SD_WATCH": 0x1B02, "DNS_SD_WATCH_RESULT": 0x1B03, // §12.9.1 (owner decision 778)
 			},
