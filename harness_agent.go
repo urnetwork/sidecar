@@ -60,12 +60,21 @@ type HarnessBudget struct {
 
 // §7.4's agent.
 type HarnessAgent interface {
-	// Starts a run of turns on text and images, refused while running: use Steer or FollowUp.
+	// Starts a run of turns on text and images, refused while running: use Steer or FollowUp. The text is trusted, as
+	// the person's; PromptAs takes it from another origin.
 	Prompt(ctx context.Context, text string, images [][]byte) error
-	// Delivered after the current turn, before the next model request.
+	// Delivered after the current turn, before the next model request, as the person's.
 	Steer(text string)
-	// Delivered when the agent has no more work, before the run ends.
+	// Delivered when the agent has no more work, before the run ends, as the person's.
 	FollowUp(text string)
+	// Prompt, Steer and FollowUp from origin (§7.10's origins, D-HARN-8): text from an origin that is not trusted
+	// taints the run first, write-ahead, and reaches the model between untrusted-data markers naming its sender, so a
+	// failed taint refuses the text. A prompt refused while running delivers nothing and taints nothing.
+	PromptAs(ctx context.Context, origin *HarnessOrigin, text string, images [][]byte) error
+	SteerAs(ctx context.Context, origin *HarnessOrigin, text string) error
+	FollowUpAs(ctx context.Context, origin *HarnessOrigin, text string) error
+	// Whether the agent's run is working on a prompt now, so a new one is refused.
+	Running() bool
 	// Ends the turn; the stop reason is aborted.
 	Abort()
 	// Returns once the agent is idle, or ctx ends.
@@ -118,8 +127,8 @@ type harnessAgent struct {
 	closed           bool
 	idle             chan struct{}
 	cancelRun        context.CancelFunc
-	steering         []string
-	followUps        []string
+	steering         []*harnessQueued
+	followUps        []*harnessQueued
 	// the session tree: the system node in force, and the leaf the next node hangs from
 	systemNodeId string
 	leafNodeId   string
@@ -389,21 +398,64 @@ func (self *harnessAgent) emit(event *HarnessEvent) {
 	}
 }
 
+// One queued steer or follow-up: its text and where it came from.
+type harnessQueued struct {
+	text   string
+	origin *HarnessOrigin
+}
+
+// The texts of queued, in order.
+func harnessQueuedTexts(queued []*harnessQueued) []string {
+	texts := make([]string, len(queued))
+	for i, item := range queued {
+		texts[i] = item.text
+	}
+	return texts
+}
+
 // The queues, for queue_update.
 func (self *harnessAgent) queues() ([]string, []string) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
-	return append([]string{}, self.steering...), append([]string{}, self.followUps...)
+	return harnessQueuedTexts(self.steering), harnessQueuedTexts(self.followUps)
 }
 
-// Starts a run on text and images, refused while running.
+// Starts a run on text and images as the person's, refused while running.
 func (self *harnessAgent) Prompt(ctx context.Context, text string, images [][]byte) error {
+	return self.PromptAs(ctx, HarnessPersonOrigin(), text, images)
+}
+
+// Starts a run on text and images from origin, refused while running. Text from an origin that is not trusted taints
+// the run before the run starts, so a failed taint refuses the prompt.
+func (self *harnessAgent) PromptAs(ctx context.Context, origin *HarnessOrigin, text string, images [][]byte) error {
 	runCtx, err := self.startRun()
 	if err != nil {
 		return err
 	}
-	go self.runPrompt(runCtx, &harnessInput{text: text, images: images})
+	if err := self.admit(ctx, origin); err != nil {
+		self.endRun()
+		return err
+	}
+	go self.runPrompt(runCtx, &harnessInput{text: text, images: images, origin: origin})
 	return nil
+}
+
+// Taints the run, write-ahead, for text from an origin that is not trusted, before the text can reach the model.
+func (self *harnessAgent) admit(ctx context.Context, origin *HarnessOrigin) error {
+	if origin.Trusted() {
+		return nil
+	}
+	if err := self.run.Taint(ctx, RunTaintUntrustedData); err != nil {
+		return fmt.Errorf("the run's taint did not persist, so the text is refused: %w", err)
+	}
+	return nil
+}
+
+// Whether a prompt runs now.
+func (self *harnessAgent) Running() bool {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.running
 }
 
 // Marks the agent running, answering the run's context; refused while running or closed.
@@ -435,31 +487,49 @@ func (self *harnessAgent) endRun() {
 	close(self.idle)
 }
 
-// Queues text for after the current turn.
+// Queues text for after the current turn, as the person's.
 func (self *harnessAgent) Steer(text string) {
-	func() {
-		self.stateLock.Lock()
-		defer self.stateLock.Unlock()
-		self.steering = append(self.steering, text)
-	}()
-	steering, followUps := self.queues()
-	self.emit(NewHarnessQueueUpdateEvent(steering, followUps))
+	self.SteerAs(context.Background(), HarnessPersonOrigin(), text)
 }
 
-// Queues text for when no work remains.
+// Queues text for when no work remains, as the person's.
 func (self *harnessAgent) FollowUp(text string) {
+	self.FollowUpAs(context.Background(), HarnessPersonOrigin(), text)
+}
+
+// Queues text from origin for after the current turn, the run tainted first where origin is not trusted.
+func (self *harnessAgent) SteerAs(ctx context.Context, origin *HarnessOrigin, text string) error {
+	if err := self.admit(ctx, origin); err != nil {
+		return err
+	}
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
-		self.followUps = append(self.followUps, text)
+		self.steering = append(self.steering, &harnessQueued{text: text, origin: origin})
 	}()
 	steering, followUps := self.queues()
 	self.emit(NewHarnessQueueUpdateEvent(steering, followUps))
+	return nil
+}
+
+// Queues text from origin for when no work remains, the run tainted first where origin is not trusted.
+func (self *harnessAgent) FollowUpAs(ctx context.Context, origin *HarnessOrigin, text string) error {
+	if err := self.admit(ctx, origin); err != nil {
+		return err
+	}
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.followUps = append(self.followUps, &harnessQueued{text: text, origin: origin})
+	}()
+	steering, followUps := self.queues()
+	self.emit(NewHarnessQueueUpdateEvent(steering, followUps))
+	return nil
 }
 
 // Takes the steering queue.
-func (self *harnessAgent) takeSteering() []string {
-	taken := func() []string {
+func (self *harnessAgent) takeSteering() []*harnessQueued {
+	taken := func() []*harnessQueued {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		taken := self.steering
@@ -474,8 +544,8 @@ func (self *harnessAgent) takeSteering() []string {
 }
 
 // Takes the follow-up queue.
-func (self *harnessAgent) takeFollowUps() []string {
-	taken := func() []string {
+func (self *harnessAgent) takeFollowUps() []*harnessQueued {
+	taken := func() []*harnessQueued {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		taken := self.followUps
@@ -625,12 +695,15 @@ func (self *harnessAgent) Close() {
 		defer self.harness.stateLock.Unlock()
 		delete(self.harness.agents, self.id)
 	}()
+	// a view waiting on the agent's events hears that no more come (harness_daemon.go)
+	self.harness.viewClosed(self.id)
 }
 
-// What a run was started on.
+// What a run was started on, and where it came from.
 type harnessInput struct {
 	text   string
 	images [][]byte
+	origin *HarnessOrigin
 }
 
 // An item boundary the loop stopped at when the app left the foreground: the tool calls its turn had left.

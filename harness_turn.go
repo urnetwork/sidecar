@@ -65,7 +65,12 @@ func (self *harnessAgent) runPrompt(ctx context.Context, input *harnessInput) {
 	self.emit(NewHarnessTurnStartEvent())
 	newMessages := []*HarnessPiMessage{}
 	message := self.userMessage(input)
-	if _, err := self.journalMessage(ctx, message, false, ""); err != nil {
+	// text from an origin that is not trusted tainted the run before it started, and the model reads it fenced
+	untrusted, sender := !input.origin.Trusted(), ""
+	if untrusted {
+		sender = input.origin.SenderLabel()
+	}
+	if _, err := self.journalMessage(ctx, message, untrusted, sender); err != nil {
 		self.settle(newMessages, &harnessRunEnd{stopReason: HarnessStopError, errorMessage: err.Error()})
 		return
 	}
@@ -118,11 +123,16 @@ func (self *harnessAgent) settle(newMessages []*HarnessPiMessage, end *harnessRu
 	}
 }
 
-// Delivers queued text as the person's messages before the next request.
-func (self *harnessAgent) deliver(ctx context.Context, texts []string, newMessages *[]*HarnessPiMessage) error {
-	for _, text := range texts {
-		message := NewHarnessPiUserMessage(text, nil, self.harness.clock.Now().UnixMilli())
-		if _, err := self.journalMessage(ctx, message, false, ""); err != nil {
+// Delivers queued text as user messages before the next request, text from an origin that is not trusted fenced (its
+// run was tainted when it was queued).
+func (self *harnessAgent) deliver(ctx context.Context, queued []*harnessQueued, newMessages *[]*HarnessPiMessage) error {
+	for _, item := range queued {
+		message := NewHarnessPiUserMessage(item.text, nil, self.harness.clock.Now().UnixMilli())
+		untrusted, sender := !item.origin.Trusted(), ""
+		if untrusted {
+			sender = item.origin.SenderLabel()
+		}
+		if _, err := self.journalMessage(ctx, message, untrusted, sender); err != nil {
 			return err
 		}
 		self.emit(NewHarnessMessageStartEvent(message))
@@ -136,7 +146,7 @@ func (self *harnessAgent) deliver(ctx context.Context, texts []string, newMessag
 func (self *harnessAgent) turns(ctx context.Context, newMessages *[]*HarnessPiMessage, paused *harnessPause) *harnessRunEnd {
 	turnCount := 0
 	first := paused == nil
-	pending := []string{}
+	pending := []*harnessQueued{}
 	for {
 		hasMoreToolCalls := true
 		for hasMoreToolCalls || 0 < len(pending) {
