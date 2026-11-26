@@ -658,8 +658,9 @@ func approvalDevicesWakeNamesNothing(t *testing.T, wake *FakeApprovalWake, seque
 	}
 }
 
-// An ApprovalRequest reaches a phone by its evs hint, else §18.7's wake (§16.6's flow): the phone's approval part leases
-// the world's log; while the app runs, the CLI's request is a hint to it and wakes nothing, and its next resync raises
+// An ApprovalRequest reaches a phone by its notice's evs hint, else §18.7's wake (§16.6's flow; D-CTXH-10): the phone's
+// approval part leases the world's vault's a/ notices; while the app runs, the CLI's request is a hint to it and wakes
+// nothing, and its next resync raises
 // approval_pending once; once the app is closed, its lease kept at evs, the next request is one wake naming nothing
 // but a topic class and a version, and the next process's resync takes the lease again, raises approval_pending for
 // what waits and decides the request by device, which the CLI spends; a lease left to lapse wakes nothing.
@@ -671,6 +672,7 @@ func TestPhoneReachedByHintElseWake(t *testing.T) {
 	phoneId := phone.Sidecar().Identity().SidecarId
 	surrogate := NewFakeApprovalPhone(devices.net.Clock(), nil)
 	defer surrogate.Follow(world.LogId(), world.Log())()
+	defer surrogate.FollowNotices(world.LogId(), world.Log())()
 	// approval_pending as the app hears it: an event raised while another is delivered reaches the callbacks on the
 	// delivering goroutine, so each is awaited, never read at once
 	pendingEvents := make(chan sidecar.SidecarEvent, 16)
@@ -700,7 +702,9 @@ func TestPhoneReachedByHintElseWake(t *testing.T) {
 	bind := func() *sidecar.ApprovalPhone {
 		part, err := phone.Sidecar().BindApprovalPhone(&sidecar.ApprovalPhoneArgs{
 			Leaser: surrogate,
-			Logs:   func() ([]sidecar.Id, error) { return []sidecar.Id{world.LogId()}, nil },
+			Logs: func() ([]sidecar.ApprovalPhoneLog, error) {
+				return []sidecar.ApprovalPhoneLog{{LogId: world.LogId(), Vault: true}}, nil
+			},
 			Hinted: func() { hints.Add(1) },
 		})
 		if err != nil {

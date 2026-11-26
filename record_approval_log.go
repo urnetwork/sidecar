@@ -12,6 +12,9 @@
 //	           device's admin-approved non-grant action stays pending until the ApprovalDelivery delta exists; read by
 //	           the requester by hint, and by Decision, the poll behind ur://approval/{id}
 //	use        approval_use, after §16.6's Outcome, never instead of it
+//	notice     from M11, a request filed in its author's vault by its own writer, and a decision or cancel filed
+//	           there, owe the request's a/<approval_id> notice its write, rewrite or removal once the entry lands
+//	           (record_approval_notice.go; CTXH-M11-07), so an approver's phone leases a/ and never the whole vault
 //
 // Bodies are stored bytes: an ApprovalRequest as the ledger keeps it, and a decision or a cancel as its Signed bytes,
 // never re-marshaled, since request_sha256 and payload_sha256 bind them. ApprovalDecision holds no run or agent id, and
@@ -33,6 +36,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 
 	"google.golang.org/protobuf/proto"
 
@@ -59,6 +63,8 @@ var (
 type RecordApprovals struct {
 	writer *recordWriter
 	reader *RecordReader
+	// the record's notices part once SidecarRecord.ApprovalNotices made it, nil before
+	notices atomic.Pointer[ApprovalNotices]
 }
 
 // One request waiting for a decision, as an approver's device reads it.
@@ -133,7 +139,18 @@ func (self *RecordApprovals) FileRequest(request *StoredApprovalRequest) (*Recor
 		id := recordIdOf(agentId)
 		draft.AgentId = &id
 	}
-	return self.appendOne(draft)
+	ref, err := self.appendOne(draft)
+	if err != nil {
+		return nil, err
+	}
+	// its notice, where this device writes its own stream of its author's vault: a deposit or a team record's request
+	// has none here
+	if notices := self.notices.Load(); notices != nil && !ref.Spooled && !teamOnly {
+		if route, err := self.route(); err == nil && !route.deposit && route.logId == ref.LogId {
+			notices.noteRequest(ref, request)
+		}
+	}
+	return ref, nil
 }
 
 // Appends one approval-family draft through the writer, which routes it to this device's author's vault.
@@ -219,7 +236,15 @@ func (self *RecordApprovals) fileAnswer(ctx context.Context, logId Id, approvalI
 		StoredBody: storedSigned,
 		TeamOnly:   inTeam,
 	}
-	return self.appendOne(draft)
+	ref, err := self.appendOne(draft)
+	if err != nil {
+		return nil, err
+	}
+	// the request's notice in the vault: rewritten at a decision, removed at a cancel, once this entry lands
+	if notices := self.notices.Load(); notices != nil && !inTeam && !ref.Spooled && ref.LogId == logId {
+		notices.noteAnswer(ref, approvalId, kind)
+	}
+	return ref, nil
 }
 
 // Files an approval_use for one use of approvalId, after §16.6's Outcome is recorded, in the requester's route.
@@ -257,6 +282,32 @@ func (self *RecordApprovals) approvalLogs() ([]Id, error) {
 		return nil, err
 	}
 	return logIds, nil
+}
+
+// The logs a phone's approval part follows on this device and how it leases each (record_approval_app.go's phone row):
+// the author's vault by its a/ notices, and the team record, where this device reads it, whole, since it holds no
+// session entry (I-20).
+func (self *RecordApprovals) approvalPhoneLogs() ([]ApprovalPhoneLog, error) {
+	logIds, err := self.approvalLogs()
+	if err != nil {
+		return nil, err
+	}
+	teamRecordId, _ := recordTeamLogs(self.writer.auth())
+	logs := []ApprovalPhoneLog{}
+	for _, logId := range logIds {
+		logs = append(logs, ApprovalPhoneLog{LogId: logId, Vault: teamRecordId == nil || *teamRecordId != logId})
+	}
+	return logs, nil
+}
+
+// A phone's check of vaultId's notices against its requests (record_approval_notice.go's phone row):
+// ErrApprovalNoticeUnbound while the record has made no notices part or bound no vault.
+func (self *RecordApprovals) CheckNotices(ctx context.Context, vaultId Id) (*ApprovalNoticesChecked, error) {
+	notices := self.notices.Load()
+	if notices == nil {
+		return nil, ErrApprovalNoticeUnbound
+	}
+	return notices.Check(ctx, vaultId)
 }
 
 // The requests waiting in the logs this approver's device reads, each with no decision or cancel and not past its

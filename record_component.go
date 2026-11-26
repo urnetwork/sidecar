@@ -34,6 +34,9 @@ func NewRecordComponent(record *SidecarRecord) SidecarComponent {
 	// and every sync looks for late copies of erased entries, the loop erasing them and going on with an erasure that
 	// waits (record_erase.go)
 	record.hookErasures()
+	// and the loop writes each approval request's a/<approval_id> notice in the vault once its entry lands, with its
+	// rewrite or removal at a decision or cancel and the repair (record_approval_notice.go; CTXH-M11-07)
+	record.ApprovalNotices()
 	return &recordComponent{record: record}
 }
 
