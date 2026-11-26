@@ -420,8 +420,6 @@ func (self *RecordApprovals) CheckNotices(ctx context.Context, vaultId Id) (*App
 	return notices.Check(ctx, vaultId)
 }
 
-
-
 // Binds where a vault's notices are read and written: an EvsClient's repos (bindMemberReplica), or a test's. Nil
 // unbinds, and writes stay owed.
 func (self *ApprovalNotices) Bind(vault func(repoId Id) ApprovalNoticeVault) {
