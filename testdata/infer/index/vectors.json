@@ -1,0 +1,46 @@
+{
+  "about": "A local model file's chunk index (DESIGN-COMPUTE §6.5, CO-49; compute-plan-model-index-format, QD-1408): RFC 8785 canonical JSON of the file's byte count, the chunk size, each chunk's lowercase hex SHA-256 in order, the file's SHA-256 and the version, written by sidecar's InferModelIndexBuild. Each index file holds the index's bytes exactly, with no newline, and index_sha256 is their SHA-256, the pin a manifest carries.",
+  "content": "byte i of a vector's file is i mod 251, for i from 0",
+  "vectors": [
+    {
+      "name": "empty",
+      "byte_count": 0,
+      "chunk_byte_count": 16777216,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "index": "empty.json",
+      "index_sha256": "08beaf90606a7b26fa3ad9bab942b49fd4dfac5ff93d7f5a0ab1981956430416"
+    },
+    {
+      "name": "one-byte",
+      "byte_count": 1,
+      "chunk_byte_count": 16777216,
+      "sha256": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
+      "index": "one-byte.json",
+      "index_sha256": "ef3335a1d5a22d21a7fc4cb25940099427a6776f34b05ce37d85aeac2e21fdb0"
+    },
+    {
+      "name": "one-chunk",
+      "byte_count": 16777216,
+      "chunk_byte_count": 16777216,
+      "sha256": "287507f403176f1f5b22b9a4d9cb49f7d7f88ac19e406b5ae87ce109564846bd",
+      "index": "one-chunk.json",
+      "index_sha256": "59f8a8d66e37644d9c5d6b4221edc5c6c34faab2752a6072a0867d7869fbff47"
+    },
+    {
+      "name": "one-chunk-and-one-byte",
+      "byte_count": 16777217,
+      "chunk_byte_count": 16777216,
+      "sha256": "4f0d26681f3c27a767c8e643f3ab9208de29d96ca7119774c559d27cfa4697f8",
+      "index": "one-chunk-and-one-byte.json",
+      "index_sha256": "6889490e8c4d97629dc9421f0c50a3292cb17f159cb3a816f619691cda2b9e11"
+    },
+    {
+      "name": "three-chunks-and-a-tail",
+      "byte_count": 50343993,
+      "chunk_byte_count": 16777216,
+      "sha256": "6793897cdb0f51ca506ac221ea6ec974040c7b96da385558b74b82542ee3f6b4",
+      "index": "three-chunks-and-a-tail.json",
+      "index_sha256": "1d8cd16f9d5437fb55b47f00866325aeb534ae205a5506688ed5c2e4b6a1c494"
+    }
+  ]
+}

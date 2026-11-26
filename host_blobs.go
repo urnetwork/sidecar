@@ -157,6 +157,26 @@ func BlobClientPaced(ctx context.Context) bool {
 	return paced
 }
 
+// The context key WithBlobProbe stores under.
+type blobProbeKey struct{}
+
+// ctx for a Head or List a store check sends: a cluster's sentinel HEAD every 30 s (§19.4's evs row), or evs's and
+// gkm's readiness probe, a List of place/ for one key on the first cluster every few seconds. A check is one request
+// a cluster or an engine at a time, never a burst, and it is there to measure the store, so an implementation that
+// caps the connections it opens to a host (server's FileClusterSettings.MaxConnsPerHost, §11.15's fan-out) sends it
+// outside the cap, where the block's own queue for the host cannot read as the store failing (owner decision 790).
+// Its deadline and deadline header are any request's. A Get or a write on ctx, and every request to an
+// implementation with no such cap, goes as before, and a store that does not answer still fails the check.
+func WithBlobProbe(ctx context.Context) context.Context {
+	return context.WithValue(ctx, blobProbeKey{}, true)
+}
+
+// Whether ctx says a Head or List is a store check's (WithBlobProbe).
+func BlobProbe(ctx context.Context) bool {
+	probe, _ := ctx.Value(blobProbeKey{}).(bool)
+	return probe
+}
+
 // §11.8's create of an immutable key (place/, log/, pb/, hp/, pmap/, pidx/, spidx/, dropscan/ and any
 // other family its immutable row names): creates key holding body and returns the ETag it holds. The
 // one helper every family's writer calls, so each answers a lost response alike (D-EVS-13):

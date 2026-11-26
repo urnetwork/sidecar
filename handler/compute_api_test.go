@@ -17,13 +17,22 @@ import (
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
-// Registers handler for the test alone.
+// Registers handler for the test alone, in place of the route's own where its task registered one (the promotion
+// route, BAL-M12-13), which it puts back after.
 func testRegisterComputeApiHandler(t *testing.T, method string, path string, handler ComputeApiHandler) {
+	key := computeApiRouteKey(method, path)
+	computeApiStateLock.Lock()
+	saved, registered := computeApiHandlers[key]
+	delete(computeApiHandlers, key)
+	computeApiStateLock.Unlock()
 	RegisterComputeApiHandler(method, path, handler)
 	t.Cleanup(func() {
 		computeApiStateLock.Lock()
 		defer computeApiStateLock.Unlock()
-		delete(computeApiHandlers, computeApiRouteKey(method, path))
+		delete(computeApiHandlers, key)
+		if registered {
+			computeApiHandlers[key] = saved
+		}
 	})
 }
 
@@ -66,6 +75,10 @@ func TestComputeApiRoutesRefuseUntilRegistered(t *testing.T) {
 	for i, route := range routes {
 		if route.Method+" "+route.Path != want[i] {
 			t.Errorf("route %d is %s %s, want %s", i, route.Method, route.Path, want[i])
+		}
+		if computeApiHandlerOf(route.Method, route.Path) != nil {
+			// its task registered it: it answers its handler (compute_promo_test.go holds the promotion route's)
+			continue
 		}
 		body := []byte(nil)
 		if route.Method == http.MethodPost {
