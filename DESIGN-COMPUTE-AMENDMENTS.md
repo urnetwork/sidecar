@@ -1048,6 +1048,8 @@ All seven stand, each a format change the enclave tasks land under the `enclaves
 
 Builds: CARCH-M11-05, CTXH-M11-08. Question: `compute-plan-enc-readings.md`.
 
+**As built (2026-11-26; DESIGN.md's fourteenth fold).** Reading 2 is kind 57 `enclave`, class action, its body `EnclaveEntryBody`; reading 3 is `ReachReceipt`'s kind 7 `ssh`, one receipt a session and never coalesced, its fields 12 to 16 the login user, the open and close times and the bytes each way, the `ssh` reach kind `.stack/plan/CONTRACTS.md`'s C-26 settled, rather than a message of its own (CTXH-M11-08, sidecar d54fa1f7). Kind 57 sits among RECORD.md section 6.1's raw capture numbers by the owner's answer QD-1426 (DESIGN.md's owner decision 802).
+
 ### QD-1418: How does one of the person's own devices prove its SSH host key, and what does the attach origin name as its target, since §12.5 and §12.6 give both only for an enclave's incarnation?
 *Amends §12.5, §12.6 and §7.10. Option 1.*
 
@@ -1259,6 +1261,8 @@ The tests that hold the record's code to RECORD.md and DESIGN.md, record_kind_te
 Builds: CTXH-M11-01, CTXH-M11-02, CTXH-M11-08, SAFE-M13-08. Question: `compute-plan-record-registry-fold.md`.
 
 **Carried for context history (2026-11-25; DESIGN.md's thirteenth fold).** RECORD.md's sections 5.2 to 5.7, 6.1, 6.3, 6.4, 7.1 and 8 give kinds 54 and 55, class 8 and the body filed apart at `s/<n>`, which CTXH-M11-01 and CTXH-M11-02 built, and DESIGN §16.8's fences `body_apart` and `Coverage`'s field 8, so record_kind_test.go's kind and class lines and design_unfenced_test.go's two field lines left in the commits that wrote them; the lists stay, empty, for kind 56 and CTXH-M11-08's enclave kinds, which this rule still lands.
+
+**The enclave kinds (2026-11-26; DESIGN.md's fourteenth fold).** CTXH-M11-08 declared kind 57 `enclave` with `EnclaveEntryBody` and `ReachReceipt`'s kind 7 `ssh` with its fields 12 to 16 through these lists (sidecar d54fa1f7). RECORD.md section 6.1 gives the exception the owner's answer QD-1426 makes for kinds 56 and 57 (DESIGN.md's owner decision 802), the numbers after 55 whatever their class, and section 21 says what waits: sections 6.2 to 6.4 and 8 take kind 57 and reach kind 7 with their writers, ENC-M14-08 and SSH-M14-02, and kind 56 with SAFE-M13-08, so the lists keep their lines until then.
 
 ### QD-1410: Which build leg and size gate hold ur.io's page Worker once it links the Harness and a js connect client, and is that client C17 or the full one?
 *Amends §7.5 and Appendix D's rows for DESIGN §4.6's C17 and §18.10's page Worker build. Option 1.*

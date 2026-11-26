@@ -3,6 +3,11 @@
 // instances keep their IPv6 addresses across restarts of the tun and the daemon; the tun turns the bridge's translator
 // on over it while it carries the network (tun_device.go), and the platform puts the tun's own address of the /48 on
 // the device and routes the instances' /96 into it (urTunTranslatorInterface).
+//
+// The translator gives the Linux advertising proxy its IPv6 on the tun's link too (discovery_proxy_mdns.go's ipv6
+// row): it answers from <block>.0.53's address in the /96, which the host routes into the tun as it routes
+// <block>.0.53, and the tun hands it the mDNS queries the host sends from the tun's own address of the /48, or from a
+// link-local one (tun_device.go's handMdns).
 
 package main
 
@@ -52,6 +57,8 @@ type urTunTranslatorBridge interface {
 	SetTranslator(ula netip.Prefix, mtu int) error
 	// The instances' /96 and the tun's own address, invalid while off.
 	TranslatorAddresses() (netip.Prefix, netip.Addr)
+	// An IPv4 address's IPv6 one in the instances' /96, invalid while off or for no IPv4 address.
+	TranslatedAddress(address netip.Addr) netip.Addr
 	// Writes into out a reply to <block>.0.46 translated back to IPv6 (device.Bridge.TranslateReply).
 	TranslateReply(out []byte, packet []byte) (int, bool)
 	// Packets translated out and back, and dropped.
@@ -59,6 +66,26 @@ type urTunTranslatorBridge interface {
 }
 
 var _ urTunTranslatorBridge = (*device.Bridge)(nil)
+
+// urDiscoveryProxyLink: <block>.0.53 at its address in the translator's /96, which the advertising proxy answers IPv6
+// mDNS from as it answers IPv4's from <block>.0.53 itself; invalid while the translator is off or before a block. Not
+// the tun's own address, which the host's mDNS stack would take for its own echo (discovery_proxy_mdns.go's ipv6 row).
+func (self *urTun) ResolverIpv6Address() netip.Addr {
+	if self.translator == nil {
+		return netip.Addr{}
+	}
+	return self.translator.TranslatedAddress(self.ResolverAddress())
+}
+
+// The tun's own address of the /48, which the host's stack may send its mDNS queries on the link from; invalid while
+// the translator is off. self.translator is set once before the tun's loops start.
+func (self *urTun) translatorOwnAddress() netip.Addr {
+	if self.translator == nil {
+		return netip.Addr{}
+	}
+	_, own := self.translator.TranslatorAddresses()
+	return own
+}
 
 // The /48 in the network's sealed local state, under the choices' class, so a process that cannot open the instance's
 // keychain can neither read nor change it.

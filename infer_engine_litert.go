@@ -2,10 +2,9 @@
 
 // LiteRT-LM's C API through purego (DESIGN-COMPUTE §6.5, D-INFER-2): the backend the ur-engine helper drives, and the
 // helper's main. Only the ur_engine build tag builds this file, which the helper's executable sets, so ur and the sdk
-// link no binding and no LiteRT-LM symbol, and nothing here runs with the daemon's keys. Where that executable's main
-// lives waits on question infer-m11-02-ur-engine-main-location: QD-1247 put it in cli/ur-engine/, which check's §4.9
-// rule refuses, so no build makes the helper until it is answered. There is no cgo: purego loads the C library and
-// calls it, and one callback, made once, carries every stream's chunks by an integer key.
+// link no binding and no LiteRT-LM symbol, and nothing here runs with the daemon's keys. The executable is cli built
+// with that tag, whose cli/main_ur_engine.go calls InferEngineHelperMain (QD-1401). There is no cgo: purego loads the C
+// library and calls it, and one callback, made once, carries every stream's chunks by an integer key.
 //
 // What it holds to (§6.5):
 //
@@ -382,11 +381,22 @@ func (self *inferEngineLiteRtConversation) close() {
 	self.model.api.conversationDelete(self.conversation)
 }
 
-// The ur-engine helper's main: serves the protocol on its stdio over LiteRT-LM until its input ends, and answers the
-// process's exit code. Its settings are the defaults, whose protocol bounds the daemon's share.
+// The ur-engine helper's main: confines itself to what its environment names before it loads anything, running
+// nothing where it cannot (infer_engine_confine.go), then serves the protocol on its stdio over LiteRT-LM until its
+// input ends, and answers the process's exit code. Its settings are the defaults, whose protocol bounds the daemon's
+// share.
 func InferEngineHelperMain() int {
 	settings := DefaultInferSettings()
-	err := inferEngineHelperServe(context.Background(), os.Stdin, os.Stdout, newInferEngineLiteRt(), inferEngineMethods, settings)
+	confinement, err := parseInferEngineConfineEnvironment(os.Environ())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ur-engine: %s, so it runs nothing\n", err)
+		return 2
+	}
+	if err := inferEngineConfine(confinement, settings, os.Args, os.Environ()); err != nil {
+		fmt.Fprintf(os.Stderr, "ur-engine: %s, so it runs nothing\n", err)
+		return 1
+	}
+	err = inferEngineHelperServe(context.Background(), os.Stdin, os.Stdout, newInferEngineLiteRt(), inferEngineMethods, settings)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ur-engine: %s\n", err)
 		return 1

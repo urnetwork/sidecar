@@ -77,6 +77,17 @@ func (self *testTunTranslatorBridge) TranslatorAddresses() (netip.Prefix, netip.
 	return instances, netip.AddrFrom16(octets)
 }
 
+func (self *testTunTranslatorBridge) TranslatedAddress(address netip.Addr) netip.Addr {
+	instances, _ := self.TranslatorAddresses()
+	if !instances.IsValid() || !address.Is4() {
+		return netip.Addr{}
+	}
+	octets := instances.Addr().As16()
+	ipv4 := address.As4()
+	copy(octets[12:], ipv4[:])
+	return netip.AddrFrom16(octets)
+}
+
 func (self *testTunTranslatorBridge) TranslateReply(out []byte, packet []byte) (int, bool) {
 	if netip.AddrFrom4([4]byte(packet[16:20])) != netip.MustParseAddr("100.70.0.46") {
 		return 0, false
@@ -193,6 +204,10 @@ func TestTunLeavesTheTranslatorOffWhereThePlatformRefuses(t *testing.T) {
 	if status.Translator != "" || status.TranslatorError != "IPv6 is off on this device" {
 		t.Fatalf("status %+v", status)
 	}
+	// and the advertising proxy holds no IPv6 address on the link
+	if address := tun.ResolverIpv6Address(); address.IsValid() {
+		t.Fatalf("the proxy's IPv6 address reads %v", address)
+	}
 	// with it off, a packet to the translator's address is written as it is
 	reply := testTunPacket("100.70.1.2", "100.70.0.46", 6, []byte("reply"))
 	links.current()(connect.TransferPath{}, protocol.ProvideMode_Network, nil, reply)
@@ -254,6 +269,60 @@ func TestTunHandsTheHostsMdnsQueriesToTheProxy(t *testing.T) {
 	}
 }
 
+// Over IPv6 the tun hands the advertising proxy each mDNS query the host sends on its link from the translator's own
+// address or from a link-local one, and the bridge the rest, IPv6's group on another port among them; the proxy's IPv6
+// address is <block>.0.53's in the translator's /96, never the tun's own, and its answers go into the device as they
+// are.
+func TestTunHandsTheHostsIpv6MdnsQueriesToTheProxy(t *testing.T) {
+	tun, tunBridge, iface, _ := startTestTranslatorTun(t, &urTunMemoryTranslator{}, nil)
+	defer tun.close()
+	instances, own := tunBridge.TranslatorAddresses()
+	resolver := tun.ResolverIpv6Address()
+	if resolver != tunBridge.TranslatedAddress(netip.MustParseAddr("100.70.0.53")) || !instances.Contains(resolver) || resolver == own {
+		t.Fatalf("the proxy's IPv6 address reads %v, the /96 %v and the tun's own %v", resolver, instances, own)
+	}
+	link := &testTunLink{}
+	tunBridge.stateLock.Lock()
+	tunBridge.route = func(packet []byte) connect.UserNatClient { return link }
+	tunBridge.stateLock.Unlock()
+	query := &urMdnsMessage{questions: []urMdnsQuestion{{name: urMdnsNameParse("_remotepairing._tcp.local"), qtype: urMdnsTypePtr}}}
+	payload := query.pack(9000)[0]
+	group := netip.AddrPortFrom(urMdnsProxyIpv6Group, 5353)
+	fromOwn := urMdnsProxyUdpPacket(netip.AddrPortFrom(own, 5353), group, payload)
+	fromLinkLocal := urMdnsProxyUdpPacket(netip.MustParseAddrPort("[fe80::1234]:5353"), group, payload)
+	foreign := urMdnsProxyUdpPacket(netip.MustParseAddrPort("[2001:db8::7]:5353"), group, payload)
+	otherPort := urMdnsProxyUdpPacket(netip.AddrPortFrom(own, 5353), netip.AddrPortFrom(urMdnsProxyIpv6Group, 5355), payload)
+	ipv4 := urMdnsProxyUdpPacket(netip.MustParseAddrPort("100.70.9.9:5353"), netip.MustParseAddrPort("224.0.0.251:5353"), payload)
+	handed := make(chan []byte, 8)
+	tun.SetMdnsReceiver(func(packet []byte) { handed <- slices.Clone(packet) })
+	defer tun.SetMdnsReceiver(nil)
+	iface.reads <- testTunRead{packets: [][]byte{fromOwn, foreign, fromLinkLocal, otherPort, ipv4}}
+	// the next read is taken only once the first batch has gone through
+	iface.reads <- testTunRead{}
+	for _, want := range [][]byte{fromOwn, fromLinkLocal, ipv4} {
+		if got := <-handed; !bytes.Equal(got, want) {
+			t.Fatalf("the proxy was handed %x", got)
+		}
+	}
+	select {
+	case got := <-handed:
+		t.Fatalf("the proxy was handed a fourth packet %x", got)
+	default:
+	}
+	if taken := link.taken(); len(taken) != 2 || !bytes.Equal(taken[0], foreign) || !bytes.Equal(taken[1], otherPort) {
+		t.Fatalf("the bridge took %d packets", len(taken))
+	}
+	// an IPv6 answer is no reply to the translator's address, so it goes into the device as it is
+	answer := urMdnsProxyUdpPacket(netip.AddrPortFrom(resolver, 5353), group, payload)
+	tun.WritePacket(answer)
+	iface.stateLock.Lock()
+	writes := slices.Clone(iface.writes)
+	iface.stateLock.Unlock()
+	if len(writes) != 1 || !bytes.Equal(writes[0], answer) {
+		t.Fatalf("the device was written %q", writes)
+	}
+}
+
 // The app's VPN component carries a network for discovery only on a paired Mac whose app routes the network's block on
 // another interface while ur tun does not carry it (§17.7.1's default row; bridge_discovery_app.go).
 func TestAppViewingNeedsAPairedMacWhoseAppRoutesTheBlock(t *testing.T) {
@@ -279,7 +348,7 @@ func TestAppViewingNeedsAPairedMacWhoseAppRoutesTheBlock(t *testing.T) {
 		}
 	}
 	link := urAppDiscoveryLink{}
-	if link.ResolverAddress().IsValid() || link.SetLinkMulticastDns(true) == nil {
+	if link.ResolverAddress().IsValid() || link.ResolverIpv6Address().IsValid() || link.SetLinkMulticastDns(true) == nil {
 		t.Fatal("the app's link answers for a tun it is not")
 	}
 }

@@ -741,8 +741,9 @@ func (self *urTun) dropWithheld(packets [][]byte, withheld []netip.Prefix) [][]b
 }
 
 // Hands each mDNS packet the host sends on the tun's link from its own addresses to receive, the advertising proxy's,
-// and returns it to the pool; answers the rest in their order, in packets' own array. The addresses are read only for
-// a packet to mDNS's group.
+// and returns it to the pool; answers the rest in their order, in packets' own array. The addresses, the overlay's and
+// the translator's own IPv6 one, are read only for a packet to one of mDNS's groups, and over IPv6 a link-local source
+// is the host's own too (urMdnsProxyQueryFrom).
 func (self *urTun) handMdns(packets [][]byte, receive func(packet []byte)) [][]byte {
 	var addresses []netip.Addr
 	kept := packets[:0]
@@ -754,6 +755,9 @@ func (self *urTun) handMdns(packets [][]byte, receive func(packet []byte)) [][]b
 					defer self.stateLock.Unlock()
 					addresses = slices.Clone(self.addresses)
 				}()
+				if own := self.translatorOwnAddress(); own.IsValid() {
+					addresses = append(addresses, own)
+				}
 			}
 			if urMdnsProxyQueryFrom(packet, addresses) {
 				receive(packet)
