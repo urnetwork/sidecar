@@ -83,7 +83,10 @@ func (self *SocketComponent) refreshSocketConfig() (stateChanged, localChanged, 
 }
 
 // Obtains the immutable canonical label on first use. A qualified call that
-// names an alias resolves it from this network's authenticated DNS zone.
+// names an alias resolves it from this network's authenticated DNS zone, and one
+// that names an alias in its 90 days of retiring from the retiring aliases the
+// zone and the network's label table keep (dns_label_zone_row.go), until the
+// alias's tombstone time on this component's clock (§12.5).
 func (self *SocketComponent) prepareSocketNetwork(ctx context.Context, networkLabel string) error {
 	if self.host == nil {
 		return nil
@@ -97,16 +100,14 @@ func (self *SocketComponent) prepareSocketNetwork(ctx context.Context, networkLa
 		return nil
 	}
 	if networkLabel != "" {
-		dns, err := self.host.Dns()
-		if err == nil {
-			zone, err := dns.Zone(ctx)
-			if err == nil {
-				row, err := canonicalNetworkLabelRow(NetworkLabelRow{NetworkId: zone.NetworkId, Root: zone.Root, Label: zone.Label, Alias: zone.Alias})
-				if err != nil {
-					return &SocketCodeError{Err: ErrSocketUnavailable}
-				}
-				return self.installHostLabels(row.NetworkId, &SocketNetworkLabels{Label: row.Label, Root: row.Root, Resolver: &NetworkLabelTable{rows: []NetworkLabelRow{row}}})
+		if zone, row, err := self.host.networkLabelZoneRow(ctx); zone != nil {
+			if err != nil {
+				return &SocketCodeError{Err: ErrSocketUnavailable}
 			}
+			// on this component's clock, so a resolver installed before an alias's tombstone time resolves it no
+			// more from then on
+			resolver := &NetworkLabelTable{rows: []NetworkLabelRow{row}, clock: self.clock}
+			return self.installHostLabels(row.NetworkId, &SocketNetworkLabels{Label: row.Label, Root: row.Root, Resolver: resolver})
 		}
 	}
 	answer, err := generation.sidecarApi.GetSidecarLabel(ctx)
