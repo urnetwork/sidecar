@@ -1,24 +1,34 @@
 // §17.7.1's advertising proxy on ur tun's own link, as Linux runs it (discovery_proxy_linux.go; owner decision 778),
 // apart from Linux so it runs and is tested on every platform: an mDNS responder for the instances the viewer keeps,
-// answering the queries the host's own mDNS stack sends on ur tun's link, systemd-resolved once ur tun sets the link's
-// MulticastDNS, or Avahi from 0.9, which uses any multicast interface. The tun hands it the mDNS packets that reach the
-// tun from the host's own address, and it answers into the tun alone, from <block>.0.53 with RFC 6762 §10's TTLs, so
-// nothing it sends reaches a LAN interface.
+// answering the queries the host's own mDNS stack sends on ur tun's link over IPv4 and IPv6 alike, to 224.0.0.251 and
+// ff02::fb (RFC 6762 §3; Apple's stack and many Linux hosts ask over both), systemd-resolved once ur tun sets the
+// link's MulticastDNS, or Avahi from 0.9, which uses any multicast interface. The tun hands it the mDNS packets that
+// reach the tun from the host's own address, and it answers into the tun alone, from <block>.0.53, or over IPv6 from
+// that address's twin in the translator's /96 (the ipv6 row), with RFC 6762 §10's TTLs, so nothing it sends reaches a
+// LAN interface.
 //
 //	records   per instance under its registration's name (sidecar.BridgeDiscoveryRegistrations): PTR from its type and
 //	          from each subtype, and PTR from _services._dns-sd._udp.local. to its type, PointerTtl; SRV to its target
 //	          and its TXT, unchanged, HostTtl and PointerTtl with cache-flush; and per target its A, and its AAAA at
 //	          the translated address while ur tun's translator runs, HostTtl with cache-flush (the same records
-//	          macOS's registrations make)
+//	          macOS's registrations make), the same records over either family
 //	answer    a query from the host's own address on port 5353 gets each record that answers a question, those its
 //	          known-answer list holds with half their TTL or more left out (RFC 6762 §7.1), SRV, TXT and the target's
-//	          addresses as additionals (RFC 6763 §12), multicast to 224.0.0.251:5353; a type a name the proxy owns does not
-//	          hold, an AAAA while the translator is off among them, is denied by an NSEC (§6.1); a query from another
-//	          port is a legacy one, answered to it alone with its id and questions and TTLs of at most LegacyTtl (§6.7)
+//	          addresses as additionals (RFC 6763 §12), multicast to its own family's group, 224.0.0.251:5353 or
+//	          [ff02::fb]:5353; a type a name the proxy owns does not hold, an AAAA while the translator is off among
+//	          them, is denied by an NSEC (§6.1); a query from another port is a legacy one, answered to it alone with its
+//	          id and questions and TTLs of at most LegacyTtl (§6.7)
+//	ipv6      answered from <block>.0.53's address in the translator's /96 (ur tun's ResolverIpv6Address), which the
+//	          host routes into the tun as it routes <block>.0.53, never from the host's own address: a host's mDNS
+//	          stack takes a packet from an address of its own for its own echo and drops it, as systemd-resolved does,
+//	          and Linux's IPv4 stack refuses one as a martian, which is why IPv4's answers come from <block>.0.53 too;
+//	          while the translator is off the proxy holds no IPv6 address, and an IPv6 query goes unanswered while its
+//	          IPv4 twin is answered
 //	announce  a record that appears is announced twice, AnnounceInterval apart (RFC 6762 §8.3); one that goes or changes
-//	          is withdrawn by a goodbye, its TTL 0 (§10.1), at once, and a closing proxy says goodbye to all
+//	          is withdrawn by a goodbye, its TTL 0 (§10.1), at once, and a closing proxy says goodbye to all; each on
+//	          both families where the proxy holds an address of each, since the host's stack caches each apart
 //	off       where Avahi's reflector is on, which would repeat what it sends onto the LAN, the proxy sends nothing at all
-//	          and ur bridge devices says why (reflectorOn, Linux's check)
+//	          on either family, and ur bridge devices says why (reflectorOn, Linux's check)
 //
 // The tun's read loop hands a packet over without waiting: the queue takes it or drops it, counted (CODESTYLE's
 // receive callbacks). Names, TXT and addresses reach no log (I-13).
@@ -41,13 +51,16 @@ import (
 
 // What an advertising proxy that answers on ur tun's link reaches of the tun (urTun's).
 type urDiscoveryProxyLink interface {
-	// Hands each mDNS packet the tun reads from the host's own address to receive, a whole IPv4 packet the caller
-	// owns again once receive returns; nil hands none. receive must not block.
+	// Hands each mDNS packet the tun reads from the host's own address to receive, a whole IPv4 or IPv6 packet the
+	// caller owns again once receive returns; nil hands none. receive must not block.
 	SetMdnsReceiver(receive func(packet []byte))
-	// Writes one IPv4 packet into the tun.
+	// Writes one IPv4 or IPv6 packet into the tun.
 	WritePacket(packet []byte)
-	// The block's resolver, <block>.0.53, which the proxy answers from; invalid before a block.
+	// The block's resolver, <block>.0.53, which the proxy answers IPv4 from; invalid before a block.
 	ResolverAddress() netip.Addr
+	// The resolver's address in the translator's /96, which the proxy answers IPv6 from (the file's ipv6 row); invalid
+	// while the translator is off or before a block.
+	ResolverIpv6Address() netip.Addr
 	// Turns the host's mDNS on the link on or off: systemd-resolved's MulticastDNS for the link on Linux.
 	SetLinkMulticastDns(on bool) error
 }
@@ -63,9 +76,11 @@ type urMdnsProxySettings struct {
 	LegacyTtl  time.Duration
 	// The packets the queue holds for the responder's goroutine: 64, the rest dropped and counted. Positive.
 	QueueCount int
-	// The largest message the responder writes: 1,252 B, the tun's 1,280 B MTU less IPv4's and UDP's headers, so no
-	// answer fragments; a larger answer is split over several messages. Positive.
-	MessageByteCount int
+	// The largest message the responder writes over IPv4, 1,252 B, and over IPv6, 1,232 B: the tun's 1,280 B MTU less
+	// each family's IP header and UDP's, so no answer fragments; a larger answer is split over several messages.
+	// Positive.
+	MessageByteCount     int
+	Ipv6MessageByteCount int
 	// How often Avahi's reflector setting is read again: 1 min. Positive.
 	ReflectorInterval time.Duration
 }
@@ -73,24 +88,36 @@ type urMdnsProxySettings struct {
 // The values above.
 func defaultUrMdnsProxySettings() *urMdnsProxySettings {
 	return &urMdnsProxySettings{
-		AnnounceInterval:  1 * time.Second,
-		PointerTtl:        4500 * time.Second,
-		HostTtl:           120 * time.Second,
-		LegacyTtl:         10 * time.Second,
-		QueueCount:        64,
-		MessageByteCount:  1252,
-		ReflectorInterval: 1 * time.Minute,
+		AnnounceInterval:     1 * time.Second,
+		PointerTtl:           4500 * time.Second,
+		HostTtl:              120 * time.Second,
+		LegacyTtl:            10 * time.Second,
+		QueueCount:           64,
+		MessageByteCount:     1252,
+		Ipv6MessageByteCount: 1232,
+		ReflectorInterval:    1 * time.Minute,
 	}
 }
 
-// mDNS's group and port (RFC 6762 §3), and the names DNS-SD fixes: identifiers.
+// mDNS's groups and port (RFC 6762 §3), 224.0.0.251 and ff02::fb, and the names DNS-SD fixes: identifiers.
 var (
-	urMdnsProxyGroup    = urMdnsGroup.Addr()
-	urMdnsLocalName     = urMdnsNameParse("local")
-	urMdnsServicesName  = urMdnsNameParse("_services._dns-sd._udp.local")
-	urMdnsSubtypeLabel  = "_sub"
-	urMdnsProxyPort     = urMdnsGroup.Port()
-	urMdnsProxyUdpProto = byte(17)
+	urMdnsProxyGroup     = urMdnsGroup.Addr()
+	urMdnsProxyIpv6Group = netip.AddrFrom16([16]byte{0: 0xFF, 1: 0x02, 15: 0xFB})
+	urMdnsLocalName      = urMdnsNameParse("local")
+	urMdnsServicesName   = urMdnsNameParse("_services._dns-sd._udp.local")
+	urMdnsSubtypeLabel   = "_sub"
+	urMdnsProxyPort      = urMdnsGroup.Port()
+	urMdnsProxyUdpProto  = byte(17)
+)
+
+// IPv4's, IPv6's and UDP's numbers the responder reads and writes (RFC 791, RFC 8200, RFC 768): the headers' fixed
+// sizes, and the TTL and hop limit every mDNS packet carries, by which a receiver knows it came from its own link
+// (RFC 6762 §11), a value the protocol fixes and no bound.
+const (
+	urMdnsProxyHopLimit            = 255
+	urMdnsProxyIpv4HeaderByteCount = 20
+	urMdnsProxyIpv6HeaderByteCount = 40
+	urMdnsProxyUdpHeaderByteCount  = 8
 )
 
 // One record the responder answers with, and the records it brings as additionals.
@@ -399,7 +426,7 @@ func (self *urMdnsDiscoveryProxy) announce(keys []string) {
 			answers = append(answers, record.record)
 		}
 	}
-	self.send(answers, nil, nil, netip.AddrPortFrom(urMdnsProxyGroup, urMdnsProxyPort), 0)
+	self.multicast(answers)
 }
 
 // Sends a goodbye, TTL 0, for each record of keys (RFC 6762 §10.1).
@@ -412,13 +439,29 @@ func (self *urMdnsDiscoveryProxy) goodbye(keys []string) {
 			answers = append(answers, goodbye)
 		}
 	}
-	self.send(answers, nil, nil, netip.AddrPortFrom(urMdnsProxyGroup, urMdnsProxyPort), 0)
+	self.multicast(answers)
 }
 
-// Answers one query the tun handed over (the file's answer row).
+// Sends answers unsolicited to IPv4's group, then to IPv6's, each where the link holds the proxy an address of its
+// family (send), so neither family's caches miss an announcement or keep a record past its goodbye.
+func (self *urMdnsDiscoveryProxy) multicast(answers []urMdnsRecord) {
+	for _, group := range []netip.Addr{urMdnsProxyGroup, urMdnsProxyIpv6Group} {
+		self.send(answers, nil, nil, netip.AddrPortFrom(group, urMdnsProxyPort), 0)
+	}
+}
+
+// Answers one query the tun handed over (the file's answer row), on the family it came over.
 func (self *urMdnsDiscoveryProxy) answer(packet []byte) {
 	source, payload, ok := urMdnsProxyUdpPayload(packet)
-	if !ok {
+	if !ok || source.Addr().Is4In6() {
+		return
+	}
+	group := urMdnsProxyGroup
+	if source.Addr().Is6() {
+		group = urMdnsProxyIpv6Group
+	}
+	// a family the link holds the proxy no address of goes unanswered: IPv6 while the translator is off
+	if from, _ := self.sourceFor(group); !from.IsValid() {
 		return
 	}
 	query, err := parseUrMdnsMessage(payload)
@@ -489,7 +532,7 @@ func (self *urMdnsDiscoveryProxy) answer(packet []byte) {
 		self.send(answers, additionals, query.questions, source, query.id)
 		return
 	}
-	self.send(answers, additionals, nil, netip.AddrPortFrom(urMdnsProxyGroup, urMdnsProxyPort), 0)
+	self.send(answers, additionals, nil, netip.AddrPortFrom(group, urMdnsProxyPort), 0)
 }
 
 // An NSEC record of name asserting that it holds types and no other (RFC 6762 §6.1): its next domain name its own,
@@ -531,45 +574,91 @@ func urMdnsProxyRecordOrder(a urMdnsRecord, b urMdnsRecord) int {
 }
 
 // Writes a response of answers and additionals, with questions and id for a legacy asker, to destination from the
-// block's resolver on port 5353, split over as many messages as MessageByteCount needs. Sends nothing before a block.
+// proxy's address in its family on port 5353, split over as many messages as that family's bound needs. Sends nothing
+// where the link holds the proxy no address of that family: before a block, and over IPv6 while the translator is off.
 func (self *urMdnsDiscoveryProxy) send(answers []urMdnsRecord, additionals []urMdnsRecord, questions []urMdnsQuestion,
 	destination netip.AddrPort, id uint16) {
 	if len(answers) == 0 {
 		return
 	}
-	resolver := self.link.ResolverAddress()
-	if !resolver.Is4() {
+	source, byteCount := self.sourceFor(destination.Addr())
+	if !source.IsValid() {
 		return
 	}
 	message := &urMdnsMessage{id: id, response: true, authoritative: true, questions: questions, answers: answers, additionals: additionals}
-	for _, payload := range message.pack(self.settings.MessageByteCount) {
-		self.link.WritePacket(urMdnsProxyUdpPacket(netip.AddrPortFrom(resolver, urMdnsProxyPort), destination, payload))
+	for _, payload := range message.pack(byteCount) {
+		self.link.WritePacket(urMdnsProxyUdpPacket(netip.AddrPortFrom(source, urMdnsProxyPort), destination, payload))
 	}
 }
 
-// An IPv4 UDP packet from source to destination carrying payload, its TTL 255 as mDNS asks (RFC 6762 §11), with both
-// checksums.
+// The address the proxy sends to destination from, <block>.0.53 for IPv4 and its address in the translator's /96 for
+// IPv6 (the file's ipv6 row), and the largest message it writes there; invalid where the link holds none of
+// destination's family.
+func (self *urMdnsDiscoveryProxy) sourceFor(destination netip.Addr) (netip.Addr, int) {
+	switch {
+	case destination.Is4():
+		if source := self.link.ResolverAddress(); source.Is4() {
+			return source, self.settings.MessageByteCount
+		}
+	case destination.Is6() && !destination.Is4In6():
+		if source := self.link.ResolverIpv6Address(); source.Is6() && !source.Is4In6() {
+			return source, self.settings.Ipv6MessageByteCount
+		}
+	}
+	return netip.Addr{}, 0
+}
+
+// A UDP packet from source to destination carrying payload, IPv4 where both are IPv4 addresses and IPv6 where both are
+// IPv6 ones, its TTL or hop limit 255 as mDNS asks (RFC 6762 §11), with its checksums; nil for two families.
 func urMdnsProxyUdpPacket(source netip.AddrPort, destination netip.AddrPort, payload []byte) []byte {
-	packet := make([]byte, 28+len(payload))
-	packet[0] = 0x45
-	binary.BigEndian.PutUint16(packet[2:4], uint16(len(packet)))
-	packet[8] = 255
-	packet[9] = urMdnsProxyUdpProto
-	sourceOctets, destinationOctets := source.Addr().As4(), destination.Addr().As4()
-	copy(packet[12:16], sourceOctets[:])
-	copy(packet[16:20], destinationOctets[:])
-	binary.BigEndian.PutUint16(packet[10:12], urMdnsProxyChecksum(0, packet[:20]))
-	udp := packet[20:]
+	udpByteCount := urMdnsProxyUdpHeaderByteCount + len(payload)
+	var packet []byte
+	var pseudoSum uint32
+	switch {
+	case source.Addr().Is4() && destination.Addr().Is4():
+		packet = make([]byte, urMdnsProxyIpv4HeaderByteCount+udpByteCount)
+		packet[0] = 0x45
+		binary.BigEndian.PutUint16(packet[2:4], uint16(len(packet)))
+		packet[8] = urMdnsProxyHopLimit
+		packet[9] = urMdnsProxyUdpProto
+		sourceOctets, destinationOctets := source.Addr().As4(), destination.Addr().As4()
+		copy(packet[12:16], sourceOctets[:])
+		copy(packet[16:20], destinationOctets[:])
+		binary.BigEndian.PutUint16(packet[10:12], urMdnsProxyChecksum(0, packet[:urMdnsProxyIpv4HeaderByteCount]))
+		// IPv4's pseudo-header (RFC 768): the addresses, a zero octet, the protocol and UDP's length
+		var pseudo [12]byte
+		copy(pseudo[0:4], sourceOctets[:])
+		copy(pseudo[4:8], destinationOctets[:])
+		pseudo[9] = urMdnsProxyUdpProto
+		binary.BigEndian.PutUint16(pseudo[10:12], uint16(udpByteCount))
+		pseudoSum = urMdnsProxySum(0, pseudo[:])
+	case source.Addr().Is6() && destination.Addr().Is6():
+		packet = make([]byte, urMdnsProxyIpv6HeaderByteCount+udpByteCount)
+		packet[0] = 0x60
+		binary.BigEndian.PutUint16(packet[4:6], uint16(udpByteCount))
+		packet[6] = urMdnsProxyUdpProto
+		packet[7] = urMdnsProxyHopLimit
+		sourceOctets, destinationOctets := source.Addr().As16(), destination.Addr().As16()
+		copy(packet[8:24], sourceOctets[:])
+		copy(packet[24:40], destinationOctets[:])
+		// IPv6's pseudo-header (RFC 8200 §8.1): the addresses, UDP's length in 32 bits, three zero octets and the next
+		// header
+		var pseudo [40]byte
+		copy(pseudo[0:16], sourceOctets[:])
+		copy(pseudo[16:32], destinationOctets[:])
+		binary.BigEndian.PutUint32(pseudo[32:36], uint32(udpByteCount))
+		pseudo[39] = urMdnsProxyUdpProto
+		pseudoSum = urMdnsProxySum(0, pseudo[:])
+	default:
+		return nil
+	}
+	udp := packet[len(packet)-udpByteCount:]
 	binary.BigEndian.PutUint16(udp[0:2], source.Port())
 	binary.BigEndian.PutUint16(udp[2:4], destination.Port())
-	binary.BigEndian.PutUint16(udp[4:6], uint16(len(udp)))
-	copy(udp[8:], payload)
-	var pseudo [12]byte
-	copy(pseudo[0:4], sourceOctets[:])
-	copy(pseudo[4:8], destinationOctets[:])
-	pseudo[9] = urMdnsProxyUdpProto
-	binary.BigEndian.PutUint16(pseudo[10:12], uint16(len(udp)))
-	checksum := urMdnsProxyChecksum(urMdnsProxySum(0, pseudo[:]), udp)
+	binary.BigEndian.PutUint16(udp[4:6], uint16(udpByteCount))
+	copy(udp[urMdnsProxyUdpHeaderByteCount:], payload)
+	// a sum of zero goes as all ones, since zero says none was taken, which IPv6 forbids (RFC 768, RFC 8200 §8.1)
+	checksum := urMdnsProxyChecksum(pseudoSum, udp)
 	if checksum == 0 {
 		checksum = 0xFFFF
 	}
@@ -597,32 +686,64 @@ func urMdnsProxyChecksum(sum uint32, data []byte) uint16 {
 	return ^uint16(sum)
 }
 
-// The source and payload of an IPv4 UDP packet to mDNS's group and port, false for anything else.
+// The source and payload of a UDP packet to mDNS's group and port, IPv4's 224.0.0.251 or IPv6's ff02::fb, false for
+// anything else: a fragment, an IPv6 packet whose UDP follows an extension header, or lengths that do not hold.
 func urMdnsProxyUdpPayload(packet []byte) (netip.AddrPort, []byte, bool) {
-	if len(packet) < 28 || packet[0]>>4 != 4 || packet[9] != urMdnsProxyUdpProto {
+	if len(packet) == 0 {
 		return netip.AddrPort{}, nil, false
 	}
-	headerByteCount := int(packet[0]&0x0F) * 4
-	totalByteCount := int(binary.BigEndian.Uint16(packet[2:4]))
-	if headerByteCount < 20 || totalByteCount < headerByteCount+8 || len(packet) < totalByteCount ||
-		binary.BigEndian.Uint16(packet[6:8])&0x3FFF != 0 {
+	var source netip.Addr
+	var udp []byte
+	switch packet[0] >> 4 {
+	case 4:
+		if len(packet) < urMdnsProxyIpv4HeaderByteCount+urMdnsProxyUdpHeaderByteCount || packet[9] != urMdnsProxyUdpProto {
+			return netip.AddrPort{}, nil, false
+		}
+		headerByteCount := int(packet[0]&0x0F) * 4
+		totalByteCount := int(binary.BigEndian.Uint16(packet[2:4]))
+		if headerByteCount < urMdnsProxyIpv4HeaderByteCount || totalByteCount < headerByteCount+urMdnsProxyUdpHeaderByteCount ||
+			len(packet) < totalByteCount || binary.BigEndian.Uint16(packet[6:8])&0x3FFF != 0 {
+			return netip.AddrPort{}, nil, false
+		}
+		if netip.AddrFrom4([4]byte(packet[16:20])) != urMdnsProxyGroup {
+			return netip.AddrPort{}, nil, false
+		}
+		source, udp = netip.AddrFrom4([4]byte(packet[12:16])), packet[headerByteCount:totalByteCount]
+	case 6:
+		// UDP straight after the fixed header: a host's stack puts no extension header on an mDNS query, and a fragment
+		// header says the rest is elsewhere
+		if len(packet) < urMdnsProxyIpv6HeaderByteCount+urMdnsProxyUdpHeaderByteCount || packet[6] != urMdnsProxyUdpProto {
+			return netip.AddrPort{}, nil, false
+		}
+		totalByteCount := urMdnsProxyIpv6HeaderByteCount + int(binary.BigEndian.Uint16(packet[4:6]))
+		if totalByteCount < urMdnsProxyIpv6HeaderByteCount+urMdnsProxyUdpHeaderByteCount || len(packet) < totalByteCount {
+			return netip.AddrPort{}, nil, false
+		}
+		if netip.AddrFrom16([16]byte(packet[24:40])) != urMdnsProxyIpv6Group {
+			return netip.AddrPort{}, nil, false
+		}
+		source, udp = netip.AddrFrom16([16]byte(packet[8:24])), packet[urMdnsProxyIpv6HeaderByteCount:totalByteCount]
+	default:
 		return netip.AddrPort{}, nil, false
 	}
-	if netip.AddrFrom4([4]byte(packet[16:20])) != urMdnsProxyGroup {
-		return netip.AddrPort{}, nil, false
-	}
-	udp := packet[headerByteCount:totalByteCount]
 	if binary.BigEndian.Uint16(udp[2:4]) != urMdnsProxyPort || int(binary.BigEndian.Uint16(udp[4:6])) != len(udp) {
 		return netip.AddrPort{}, nil, false
 	}
-	source := netip.AddrPortFrom(netip.AddrFrom4([4]byte(packet[12:16])), binary.BigEndian.Uint16(udp[0:2]))
-	return source, udp[8:], true
+	return netip.AddrPortFrom(source, binary.BigEndian.Uint16(udp[0:2])), udp[urMdnsProxyUdpHeaderByteCount:], true
 }
 
-// Whether packet is an IPv4 UDP packet to mDNS's group and port from one of addresses: what the tun hands the proxy.
+// Whether packet is a UDP packet to mDNS's group and port from one of addresses, or over IPv6 from a link-local
+// address: what the tun hands the proxy. The tun names its IPv4 addresses and its own IPv6 one, the translator's; a
+// link-local source is the host's own too, whichever its kernel drew for the tun, since no router forwards a packet
+// from one (RFC 4291 §2.5.6), and a legacy answer to one stays on the host or comes back into the tun, so it never
+// reaches a LAN.
 func urMdnsProxyQueryFrom(packet []byte, addresses []netip.Addr) bool {
 	source, _, ok := urMdnsProxyUdpPayload(packet)
-	return ok && slices.Contains(addresses, source.Addr())
+	if !ok {
+		return false
+	}
+	address := source.Addr()
+	return slices.Contains(addresses, address) || address.Is6() && !address.Is4In6() && address.IsLinkLocalUnicast()
 }
 
 // A registration's target as a full name in local., "<label>.<client-name>.local.": false where it is not a host name

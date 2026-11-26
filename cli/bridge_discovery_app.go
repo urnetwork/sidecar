@@ -26,6 +26,10 @@ func (urAppDiscoveryLink) ResolverAddress() netip.Addr {
 	return netip.Addr{}
 }
 
+func (urAppDiscoveryLink) ResolverIpv6Address() netip.Addr {
+	return netip.Addr{}
+}
+
 func (urAppDiscoveryLink) SetLinkMulticastDns(on bool) error {
 	return errors.New("the app's VPN component's link is not this daemon's")
 }
