@@ -101,11 +101,11 @@
  {
   "num": 12,
   "code": "DNS",
-  "words": 7745,
+  "words": 7789,
   "code_words": 2646,
   "ceiling": 3000,
-  "over": 4745,
-  "over_pct": 158.2
+  "over": 4789,
+  "over_pct": 159.6
  },
  {
   "num": 13,
@@ -155,20 +155,20 @@
  {
   "num": 18,
   "code": "SDK",
-  "words": 11460,
+  "words": 11461,
   "code_words": 12451,
   "ceiling": 3000,
-  "over": 8460,
+  "over": 8461,
   "over_pct": 282.0
  },
  {
   "num": 19,
   "code": "OPS",
-  "words": 11021,
+  "words": 11096,
   "code_words": 11130,
   "ceiling": 3500,
-  "over": 7521,
-  "over_pct": 214.9
+  "over": 7596,
+  "over_pct": 217.0
  },
  {
   "num": 20,
@@ -182,11 +182,11 @@
  {
   "num": 21,
   "code": "ABUSE",
-  "words": 6367,
+  "words": 6413,
   "code_words": 1403,
   "ceiling": 2500,
-  "over": 3867,
-  "over_pct": 154.7
+  "over": 3913,
+  "over_pct": 156.5
  },
  {
   "num": 22,

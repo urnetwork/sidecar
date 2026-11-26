@@ -7,7 +7,7 @@
 | Path | What it is |
 |---|---|
 | `sections/01-CTX.md` … `sections/23-PHASE.md` | DESIGN.md §1-§23, one file per section. The build copies them verbatim, adding only links. |
-| `owner/DECISIONS.md` | The owner's record, entries 1-795. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
+| `owner/DECISIONS.md` | The owner's record, entries 1-796. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
 | `owner/APPLY.md` | The rules for applying the owner's decisions: precedence (§1), supersession, where two decisions disagree (§2), notation (§3), editing rules (§4), and the follow-up decisions 112-136 with the sections each binds (§6-§8). |
 | `CONVENTIONS.md` | The writing conventions every section follows: the owner directive (§0), the owner rules (§1), the section template (§2) and the X registry (§7), which DESIGN.md's X1-X20 table replaced. |
 | `OUTLINE.md` | The original outline: section codes, scope boundaries, and the word budgets that G0's density rule replaced on 2026-11-04. |
@@ -44,7 +44,7 @@ It needs only `python3`; it was built and checked with Python 3.13. The steps, a
 
 The data files are layered. Each `data_*N.py` loads its predecessor with `runpy` and patches it: `data_front10.py` loads `data_front9.py`, back to `data_front3.py`, and the registers, glossary and appendices go the same way. Change the top layer (the `*10` files), or add an `*11` layer that loads them. Comments in the scripts cite working files from the design sessions (the reconcilers' orders, `peer/`, `review/`, `snap/`), which were not imported; they are history.
 
-## Adding owner decision N (796 onward)
+## Adding owner decision N (797 onward)
 
 1. Add entry N to `owner/DECISIONS.md`: the question, the answer, its cost, the options not taken, and what raised it.
 2. In `asm/data_front10.py`, append `(N, "<what it settles>", "<one line>")` to `INDEX`, add `DATES[N]`, and raise the `assert` to `list(range(1, N + 1))`. Update `STATUS` and `DECISIONS_INTRO` where they name a range. `@@OD:k@@` writes a link to decision k.
@@ -1601,3 +1601,23 @@ What context history's first two tracks built, CTXH-M11-01 (sidecar bd0acc99) an
 - **Outside RECORD.md.** DESIGN-COMPUTE-AMENDMENTS.md's QD-1366 takes a line saying what is carried, and DESIGN-AMENDMENTS.md's lead what the fold wrote.
 
 `build.sh` on this folder reproduces DESIGN.md (SHA-256 `20537c5c37fb512f7bdb305014362ac58e26de63908d92a32d68d9121e094b8b`) and DESIGN-DEFER.md (SHA-256 `3af6b10c35e06eaa2230e6232dc953d77f4539fe4065623950425ebab41895a6`, unchanged), and the validation shows all 795 rows present and cited, 320 superseded-option hits none live, the changed sentence raising none, 12,863 section references with the one unresolved, and 106 DESIGN-DEFER.md entries with 172 pointers; `v7/words.json` was regenerated, and `v7/text_checks.json` regenerated unchanged.
+
+### Owner decision 796 and what was built since the second piece
+
+The owner answered one more question the build raised, QD-1420, on 2026-11-25 while this fold ran, accepting the recommendation under the owner's standing acceptance of recommended options; it takes the next number, after CO-47 to CO-49, and two tracks whose decisions this fold and the twelfth stated ahead of their code have landed since.
+
+| Ledger id | Owner decision | What it settles |
+|---|---|---|
+| QD-1420 | 796 | Where api and taskworker share a process, each delete runs through taskworker's store: `rev/`'s sweep reads the worker's sweep store wherever one is installed, the signing store taking the writes alone, and `hold/`'s current writer is the worker's whenever it is installed. |
+
+- **One process's deletes (796).** §19.4's bullet on the writers that share a process says each delete runs under the user of the role that deletes, api's on the first cluster deleting nothing as xops' policy renders its row, with `hold/`'s order, `rev/`'s two places and the sequencer's two slots, all built (all-process-store-slots, server 91df4a146, 59c67331e, 14cad6626; all-process-worker-deletes, server 62e93daa8, 49291a9fd, f9a741f61); §21.9's preservation holds take a sentence: in such a process placement, a renewal and the pass that ends a hold write through the worker's writer. Owner decision 788's index row notes the amendment, and its entry says it is built, the sequencer having taken the two slots since api's covers no retention.
+- **The user root (791), built.** daemon-label-resolution landed (sidecar e74a8491, 195168c2, df01bdee; sdk 02504962): §18.9's paragraph names the track and commits where it said decided ahead of its code, §12.5's label row says what the daemon does as built, a resolution over each hosted network's own table, a name two tables claim refused as ambiguous, and the label filed at each client generation, and owner decision 791's entry says it is built.
+- **Still ahead of their code.** Owner decision 789 (bridge-wall-clock-wake, running) and 790 (file-cluster-probes-and-floor, queued after this track in its lane) keep their "decided ahead of its code" lines.
+
+`build.sh` on this folder reproduces DESIGN.md (SHA-256 `35b72b152eb420e29ce35ce749d544cf10336e225777874ec1b24bb0c129c658`) and DESIGN-DEFER.md (SHA-256 `3af6b10c35e06eaa2230e6232dc953d77f4539fe4065623950425ebab41895a6`, unchanged), and the validation shows:
+
+- **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item and no §2.8 row, so no guard line.
+- **Owner decisions.** All 796 rows are present and cited; APPLY.md's section pairs hold. `MAXD`, the two range checks and `LATE_DATES` take 796, dated 2026-11-25. One open owner question, Q-REPO-6.
+- **Superseded options.** 320 grep hits, none on a changed line unread, none live.
+- **Text.** No bare placeholders or HTML tags; the one research-sheet id stands; 12,866 section references, with the one unresolved as before. `v7/words.json` was regenerated, and `v7/text_checks.json` regenerated unchanged.
+- **DESIGN-DEFER.md.** 106 entries and 172 pointers, unchanged: 796 defers nothing.
