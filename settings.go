@@ -1040,10 +1040,10 @@ type SidecarSocketSettings struct {
 	// its backup.
 	ListenPositionWait time.Duration
 	// How long a listen whose approval has just activated its grant waits for this device's engine to hold the grant
-	// before it registers, on the network's config up to the GrantActivate's receipt (socket_listen_grant.go, MCP's
-	// socket_listen; acl_grant_keep.go's landed row): 30 s, a reading, a publish's PublishGrantLandTimeout and a
-	// forward's AddressLandTimeout, well past §8.9's p99 of 5 s. A grant not held by then answers uncertain, which the
-	// listen asked again completes.
+	// before it registers, on the network's config up to the GrantActivate's receipt (Sidecar.Listen's tls/ and smtp/
+	// listens, socket_listen.go, and MCP's socket_listen, socket_listen_grant.go; acl_grant_keep.go's landed row): 30 s,
+	// a reading, a publish's PublishGrantLandTimeout and a forward's AddressLandTimeout, well past §8.9's p99 of 5 s. A
+	// grant not held by then answers uncertain, naming the grant, which the listen asked again completes.
 	ListenGrantLandTimeout time.Duration
 	// What an smtp/ listen's max_streams of 0 takes: 16, a receiver's (§15.5). Other names take the registration
 	// format's default (SocketFormatSettings.DefaultMaxStreams).

@@ -43,7 +43,9 @@ import (
 )
 
 // The bridge file world's sidecar as a tls/ and smtp/ listener behind §16.6's real gate: the world's ACL engine is the
-// gate's standing grants and the listen's grant filer, and the approval ledger, run store and log are the gate's.
+// gate's standing grants and the listen's grant filer, and the approval ledger, run store and log are the gate's. The
+// component waits for a grant its listen's use activates in config, which installs the log's state in the engine as
+// the host's config client's follower does, at once unless a test holds it.
 type testListenGateWorld struct {
 	*testBridgeFileWorld
 	approvals  *testApprovalLog
@@ -52,6 +54,7 @@ type testListenGateWorld struct {
 	service    *testListenService
 	component  *SocketComponent
 	generation *socketGeneration
+	config     *testGrantLandConfig
 
 	stateLock sync.Mutex
 	// each action the generation took to the gate, in order
@@ -59,6 +62,12 @@ type testListenGateWorld struct {
 }
 
 func newTestListenGateWorld(t *testing.T) *testListenGateWorld {
+	t.Helper()
+	return newTestListenGateWorldWith(t, DefaultSidecarSocketSettings())
+}
+
+// newTestListenGateWorld with its component on settings.
+func newTestListenGateWorldWith(t *testing.T, settings *SidecarSocketSettings) *testListenGateWorld {
 	t.Helper()
 	fileWorld := newTestBridgeFileWorld(t, false)
 	instance, _, _ := enrolledInstance(t)
@@ -76,7 +85,7 @@ func newTestListenGateWorld(t *testing.T) *testListenGateWorld {
 	if err != nil {
 		t.Fatal(err)
 	}
-	world := &testListenGateWorld{testBridgeFileWorld: fileWorld, approvals: newTestApprovalLog(), ledgerRows: ledgerRows}
+	world := &testListenGateWorld{testBridgeFileWorld: fileWorld, approvals: newTestApprovalLog(), ledgerRows: ledgerRows, config: newTestGrantLandConfig(fileWorld)}
 	args := &ApprovalArgs{
 		SidecarId: fileWorld.hostId,
 		Ledger:    ledgerRows,
@@ -107,7 +116,7 @@ func newTestListenGateWorld(t *testing.T) *testListenGateWorld {
 	signer := newTestSocketSigner("listen gate")
 	component, err := NewSocketComponent(t.Context(), &SocketComponentArgs{
 		NetworkId: fileWorld.net.networkId,
-		Settings:  DefaultSidecarSocketSettings(),
+		Settings:  settings,
 		Sign:      signer.sign,
 		Clock:     fileWorld.clock,
 		Log:       NewNoopLogger(),
@@ -121,6 +130,7 @@ func newTestListenGateWorld(t *testing.T) *testListenGateWorld {
 		component.stateLock.Lock()
 		defer component.stateLock.Unlock()
 		component.grants = NewAclGrantFiler(fileWorld.sidecar, fileWorld.engine)
+		component.grantConfig = world.config
 	}()
 	t.Cleanup(fileWorld.sidecar.RegisterEffectLookup(SidecarActionListen, component.listenLookup))
 	if err := component.SetNetworkLabels(&SocketNetworkLabels{Label: "abcdefghij"}); err != nil {
