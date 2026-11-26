@@ -91,7 +91,14 @@ mail_send(from_alias, to, cc, bcc, subject, text, in_reply_to?, uses?) -> status
                  to a subset of them spends a use, the agent retrying its first mail (16.6's multi-use row;
                  owner decision 613)
 mail_aliases()   mail_alias_create(alias, group?)   mail_alias_delete(alias)
-socket_list()   socket_status(name)   socket_listen(name, local_port) -> status, grant_id   socket_unlisten(name)
+socket_list()   socket_status(name)   socket_unlisten(name)
+socket_listen(name, local_port, expires?) -> status, grant_id, expires?
+                 expires, an RFC 3339 time ahead, ends the grant an outward listen asks, as tls_publish's does,
+                 so the call made again asks the same end and another end files its own request; absent, the
+                 requests rule's expiresDefault; past its maxExpiry the listen is refused before the gate,
+                 filing nothing, the error's data naming the maximum as max_expiry_millis, never the call's
+                 input; a covering or standing grant asks nothing and passes whatever it asks; the result's
+                 expires is when the grant it names ends, absent where it has none (owner decision 687)
 tls_publish(host, port?, local_port, audience, expires, app_mode?, alpn?) -> url, grant_id, cert_file?
                  port: 443 by default, or 8443, 8883 or 5671 (§13.4; owner decision 121); app_mode http by
                  default, or raw under audience public or link (§13.7); a raw link writes a client key and
