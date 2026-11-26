@@ -83,8 +83,9 @@ const (
 	harnessEventOriginCard
 )
 
-// How a terminal shows a registered card (§7.11): its lines, untrusted text in them already sanitized by the card's
-// own renderer, which HARN-M11-09's renderer prints as given.
+// How a terminal shows a registered card (§7.11): its lines, plain text. The terminal renderer
+// (harness_render_terminal.go) prints each with ESC, C0 and C1 removed and styles it itself, so a card's own escapes
+// never reach the terminal, whatever untrusted text its lines hold.
 type HarnessEventTerminalRender func(event *HarnessEvent) ([]string, error)
 
 // One registered type.
@@ -600,4 +601,11 @@ func (self *harnessEventStamper) stamp(agentId Id, event *HarnessEvent) error {
 	event.Agent = agentId.String()
 	event.Seq = seq
 	return nil
+}
+
+// The seq the agent's last event took, 0 before its first.
+func (self *harnessEventStamper) seqOf(agentId Id) uint64 {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.agentSeqs[agentId]
 }

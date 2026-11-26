@@ -27,6 +27,7 @@ import (
 	"os"
 	"slices"
 	"sync"
+	"sync/atomic"
 )
 
 var (
@@ -343,6 +344,8 @@ type Harness struct {
 	stamper         *harnessEventStamper
 	subscribers     *harnessSubscribers
 	support         func() (*SupportClient, error)
+	// the events a view reads after the fact, nil until a view first asks (harness_view_log.go)
+	view atomic.Pointer[harnessViewLog]
 	// held across one emission: never stateLock
 	emitLock sync.Mutex
 
@@ -446,6 +449,9 @@ func (self *Harness) Emit(agentId Id, event *HarnessEvent) error {
 	}
 	if self.observer != nil {
 		self.observer(agentId, event)
+	}
+	if view := self.view.Load(); view != nil {
+		view.add(agentId, event)
 	}
 	agent := func() *harnessAgent {
 		self.stateLock.Lock()

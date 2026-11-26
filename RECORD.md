@@ -273,6 +273,12 @@ stream path   e/<n div 4,194,304>/<(n div 2,048) mod 2,048>/<n>, n a stream's ow
               the ref is `ur/<sidecar_id>/record`, `<sidecar_id>` as Id.String() as in every ur/ name, and ids in
               paths are 32 lowercase hex, as plan-RECORD-stream-names' answers gave them (QD-450, QD-484, QD-485;
               owner decision 406; §11.8's refs table)
+body apart    a session entry, kind 54 or 55 (DESIGN-COMPUTE.md 24.5), is two files of its writer's stream: at e/<n>
+              its RecordEntry, sealed_body empty and body_apart (field 6) set, signed and chained as every entry is;
+              at s/<n div 4,194,304>/<(n div 2,048) mod 2,048>/<n>, the same n in e/'s layout, its sealed_body alone,
+              sealed as any record-class file and opened with the key row its e/ file names; the leaf covers the
+              header alone, so it is the same wherever the body is; a deposit carries the entry whole, and its ingester
+              files it apart (section 5.4); no other kind files a body apart
 ```
 
 ### 5.3 Writing
@@ -306,6 +312,11 @@ time        time_millis is the capture time on the writer's clock: for spooled c
             any push and a time before that push is normal for a spool or a deposit awaiting ingest
 batch       up to 64 entries or 1 s of them a push, in one part, 64 keys to a slot object (§16.8); a tree's change
             and blob entries go in one push, multi-part when large (§16.7, §11.8), each 64 keys to a slot object
+sessions    kinds 54 and 55 start no push of their own: they leave in the push of their call's model_call entry, at a
+            turn's end, or 60 s after the oldest of them was journaled (the harness config's record.session_push_secs,
+            30 to 300), whichever comes first; any earlier push of their writer carries their headers, its stream
+            landing in seq order, so a header never waits behind a later entry; a body rides with its header or in a
+            later push, a history cap holding back bodies alone (DESIGN-COMPUTE.md 24.5, 24.10)
 position    a push's entries are ordered by (writer_sidecar_id bytes, seq) (§16.8), whatever the order of the
             statement's changes, which sort by token path (§11.6)
 deposits    to T: coalesced for DepositInterval (5 min, the slower pace owner decision 172 sets companion pushes),
@@ -344,7 +355,9 @@ ingester    a device with rw on the log: for T a log admin's device, for V a con
             several may run
 stream      an ingested entry sits in the ingester's own stream, since an owned stream takes only its sidecar's
             pushes (§11.8); its bytes and its writer's chain stay as written (§16.8), and only key_slot_id and
-            key_index change
+            key_index change; a session entry, which its deposit carries whole, is filed there as its writer files
+            one, its sealed_body at s/<n> beside its e/<n> (section 5.2's body apart row), past a cap its body held
+            back (DESIGN-COMPUTE.md 24.5)
 order       per deposit ref, in version order (§11.12); per entry, no outcome holding the ref back, and one CONSUME
             covering a deposit once each of its entries is written or refused:
   1 parse   a batch or entry that does not parse: consume unrecorded, alarm
@@ -410,16 +423,27 @@ verify      per entry, in stream order, on every reader:
             it (§11.8): where n equals seq, they removed those seqs' own paths; in an ingested stream, where paths do
             not map to seqs, they removed at least as many of the log's paths as the gap holds; any other gap stands;
             kind and class go with the entry file, so only a reader that held the entry can test its class's keep_days,
-            and it alarms on one removed early and on any class 7 entry removed (section 8), while a reader that never
-            held it raises nothing
+            and it alarms on any class 7 entry removed (section 8) and on one removed early, unless it does not know
+            the entry's kind and an erasure of reason 2 names the entry, a policy for a class it does not know, as
+            class bulk is to a reader released before it, having expired it (DESIGN-COMPUTE.md 24.10); a reader that
+            never held it raises nothing
   5 body    with its key: open, recompute body_commitment; a body that does not open or a mismatch alarms and shows
-            the body as invalid; without its key: the states below
+            the body as invalid; without its key: the states below; a session entry's body: the bodies row
   6 kind    known: parse as the kind's one message, keeping the stored bytes; unknown: keep, verify steps 1-5, show
             generically (§16.8); a known kind from a writer section 6.3 does not admit: ignore and alarm
 states      live; erased (an ERASE named a key of any copy; header kept, but for an ERASE of the entry file's
             own key, which reads as a gap at step 4; owner decision 672); expired (past keep_days and erased; after
             BASE and GC only its push statement and any checkpoint leaf remain); archived (section 8); forked; lost
-            (a checkpoint leaf with no entry, after a site loss)
+            (a checkpoint leaf with no entry, after a site loss); and for a session entry's body deferred, withheld
+            and dropped (the bodies row)
+bodies      a session entry (section 5.2's body apart row) is read at steps 1 to 4 by its header alone, so its writer's
+            chain verifies seq by seq whatever its bodies, a missing header still a gap and a second at one seq a
+            fork; at step 5 its body reads deferred while its s/<n> file is in the stream and this reader has not
+            fetched it, withheld while no such file stands, its writer holding it, and dropped once its writer's
+            coverage names its seq in bodies_dropped or its writer is revoked or removed, none of the three alarming;
+            a reader fetches a body when its run is opened, continued, forked or exported, a log's mirror every body,
+            and holds it to body_commitment as step 5 holds any, a match making the entry live; a file at s/<n> with
+            no header at e/<n> in its push or an earlier one is ignored and alarmed (DESIGN-COMPUTE.md 24.5)
 flagged     an entry is flagged, for §16.6 and I-9, when its header's tainted is true; §16.10's trust rule reads
             this, so reading a flagged entry's text taints the reader's run first
 push time   an entry's push time is the time_ms of the earliest push holding a copy of it: signed, and bounded by evs
@@ -442,7 +466,7 @@ record_query(log?, run?, agent?, kind?, action?, entry?, since?, until?, untrust
   rows      entry_id, log, kind, time, writer, agent_id, agent_label, run_id, action_id, source, tainted, trust,
             state, and the body by field name, or stub true
   stubs     an untrusted row, and D's announcements, requests and decisions, return as stubs unless
-            untrusted: include, which taints the run first (§16.10, §16.11); raw kinds (48-53) return bodies only
+            untrusted: include, which taints the run first (§16.10, §16.11); raw kinds (48-55) return bodies only
             when entry names one, over 256 KiB as §16.4's resource_link; copy entries return stubs
 run_coverage(run?, since?, gaps_only?, cursor?) -> rows
   rows      run_id, harness, version, sources, gaps, first_seq, last_seq, ended: the newest coverage entry of each
@@ -465,6 +489,7 @@ These checks hold, and `record_md_test.go` recomputes each figure:
 - A stream's three-level path stays inside §11.7's directory bound for about 15 billion entries, where 400 days at section 13.2's Team limit keeps about 114 million (section 5.2).
 - `BASE` keeps every push statement (§11.8's Refs table), so a checkpoint batch's stream versions stay checkable after expiry (section 10).
 - A depositor learns of a `CONSUME` by its mark: the ingester's CONSUME declares `consumed_through` (`EvsPush` field 35), which evs copies to `EvsHead` field 27 and returns on the depositor's push replies, so D-MCP-10's spool prunes at it (section 5.4's `spool` row); §11.6's and §11.8's fences carry both fields (plan-RECORD-depositor-spool, beside plan-EVS1-deposit-head; QD-176).
+- A session entry's two files are format 1's (section 5.2's `body apart` row): `RecordEntry.body_apart` (field 6) and the `s/` prefix are reserved before `record.proto` freezes at M3 (D-MCP-6), so every reader lists `s/`, never refusing a stream for a file there, and reads `body_apart` at section 5.5's step 5; a reader released before M11 verifies a vault's chains whole and shows session entries generically, their bodies deferred, and M11 needs no activation point for the layout (DESIGN-COMPUTE.md 24.5).
 
 These were open; the finding waits on the first, and the second has settled:
 
@@ -473,7 +498,7 @@ These were open; the finding waits on the first, and the second has settled:
 | What a `BASE` carries, what evs checks and what GC then keeps: §11.22 lists it and no section specifies it | Sections 5.5, 8 and 10 read which paths a BASE removed and rely on its kept statements | plan-EVS1-v1-unspecified, whose reading this document follows: an `admin` push adding no payload, whose changes remove expired paths | a BASE that does not show what it removed leaves readers no way to hold class 7 or tell expiry from loss, and format 1 must carry that |
 | The bytes of a stream's ref name and of ids in paths | Section 5.2; `DecisionRef`'s head read | plan-RECORD-stream-names, beside plan-EVS1-ref-name-bytes | settled: `ur/<sidecar_id>/record` spells its sidecar id as Id.String(), and ids in paths stay 32 lowercase hex (QD-450, QD-484, QD-485; owner decision 406; §11.8's refs table), so section 5.2's vectors stand |
 
-DESIGN-COMPUTE.md amends this section; section 21 holds its additions.
+The last check above is DESIGN-COMPUTE.md's amendment of this section (section 21).
 
 ## 6. The v1 kind registry
 
@@ -482,8 +507,9 @@ DESIGN-COMPUTE.md amends this section; section 21 holds its additions.
 ```text
 numbers     a kind's number and name are permanent once released, and never reused; 0 is never written; 1-1,023 are
             this registry's, in the blocks below; 1,024 and up are for private use, which v1 readers show generically
-blocks      1-15 coordination and directory entries; 16-47 actions, accounting and log upkeep; 48-63 raw capture;
-            64-79 derived names, which appear only in search (field 6, SearchFilters.kinds), never in a header
+blocks      1-15 coordination and directory entries; 16-47 actions, accounting and log upkeep; 48-63 raw capture,
+            of class capture or bulk; 64-79 derived names, which appear only in search (field 6, SearchFilters.kinds),
+            never in a header
 one body    each kind has one body message and is parsed only as it; versions add fields (§16.8); a hash or signature
             over a body covers its stored bytes, so readers keep unknown fields by keeping the bytes
 unknown     an unknown kind is kept, verified and shown generically, never refused (§16.8): its number, time, writer,
@@ -564,14 +590,16 @@ Personal and Team give the log an entry lands in, by mode (section 4.2). "Route"
 | 51 | `file_event` | capture | V | V | the daemon | observed | M6 |
 | 52 | `blob` | capture | V | V | the daemon | observed | M3 |
 | 53 | `model_call` | capture | V | V | the daemon | hook | M6 |
+| 54 | `session_entry` | capture | V | V | the daemon or sdk running the Harness or the gateway | observed; hook for items the gateway records from a harness's request, which are that harness's word | M11 |
+| 55 | `session_blob` | bulk | V | V | as `session_entry` | observed | M11 |
 
 Derived names appear in search only, from M10: 64 `run` (a run card, or D's run announcement), 65 `worker` and 66 `repo` (D's worker and repo announcements).
 
-Source `approver` means a person's act at a device: a decision, or a command confirmed on /dev/tty or in an app's UI (§5.8). Personal `none` marks a kind no personal network can hold: D's own (it has no directory), a copy of a T entry, and T's and R's log upkeep. A sponsorless tagged sidecar's run kinds go to T alone, as §16.8 routes its approvals. One call is one `tool_call`: a call through the daemon's own MCP server is `observed`, and a PostToolUse-family event becomes the `tool_call`, never a `hook_event` too. PreToolUse, PermissionRequest and lifecycle events are `hook_event`s. In team mode a claim or handoff from a session no run binds answers FAILED_PRECONDITION, since it has no announcement to change (§16.11); its ask, answer, check or note is written, tainted (section 5.3).
+Source `approver` means a person's act at a device: a decision, or a command confirmed on /dev/tty or in an app's UI (§5.8). Personal `none` marks a kind no personal network can hold: D's own (it has no directory), a copy of a T entry, and T's and R's log upkeep. A sponsorless tagged sidecar's run kinds go to T alone, as §16.8 routes its approvals. One call is one `tool_call`: a call through the daemon's own MCP server is `observed`, and a PostToolUse-family event becomes the `tool_call`, never a `hook_event` too. PreToolUse, PermissionRequest and lifecycle events are `hook_event`s. In team mode a claim or handoff from a session no run binds answers FAILED_PRECONDITION, since it has no announcement to change (§16.11); its ask, answer, check or note is written, tainted (section 5.3). Kinds 54 and 55 hold a run's session tree, DESIGN-COMPUTE.md's context history (section 21): the author's vault keeps them in both modes and the team record never, so I-20 holds, no log indexes them (section 7.1), and each files its body apart from its header (section 5.2).
 
 ### 6.4 Bodies
 
-These kinds' bodies are messages DESIGN.md already holds, and for `support_message` DESIGN-COMPUTE.md, whose stored bytes are the whole body:
+These kinds' bodies are messages DESIGN.md already holds, and for `support_message`, `session_entry` and `session_blob` DESIGN-COMPUTE.md, whose stored bytes are the whole body:
 
 ```text
 approval             ApprovalRequest (§16.8)              announce          Announcement (§16.11)
@@ -582,11 +610,17 @@ coverage             Coverage (§16.8)                     retention         Sig
 support_message      SupportMessageBody (§16.8's Compute's record primitives; DESIGN-COMPUTE.md 28.12's fence writes it,
                      `V:` marking what T's projection leaves empty: the text, the agent's label, the bundle's manifest
                      and the files)
+session_entry        SessionEntryBody (§16.8's Compute's record primitives; DESIGN-COMPUTE.md 24.5's fence writes it,
+                     with its parts as SessionPart: one node of the run's session tree, its item at most 16 KiB and
+                     at most 64 parts, each kept whole in at most 8 session_blob pieces up to 64 MiB and by hash and
+                     size past it)
+session_blob         SessionBlobBody (§16.8's Compute's record primitives; DESIGN-COMPUTE.md 24.5's fence writes it:
+                     one piece of a part, its content at most section 5.2's 8 MiB)
 ```
 
 `ApprovalRequest` takes section 6.1's version rule as `CanonicalAction` does, since an approver renders only fields it can name and refuses a version it does not know. Its version 2 (QD-1010, owner decision 574), a format change after M3's freeze, adds `uses = 18`: how many distinct actions the agent asks the approval to cover, 2 or more for a template (`scope = true`) and 1 for any other action, never 0, daemon-built, under `request_sha256`, and rendered among the request's daemon-built fields after `socket_name`, `local_port`, `weight` and `alpn`. The approver signs that count as `ApprovalDecision.uses`, or for a template a smaller count of 2 or more, never a larger one, and the requester keeps no decision for more uses than its request names. A requester files every request at version 2. A version-1 request sets no `uses`: it asks for 1, and a version-1 template names no count, so its approver gives one, 2 or more, and an app, whose `Decide` carries none (§18.5), lists it with deny alone. An approver that knows only version 1 refuses a version-2 request whole, as it refuses any version it does not know: the closed direction.
 
-`Coverage.first_seq` and `last_seq` are the writer's chain in the log that holds the entry, so the V and T entries of one run differ there, and with several runs on a sidecar the range brackets the run without being exclusive to it. `sources` are `mcp`, `hooks`, `transcript`, `scan`, `telemetry` and `file_events`. `gaps` are `code` or `code:count` strings, codes `hook_failure`, `missed_event`, `config_changed`, `downtime`, `truncation`, `oversize`, `bypass_mode`, `redaction`, `no_tool_id`, `no_vault`, `run_file_missing` and `spool_drop`, with no path or text in them, so T's entry holds the same lists as V's.
+`Coverage.first_seq` and `last_seq` are the writer's chain in the log that holds the entry, so the V and T entries of one run differ there, and with several runs on a sidecar the range brackets the run without being exclusive to it. `sources` are `mcp`, `hooks`, `transcript`, `scan`, `telemetry`, `file_events`, `harness`, the Harness recording a run natively, and `gateway`, the gateway recording its model calls (DESIGN-COMPUTE.md 24.5, 24.8). `gaps` are `code` or `code:count` strings, codes `hook_failure`, `missed_event`, `config_changed`, `downtime`, `truncation`, `oversize`, `bypass_mode`, `redaction`, `no_tool_id`, `no_vault`, `run_file_missing`, `spool_drop` and `context_partial`, a model call a hook or telemetry reported whose request the gateway never saw (DESIGN-COMPUTE.md 24.8), with no path or text in them, so T's entry holds the same lists as V's. `bodies_dropped`, field 8, repeated `SeqRange{first, last}` (§16.8's fence), names the writer's seqs in this log whose session bodies its spool dropped, from 1, ascending and apart, in a coverage entry it files for the run at the drop beside gap `spool_drop`, so readers show those bodies dropped (section 5.5's `bodies` row; DESIGN-COMPUTE.md 24.10).
 
 The rest are new, in `record.proto`, and sealed like every body, so §2.8's evs rows stand. Sections 10-13 hold their own sections' messages. A comment starting `V:` marks a field that T's projection leaves empty. Every cap is the writer's: it refuses an overrun, and a reader ignores a version past one and alarms (§16.11's caps row). Prose and identifier fields follow §16.11's classes, and the daemon redacts them before it signs.
 
@@ -809,7 +843,7 @@ documents   V: one run card per run and stream (section 7.4); in personal mode e
             D: §16.11's announcements, announce entries folding into them, and one document per other stream entry
             T: one run card per run and stream, and nothing else (§16.10)
             R: each entry except class log
-            never: raw kinds (§16.12's "Later", once §22.8 measures it), copy, class log
+            never: raw kinds, of class capture or bulk (§16.12's "Later", once §22.8 measures it), copy, class log
 row         §11.14's row: doc kind record for an entry, derived for a run card; flag bit 0 the header's tainted;
             time the header's time_millis in seconds; started and expires 0 for an entry; locator the stream path,
             which a hit opens in its ref (§11.14's SearchHit), so two ingesters' copies of an entry are two
@@ -932,7 +966,7 @@ A vault card reads its prompts from its context entries' `prompts`, which ingest
 §16.8 gives the mechanism, and §11.12 and §11.13 the pushes. This section gives `RetentionPolicy.class`, what each field means, and how an erasure reads.
 
 ```text
-class         1 capture        transcript, tool_call, hook_event, file_event, blob, model_call
+class         1 capture        transcript, tool_call, hook_event, file_event, blob, model_call, session_entry
               2 action         context, change, permission, the approval family, route, publish, reach, restore,
                                model, cost, attestation, support_message
               3 coordination   claim, handoff, ask, answer, check, note
@@ -941,6 +975,9 @@ class         1 capture        transcript, tool_call, hook_event, file_event, bl
               6 accounting     membership, key, coverage, read, erasure, inventory, disclosure, copy
               7 log            retention, log_settings, checkpoint, ledger_scope: no policy applies, and they last
                                as long as the log, or a tree could no longer be rebuilt (section 10)
+              8 bulk           session_blob: a run's large parts, which a policy of their own expires while the
+                               nodes that name them stay, a pruned part reading by its size and hash in a rebuild
+                               (DESIGN-COMPUTE.md 24.10)
               an unknown kind takes class 2
 defaults      T and R: every class keep_days 400, searchable_days 90 (§16.8; R-MCP-8)
               D: §16.11's retention row and settings
@@ -1685,15 +1722,15 @@ detail nonce v3    an access_request of kind 15, expires_millis 1762387200000, g
 
 ## 21. DESIGN-COMPUTE.md's additions
 
-DESIGN-COMPUTE.md, the owner's compute design of 2026-11-23 (DESIGN.md's owner decisions 733-776), with its support skill of 2026-11-24 (owner decisions 783 and 784), amends this document as its Appendix D lists, and DESIGN.md's eighth late fold and eleventh fold write the amendments here. Each takes the registry rows, enumerations and fields it names with its code. Section 6.2 gives `CanonicalAction.kind` 19 to 27 and `ApprovalDecision.channel` 4 `auto`, which record.proto declares, and DESIGN.md §16.8's fence the fields and messages of `CanonicalAction` version 5, field 80's among them, and `ApprovalDecision.selected`; sections 6.3, 6.4, 7.2 and 8 give kind 30, `support_message`, which record.proto and record_kind.go declare, its body staying in DESIGN-COMPUTE.md 28.12's fence (DESIGN.md's twelfth fold). Until record.proto, record_kind.go and their tests take the rest, through an additions list as the owner's answer QD-1366 allows (DESIGN-COMPUTE-AMENDMENTS.md), sections 6.3, 6.4 and 8 keep their tables without them, and DESIGN-COMPUTE.md's fences hold the wire.
+DESIGN-COMPUTE.md, the owner's compute design of 2026-11-23 (DESIGN.md's owner decisions 733-776), with its support skill of 2026-11-24 (owner decisions 783 and 784), amends this document as its Appendix D lists, and DESIGN.md's eighth late fold and the folds after it write the amendments here. Each takes the registry rows, enumerations and fields it names with its code. Section 6.2 gives `CanonicalAction.kind` 19 to 27 and `ApprovalDecision.channel` 4 `auto`, which record.proto declares, and DESIGN.md §16.8's fence the fields and messages of `CanonicalAction` version 5, field 80's among them, and `ApprovalDecision.selected`; sections 6.3, 6.4, 7.2 and 8 give kind 30, `support_message`, which record.proto and record_kind.go declare, its body staying in DESIGN-COMPUTE.md 28.12's fence (DESIGN.md's twelfth fold). Sections 5.2 to 5.7, 6.1, 6.3, 6.4, 7.1 and 8 give context history's session entries, kinds 54 `session_entry` and 55 `session_blob`, class 8 `bulk`, the body filed apart at `s/<n>` and `Coverage`'s sources `harness` and `gateway`, gap `context_partial` and field 8, which record.proto, record_kind.go and the record's writer, reader, ingester and evs binding declare (CTXH-M11-01, CTXH-M11-02), their bodies staying in DESIGN-COMPUTE.md 24.5's fence and `RecordEntry.body_apart` and `Coverage.bodies_dropped` in DESIGN.md §16.8's (DESIGN.md's thirteenth fold). Until record.proto, record_kind.go and their tests take the rest, through an additions list as the owner's answer QD-1366 allows (DESIGN-COMPUTE-AMENDMENTS.md), sections 6.3, 6.4 and 8 keep their tables without them, and DESIGN-COMPUTE.md's fences hold the wire.
 
 - **Bindings (section 4.3; DESIGN-COMPUTE.md 8.9; owner decision 736).** A gateway call under a run handle is an event of its token's harness process: it binds the session its headers name as a hook's first event would, and the router checks it against the union of the marks and taint of that process's runs and of any harness process above it before choosing a route. A call without a handle binds no process, is recorded by harness, agent and time as an inference, and is checked against the union of every run of the grant's live harness processes.
 - **Continuations (section 4.3; DESIGN-COMPUTE.md 24.7, 24.8; owner decisions 757, 775).** A Harness continuation or fork, and a gateway session its harness reports resumed, set `continues_run_id` and `continues_entry_id` too, naming the run and node they continue; such a run starts tainted if any node it takes into its context is flagged, or untrusted: written by a tagged sidecar other than the member's own enclave, or recorded under an inferred binding.
-- **Session entries (sections 5.2 to 5.5; DESIGN-COMPUTE.md 24.5, 24.10; owner decision 757).** A session entry (kinds 54 and 55) is two files: its `RecordEntry` at `e/<n>`, `sealed_body` empty and `body_apart` (field 6) set, chained as every entry is, and its sealed body alone at `s/<n>`, the same n, opened with the key row its entry names. A writer's headers leave in seq order and never wait, its bodies in the same push or a later one, a cap holding back only bodies; an ingester files a deposited session entry so in its own stream, past a cap holding its body. Readers read every header, so chains, pins, gaps and forks stand as section 5.5 has them, and at step 5 show such a body `deferred` (in the stream, not fetched), `withheld` (not yet pushed) or `dropped` (named in its writer's `coverage` `bodies_dropped`, or its writer revoked or removed), none alarming; a fetched body that fails `body_commitment` alarms as any body's; a file at `s/<n>` with no header at `e/<n>` in its push or before is ignored and alarmed. Until then one stream path, `e/`, holds each entry as one file, and record_evs.go refuses a stream file at no `e/` path.
-- **What format 1 must carry (section 5.7; DESIGN-COMPUTE.md 24.5).** `RecordEntry.body_apart` and the `s/` prefix are reserved before record.proto freezes at M3 (D-MCP-6): every reader from format 1 lists `s/`, never refusing a stream for a file there, and reads `body_apart` at step 5, so a reader released before M11 verifies a vault's chains whole and shows session entries generically, their bodies deferred, and M11 needs no activation point for the layout.
-- **The batch (section 5.3; DESIGN-COMPUTE.md 24.5).** Kinds 54 and 55 leave in the push of their call's `model_call` entry, at a turn's end, or 60 s after the oldest waits (`record.session_push_secs`, 30 to 300), never in a push of their own at each call; any earlier push of their writer carries their headers, its stream landing in seq order, and may leave their bodies to a later one.
-- **Kinds (sections 5.6, 6.3, 6.4 and 8; DESIGN-COMPUTE.md 24.5, 24.10, 27.9; owner decisions 757, 772).** Kinds 54 `session_entry` (source observed, hook for items the gateway records from a harness's request) and 55 `session_blob`, in V only, raw and never indexed, their bodies returned by `record_query` only when named, a node a tagged sidecar other than the member's own enclave wrote shown as an untrusted stub; `ModelCallBody` field 15, `CallContext`, its `request_sha256` covering parts by hash; class 8 `bulk` (`session_blob`), a reader raising no removed-early alarm for an unknown kind whose erasure gives reason 2; sources `harness` and `gateway`, gap `context_partial`; and `ur record erase --run <id>` with `--context` or `--blobs-only`, every entry of the run unless narrowed. Kind 56 `auto_verdict`, class action, in V and routed as `approval_decision`, one per verdict in auto mode, holds hashes and scores, never text, each input by its session entry, part, size and the form the record holds it in, so a decision stands as a recorded verdict whatever later becomes of an input; kind 20 for channel `auto` is written by the classifying daemon or sdk, source observed, never approver.
+- **Session entries (sections 5.2 to 5.5; DESIGN-COMPUTE.md 24.5, 24.10; owner decision 757).** A session entry (kinds 54 and 55) is two files: its `RecordEntry` at `e/<n>`, `sealed_body` empty and `body_apart` (field 6) set, chained as every entry is, and its sealed body alone at `s/<n>`, the same n, opened with the key row its entry names. A writer's headers leave in seq order and never wait, its bodies in the same push or a later one, a cap holding back only bodies; an ingester files a deposited session entry so in its own stream, past a cap holding its body. Readers read every header, so chains, pins, gaps and forks stand as section 5.5 has them, and at step 5 show such a body `deferred` (in the stream, not fetched), `withheld` (not yet pushed) or `dropped` (named in its writer's `coverage` `bodies_dropped`, or its writer revoked or removed), none alarming; a fetched body that fails `body_commitment` alarms as any body's; a file at `s/<n>` with no header at `e/<n>` in its push or before is ignored and alarmed. Section 5.2's `body apart` row, 5.3's `sessions` row, 5.4's `stream` row and 5.5's `bodies` row hold it, and record_evs.go finds `s/<n>` files as it finds `e/<n>` files, refusing a stream file at any other path.
+- **What format 1 must carry (section 5.7; DESIGN-COMPUTE.md 24.5).** `RecordEntry.body_apart` and the `s/` prefix are reserved before record.proto freezes at M3 (D-MCP-6): every reader from format 1 lists `s/`, never refusing a stream for a file there, and reads `body_apart` at step 5, so a reader released before M11 verifies a vault's chains whole and shows session entries generically, their bodies deferred, and M11 needs no activation point for the layout. Section 5.7's last check holds it.
+- **The batch (section 5.3; DESIGN-COMPUTE.md 24.5).** Kinds 54 and 55 leave in the push of their call's `model_call` entry, at a turn's end, or 60 s after the oldest waits (`record.session_push_secs`, 30 to 300), never in a push of their own at each call; any earlier push of their writer carries their headers, its stream landing in seq order, and may leave their bodies to a later one. Section 5.3's `sessions` row holds it.
+- **Kinds (sections 5.6, 6.3, 6.4 and 8; DESIGN-COMPUTE.md 24.5, 24.10, 27.9; owner decisions 757, 772).** Kinds 54 `session_entry` (source observed, hook for items the gateway records from a harness's request) and 55 `session_blob`, in V only, raw and never indexed, their bodies returned by `record_query` only when named, a node a tagged sidecar other than the member's own enclave wrote shown as an untrusted stub; `ModelCallBody` field 15, `CallContext`, its `request_sha256` covering parts by hash; class 8 `bulk` (`session_blob`), a reader raising no removed-early alarm for an unknown kind whose erasure gives reason 2; sources `harness` and `gateway`, gap `context_partial`; and `ur record erase --run <id>` with `--context` or `--blobs-only`, every entry of the run unless narrowed. Sections 6.3, 6.4 and 8 hold kinds 54 and 55 with their bodies and class 8, section 5.6's `stubs` row their bodies returned only when named, 5.5's `expired` row the reason-2 exemption and 6.4 the sources and gap; the untrusted stub, `ur record erase --run` and kind 56 wait here for their code, and field 15, which record.proto declares, stays in DESIGN-COMPUTE.md 6.8's fence, which extends section 12's. Kind 56 `auto_verdict`, class action, in V and routed as `approval_decision`, one per verdict in auto mode, holds hashes and scores, never text, each input by its session entry, part, size and the form the record holds it in, so a decision stands as a recorded verdict whatever later becomes of an input; kind 20 for channel `auto` is written by the classifying daemon or sdk, source observed, never approver.
 - **Tool calls (section 6.4; DESIGN-COMPUTE.md 24.4, 24.5).** A Harness's `tool_call` leaves `input` and `output` empty and names the `session_entry` holding its result in the header's `content`, a `ContentRef`, its action id joining the two.
-- **Coverage (section 6.4; DESIGN-COMPUTE.md 24.5, 24.10).** `Coverage` field 8, `bodies_dropped`, repeated `SeqRange{first, last}`: the writer's seqs in this log whose session bodies its spool dropped, gap `spool_drop`, in a coverage entry it files for the run at the drop.
+- **Coverage (section 6.4; DESIGN-COMPUTE.md 24.5, 24.10).** `Coverage` field 8, `bodies_dropped`, repeated `SeqRange{first, last}`: the writer's seqs in this log whose session bodies its spool dropped, gap `spool_drop`, in a coverage entry it files for the run at the drop. Section 6.4 holds it.
 - **Model receipts (section 12; DESIGN-COMPUTE.md 6.8, 11.12; owner decisions 733, 737).** Evidence level 4 is a verified TEE platform; `ModelCallBody` takes fields 11 to 14; and the record takes enclave entries.
 - **Support messages (sections 4.2, 6.1, 6.3, 6.4 and 8; DESIGN-COMPUTE.md 28.12; owner decisions 783, 784).** Kind 30 `support_message`, in section 6.1's actions block, class action, in V and T: one entry for each message the member's devices or a tagged sender sent in the support conversation, and each event they received on it, a tagged sender depositing its own into its sponsor's vault (section 4.2). Its writer is the daemon or sdk that sent or received it, its source approver for the person's own message, typed in an app's UI or confirmed on `/dev/tty`, and observed otherwise. Its body, `SupportMessageBody` (DESIGN-COMPUTE.md 28.12's fence), holds the direction, the product, FB's entry id and event seq, the event's type, the tier (human, released or agent), the `client_ref` that joins a sent message to its acknowledgment, the text exactly as sent or received, the sending agent's label, the support log's bundle manifest, the files' names, types, sizes and SHA-256, the body's SHA-256 and size, a status event's status and `fixed_in`, a kind-27 use's approval id and, field 17, `disclosure_version`, the `support:urnetwork` version a sent message went under; the text, the label, the manifest and the files are V's alone, so T's projection, the team record's copy, takes the other fields with one `ContentRef` to the vault entry (sections 4.2 and 5.1) and holds no text, a Team's audit reader opening the text in the vault by receipt. Where two of the member's devices record one received event, readers show one per entry and seq, as they show membership mirrors (section 4.2). The class is action: in V the owner's retention, in T 400 days. `ur support delete` removes an item at the service and offers to erase its kind-30 entries too, a person's erasure as section 8 has it. Section 6.3 holds its row, 6.4 its body, 7.2 its search row, no log indexing it, and 8 its class.

@@ -125,6 +125,9 @@ type urSettings struct {
 	// The most pages ur search --format jsonl reads, each a control call of at most its wait, before it prints its
 	// summary as it stands: 64, past a search's ten-minute cursor at 10 s a page. Positive.
 	SearchPageCount int
+	// How long one of ur harness's harness.events calls asks the daemon to wait for an event: the daemon's own cap,
+	// HarnessSettings.DaemonViewWait's 25 s, under CallTimeout (cmd_harness.go). Non-positive polls without waiting.
+	HarnessEventsWait time.Duration
 }
 
 // The defaults, a fresh value each call.
@@ -147,6 +150,8 @@ func defaultUrSettings() *urSettings {
 		AclMemberPageCount:         8,
 		SearchTerminalWait:         10 * time.Second,
 		SearchPageCount:            64,
+		// the daemon's own cap on a harness.events wait, so the two have one default
+		HarnessEventsWait: sidecar.DefaultHarnessSettings().DaemonViewWait,
 	}
 }
 
