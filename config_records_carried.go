@@ -5,17 +5,22 @@
 // alone, and every head carries it forward byte for byte. Readers judge it once, at the base whose head first holds it,
 // and keep it unjudged after, so it stands under its first signer whatever befalls that signer, until an Owner or Admin,
 // or for VersioningRules a Network admin, files another. No writer signs it again, which would put an admin's signature
-// on choices a revoked device made. Instead ur admin settings and ur admin versioning, with their control methods, list
-// every such record whose signer no longer stands, naming the signer and why, so an admin can file a fresh one:
+// on choices a revoked device made. Instead every admin surface lists each such record whose signer no longer stands,
+// naming the signer and why, so an admin can file a fresh one (ConfigCarriedRecordFilers names who may):
 //
-//	stands  the signer is judged by the rule a new record of its kind meets at the newest verified state
-//	        (configHeadRecordSignedByRole): standing, untagged, of a member whose role signs it, its signature
-//	        verifying under its identity key. A record that passes is not listed
-//	why     revoked or parked at a position, expired, removed (its member no longer the network's), tagged, role (its
-//	        member's role no longer signs it), unlisted (no row holds it), or signature: none of these, its signature
-//	        failing under the key its row admits, which only a record a reader took unjudged, at its anchor, can meet
-//	head    the records are read from the config head the newest base names, each the record the state holds, byte for
-//	        byte, by its Signed bytes' SHA-256 (ConfigState); a reader that opens no config head knows none
+//	stands    the signer is judged by the rule a new record of its kind meets at the newest verified state
+//	          (configHeadRecordSignedByRole): standing, untagged, of a member whose role signs it, its signature
+//	          verifying under its identity key. A record that passes is not listed
+//	why       revoked or parked at a position, expired, removed (its member no longer the network's), tagged, role (its
+//	          member's role no longer signs it), unlisted (no row holds it), or signature: none of these, its signature
+//	          failing under the key its row admits. Tagged, unlisted and signature only a record a reader took
+//	          unjudged, at its anchor, can meet; expired also a record an ephemeral device of an Owner or Admin signed
+//	head      the records are read from the config head the newest base names, each the record the state holds, byte
+//	          for byte, by its Signed bytes' SHA-256 (ConfigState); a reader that opens no config head knows none
+//	surfaces  ur admin settings and ur admin versioning, with their control methods; ur admin directory and ur admin
+//	          scopes, whose settings the ServiceSettings record holds; the apps, through the sdk's
+//	          GetCarriedConfigRecords (Sidecar.CarriedConfigRecords, or ur daemon's admin.settings.show in remote
+//	          mode); and the team console's config view, which lists a page Worker's own state's records
 //
 // The listing judges a record's signer and changes nothing: no verdict, no state, no head. Nothing here creates,
 // derives or unwraps a key, so nothing calls testHookSecret.
@@ -27,6 +32,8 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/urnetwork/sidecar/protocol/bridge"
@@ -83,6 +90,35 @@ type ConfigCarriedRecord struct {
 	MemberRemoved bool `json:"member_removed,omitempty"`
 }
 
+// A member role as ConfigCarriedRecord.Role names it: owner, admin, network_admin, it_admin, billing_admin, auditor or
+// member.
+func configCarriedRoleName(role bridge.MemberRole) string {
+	return strings.TrimPrefix(strings.ToLower(role.String()), "member_role_")
+}
+
+// The roles whose standing, untagged devices may file another record at path, the head path a ConfigCarriedRecord
+// names, in role order and as ConfigCarriedRecord.Role names a role: the roles §7.9's records table has sign it, read
+// from the rule a new record meets (configHeadRecordSignedByRole), so owner and admin for ServiceSettings and
+// network_admin as well for VersioningRules. Nil for any other path.
+func ConfigCarriedRecordFilers(path string) []string {
+	var allow func(role bridge.MemberRole) bool
+	switch path {
+	case ConfigHeadServiceSettingsPath:
+		allow = configAdminSignerRole
+	case ConfigHeadVersioningRulesPath:
+		allow = configVersioningRulesSignerRole
+	default:
+		return nil
+	}
+	roles := []string{}
+	for _, value := range slices.Sorted(maps.Keys(bridge.MemberRole_name)) {
+		if role := bridge.MemberRole(value); role != bridge.MemberRole_MEMBER_ROLE_UNSPECIFIED && allow(role) {
+			roles = append(roles, configCarriedRoleName(role))
+		}
+	}
+	return roles
+}
+
 // The records the config head of this state's newest base holds whose signer no longer stands at this state as one
 // who may sign it, ServiceSettings' before VersioningRules', each with why (see the file header). head is the head that
 // base names, which may be nil where the state holds neither record. None before base 1, whose state no head stands
@@ -117,7 +153,7 @@ func (self *ConfigState) CarriedRecords(head *ConfigHead) ([]*ConfigCarriedRecor
 			member = self.members[memberId]
 			carried.MemberRemoved = member == nil
 			if member != nil {
-				carried.Role = strings.TrimPrefix(strings.ToLower(member.GetRole().String()), "member_role_")
+				carried.Role = configCarriedRoleName(member.GetRole())
 			}
 		}
 		switch {
@@ -214,7 +250,8 @@ func (self *ConfigClient) CarriedRecords(ctx context.Context) ([]*ConfigCarriedR
 }
 
 // The records of this network's newest verified config head whose signer no longer stands (ConfigClient.CarriedRecords),
-// for ur admin settings, ur admin versioning and the apps to list: ErrSidecarActNoAuthority before a verified state.
+// for ur admin settings, ur admin versioning, ur admin directory, ur admin scopes and the apps (the sdk's
+// GetCarriedConfigRecords) to list: ErrSidecarActNoAuthority before a verified state.
 func (self *Sidecar) CarriedConfigRecords(ctx context.Context) ([]*ConfigCarriedRecord, error) {
 	authority, ok := self.authority().(*ConfigAuthority)
 	if !ok {
