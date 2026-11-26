@@ -108,10 +108,10 @@ func TestRecordClassesMatchSectionEight(t *testing.T) {
 			t.Errorf("class %d reads %q here, and %s is added (%s)", addition.number, class, addition.name, addition.source)
 		}
 	}
-	if found != 7 {
+	if found != 8 {
 		t.Errorf("section 8 holds %d classes: a fold that writes one of testRecordClassAdditions drops its line", found)
 	}
-	if RecordClass(0).Known() || RecordClass(7+len(testRecordClassAdditions)+1).Known() {
+	if RecordClass(0).Known() || RecordClass(8+len(testRecordClassAdditions)+1).Known() {
 		t.Error("a class section 8 does not hold, and no addition names, reads as known")
 	}
 
@@ -151,10 +151,7 @@ type testRecordKindAddition struct {
 // The kinds the compute extension adds to section 6.3's registry, which record_kind.go takes with their code while
 // RECORD.md waits for the fold (QD-1366, compute-plan-record-registry-fold). A line whose kind section 6.3 comes to
 // give fails until it leaves.
-var testRecordKindAdditions = []testRecordKindAddition{
-	{number: 54, name: "session_entry", class: "capture", body: "SessionEntryBody", source: testRecordSessionSource},
-	{number: 55, name: "session_blob", class: "bulk", body: "SessionBlobBody", source: testRecordSessionSource},
-}
+var testRecordKindAdditions = []testRecordKindAddition{}
 
 // One class DESIGN-COMPUTE.md adds to section 8 ahead of a design-records fold.
 type testRecordClassAddition struct {
@@ -165,12 +162,7 @@ type testRecordClassAddition struct {
 
 // The classes the compute extension adds to section 8, which record_kind.go takes with their kinds while RECORD.md
 // waits for the fold (QD-1366). A fold that writes one into section 8's table drops its line here.
-var testRecordClassAdditions = []testRecordClassAddition{
-	{number: 8, name: "bulk", source: testRecordSessionSource},
-}
-
-// Where context history's kinds and class come from (Appendix D's RECORD.md 5.6, 6.3, 6.4 and 8 row).
-const testRecordSessionSource = "DESIGN-COMPUTE.md §24.5, §24.10 (CO-25; CTXH-M11-01)"
+var testRecordClassAdditions = []testRecordClassAddition{}
 
 // Each kind an addition gives a body takes that message here, and a body-apart kind is one §24.5 names.
 func TestRecordKindAdditionsTakeTheirBodies(t *testing.T) {

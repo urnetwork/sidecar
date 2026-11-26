@@ -1631,7 +1631,7 @@ func TestRecordMdRegistryHoldsTogether(t *testing.T) {
 		numberNames[kind.number] = kind.name
 		block := (kind.number >= 1 && kind.number <= 15 && (kind.class == "coordination" || kind.class == "announce" || kind.class == "request")) ||
 			(kind.number >= 16 && kind.number <= 47 && (kind.class == "action" || kind.class == "accounting" || kind.class == "log")) ||
-			(kind.number >= 48 && kind.number <= 63 && kind.class == "capture")
+			(kind.number >= 48 && kind.number <= 63 && (kind.class == "capture" || kind.class == "bulk"))
 		if !block {
 			t.Errorf("kind %s at %d sits outside section 6.1's block for class %s", kind.name, kind.number, kind.class)
 		}
@@ -1691,8 +1691,10 @@ func TestRecordMdRegistryHoldsTogether(t *testing.T) {
 			indexed[match[1]] = true
 		}
 	}
+	// Section 7.1's never row: raw kinds, of class capture or bulk, copy, and class log.
+	recordMdRequire(t, "section 7.1's documents row", doc.row(t, "7.1", "documents"), "never: raw kinds, of class capture or bulk")
 	for _, kind := range kinds {
-		never := kind.class == "capture" || kind.class == "log" || kind.name == "copy"
+		never := kind.class == "capture" || kind.class == "bulk" || kind.class == "log" || kind.name == "copy"
 		if indexed[kind.name] == never {
 			t.Errorf("kind %s: section 7.2 lists it %v, and section 7.1 never indexes it %v", kind.name, indexed[kind.name], never)
 		}
