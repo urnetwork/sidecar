@@ -10,6 +10,8 @@ barrier acl_engine.install.after acl_engine.go
 barrier acl_engine.install.before acl_engine.go
 barrier acl_engine.install_routes.after acl_engine.go
 barrier acl_engine.install_routes.before acl_engine.go
+barrier acl_engine.read_waiting.after acl_engine.go
+barrier acl_engine.read_waiting.before acl_engine.go
 barrier acl_gate.install acl_gate.go
 barrier acl_gate.install.after acl_gate.go
 barrier acl_gate.install.before acl_gate.go
