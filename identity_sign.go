@@ -90,6 +90,9 @@ func sidecarIdentitySignedPurpose(signedType bridge.SignedType) (string, bool) {
 		return "record-entry", true
 	case bridge.SignedType_SIGNED_APPROVAL_DECISION, bridge.SignedType_SIGNED_APPROVAL_CANCEL:
 		return "approval", true
+	case bridge.SignedType_SIGNED_ATTACH_ORIGIN:
+		// HarnessAttachOriginPurpose, which harness_origin.go holds off this file's legs (DESIGN-COMPUTE §7.10, §12.5)
+		return "attach-origin", true
 	case bridge.SignedType_SIGNED_DIRECTORY_CARD, bridge.SignedType_SIGNED_DIRECTORY_REPO:
 		return "directory", true
 

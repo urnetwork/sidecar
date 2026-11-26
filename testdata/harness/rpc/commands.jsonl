@@ -1,0 +1,19 @@
+{"id": "req-1", "type": "prompt", "message": "Hello, world!"}
+{"type": "prompt", "message": "What's in this image?", "images": [{"type": "image", "data": "base64-encoded-data", "mimeType": "image/png"}]}
+{"type": "prompt", "message": "New instruction", "streamingBehavior": "steer"}
+{"type": "steer", "message": "Stop and do this instead"}
+{"type": "steer", "message": "Look at this instead", "images": [{"type": "image", "data": "base64-encoded-data", "mimeType": "image/png"}]}
+{"type": "follow_up", "message": "After you're done, also do this"}
+{"type": "follow_up", "message": "Also check this image", "images": [{"type": "image", "data": "base64-encoded-data", "mimeType": "image/png"}]}
+{"type": "abort"}
+{"type": "get_state"}
+{"type": "get_messages"}
+{"type": "set_model", "provider": "anthropic", "modelId": "claude-sonnet-4-20250514"}
+{"type": "compact"}
+{"type": "compact", "customInstructions": "Focus on code changes"}
+{"type": "switch_session", "sessionPath": "/path/to/session.jsonl"}
+{"type": "fork", "entryId": "abc123"}
+{"type": "clone"}
+{"type": "get_tree"}
+{"id":"req-1","type":"get_state"}
+{"id":"req-2","type":"prompt","message":"Review this repository"}
