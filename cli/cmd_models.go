@@ -339,7 +339,7 @@ func urModelsPullLine(reply *sidecar.DaemonModelsPullReply) string {
 }
 
 // What a failed pull says: its code, the chunk download_corrupt names, and why.
-func urModelsPullError(pullErr *sidecar.DaemonModelsPullError) error {
+func urModelsPullError(pullErr *sidecar.InferPullError) error {
 	if pullErr == nil {
 		return errors.New("the pull failed")
 	}
@@ -385,7 +385,7 @@ func runUrModelsPull(ctx context.Context, cli *urCli, network string, name strin
 }
 
 // The models key's lines.
-func urModelsSettingsLines(settings *sidecar.DaemonModelsSettingsReply) []string {
+func urModelsSettingsLines(settings *sidecar.InferModelsSettings) []string {
 	lines := []string{}
 	if settings.Unreadable {
 		lines = append(lines, "the models key does not read, so every model is refused until it is set again: "+sidecar.HarnessSanitizeLine(settings.Reason))
@@ -432,7 +432,7 @@ func urModelsSettingsLines(settings *sidecar.DaemonModelsSettingsReply) []string
 
 // ur models settings.
 func runUrModelsSettings(ctx context.Context, cli *urCli, network string, jsonOut bool) error {
-	settings := &sidecar.DaemonModelsSettingsReply{}
+	settings := &sidecar.InferModelsSettings{}
 	if err := cli.callDaemon(ctx, sidecar.DaemonMethodModelsSettings, &sidecar.DaemonModelsParams{Network: network}, false, settings); err != nil {
 		return err
 	}
@@ -495,7 +495,7 @@ func urModelsSetParams(network string, options docopt.Opts) (*sidecar.DaemonMode
 }
 
 // The change as the person reads it before saying yes: each field from what it is to what it would be.
-func urModelsSetLines(now *sidecar.DaemonModelsSettingsReply, params *sidecar.DaemonModelsSetParams) []string {
+func urModelsSetLines(now *sidecar.InferModelsSettings, params *sidecar.DaemonModelsSetParams) []string {
 	lines := []string{}
 	change := func(field string, from string, to string) {
 		lines = append(lines, fmt.Sprintf("%s: %s -> %s", field, sidecar.HarnessSanitizeLine(from), sidecar.HarnessSanitizeLine(to)))
@@ -534,7 +534,7 @@ func runUrModelsSet(ctx context.Context, cli *urCli, network string, options doc
 	if err != nil {
 		return err
 	}
-	now := &sidecar.DaemonModelsSettingsReply{}
+	now := &sidecar.InferModelsSettings{}
 	if err := cli.callDaemon(ctx, sidecar.DaemonMethodModelsSettings, &sidecar.DaemonModelsParams{Network: network}, false, now); err != nil {
 		return err
 	}
@@ -554,7 +554,7 @@ func runUrModelsSet(ctx context.Context, cli *urCli, network string, options doc
 		cli.printf("nothing changed\n")
 		return nil
 	}
-	written := &sidecar.DaemonModelsSettingsReply{}
+	written := &sidecar.InferModelsSettings{}
 	if err := cli.callDaemon(ctx, sidecar.DaemonMethodModelsSet, params, true, written); err != nil {
 		return err
 	}

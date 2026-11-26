@@ -556,6 +556,37 @@ func (self *InferPull) pullEngineFile(ctx context.Context, file *InferManifestFi
 	return nil
 }
 
+// Why a pull failed, as every surface shows it: its code (download_corrupt, download_unavailable or download_no_space,
+// model_refused, canceled, or pull_failed), the chunk download_corrupt names, -1 for the index, and why in the pull's
+// own words.
+type InferPullError struct {
+	Code    string `json:"code"`
+	Chunk   *int   `json:"chunk,omitempty"`
+	Message string `json:"message"`
+}
+
+// The pull's error err as the surfaces show it.
+func InferPullErrorOf(err error) *InferPullError {
+	var downloadErr *InferDownloadError
+	var inferErr *InferError
+	switch {
+	case errors.As(err, &downloadErr):
+		pullErr := &InferPullError{Code: string(downloadErr.Code), Message: downloadErr.Message}
+		if downloadErr.Code == InferDownloadErrorCorrupt {
+			chunk := downloadErr.Chunk
+			pullErr.Chunk = &chunk
+		}
+		return pullErr
+	case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
+		return &InferPullError{Code: string(InferErrorCanceled), Message: "the pull was stopped"}
+	case errors.As(err, &inferErr):
+		return &InferPullError{Code: string(inferErr.Code), Message: inferErr.Message}
+	case errors.Is(err, ErrInferModelUnknown) || errors.Is(err, ErrInferModelUnavailable) || errors.Is(err, ErrInferModelNameInvalid):
+		return &InferPullError{Code: string(InferErrorModelRefused), Message: err.Error()}
+	}
+	return &InferPullError{Code: "pull_failed", Message: err.Error()}
+}
+
 // The transport this Sidecar's api calls go through, bound to its egress: what a host's InferPull downloads with,
 // sending no credential of its own (CO-49). ur's daemon hands it to the pull it keeps for the instance.
 func (self *Sidecar) InferDownloadTransport() http.RoundTripper {

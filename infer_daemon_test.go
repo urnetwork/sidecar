@@ -160,11 +160,11 @@ func TestDaemonInferRunAnswersARefusal(t *testing.T) {
 }
 
 // The pulls of a daemon over world's model for an Android phone.
-func newTestDaemonInferPulls(t *testing.T, world *testInferDownloadWorld) *daemonInferPulls {
+func newTestDaemonInferPulls(t *testing.T, world *testInferDownloadWorld) *InferPulls {
 	t.Helper()
 	device := testInferDevice("android/arm64", InferDeviceClassPhone, 8, false)
 	pull, _ := newTestInferPull(t, world, testInferPullManifest(world, nil), device, false)
-	return &daemonInferPulls{ctx: context.Background(), pull: pull, settings: world.settings, nameStates: map[string]*daemonInferPullState{}}
+	return NewInferPulls(context.Background(), pull.Pull, world.settings)
 }
 
 // A call that follows a pull, its notifications kept.
@@ -192,7 +192,7 @@ func TestDaemonModelsPullFollowsAndAnswersOnce(t *testing.T) {
 	world.settings.ModelChunkFetchConcurrency = 1
 	pulls := newTestDaemonInferPulls(t, world)
 	follower := &testInferDaemonFollower{}
-	reply, err := pulls.answer(context.Background(), follower.call(), &DaemonModelsPullParams{Name: "local-test-model-off", Follow: true})
+	reply, err := daemonModelsPull(context.Background(), pulls, follower.call(), &DaemonModelsPullParams{Name: "local-test-model-off", Follow: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,7 +212,7 @@ func TestDaemonModelsPullFollowsAndAnswersOnce(t *testing.T) {
 		t.Errorf("an answered pull kept %d states", len(pulls.nameStates))
 	}
 	// the model is whole: an unfollowed call joins a new pull, which ends at once
-	reply, err = pulls.answer(context.Background(), &DaemonCall{}, &DaemonModelsPullParams{Name: "local-test-model-off"})
+	reply, err = daemonModelsPull(context.Background(), pulls, &DaemonCall{}, &DaemonModelsPullParams{Name: "local-test-model-off"})
 	if err != nil || (reply.State != DaemonModelsPullRunning && reply.State != DaemonModelsPullDone) {
 		t.Errorf("an unfollowed pull answered %+v, %v", reply, err)
 	}
@@ -229,7 +229,7 @@ func TestDaemonModelsPullReportsCorruptChunk(t *testing.T) {
 		return testInferDownloadServe
 	})
 	pulls := newTestDaemonInferPulls(t, world)
-	reply, err := pulls.answer(context.Background(), (&testInferDaemonFollower{}).call(), &DaemonModelsPullParams{Name: "local-test-model-off", Follow: true})
+	reply, err := daemonModelsPull(context.Background(), pulls, (&testInferDaemonFollower{}).call(), &DaemonModelsPullParams{Name: "local-test-model-off", Follow: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,15 +250,15 @@ func TestDaemonModelsSetChange(t *testing.T) {
 	teeOnly := true
 	mode := string(HarnessSignInMailAllow)
 	allow := []string{"chutes-*", "local-*"}
-	if err := daemonModelsSetChange(&DaemonModelsSetParams{TeeOnly: &teeOnly, SignInMail: &mode, Allow: &allow,
-		Harness: HarnessModelsCodex, Tier: HarnessModelsTierModel, Model: "chutes-qwen3.8-27b-tee-high"}, key); err != nil {
+	if err := (&InferModelsChange{TeeOnly: &teeOnly, SignInMail: &mode, Allow: &allow,
+		Harness: HarnessModelsCodex, Tier: HarnessModelsTierModel, Model: "chutes-qwen3.8-27b-tee-high"}).Apply(key); err != nil {
 		t.Fatal(err)
 	}
 	if key.Default != "local-gemma-4-e4b-off" || !key.TeeOnly || key.SignInMail != HarnessSignInMailAllow ||
 		!slices.Equal(key.Allow, allow) || key.Harness[HarnessModelsCodex][HarnessModelsTierModel] != "chutes-qwen3.8-27b-tee-high" {
 		t.Errorf("the key is %+v", key)
 	}
-	if err := daemonModelsSetChange(&DaemonModelsSetParams{Harness: HarnessModelsCodex}, key); !errors.Is(err, ErrModelsKeyInvalid) {
+	if err := (&InferModelsChange{Harness: HarnessModelsCodex}).Apply(key); !errors.Is(err, ErrModelsKeyInvalid) {
 		t.Errorf("half a tier was taken: %v", err)
 	}
 	var set *DaemonMethod

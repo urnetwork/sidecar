@@ -15,6 +15,7 @@ package sidecar
 
 import (
 	"context"
+	"fmt"
 	"slices"
 )
 
@@ -196,4 +197,120 @@ func (self *Sidecar) InferModels(ctx context.Context, filter *InferModelsFilter,
 		return nil, err
 	}
 	return InferModelsListingOf(catalog, filter, self.inferCurrentPolicy(), pull), nil
+}
+
+// The person's models key as the lists show it (§16.4): models.settings's and models.set's answer, an app's
+// Models().Settings.
+type InferModelsSettings struct {
+	Default string `json:"default,omitempty"`
+	// The globs every model must match one of; null for every model, [] for none.
+	Allow      []string `json:"allow"`
+	TeeOnly    bool     `json:"tee_only"`
+	SignInMail string   `json:"sign_in_mail"`
+	// Each harness's tiers, harness to tier to canonical name.
+	Harness map[string]map[string]string `json:"harness,omitempty"`
+	// Each agent label's default model.
+	Agents map[string]string `json:"agents,omitempty"`
+	// The key does not read: every model is refused under allow, the closed reading (§16.4).
+	Unreadable bool     `json:"unreadable,omitempty"`
+	Reason     string   `json:"reason,omitempty"`
+	Warnings   []string `json:"warnings,omitempty"`
+}
+
+// The settings key holds, with read's verdict where it was read.
+func InferModelsSettingsOf(key *HarnessModelsKey, read *HarnessModelsKeyRead) *InferModelsSettings {
+	settings := &InferModelsSettings{
+		Default:    key.Default,
+		Allow:      key.Allow,
+		TeeOnly:    key.TeeOnly,
+		SignInMail: string(key.SignInMailMode()),
+		Harness:    key.Harness,
+	}
+	if 0 < len(key.Agents) {
+		settings.Agents = map[string]string{}
+		for label, agent := range key.Agents {
+			settings.Agents[label] = agent.Default
+		}
+	}
+	if read != nil {
+		settings.Unreadable = read.Unreadable
+		settings.Reason = read.Reason
+		settings.Warnings = read.Warnings
+	}
+	return settings
+}
+
+// A change to the person's models key (§16.4), ur models set's and an app's Models().SetSettings: each set field
+// changes, each nil or empty one stays.
+type InferModelsChange struct {
+	// The default model, a canonical name; empty removes it.
+	Default *string `json:"default,omitempty"`
+	TeeOnly *bool   `json:"tee_only,omitempty"`
+	// withhold or allow.
+	SignInMail *string `json:"sign_in_mail,omitempty"`
+	// The globs allowed; [] allows none.
+	Allow *[]string `json:"allow,omitempty"`
+	// A harness's tier's model: all three, or none.
+	Harness string `json:"harness,omitempty"`
+	Tier    string `json:"tier,omitempty"`
+	Model   string `json:"model,omitempty"`
+}
+
+// Whether the change changes nothing.
+func (self *InferModelsChange) Empty() bool {
+	return self.Default == nil && self.TeeOnly == nil && self.SignInMail == nil && self.Allow == nil &&
+		self.Harness == "" && self.Tier == "" && self.Model == ""
+}
+
+// Applies the change to key, refusing a harness's tier named by halves; CACL's writer checks the key whole after.
+func (self *InferModelsChange) Apply(key *HarnessModelsKey) error {
+	if self.Default != nil {
+		key.Default = *self.Default
+	}
+	if self.TeeOnly != nil {
+		key.TeeOnly = *self.TeeOnly
+	}
+	if self.SignInMail != nil {
+		key.SignInMail = HarnessSignInMail(*self.SignInMail)
+	}
+	if self.Allow != nil {
+		key.Allow = append([]string{}, *self.Allow...)
+	}
+	switch {
+	case self.Harness == "" && self.Tier == "" && self.Model == "":
+	case self.Harness == "" || self.Tier == "" || self.Model == "":
+		return fmt.Errorf("%w: a harness's tier takes the harness, the tier and the model", ErrModelsKeyInvalid)
+	default:
+		if key.Harness == nil {
+			key.Harness = map[string]map[string]string{}
+		}
+		if key.Harness[self.Harness] == nil {
+			key.Harness[self.Harness] = map[string]string{}
+		}
+		key.Harness[self.Harness][self.Tier] = self.Model
+	}
+	return nil
+}
+
+// The person's models key as this device reads it now (§16.4).
+func (self *Sidecar) InferModelsSettings(ctx context.Context) (*InferModelsSettings, error) {
+	read, err := self.ModelsKey(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return InferModelsSettingsOf(read.Key, read), nil
+}
+
+// Changes the person's models key by change: their own act, confirmed on /dev/tty or in an app's UI, which the
+// callers vouch for (ur daemon's models.set, a Confirm method refused under a harness; an app's SetSettings), written
+// through CACL's writer (Sidecar.SetModelsKey) and never from a run, a tool or MCP. Answers the key as written.
+func (self *Sidecar) InferSetModels(ctx context.Context, change *InferModelsChange) (*InferModelsSettings, error) {
+	if change == nil || change.Empty() {
+		return nil, fmt.Errorf("%w: no change", ErrModelsKeyInvalid)
+	}
+	written, err := self.SetModelsKey(ctx, &MemberHarnessConfigUpdateArgs{Origin: SidecarActConfirmed}, change.Apply)
+	if err != nil {
+		return nil, err
+	}
+	return InferModelsSettingsOf(written, nil), nil
 }

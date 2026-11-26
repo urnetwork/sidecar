@@ -224,7 +224,7 @@ func TestUrModelsPullProgress(t *testing.T) {
 func TestUrModelsPullResumesAtFirstMissingChunk(t *testing.T) {
 	cut := &sidecar.DaemonModelsPullReply{Name: "local-gemma-4-e2b-off", State: sidecar.DaemonModelsPullFailed,
 		Progress: testUrModelsPullProgress(2, 5).Progress,
-		Error:    &sidecar.DaemonModelsPullError{Code: string(sidecar.InferDownloadErrorUnavailable), Message: "the api stopped answering"}}
+		Error:    &sidecar.InferPullError{Code: string(sidecar.InferDownloadErrorUnavailable), Message: "the api stopped answering"}}
 	stand := &testUrModelsStand{
 		replies: map[string][]any{sidecar.DaemonMethodModelsPull: {cut, &sidecar.DaemonModelsPullReply{Name: "local-gemma-4-e2b-off", State: sidecar.DaemonModelsPullDone}}},
 		notifications: map[string][][]any{sidecar.DaemonMethodModelsPull: {
@@ -254,7 +254,7 @@ func TestUrModelsPullReportsCorruptChunk(t *testing.T) {
 	chunk := 37
 	stand := &testUrModelsStand{replies: map[string][]any{sidecar.DaemonMethodModelsPull: {&sidecar.DaemonModelsPullReply{
 		Name: "local-gemma-4-e2b-off", State: sidecar.DaemonModelsPullFailed,
-		Error: &sidecar.DaemonModelsPullError{Code: string(sidecar.InferDownloadErrorCorrupt), Chunk: &chunk, Message: "it failed its check 3 times"},
+		Error: &sidecar.InferPullError{Code: string(sidecar.InferDownloadErrorCorrupt), Chunk: &chunk, Message: "it failed its check 3 times"},
 	}}}}
 	cli, output, _ := testUrModelsCli(t, stand)
 	if code := cli.main(context.Background(), []string{"ur", "models", "pull", "local-gemma-4-e2b-off"}); code == urExitOk {
@@ -269,8 +269,8 @@ func TestUrModelsPullReportsCorruptChunk(t *testing.T) {
 // method is sent confirmed.
 func TestUrModelsSetNeedsTty(t *testing.T) {
 	stand := &testUrModelsStand{replies: map[string][]any{
-		sidecar.DaemonMethodModelsSettings: {&sidecar.DaemonModelsSettingsReply{SignInMail: "withhold"}},
-		sidecar.DaemonMethodModelsSet:      {&sidecar.DaemonModelsSettingsReply{TeeOnly: true, SignInMail: "withhold"}},
+		sidecar.DaemonMethodModelsSettings: {&sidecar.InferModelsSettings{SignInMail: "withhold"}},
+		sidecar.DaemonMethodModelsSet:      {&sidecar.InferModelsSettings{TeeOnly: true, SignInMail: "withhold"}},
 	}}
 	cli, output, _ := testUrModelsCli(t, stand)
 	if code := cli.main(context.Background(), []string{"ur", "models", "set", "--tee-only=on"}); code == urExitOk {
@@ -315,7 +315,7 @@ func TestUrModelsSetNeedsTty(t *testing.T) {
 
 // Under a harness the daemon refuses the set, confirmed or not, and the key's writer is never reached.
 func TestUrModelsSetRefusedUnderHarness(t *testing.T) {
-	stand := &testUrModelsStand{replies: map[string][]any{sidecar.DaemonMethodModelsSettings: {&sidecar.DaemonModelsSettingsReply{}}}}
+	stand := &testUrModelsStand{replies: map[string][]any{sidecar.DaemonMethodModelsSettings: {&sidecar.InferModelsSettings{}}}}
 	cli, output, _ := testUrModelsCli(t, stand, "yes")
 	urModelsUnderHarness = func(ctx context.Context, call *sidecar.DaemonCall) bool { return true }
 	if code := cli.main(context.Background(), []string{"ur", "models", "set", "--tee-only=on"}); code == urExitOk {
@@ -331,7 +331,7 @@ func TestUrModelsSetRefusedUnderHarness(t *testing.T) {
 
 // The settings print as the person reads them.
 func TestUrModelsSettingsPrints(t *testing.T) {
-	stand := &testUrModelsStand{replies: map[string][]any{sidecar.DaemonMethodModelsSettings: {&sidecar.DaemonModelsSettingsReply{
+	stand := &testUrModelsStand{replies: map[string][]any{sidecar.DaemonMethodModelsSettings: {&sidecar.InferModelsSettings{
 		Default: "local-gemma-4-e4b-off", Allow: []string{}, TeeOnly: true, SignInMail: "withhold",
 		Harness: map[string]map[string]string{"codex": {"model": "chutes-qwen3.8-27b-tee-high"}},
 	}}}}

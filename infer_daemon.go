@@ -10,7 +10,7 @@
 //	                  models.pull.progress notifications and answers once it ends (ur models pull), else the call
 //	                  answers its state at once, which an app polls (Models().Pull); a pull that ended is answered once
 //	models.remove     a local model's files, every state of them
-//	models.settings   the person's models key, as this device reads it (§16.4)
+//	models.settings   the person's models key, as this device reads it (§16.4; InferModelsSettings)
 //	models.set        a change to the models key: a Confirm method, the person's act on /dev/tty or in an app's UI,
 //	                  refused to a caller with a harness process among its ancestors (DESIGN §5.8), written through
 //	                  CACL's writer (Sidecar.SetModelsKey) and never through MCP
@@ -28,7 +28,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
 )
 
 // The methods and their notifications.
@@ -44,11 +43,11 @@ const (
 	DaemonNotifyInferEvent         = "infer.event"
 )
 
-// A pull's states.
+// A pull's states, InferPulls'.
 const (
-	DaemonModelsPullRunning = "running"
-	DaemonModelsPullDone    = "done"
-	DaemonModelsPullFailed  = "failed"
+	DaemonModelsPullRunning = InferPullRunning
+	DaemonModelsPullDone    = InferPullDone
+	DaemonModelsPullFailed  = InferPullFailed
 )
 
 // The harness name of the run infer.run opens.
@@ -69,22 +68,8 @@ type DaemonModelsPullParams struct {
 	Follow bool `json:"follow,omitempty"`
 }
 
-// Why a pull failed: its code (download_corrupt, download_unavailable or download_no_space, model_refused, canceled or
-// pull_failed), the chunk download_corrupt names, -1 for the index, and why in the pull's own words.
-type DaemonModelsPullError struct {
-	Code    string `json:"code"`
-	Chunk   *int   `json:"chunk,omitempty"`
-	Message string `json:"message"`
-}
-
-// models.pull's reply, and each of its notifications: where the pull is.
-type DaemonModelsPullReply struct {
-	Name string `json:"name"`
-	// running, done or failed.
-	State    string                 `json:"state"`
-	Progress *InferPullProgress     `json:"progress,omitempty"`
-	Error    *DaemonModelsPullError `json:"error,omitempty"`
-}
+// models.pull's reply, and each of its notifications: where the pull is, InferPulls' status.
+type DaemonModelsPullReply = InferPullStatus
 
 // models.remove's params.
 type DaemonModelsRemoveParams struct {
@@ -97,37 +82,10 @@ type DaemonModelsParams struct {
 	Network string `json:"network,omitempty"`
 }
 
-// The person's models key as models.settings and models.set answer it (§16.4).
-type DaemonModelsSettingsReply struct {
-	Default string `json:"default,omitempty"`
-	// The globs every model must match one of; null for every model, [] for none.
-	Allow      []string `json:"allow"`
-	TeeOnly    bool     `json:"tee_only"`
-	SignInMail string   `json:"sign_in_mail"`
-	// Each harness's tiers, harness to tier to canonical name.
-	Harness map[string]map[string]string `json:"harness,omitempty"`
-	// Each agent label's default model.
-	Agents map[string]string `json:"agents,omitempty"`
-	// The key does not read: every model is refused under allow, the closed reading (§16.4).
-	Unreadable bool     `json:"unreadable,omitempty"`
-	Reason     string   `json:"reason,omitempty"`
-	Warnings   []string `json:"warnings,omitempty"`
-}
-
-// models.set's params: each set field changes, each nil one stays.
+// models.set's params: the change.
 type DaemonModelsSetParams struct {
 	Network string `json:"network,omitempty"`
-	// The default model, a canonical name; empty removes it.
-	Default *string `json:"default,omitempty"`
-	TeeOnly *bool   `json:"tee_only,omitempty"`
-	// withhold or allow.
-	SignInMail *string `json:"sign_in_mail,omitempty"`
-	// The globs allowed; [] allows none.
-	Allow *[]string `json:"allow,omitempty"`
-	// A harness's tier's model: all three, or none.
-	Harness string `json:"harness,omitempty"`
-	Tier    string `json:"tier,omitempty"`
-	Model   string `json:"model,omitempty"`
+	InferModelsChange
 }
 
 // infer.run's params.
@@ -177,205 +135,25 @@ var errDaemonModelsSetUnderHarness = errors.New("the models key is the person's 
 // models.set without the person's confirmation.
 var errDaemonModelsSetUnconfirmed = errors.New("models.set is a person's act, confirmed on /dev/tty or in an app")
 
-// The daemon's pulls, one a model, each running until it ends whoever asked.
-type daemonInferPulls struct {
-	ctx      context.Context
-	pull     *InferPull
-	settings *InferSettings
-
-	stateLock  sync.Mutex
-	nameStates map[string]*daemonInferPullState
-}
-
-// One pull's state: its newest reply, and a channel closed and replaced at each change.
-type daemonInferPullState struct {
-	reply   *DaemonModelsPullReply
-	ended   bool
-	changed chan struct{}
-}
-
-// The pull's error as models.pull answers it.
-func daemonModelsPullError(err error) *DaemonModelsPullError {
-	var downloadErr *InferDownloadError
-	var inferErr *InferError
-	switch {
-	case errors.As(err, &downloadErr):
-		pullErr := &DaemonModelsPullError{Code: string(downloadErr.Code), Message: downloadErr.Message}
-		if downloadErr.Code == InferDownloadErrorCorrupt {
-			chunk := downloadErr.Chunk
-			pullErr.Chunk = &chunk
-		}
-		return pullErr
-	case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
-		return &DaemonModelsPullError{Code: string(InferErrorCanceled), Message: "the pull was stopped"}
-	case errors.As(err, &inferErr):
-		return &DaemonModelsPullError{Code: string(inferErr.Code), Message: inferErr.Message}
-	case errors.Is(err, ErrInferModelUnknown) || errors.Is(err, ErrInferModelUnavailable) || errors.Is(err, ErrInferModelNameInvalid):
-		return &DaemonModelsPullError{Code: string(InferErrorModelRefused), Message: err.Error()}
+// models.pull on pulls, nil where the daemon pulls nothing: name's pull joined or started; with follow, its news
+// streamed as notifications until it ends and the end answered, else its status now. A caller that leaves leaves the
+// pull running.
+func daemonModelsPull(ctx context.Context, pulls *InferPulls, call *DaemonCall, params *DaemonModelsPullParams) (*DaemonModelsPullReply, error) {
+	if pulls == nil {
+		return nil, errDaemonInferNoPull
 	}
-	return &DaemonModelsPullError{Code: "pull_failed", Message: err.Error()}
-}
-
-// name's pull: the one running, or ended and not yet answered, else a new one started in the daemon. A state taken
-// after it ended is forgotten, so it is answered once.
-func (self *daemonInferPulls) join(name string) (*daemonInferPullState, *DaemonModelsPullReply, chan struct{}) {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	state, ok := self.nameStates[name]
-	if !ok {
-		state = &daemonInferPullState{
-			reply:   &DaemonModelsPullReply{Name: name, State: DaemonModelsPullRunning},
-			changed: make(chan struct{}),
-		}
-		self.nameStates[name] = state
-		go self.run(name, state)
+	if params.Name == "" {
+		return nil, fmt.Errorf("%w: no model", errDaemonInferParams)
 	}
-	return state, self.takeWithLock(name, state), state.changed
-}
-
-// The state's reply now, forgetting the state where it ended. Called with stateLock held.
-func (self *daemonInferPulls) takeWithLock(name string, state *daemonInferPullState) *DaemonModelsPullReply {
-	reply := *state.reply
-	if state.ended && self.nameStates[name] == state {
-		delete(self.nameStates, name)
-	}
-	return &reply
-}
-
-// The state's reply now and the channel its next change closes, forgetting it where it ended.
-func (self *daemonInferPulls) read(name string, state *daemonInferPullState) (*DaemonModelsPullReply, chan struct{}) {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	return self.takeWithLock(name, state), state.changed
-}
-
-// Sets the state's reply by change, and wakes its followers.
-func (self *daemonInferPulls) update(state *daemonInferPullState, change func(reply *DaemonModelsPullReply)) {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	reply := *state.reply
-	change(&reply)
-	state.reply = &reply
-	close(state.changed)
-	state.changed = make(chan struct{})
-}
-
-// Runs name's pull to its end in the daemon's context.
-func (self *daemonInferPulls) run(name string, state *daemonInferPullState) {
-	err := self.pull.Pull(self.ctx, name, func(progress *InferPullProgress) {
-		copied := *progress
-		self.update(state, func(reply *DaemonModelsPullReply) {
-			reply.Progress = &copied
-		})
-	})
-	self.update(state, func(reply *DaemonModelsPullReply) {
-		if err != nil {
-			reply.State = DaemonModelsPullFailed
-			reply.Error = daemonModelsPullError(err)
-		} else {
-			reply.State = DaemonModelsPullDone
-		}
-	})
-	func() {
-		self.stateLock.Lock()
-		defer self.stateLock.Unlock()
-		state.ended = true
-	}()
-	// a follower waiting now reads the end
-	self.update(state, func(reply *DaemonModelsPullReply) {})
-}
-
-// Whether next's progress is news to a follower that last heard last: another phase, file or chunk, its end, or an
-// engine file's bytes past another ModelChunkByteCount.
-func (self *daemonInferPulls) news(last *DaemonModelsPullReply, next *DaemonModelsPullReply) bool {
-	if last == nil || last.State != next.State || (last.Progress == nil) != (next.Progress == nil) {
-		return true
-	}
-	if next.Progress == nil {
-		return false
-	}
-	a, b := last.Progress, next.Progress
-	return a.Phase != b.Phase || a.FileIndex != b.FileIndex || a.DoneChunkCount != b.DoneChunkCount ||
-		self.settings.ModelChunkByteCount <= b.DoneByteCount-a.DoneByteCount
-}
-
-// models.pull: name's pull joined or started; with follow, its progress streamed until it ends, else its state now.
-func (self *daemonInferPulls) answer(ctx context.Context, call *DaemonCall, params *DaemonModelsPullParams) (*DaemonModelsPullReply, error) {
-	state, reply, changed := self.join(params.Name)
 	if !params.Follow {
-		return reply, nil
+		return pulls.Status(params.Name), nil
 	}
-	var heard *DaemonModelsPullReply
-	for reply.State == DaemonModelsPullRunning {
-		if self.news(heard, reply) && call.Notify != nil {
-			if err := call.Notify(DaemonNotifyModelsPullProgress, reply); err == nil {
-				heard = reply
-			}
+	return pulls.Follow(ctx, params.Name, call.SessionDone, func(status *InferPullStatus) error {
+		if call.Notify == nil {
+			return nil
 		}
-		select {
-		case <-changed:
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-call.SessionDone:
-			// the caller left: the pull goes on in the daemon
-			return nil, errors.New("the caller left; the pull goes on")
-		}
-		reply, changed = self.read(params.Name, state)
-	}
-	return reply, nil
-}
-
-// The models key's reply for read.
-func daemonModelsSettingsReplyOf(key *HarnessModelsKey, read *HarnessModelsKeyRead) *DaemonModelsSettingsReply {
-	reply := &DaemonModelsSettingsReply{
-		Default:    key.Default,
-		Allow:      key.Allow,
-		TeeOnly:    key.TeeOnly,
-		SignInMail: string(key.SignInMailMode()),
-		Harness:    key.Harness,
-	}
-	if 0 < len(key.Agents) {
-		reply.Agents = map[string]string{}
-		for label, agent := range key.Agents {
-			reply.Agents[label] = agent.Default
-		}
-	}
-	if read != nil {
-		reply.Unreadable = read.Unreadable
-		reply.Reason = read.Reason
-		reply.Warnings = read.Warnings
-	}
-	return reply
-}
-
-// Applies params' changes to key, refusing a harness tier named by halves.
-func daemonModelsSetChange(params *DaemonModelsSetParams, key *HarnessModelsKey) error {
-	if params.Default != nil {
-		key.Default = *params.Default
-	}
-	if params.TeeOnly != nil {
-		key.TeeOnly = *params.TeeOnly
-	}
-	if params.SignInMail != nil {
-		key.SignInMail = HarnessSignInMail(*params.SignInMail)
-	}
-	if params.Allow != nil {
-		key.Allow = append([]string{}, *params.Allow...)
-	}
-	switch {
-	case params.Harness == "" && params.Tier == "" && params.Model == "":
-	case params.Harness == "" || params.Tier == "" || params.Model == "":
-		return fmt.Errorf("%w: a harness's tier takes the harness, the tier and the model", ErrModelsKeyInvalid)
-	default:
-		if key.Harness == nil {
-			key.Harness = map[string]map[string]string{}
-		}
-		if key.Harness[params.Harness] == nil {
-			key.Harness[params.Harness] = map[string]string{}
-		}
-		key.Harness[params.Harness][params.Tier] = params.Model
-	}
-	return nil
+		return call.Notify(DaemonNotifyModelsPullProgress, status)
+	})
 }
 
 // Whether the call's process has a harness process of its network's runs among its ancestors; true where the daemon
@@ -510,7 +288,10 @@ func DaemonInferMethods(args *DaemonInferArgs) []*DaemonMethod {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	pulls := &daemonInferPulls{ctx: ctx, pull: args.Pull, settings: settings, nameStates: map[string]*daemonInferPullState{}}
+	var pulls *InferPulls
+	if args.Pull != nil {
+		pulls = NewInferPulls(ctx, args.Pull.Pull, settings)
+	}
 	// the params, strictly, and the call's Sidecar
 	open := func(call *DaemonCall, params any) error {
 		if err := decodeDaemonSocketParams(call, params); err != nil {
@@ -541,13 +322,7 @@ func DaemonInferMethods(args *DaemonInferArgs) []*DaemonMethod {
 				if err := open(call, params); err != nil {
 					return nil, err
 				}
-				if args.Pull == nil {
-					return nil, errDaemonInferNoPull
-				}
-				if params.Name == "" {
-					return nil, fmt.Errorf("%w: no model", errDaemonInferParams)
-				}
-				return pulls.answer(ctx, call, params)
+				return daemonModelsPull(ctx, pulls, call, params)
 			},
 		},
 		{
@@ -574,11 +349,7 @@ func DaemonInferMethods(args *DaemonInferArgs) []*DaemonMethod {
 				if err := open(call, &DaemonModelsParams{}); err != nil {
 					return nil, err
 				}
-				read, err := call.Sidecar.ModelsKey(ctx)
-				if err != nil {
-					return nil, err
-				}
-				return daemonModelsSettingsReplyOf(read.Key, read), nil
+				return call.Sidecar.InferModelsSettings(ctx)
 			},
 		},
 		{
@@ -596,14 +367,7 @@ func DaemonInferMethods(args *DaemonInferArgs) []*DaemonMethod {
 				if daemonInferUnderHarness(ctx, call) {
 					return nil, errDaemonModelsSetUnderHarness
 				}
-				written, err := call.Sidecar.SetModelsKey(ctx, &MemberHarnessConfigUpdateArgs{Origin: SidecarActConfirmed},
-					func(key *HarnessModelsKey) error {
-						return daemonModelsSetChange(params, key)
-					})
-				if err != nil {
-					return nil, err
-				}
-				return daemonModelsSettingsReplyOf(written, nil), nil
+				return call.Sidecar.InferSetModels(ctx, &params.InferModelsChange)
 			},
 		},
 		{

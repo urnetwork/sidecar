@@ -31,6 +31,21 @@ import (
 // The length of one of a disclosure's grace days: a unit, not a tunable.
 const inferDisclosureGraceDay = 24 * time.Hour
 
+// The context key of a check that must not ask: a listing's, such as models_list's (INFER-M11-09).
+type inferCheckNoAskKey struct{}
+
+// ctx for a check that lists rather than calls: a none model waiting for its disclosure answers disclosure_required at
+// once, asking no person even where one is attached to the run, so a listing never raises a dialog.
+func inferCheckWithoutAsking(ctx context.Context) context.Context {
+	return context.WithValue(ctx, inferCheckNoAskKey{}, true)
+}
+
+// Whether ctx's check may ask the person attached to its run.
+func inferCheckMayAsk(ctx context.Context) bool {
+	noAsk, _ := ctx.Value(inferCheckNoAskKey{}).(bool)
+	return !noAsk
+}
+
 // Whether the acknowledged version covers disclosure at now: its current version or a later one, or the previous one
 // while the current version's grace runs.
 func inferDisclosureCovered(acknowledged uint32, disclosure *ComputePolicyDisclosure, now time.Time) bool {
@@ -95,7 +110,8 @@ func (self *inferSourceChecker) checkDisclosure(ctx context.Context, call *Infer
 	}
 	request := call.Request
 	asker := self.sources.Asker
-	if request == nil || request.Binding != nil || request.RunId == nil || asker == nil || !asker.Attached(*request.RunId) {
+	if request == nil || request.Binding != nil || request.RunId == nil || asker == nil || !inferCheckMayAsk(ctx) ||
+		!asker.Attached(*request.RunId) {
 		return inferDisclosureRequired(call, disclosure, scope, InferDisclosureReasonUnacknowledged)
 	}
 	testHookBarrier("infer.disclosure.ask.before", disclosure.Id)
