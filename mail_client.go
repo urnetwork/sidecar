@@ -292,7 +292,8 @@ type MailClient struct {
 	senderStatus   MailClientSenderStatus
 	// an app host's app is in the background, where a foreground-only host registers no listener (mail_host.go)
 	background bool
-	// the zone's row as the component last read it, which Network answers where the Sidecar binds
+	// the zone's row as the component last read it, its retiring aliases with their tombstone times, which Network
+	// answers where the Sidecar binds (networkRow)
 	zoneRow NetworkLabelRow
 	// closed and replaced at each change the component looks at
 	changed chan struct{}
@@ -916,11 +917,15 @@ func (self *MailClient) AddGroupMember(ctx context.Context, group string, member
 	return repos.AddGroupMember(ctx, config, group, memberId)
 }
 
-// The zone's row as the component last read it.
+// The zone's row as the component last read it, each retiring alias whose tombstone time has come on the client's
+// clock left out, since from then on it names no network (§12.5): mail under it is refused then, with no pass between.
 func (self *MailClient) networkRow() NetworkLabelRow {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	return self.zoneRow
+	row := func() NetworkLabelRow {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		return self.zoneRow
+	}()
+	return networkLabelRowAt(row, self.clock.Now())
 }
 
 // Keeps the zone's row the component read.
