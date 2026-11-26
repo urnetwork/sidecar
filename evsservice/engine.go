@@ -386,11 +386,13 @@ func (self *EvsEngine) Probes() (count int, changed chan struct{}) {
 }
 
 // Probes the first cluster until the engine ends: one LIST of place/ for a single key, a read that costs the
-// drives nothing.
+// drives nothing. It is a store check (sidecar.WithBlobProbe), which the file clusters send outside their cap on a
+// host's connections, so it measures the store and never waits in the block's own queue for it (§11.15's fan-out;
+// owner decision 790): a probe that fails is the store's failure, and the engine reads not ready.
 func (self *EvsEngine) run() {
 	for {
 		reachable := func() bool {
-			ctx, cancel := context.WithCancel(self.ctx)
+			ctx, cancel := context.WithCancel(sidecar.WithBlobProbe(self.ctx))
 			defer cancel()
 			stop := self.clock.AfterFunc(self.settings.StoreProbeTimeout, cancel)
 			defer stop()
