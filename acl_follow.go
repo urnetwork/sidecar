@@ -538,6 +538,9 @@ func aclGrantsTarget(target *protocol.AclTarget) string {
 		return "public:" + target.GetPublicName()
 	case target.GetMailSend():
 		return "mail"
+	case target.GetRepoKind() != protocol.RepoKind_REPO_KIND_UNSPECIFIED:
+		// every repo of a kind, evs:kind:agent's (QD-1433)
+		return "repo:kind:" + aclDestinationRepoKindName(target.GetRepoKind())
 	}
 	return "unknown"
 }

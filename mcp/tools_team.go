@@ -251,6 +251,9 @@ func mcpAclTargetText(target *protocol.AclTarget) string {
 		return "mail:send"
 	case 0 < len(target.GetClientId()):
 		return "client:" + mcpIdText(target.GetClientId())
+	case target.GetRepoKind() != protocol.RepoKind_REPO_KIND_UNSPECIFIED:
+		// every repo of a kind, as the policy names it: evs:kind:agent (QD-1433)
+		return "evs:kind:" + strings.ToLower(strings.TrimPrefix(target.GetRepoKind().String(), "REPO_KIND_"))
 	}
 	return "*"
 }
