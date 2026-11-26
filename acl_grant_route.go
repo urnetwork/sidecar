@@ -1,10 +1,10 @@
-// The one reader of an activated route grant's sealed detail (§8.8's folded grants and Saving, §17.8; owner decisions
-// 220 and 679; QD-003, QD-1164). A requested route grant keeps only ids in the clear: its prefixes and ports ride its
-// CanonicalAction's sealed_detail. So every reader that judges what such a grant reaches opens the detail under the
-// config keys it holds and reads it here, one way: the save's ip: tests (acl_tests.go), the bridge compile's sender
-// table and host rows (bridge_compile_grants.go), and AclEngine's AllowRoute and Check (acl_engine.go), which ur
-// bridge's previews and MCP's acl_check ask. An accept the save counts is then one the compile serves and the engine
-// answers, at the same prefixes and ports:
+// The one reader of an activated route grant's sealed detail, and its dial counterpart below (§8.8's folded grants
+// and Saving, §17.8; owner decisions 220 and 679; QD-003, QD-740, QD-1164). A requested route grant keeps only ids in
+// the clear: its prefixes and ports ride its CanonicalAction's sealed_detail. So every reader that judges what such a
+// grant reaches opens the detail under the config keys it holds and reads it here, one way: the save's ip: tests
+// (acl_tests.go), the bridge compile's sender table and host rows (bridge_compile_grants.go), and AclEngine's
+// AllowRoute and Check (acl_engine.go), which ur bridge's previews and MCP's acl_check ask. An accept the save counts
+// is then one the compile serves and the engine answers, at the same prefixes and ports:
 //
 //	prefixes   the detail's cidrs and its ip: destinations, masked, each once
 //	ports      the ports its sidecar destinations name, taken together since rows mark ports for the rule whole, each
@@ -24,6 +24,18 @@
 // state holds it, or as the base's head's folds hold it for a reader that joined after the grant landed
 // (ConfigState.grantActionsAtHead), opened in the state's network under the config repo's key of the generation it
 // names. testHookSecret runs where the detail's key derives, inside OpenConfigBody.
+//
+// Its dial counterpart reads the same detail for the ports a port-limited activated dial grant opens at each sidecar
+// (aclGrantDialPortsOf, QD-740), one way for the bridge compile's host dial rows and a forward's route
+// (ConfigState.grantPortRule) and AclEngine's AllowInbound and Check (acl_engine.go):
+//
+//	ports      each sidecar:<id>:<protocol>:<port> of the detail's grant_dst, at that sidecar alone, a target_port
+//	           keeping only the destinations whose port it is; none at a sidecar opens nothing there, and an ip:
+//	           destination opens no port
+//	unsealed   a dial grant whose action seals no detail limits no ports: its rows' reach stands at every port, as a
+//	           document rule's with no ip port list does, and no opener is asked
+//	unread     a detail that does not open here, for the reasons above, which aclOpenGrantDetail names, opens no port
+//	           anywhere, the closed direction
 //
 // On every leg, the ios_extension legs' included, whose forwarding role compiles: root Id, no connect type.
 // Package-level functions are safe for concurrent use; an opener is used by one reader at a time.
@@ -164,26 +176,36 @@ func (self aclGrantRoute) indeterminate() bool {
 	return self.unread != aclGrantRouteUnreadNone && self.unread != aclGrantRouteUnreadUnsealed
 }
 
-// Reads one activated grant's route (the file's comment): grantId its rule's id, portsLimited its rule's
-// ports_limited, which the fold sets exactly where the action carries a sealed_detail, and details its opener, nil
-// opening none.
-func aclReadGrantRoute(grantId []byte, portsLimited bool, details AclGrantDetails) aclGrantRoute {
+// Opens one activated grant's sealed detail for a reader (the file's comment): grantId its rule's id, portsLimited its
+// rule's ports_limited, which the fold sets exactly where the action carries a sealed_detail, and details its opener,
+// nil opening none. The detail, or nil and why it gives nothing here, which the route reader and its dial counterpart
+// read alike.
+func aclOpenGrantDetail(grantId []byte, portsLimited bool, details AclGrantDetails) (*protocol.CanonicalActionDetail, aclGrantRouteUnread) {
 	if !portsLimited {
-		return aclGrantRoute{unread: aclGrantRouteUnreadUnsealed}
+		return nil, aclGrantRouteUnreadUnsealed
 	}
 	if details == nil {
-		return aclGrantRoute{unread: aclGrantRouteUnreadNoOpener}
+		return nil, aclGrantRouteUnreadNoOpener
 	}
 	detail, err := details.GrantDetail(grantId)
 	switch {
 	case errors.Is(err, ErrConfigSealGenerationMissing):
-		return aclGrantRoute{unread: aclGrantRouteUnreadGeneration}
+		return nil, aclGrantRouteUnreadGeneration
 	case errors.Is(err, ErrAclGrantActionNotHeld):
-		return aclGrantRoute{unread: aclGrantRouteUnreadNotHeld}
+		return nil, aclGrantRouteUnreadNotHeld
 	case err != nil:
-		return aclGrantRoute{unread: aclGrantRouteUnreadNotOpened}
+		return nil, aclGrantRouteUnreadNotOpened
 	case detail == nil:
-		return aclGrantRoute{unread: aclGrantRouteUnreadMissing}
+		return nil, aclGrantRouteUnreadMissing
+	}
+	return detail, aclGrantRouteUnreadNone
+}
+
+// Reads one activated grant's route (the file's comment), its detail opened by aclOpenGrantDetail.
+func aclReadGrantRoute(grantId []byte, portsLimited bool, details AclGrantDetails) aclGrantRoute {
+	detail, unread := aclOpenGrantDetail(grantId, portsLimited, details)
+	if detail == nil {
+		return aclGrantRoute{unread: unread}
 	}
 	local, unread := aclGrantRouteOfDetail(detail)
 	return aclGrantRoute{local: local, unread: unread}
@@ -228,4 +250,67 @@ func aclGrantRouteOfDetail(detail *protocol.CanonicalActionDetail) (*AclLocalRul
 		return nil, aclGrantRouteUnreadPortProtocol
 	}
 	return local, aclGrantRouteUnreadNone
+}
+
+// One port range an activated dial grant's detail names at one sidecar.
+type aclGrantDialPort struct {
+	sidecarId Id
+	ports     AclPortRange
+}
+
+// The ports an activated dial grant's opened detail names, each at its sidecar, in the detail's order (the file's
+// comment's dial counterpart). The caller must not change it.
+type aclGrantDialPorts []aclGrantDialPort
+
+// An opened detail's dial ports: each grant_dst entry that is a sidecar's port, which a target_port keeps only where it
+// is that port. Never infers a protocol from target_port, which alone names none.
+func aclGrantDialPortsOf(detail *protocol.CanonicalActionDetail) aclGrantDialPorts {
+	dialPorts := aclGrantDialPorts{}
+	for _, destination := range detail.GetGrantDst() {
+		recipient, ports, err := ParseAclGrantDst(destination)
+		if err != nil || ports == nil || len(recipient.GetSidecarId()) != len(Id{}) {
+			continue
+		}
+		if detail.GetTargetPort() != 0 && ports.GetFirst() != detail.GetTargetPort() {
+			continue
+		}
+		dialPorts = append(dialPorts, aclGrantDialPort{
+			sidecarId: Id(recipient.GetSidecarId()),
+			ports:     AclPortRange{Protocol: ports.GetProtocol(), First: ports.GetFirst(), Last: ports.GetLast()},
+		})
+	}
+	return dialPorts
+}
+
+// The ports at one sidecar as a rule's local detail, none for a sidecar the detail names no port at.
+func (self aclGrantDialPorts) at(sidecarId Id) *AclLocalRule {
+	local := &AclLocalRule{}
+	for _, dialPort := range self {
+		if dialPort.sidecarId == sidecarId {
+			local.Ports = append(local.Ports, dialPort.ports)
+		}
+	}
+	return local
+}
+
+// Whether a port at the sidecar takes the protocol and port, as aclLocalPortsMatch reads a rule's local ports.
+// Allocates nothing.
+func (self aclGrantDialPorts) takes(sidecarId Id, ipProtocol uint32, port uint32) bool {
+	for i := range self {
+		ports := &self[i].ports
+		if self[i].sidecarId == sidecarId && (ports.Protocol == 0 || ports.Protocol == ipProtocol) && ports.First <= port && port <= ports.Last {
+			return true
+		}
+	}
+	return false
+}
+
+// Whether the detail names any port at the sidecar. Allocates nothing.
+func (self aclGrantDialPorts) reaches(sidecarId Id) bool {
+	for i := range self {
+		if self[i].sidecarId == sidecarId {
+			return true
+		}
+	}
+	return false
 }

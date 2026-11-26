@@ -885,7 +885,7 @@ func (self *SidecarConfigFollower) stand(networkId Id, sidecarId Id, client *Con
 			removeRecord()
 		}
 	}
-	aclFollower, err := NewAclFollower(self.ctx, &AclFollowerArgs{
+	aclArgs := &AclFollowerArgs{
 		Source: client,
 		Engine: engine,
 		Acks:   self.sidecar.sidecarApi,
@@ -894,7 +894,12 @@ func (self *SidecarConfigFollower) stand(networkId Id, sidecarId Id, client *Con
 		HeldRepoKey: self.sidecar.GkmHeldKey,
 		Emit:        self.sidecar.emitEvent,
 		Settings:    aclSettings,
-	})
+	}
+	if joiner, ok := self.args.Gkm.(GkmConfigJoiner); ok {
+		// the keychain's signal of a config key generation taken, which reads again the grants that waited on one
+		aclArgs.RepoKeyHeld = joiner.RepoKeyHeld
+	}
+	aclFollower, err := NewAclFollower(self.ctx, aclArgs)
 	if err != nil {
 		removeAuthority()
 		self.refuse(fmt.Errorf("%w: the acl follower did not start: %w", ErrSidecarConfigRefused, err))
