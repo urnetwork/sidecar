@@ -47,10 +47,6 @@ const (
 	// AclKindAudienceReceiptsAndOwner's, and every subject of the network the projection marks mail_send, for §15.8's
 	// same-network mail (D-MAIL-8, owner decision 333): the mailbox's
 	AclKindAudienceReceiptsOwnerAndSenders
-	// readers that do not write (the receipt deposit), every member device of the network, the agents on it depositing
-	// through it, and in a network with no document every admitted sidecar, the implicit document's rule
-	// (DESIGN-COMPUTE §16.5's deposit row): the agent repo's
-	AclKindAudienceReceiptsAndAgentDepositors
 )
 
 // One kind's row of §8.5's table and the rules around it.
@@ -139,8 +135,9 @@ func AclKindDefaults() []AclKindDefault {
 		},
 		// the agent_repos feature's (DESIGN-COMPUTE §20.4, §16.5): an agents repo, one a member, written only by the
 		// member's own devices and agents, which no rule adds to, so no other member broadcasts to them; an agent repo,
-		// one an agent, taking deposits, to which a rule naming it outright adds a deposit alone. Each EvsShare's
-		// subject, one of the member's agents, reads and writes as the member's devices do (acl_evs.go)
+		// one an agent, taking others' deposits by rule alone, one naming every agent repo (evs:kind:agent: agent_repos'
+		// implicit fragment, Team's starting document) or the repo outright, each adding a deposit alone (QD-1433). Each
+		// EvsShare's subject, one of the member's agents, reads and writes as the member's devices do (acl_evs.go)
 		{
 			Kind:       protocol.RepoKind_REPO_KIND_AGENTS,
 			Read:       AclKindAudienceOwnerConsented,
@@ -152,7 +149,7 @@ func AclKindDefaults() []AclKindDefault {
 			Kind:           protocol.RepoKind_REPO_KIND_AGENT,
 			Read:           AclKindAudienceOwnerConsented,
 			Write:          AclKindAudienceOwnerConsented,
-			Deposit:        AclKindAudienceReceiptsAndAgentDepositors,
+			Deposit:        AclKindAudienceReceipts,
 			DocumentRights: AclEvsDeposit,
 			OwnerBound:     true,
 		},

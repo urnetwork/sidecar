@@ -10,6 +10,12 @@
 //	             network's first document through AclSave (acl_save.go's SaveAclTeamStart), so has_document holds
 //	             from then on; a Team narrows any rule, gives one two approvers or removes it as its own document, the
 //	             starting one never written again
+//	features     the rules an authorization feature adds (DESIGN-COMPUTE §16.5's Team column) stand in the source
+//	             between a line "// +<feature>" and a line "// -<feature>", and the document a writer saves holds them
+//	             only where its head turns that feature on (AclTeamStartDocumentFor), the marker lines never, so a Team
+//	             a release creates before a feature is on saves a document every reader compiles, as the compile
+//	             refuses the feature's forms until then: agent_repos' deposit of autogroup:member into every agent repo,
+//	             evs:kind:agent (QD-1433), which a Team narrows per agent
 //	approvers    a requests rule's approvers: 2 lights up on Team: ACL-M2-07's quorum counts k, and validation takes
 //	             it only under acl_approvers_two
 //	scope hosts  Q-TLS-3's <host>.<scope> and *.<scope> as dns: hosts, the matching tls/<port>/ names and
@@ -24,7 +30,9 @@
 package sidecar
 
 import (
+	"bytes"
 	_ "embed"
+	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -35,9 +43,65 @@ import (
 //go:embed acl_team_start.hujson
 var aclTeamStartSource []byte
 
-// Team's starting document's source, a copy.
+// Team's starting document as a head that turns on no authorization feature takes it, a copy:
+// AclTeamStartDocumentFor(0).
 func AclTeamStartDocument() []byte {
-	return append([]byte{}, aclTeamStartSource...)
+	return AclTeamStartDocumentFor(0)
+}
+
+// Team's starting document for a head whose ServiceSettings turns on features: each feature's block kept where features
+// holds it and dropped where it does not, the marker lines dropped either way (the file header's features row). A copy.
+func AclTeamStartDocumentFor(features AuthFeature) []byte {
+	document, err := aclTeamStartDocumentFor(aclTeamStartSource, features)
+	if err != nil {
+		// the binary's own source, which acl_team_start_test.go holds to its markers
+		panic(err)
+	}
+	return document
+}
+
+// source with each feature block kept or dropped for features: a block opens with a line "// +<feature>" and closes
+// with "// -<feature>", one feature's at a time; a marker naming no feature, a block opened twice or left open is an
+// error.
+func aclTeamStartDocumentFor(source []byte, features AuthFeature) ([]byte, error) {
+	document := []byte{}
+	open := AuthFeature(0)
+	for _, line := range bytes.SplitAfter(source, []byte("\n")) {
+		marker := strings.TrimSpace(string(line))
+		if name, opens := strings.CutPrefix(marker, "// +"); opens {
+			feature, err := ParseAuthFeature(name)
+			if err != nil || open != 0 {
+				return nil, fmt.Errorf("Team's starting document: a block %q opened inside another or naming no feature", marker)
+			}
+			open = feature
+			continue
+		}
+		if name, closes := strings.CutPrefix(marker, "// -"); closes {
+			feature, err := ParseAuthFeature(name)
+			if err != nil || feature != open {
+				return nil, fmt.Errorf("Team's starting document: a block %q closing none that is open", marker)
+			}
+			open = 0
+			continue
+		}
+		if open != 0 && features&open == 0 {
+			continue
+		}
+		document = append(document, line...)
+	}
+	if open != 0 {
+		return nil, fmt.Errorf("Team's starting document: %s's block is left open", open)
+	}
+	return document, nil
+}
+
+// The features a head's ServiceSettings turns on, which its compile reads (AclCompileInput.AuthFeatures).
+func aclHeadAuthFeatures(head *ConfigHead) (AuthFeature, error) {
+	settings, _, err := head.ServiceSettings()
+	if err != nil {
+		return 0, err
+	}
+	return AuthFeature(settings.GetAuthFeatures()), nil
 }
 
 // One Team scope (§13.8, Q-TLS-3): its label, and for a member scope that member, whose consented devices alone take

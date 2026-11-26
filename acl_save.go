@@ -1152,7 +1152,12 @@ func (self *Sidecar) SaveAclTeamStart(ctx context.Context, limits *AclLimits, or
 			return nil, fmt.Errorf("%w: the network is not on the Team tier", ErrAclPolicyInvalid)
 		}
 	}
-	plan, err := PlanAclSave(ctx, &AclSaveInput{Policy: AclTeamStartDocument(), Head: head, State: state, Limits: limits, Now: self.clock.Now(),
+	// the starting document holds each rule a feature the head turns on adds (AclTeamStartDocumentFor)
+	features, err := aclHeadAuthFeatures(head)
+	if err != nil {
+		return nil, err
+	}
+	plan, err := PlanAclSave(ctx, &AclSaveInput{Policy: AclTeamStartDocumentFor(features), Head: head, State: state, Limits: limits, Now: self.clock.Now(),
 		ResolveScope: state.TeamScope, RepoKeyAt: self.aclRepoKeyAt()})
 	if err != nil {
 		return nil, err

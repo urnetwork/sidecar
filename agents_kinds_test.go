@@ -10,9 +10,15 @@ package sidecar
 import (
 	"bytes"
 	"crypto/sha256"
+	"embed"
+	"encoding/hex"
 	"errors"
+	"os"
 	"slices"
+	"strings"
 	"testing"
+
+	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
@@ -78,20 +84,34 @@ func newTestAgentsKindsCast(hasDocument bool) *testAgentsKindsCast {
 
 // §20.4's table as EvsAccess gives it: the member's consented devices read and write both kinds, the admin among them
 // administers, a read_only one reads with the receipt deposit, the cloud agent the member shares them with reads and
-// writes; nobody outside the member reaches the agents repo, an admin included; every member device deposits into the
-// agent repo, and with a document no tagged or ephemeral sidecar of another member does, without one every admitted
-// sidecar does (§16.5's deposit row); a rule naming the agent repo adds a deposit alone, and one naming the agents repo
-// nothing.
+// writes; nobody outside the member reaches the agents repo, an admin included. An agent repo takes others' deposits by
+// rule alone (QD-1433): with no rule naming it nobody outside the member deposits; agent_repos' implicit rule, every
+// admitted sidecar to evs:kind:agent, gives another member's device, an admin's and a tagged sidecar a deposit and an
+// ephemeral one none (§8.6's ceiling); Team's starting rule, autogroup:member, gives members' devices alone. A rule
+// naming the agent repo adds a deposit alone and one naming the agents repo nothing, and a rule over the kind adds a
+// deposit alone, to agent repos alone.
 func TestAgentsKindDefaultsTable(t *testing.T) {
 	owned := AclEvsRead | AclEvsWrite | AclEvsDeposit
-	for _, hasDocument := range []bool{true, false} {
-		cast := newTestAgentsKindsCast(hasDocument)
-		state := cast.fixture.state(t)
-		// with no document every admitted sidecar deposits into an agent repo; with one only member devices do
-		openDeposit := AclEvsRights(0)
-		if !hasDocument {
-			openDeposit = AclEvsDeposit
+	everyone := AclAutogroupAtom(protocol.AclAutogroup_ACL_AUTOGROUP_SIDECAR)
+	members := AclAutogroupAtom(protocol.AclAutogroup_ACL_AUTOGROUP_MEMBER)
+	kindTarget := &protocol.AclTarget{RepoKind: protocol.RepoKind_REPO_KIND_AGENT}
+	for _, depositors := range []struct {
+		name        string
+		hasDocument bool
+		// the kind rule's src, nil for none
+		src                                         []Id
+		otherDevice, adminDevice, tagged, ephemeral AclEvsRights
+	}{
+		{name: "a document naming no agent repo", hasDocument: true},
+		{name: "no document and no feature rule"},
+		{name: "the implicit rule", src: []Id{everyone}, otherDevice: AclEvsDeposit, adminDevice: AclEvsDeposit, tagged: AclEvsDeposit},
+		{name: "Team's starting rule", hasDocument: true, src: []Id{members}, otherDevice: AclEvsDeposit, adminDevice: AclEvsDeposit},
+	} {
+		cast := newTestAgentsKindsCast(depositors.hasDocument)
+		if depositors.src != nil {
+			cast.fixture.rule(depositors.src, []*protocol.AclTarget{kindTarget}, protocol.AclAction_ACL_ACTION_DEPOSIT)
 		}
+		state := cast.fixture.state(t)
 		cases := []struct {
 			name      string
 			sidecarId Id
@@ -102,17 +122,17 @@ func TestAgentsKindDefaultsTable(t *testing.T) {
 			{name: "the member's other device", sidecarId: cast.phone, agents: owned, agent: owned},
 			{name: "the member's read_only device", sidecarId: cast.readOnly, agents: AclEvsRead | AclEvsDeposit, agent: AclEvsRead | AclEvsDeposit},
 			{name: "the member's cloud agent by EvsShare", sidecarId: cast.cloud, agents: owned, agent: owned},
-			{name: "another member's device", sidecarId: cast.otherDevice, agents: 0, agent: AclEvsDeposit},
-			{name: "an admin's device", sidecarId: cast.adminDevice, agents: 0, agent: AclEvsDeposit},
-			{name: "another member's tagged sidecar", sidecarId: cast.otherAgent, agents: 0, agent: openDeposit},
-			{name: "another member's ephemeral sidecar", sidecarId: cast.burner, agents: 0, agent: openDeposit},
+			{name: "another member's device", sidecarId: cast.otherDevice, agent: depositors.otherDevice},
+			{name: "an admin's device", sidecarId: cast.adminDevice, agent: depositors.adminDevice},
+			{name: "another member's tagged sidecar", sidecarId: cast.otherAgent, agent: depositors.tagged},
+			{name: "another member's ephemeral sidecar", sidecarId: cast.burner, agent: depositors.ephemeral},
 		}
 		for _, c := range cases {
 			if rights := aclTestRights(state, c.sidecarId, cast.agentsId, AclTokenAudienceEvs); rights != c.agents {
-				t.Errorf("document %t, %s, agents repo: %b, want %b", hasDocument, c.name, rights, c.agents)
+				t.Errorf("%s, %s, agents repo: %b, want %b", depositors.name, c.name, rights, c.agents)
 			}
 			if rights := aclTestRights(state, c.sidecarId, cast.agentId, AclTokenAudienceEvs); rights != c.agent {
-				t.Errorf("document %t, %s, agent repo: %b, want %b", hasDocument, c.name, rights, c.agent)
+				t.Errorf("%s, %s, agent repo: %b, want %b", depositors.name, c.name, rights, c.agent)
 			}
 		}
 		// the member's devices and the agent it shares with are the readers, so only they hold the groups' keys
@@ -120,24 +140,36 @@ func TestAgentsKindDefaultsTable(t *testing.T) {
 		slices.SortFunc(wantReaders, Id.Cmp)
 		for _, repoId := range []Id{cast.agentsId, cast.agentId} {
 			if readers := state.RepoReaders(repoId, aclTestNow); !slices.Equal(readers, wantReaders) {
-				t.Errorf("document %t: readers %v, want %v", hasDocument, readers, wantReaders)
+				t.Errorf("%s: readers %v, want %v", depositors.name, readers, wantReaders)
 			}
 		}
 	}
 
-	// another tagged subject deposits into an agent repo only by a rule naming it, which adds no read; a rule naming the
-	// agents repo adds nothing
+	// another tagged subject deposits into an agent repo only by a rule naming it or its kind, which adds no read, even
+	// where the rows' rule carries more (rows no compile writes); a rule naming the agents repo, or the kind's rule on
+	// any other kind's repo, adds nothing
 	cast := newTestAgentsKindsCast(true)
 	everything := []protocol.AclAction{protocol.AclAction_ACL_ACTION_DEPOSIT, protocol.AclAction_ACL_ACTION_READ,
 		protocol.AclAction_ACL_ACTION_WRITE, protocol.AclAction_ACL_ACTION_ADMIN}
 	cast.fixture.rule([]Id{cast.otherTag}, []*protocol.AclTarget{aclRepoTarget(cast.agentId), aclRepoTarget(cast.agentsId)}, everything...)
 	cast.fixture.rule([]Id{cast.otherTag}, []*protocol.AclTarget{aclWildcardRepoTarget()}, everything...)
+	vaultId, _ := cast.fixture.repo(protocol.RepoKind_REPO_KIND_VAULT, cast.owner)
+	generalId, _ := cast.fixture.repo(protocol.RepoKind_REPO_KIND_GENERAL, Id{})
+	cast.fixture.rule([]Id{everyone}, []*protocol.AclTarget{kindTarget}, everything...)
 	state := cast.fixture.state(t)
 	if rights := aclTestRights(state, cast.otherAgent, cast.agentId, AclTokenAudienceEvs); rights != AclEvsDeposit {
 		t.Errorf("a rule naming the agent repo: %b", rights)
 	}
 	if rights := aclTestRights(state, cast.otherAgent, cast.agentsId, AclTokenAudienceEvs); rights != 0 {
 		t.Errorf("a rule naming the agents repo: %b", rights)
+	}
+	if rights := aclTestRights(state, cast.otherDevice, cast.agentId, AclTokenAudienceEvs); rights != AclEvsDeposit {
+		t.Errorf("the kind's rule carrying every action: %b", rights)
+	}
+	for _, repoId := range []Id{cast.agentsId, vaultId, generalId} {
+		if rights := aclTestRights(state, cast.otherDevice, repoId, AclTokenAudienceEvs); rights != 0 {
+			t.Errorf("the agent kind's rule reaches repo %s: %b", repoId, rights)
+		}
 	}
 	// the kinds take a drop key, an agent repo for its inbox's deposits and an agents repo for its readers' receipts
 	for _, kind := range []protocol.RepoKind{protocol.RepoKind_REPO_KIND_AGENTS, protocol.RepoKind_REPO_KIND_AGENT} {
@@ -316,7 +348,8 @@ func TestAgentReposRefusedBeforeFeature(t *testing.T) {
 // R2-02's acceptance on the real kinds, M11's exit (§16.6's hold and update rows): a device on a release without
 // agent_repos, offline while the network turns it on and its member's devices create the agents and agent repos,
 // holds at the base with upgrade_required and writes nothing; updated, it resumes there and agrees with the network
-// on the repos' kinds, owners and readers before it writes anything.
+// on the repos' kinds, owners and readers before it writes anything. The net's compile is the statements' rows alone
+// (registerTestConfigAclCompiler), so the fragment's rule is TestAgentReposImplicitDepositRule's.
 func TestAgentReposHoldOnOldReader(t *testing.T) {
 	WithAuthFeaturesImplementedForTest(t, 0, nil)
 	world := newTestConfigClientWorld(t)
@@ -487,30 +520,224 @@ func TestTeamInboxMarkerOnlyConfigWriterOnce(t *testing.T) {
 	}
 }
 
-// §16.6's implicit row: agent_repos adds no implicit rule, its deposits being the agent kind's default, so the implicit
-// document's rows are the same bytes with the feature on as off, the frozen golden's, and EvsAccess gives the deposits
-// from the rows' has_document alone.
-func TestAgentReposImplicitRowsUnchanged(t *testing.T) {
+// Gives a world's owner-bound repos consentedId as their consented device.
+func testAgentsWorldRepos(world *aclCompileWorld, consentedId Id) {
+	for _, row := range world.statements.Repos {
+		row.ConsentedSidecarIds = [][]byte{consentedId.Bytes()}
+	}
+}
+
+// Marks a world's device as its member's invited first device, which an admin's device admitted outside every cascade,
+// consented by the invited clause (§8.5).
+func testAgentsInvited(world *aclCompileWorld, sidecarId Id) {
+	for _, row := range world.sidecars {
+		if Id(row.SidecarId) == sidecarId {
+			row.Capabilities |= uint32(bridge.SidecarCapability_SIDECAR_CAPABILITY_INVITED)
+			row.AdmissionSigners = [][]byte{world.id("admitting device").Bytes()}
+		}
+	}
+}
+
+// The rows of a network with no document and the agent_repos feature on, one agent repo among them, as a hex golden in
+// testdata/agents/rows/; SIDECAR_REGENERATE_AGENTS_ROWS=1 writes it.
+const testAgentReposImplicitRowsPath = "testdata/agents/rows/implicit_agent_repos_rows.hex"
+
+//go:embed testdata/agents/rows
+var testAgentsRowsFiles embed.FS
+
+// rows against the golden at path, which SIDECAR_REGENERATE_AGENTS_ROWS=1 rewrites.
+func testAgentsRowsGolden(t *testing.T, path string, rows *protocol.AclRows) {
+	t.Helper()
+	got := hex.EncodeToString(aclEncodeRows(t, rows))
+	if os.Getenv("SIDECAR_REGENERATE_AGENTS_ROWS") == "1" {
+		if err := os.WriteFile(path, []byte(got+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	golden, err := testAgentsRowsFiles.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != strings.TrimSpace(string(golden)) {
+		t.Fatalf("%s: the rows are other bytes:\n%s", path, got)
+	}
+}
+
+// §16.6's implicit row with §16.5's deposit rule (QD-1433): agent_repos' fragment compiles after the frozen implicit
+// document only once the feature is on, so the rows with it off are the frozen golden's, and with it on those rows and
+// one rule more under the fragment's feature id, autogroup:sidecar to every agent repo, deposit alone; a reader of the
+// rows gives it at once to every agent repo they hold, a repo created between bases included, and to no other kind.
+func TestAgentReposImplicitDepositRule(t *testing.T) {
 	world := newAclCompileWorld("implicit")
+	owner := world.member("owner@agents.example", bridge.MemberRole_MEMBER_ROLE_OWNER)
+	laptop := world.device("laptop", owner)
+	other := world.member("other@agents.example", bridge.MemberRole_MEMBER_ROLE_MEMBER)
+	otherDevice := world.device("other device", other)
+	burner := world.device("other burner", other)
+	world.ephemeral[burner] = true
+	tagged := world.agent("other cloud agent", other, "worker")
+	agentId := world.repo("agent/scout", protocol.RepoKind_REPO_KIND_AGENT, owner)
+	agentsId := world.repo("agents", protocol.RepoKind_REPO_KIND_AGENTS, owner)
+	testAgentsInvited(world, laptop)
+	testAgentsWorldRepos(world, laptop)
+
 	off := world.input()
 	off.AuthFeatures = 0
-	on := world.input()
-	on.AuthFeatures = AuthFeatureAgentRepos
 	offRows, err := CompileAcl(off)
 	if err != nil {
 		t.Fatal(err)
 	}
+	frozen := newAclCompileWorld("implicit").compile(t)
+	if len(offRows.GetRules()) != len(frozen.GetRules()) {
+		t.Fatalf("with agent_repos off, %d rules beside the frozen document's %d", len(offRows.GetRules()), len(frozen.GetRules()))
+	}
+	on := world.input()
+	on.AuthFeatures = AuthFeatureAgentRepos
 	onRows, err := CompileAcl(on)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(aclEncodeRows(t, offRows), aclEncodeRows(t, onRows)) {
-		t.Fatal("agent_repos changes the implicit document's rows")
+	if onRows.GetHasDocument() || len(onRows.GetRules()) != len(offRows.GetRules())+1 {
+		t.Fatalf("with agent_repos on: has_document %t, %d rules beside %d", onRows.GetHasDocument(), len(onRows.GetRules()), len(offRows.GetRules()))
 	}
-	if onRows.GetHasDocument() {
-		t.Fatal("the implicit document's rows say has_document")
+	featureRuleId := aclImplicitFeatureRuleId(AuthFeatureAgentRepos, 0)
+	index := slices.IndexFunc(onRows.GetRules(), func(rule *protocol.AclRule) bool { return bytes.Equal(rule.GetRuleId(), featureRuleId.Bytes()) })
+	if index < 0 {
+		t.Fatal("no row of the fragment's rule")
+	}
+	rule := onRows.GetRules()[index]
+	sidecarAtom := AclAutogroupAtom(protocol.AclAutogroup_ACL_AUTOGROUP_SIDECAR).Bytes()
+	if len(rule.GetSrcAtoms()) != 1 || !bytes.Equal(rule.GetSrcAtoms()[0], sidecarAtom) || len(rule.GetTargets()) != 1 ||
+		rule.GetTargets()[0].GetRepoKind() != protocol.RepoKind_REPO_KIND_AGENT ||
+		!slices.Equal(rule.GetActions(), []uint32{uint32(protocol.AclAction_ACL_ACTION_DEPOSIT)}) {
+		t.Fatalf("the fragment's row: %v", rule)
+	}
+	testAgentsRowsGolden(t, testAgentReposImplicitRowsPath, onRows)
+	again, err := CompileAcl(on)
+	if err != nil || !bytes.Equal(aclEncodeRows(t, onRows), aclEncodeRows(t, again)) {
+		t.Fatalf("a second compile differs: %v", err)
+	}
+
+	state, err := NewAclState(onRows, world.view())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name      string
+		sidecarId Id
+		agent     AclEvsRights
+	}{
+		{name: "the owner's device", sidecarId: laptop, agent: AclEvsRead | AclEvsWrite | AclEvsDeposit},
+		{name: "another member's device", sidecarId: otherDevice, agent: AclEvsDeposit},
+		{name: "another member's tagged sidecar", sidecarId: tagged, agent: AclEvsDeposit},
+		{name: "another member's ephemeral sidecar", sidecarId: burner, agent: 0},
+	} {
+		if rights := aclTestRights(state, c.sidecarId, agentId, AclTokenAudienceEvs); rights != c.agent {
+			t.Errorf("%s: %b, want %b", c.name, rights, c.agent)
+		}
+		if rights := aclTestRights(state, c.sidecarId, agentsId, AclTokenAudienceEvs); c.sidecarId != laptop && rights != 0 {
+			t.Errorf("%s reaches the agents repo: %b", c.name, rights)
+		}
+	}
+	// a repo the rows gain after the base takes the rule at once: the same rows, one agent repo more
+	laterId := NewId()
+	onRows.Repos = append(onRows.Repos, &protocol.AclRepo{RepoId: laterId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_AGENT,
+		OwnerMemberId: owner.Bytes(), ConsentedSidecarIds: [][]byte{laptop.Bytes()}})
+	later, err := NewAclState(onRows, world.view())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rights := aclTestRights(later, otherDevice, laterId, AclTokenAudienceEvs); rights != AclEvsDeposit {
+		t.Fatalf("an agent repo created between bases: %b", rights)
 	}
 	if AuthFeaturesImplemented()&AuthFeatureAgentRepos == 0 {
 		t.Fatal("this build does not implement agent_repos")
+	}
+}
+
+// evs:kind:agent is a format only agent_repos turns on: a document naming it compiles to a repo_kind target where the
+// head turns the feature on and is refused where it does not, and the grammar takes it as a grant's deposit alone,
+// refusing every other kind, a request naming it, a grant reading, writing or administering through it, a policy test
+// and an audit block naming it.
+func TestAgentRepoKindDestination(t *testing.T) {
+	source := `{"grants": [{"src": ["autogroup:member"], "dst": ["evs:kind:agent"], "allow": ["deposit"]}]}`
+	policy, err := ParseAclPolicy([]byte(source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resource := policy.Grants[0].Dst[0]
+	if resource.Kind != AclResourceRepoKind || resource.RepoKind != protocol.RepoKind_REPO_KIND_AGENT || resource.String() != "evs:kind:agent" {
+		t.Fatalf("evs:kind:agent parses to %+v, %q", resource, resource.String())
+	}
+	if again, err := parseAclResource(resource.String()); err != nil || again != resource {
+		t.Fatalf("its text parses back to %+v, %v", again, err)
+	}
+	for _, concrete := range []AclResource{{Kind: AclResourceRepo, Name: "agent"}, {Kind: AclResourceRepo, RepoId: NewId()}} {
+		if resource.covers(concrete) || (AclResource{Kind: AclResourceAll}).covers(resource) {
+			t.Fatalf("evs:kind:agent covers %+v, or * covers it", concrete)
+		}
+	}
+	world := newAclCompileWorld("kind destination")
+	world.setPolicy(t, source)
+	if _, err := CompileAcl(world.input()); !errors.Is(err, ErrAclCompile) {
+		t.Fatalf("compiled with agent_repos off: %v", err)
+	}
+	input := world.input()
+	input.AuthFeatures = AuthFeatureAgentRepos
+	rows, err := CompileAcl(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows.GetRules()) != 1 || len(rows.GetRules()[0].GetTargets()) != 1 ||
+		!proto.Equal(rows.GetRules()[0].GetTargets()[0], &protocol.AclTarget{RepoKind: protocol.RepoKind_REPO_KIND_AGENT}) {
+		t.Fatalf("the rows: %v", rows.GetRules())
+	}
+	for _, refused := range []string{
+		`{"grants": [{"src": ["autogroup:member"], "dst": ["evs:kind:agents"], "allow": ["deposit"]}]}`,
+		`{"grants": [{"src": ["autogroup:member"], "dst": ["evs:kind:vault"], "allow": ["deposit"]}]}`,
+		`{"grants": [{"src": ["autogroup:member"], "dst": ["evs:kind:"], "allow": ["deposit"]}]}`,
+		`{"grants": [{"src": ["autogroup:member"], "dst": ["evs:kind:AGENT"], "allow": ["deposit"]}]}`,
+		`{"grants": [{"src": ["autogroup:member"], "dst": ["evs:kind:agent"], "allow": ["deposit", "read"]}]}`,
+		`{"grants": [{"src": ["autogroup:member"], "dst": ["evs:kind:agent"], "allow": ["write"]}]}`,
+		`{"grants": [{"src": ["autogroup:member"], "dst": ["evs:kind:agent"], "allow": ["admin"]}]}`,
+		`{"grants": [{"src": ["autogroup:member"], "dst": ["evs:kind:agent"], "allow": ["*"]}]}`,
+		`{"requests": [{"src": ["autogroup:tagged"], "dst": ["evs:kind:agent"], "allow": ["deposit"]}]}`,
+		`{"audit": {"reader": "tag:audit", "repos": ["evs:kind:agent"]}}`,
+	} {
+		if _, err := ParseAclPolicy([]byte(refused)); !errors.Is(err, ErrAclPolicyInvalid) {
+			t.Errorf("%s: %v", refused, err)
+		}
+	}
+	// a policy test names one resource, never a set of repos
+	check, err := parseAclPolicyCheck("evs:kind:agent#deposit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unjudged := aclTestCheckUnjudged(check); unjudged == "" {
+		t.Fatal("a policy test judges evs:kind:agent")
+	}
+}
+
+// Rows a reader refuses: a target naming a repo kind no destination names, one naming a kind beside another target
+// kind, and a via naming a kind, none of which a compile writes.
+func TestAgentRepoKindRowsRefused(t *testing.T) {
+	for _, target := range []*protocol.AclTarget{
+		{RepoKind: protocol.RepoKind_REPO_KIND_GENERAL},
+		{RepoKind: protocol.RepoKind_REPO_KIND_AGENTS},
+		{RepoKind: protocol.RepoKind_REPO_KIND_VAULT},
+		{RepoKind: protocol.RepoKind_REPO_KIND_AGENT, RepoId: NewId().Bytes()},
+	} {
+		fixture := newAclTestFixture()
+		fixture.rule([]Id{AclAutogroupAtom(protocol.AclAutogroup_ACL_AUTOGROUP_MEMBER)}, []*protocol.AclTarget{target}, protocol.AclAction_ACL_ACTION_DEPOSIT)
+		if _, err := NewAclState(fixture.rows, fixture.view); !errors.Is(err, ErrAclRowsInvalid) {
+			t.Errorf("a rule targeting %v: %v", target, err)
+		}
+	}
+	fixture := newAclTestFixture()
+	rule := fixture.rule([]Id{AclAutogroupAtom(protocol.AclAutogroup_ACL_AUTOGROUP_MEMBER)}, nil, protocol.AclAction_ACL_ACTION_ROUTE)
+	rule.Via = []*protocol.AclTarget{{RepoKind: protocol.RepoKind_REPO_KIND_AGENT}}
+	if _, err := NewAclState(fixture.rows, fixture.view); !errors.Is(err, ErrAclRowsInvalid) {
+		t.Errorf("a via naming a repo kind: %v", err)
 	}
 }

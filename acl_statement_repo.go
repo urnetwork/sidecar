@@ -50,6 +50,7 @@
 package sidecar
 
 import (
+	_ "embed"
 	"fmt"
 	"math/bits"
 	"time"
@@ -88,14 +89,21 @@ func aclTime(timeMs int64) time.Time {
 	return time.UnixMilli(timeMs)
 }
 
+// agent_repos' implicit fragment: every admitted sidecar of a network with no document deposits into every agent repo
+// (DESIGN-COMPUTE §16.5; QD-1433).
+//
+//go:embed acl_implicit_agent_repos.hujson
+var aclImplicitAgentReposFragment []byte
+
 // This build implements the agent_repos feature (DESIGN-COMPUTE §16.6, §20.4; SKILL-M11-01): every reader of the log
 // here takes its kinds and marker past the base that turns it on (configAclAgentReposFeature), evs places the kinds
 // (EvsRepoKindKnown), gkm forms and rotates their groups, the agent repo's carrying a drop key (GkmRepoKindTakesDeposits),
-// and the receipt rule holds them as owner-bound (evsservice's closure.go). It adds no implicit fragment: an agent repo's
-// deposits are its kind default (addAgentRepoDeposit), so every release compiles the same rows before and after the base,
-// and acl_implicit.hujson's golden does not move.
+// and the receipt rule holds them as owner-bound (evsservice's closure.go). Its implicit fragment gives an agent repo's
+// deposits as a rule over the kind, evs:kind:agent, which compiles after the frozen implicit document only once a base
+// turns the feature on, so every release compiles the same rows before that base and acl_implicit.hujson's golden does
+// not move; Team's starting document holds its member rule (AclTeamStartDocumentFor), where a Team narrows it.
 func init() {
-	registerAuthFeature(AuthFeatureAgentRepos, nil)
+	registerAuthFeature(AuthFeatureAgentRepos, aclImplicitAgentReposFragment)
 }
 
 // §16.6's before rule for the agent_repos feature: a RepoCreate of an agents or agent repo, or one marking the Team
