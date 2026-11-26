@@ -22,6 +22,14 @@
 // entries first journals the whole set of signed destinations in one capture file (record_capture.go). Recovery
 // finishes each destination with those bytes before signing another capture.
 //
+// DESIGN-COMPUTE §24.5's session entries ride (CTXH-M11-02, D-CTXH-12): a draft of kind 54 or 55, or one that sets
+// Rides, starts no push of its own. It leaves in the next push its writer makes to the log, its call's model_call's
+// above all, at a turn's end (ReleaseRides, the journal's signal), or the ride interval after the oldest of them was
+// journaled (SetRideInterval, SessionSettings.PushInterval), whichever comes first; with no interval set it goes as
+// any. Its header leaves in seq order and never waits; its body, filed apart at s/<n>, rides with it, or, while
+// SetBodyHold holds the log's bodies (a cap, §24.10), waits in the writer's body store for a later push, and only a
+// body ever waits.
+//
 // The spool's drain (MCP-M3-18) hands over taint records first and delivers at least once. This writer owns the drain:
 // a taint record goes to the handler SetSpoolHandlers installs (MCP-M3-15's ingest, which applies it to the run file
 // before any capture is sealed), and so does a capture record that is no record draft. With no handler installed
@@ -44,6 +52,7 @@ import (
 	"io"
 	"slices"
 	"sync"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -115,6 +124,10 @@ type RecordDraft struct {
 	// Entries the header's content names beside T's ref to its vault entry: a reach receipt's manifest in force
 	// (RECORD.md section 12). On the draft's vault and team entries, never on a copy.
 	Content []*RecordContentRef
+	// The entry starts no push of its own: it leaves in the next push its writer makes to the log, at ReleaseRides, or
+	// the ride interval after the oldest riding entry (DESIGN-COMPUTE §24.5, D-CTXH-12). Kinds 54 and 55 ride whatever
+	// this says.
+	Rides bool
 }
 
 // An entry a header's content names: its log, its id and its body_commitment, whose salt stays in the entry's slot row.
@@ -418,6 +431,75 @@ func (self *SidecarRecord) DrainSpool(ctx context.Context) error {
 	return err
 }
 
+// Sets how long a riding entry, a session entry's above all, waits for a push to carry it before it leaves in one of its
+// own (DESIGN-COMPUTE §24.5's pushes row): SessionSettings.PushInterval, within record.session_push_secs' bounds.
+// Non-positive sends riding entries as any.
+func (self *SidecarRecord) SetRideInterval(interval time.Duration) {
+	func() {
+		self.writer.stateLock.Lock()
+		defer self.writer.stateLock.Unlock()
+		self.writer.rideInterval = interval
+	}()
+	self.writer.signal()
+}
+
+// Lets every riding entry leave now, in its log's next push: a turn's end, the journal's signal (D-CTXH-12).
+func (self *SidecarRecord) ReleaseRides() {
+	self.writer.releaseRides()
+}
+
+// SidecarRecord.ReleaseRides'.
+func (self *recordWriter) releaseRides() {
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		for _, queue := range self.logQueues {
+			queue.pruneRidingWithLock()
+			for seq := range queue.ridingSeqs {
+				queue.flushThroughSeq = max(queue.flushThroughSeq, seq)
+			}
+		}
+	}()
+	self.signal()
+}
+
+// Sets which logs' session bodies are held back now (DESIGN-COMPUTE §24.10's caps): a held body's header still
+// leaves in order, and the body waits in the writer's body store until a push the hold no longer stops carries it.
+// Nil holds none. CTXH-M11-06's caps set it.
+func (self *SidecarRecord) SetBodyHold(holdBodies func(logId Id) bool) {
+	func() {
+		self.writer.stateLock.Lock()
+		defer self.writer.stateLock.Unlock()
+		self.writer.holdBodies = holdBodies
+	}()
+	self.writer.signal()
+}
+
+// The seqs of logId whose session bodies this writer holds, their headers gone ahead, ascending.
+func (self *SidecarRecord) HeldBodies(logId Id) ([]uint64, error) {
+	held, err := self.writer.heldBodies(logId)
+	if err != nil {
+		return nil, err
+	}
+	seqs := []uint64{}
+	for _, body := range held {
+		seqs = append(seqs, body.Seq)
+	}
+	return seqs, nil
+}
+
+// Drops the held bodies of logId at seqs for good, as a spool past its cap drops its oldest (DESIGN-COMPUTE §24.10),
+// answering the seqs it dropped. The caller files the run's coverage naming them in bodies_dropped, which readers take
+// as the bodies' end.
+func (self *SidecarRecord) DropHeldBodies(logId Id, seqs []uint64) ([]uint64, error) {
+	return self.writer.dropHeldBodies(logId, seqs)
+}
+
+// Sets which logs the reader fetches every body of at each sync, as a mirror holds them (RecordReader.SetFetchEveryBody).
+func (self *SidecarRecord) SetFetchEveryBody(fetchEveryBody func(logId Id) bool) {
+	self.reader.SetFetchEveryBody(fetchEveryBody)
+}
+
 // The writer: routing, sealing, spooling, and the queues the push loop empties.
 type recordWriter struct {
 	sidecarId         Id
@@ -468,6 +550,10 @@ type recordWriter struct {
 	depositKeeper func(logId Id, commit *RecordStreamCommit, batch []byte) error
 	// the other ledgers a draft's team entry is copied to (record_other_ledger.go); nil copies to none
 	ledgerCopies func(kind RecordKind, runId *Id, body []byte) []Id
+	// how long a riding entry waits for a push to carry it (DESIGN-COMPUTE §24.5); non-positive sends it as any
+	rideInterval time.Duration
+	// whether a log's session bodies are held back now, at a cap (§24.10); nil holds none
+	holdBodies func(logId Id) bool
 }
 
 // A writer over args, reading nothing until its first Append or pump.
@@ -630,6 +716,9 @@ func (self *RecordDraft) check() error {
 	if self.LogId != nil && (!recordKindNamesItsLog(self.Kind) || self.TeamOnly || self.Projection != nil) {
 		return fmt.Errorf("%w: %s names no log of its own", ErrRecordDraftInvalid, self.Kind)
 	}
+	if self.Rides && recordKindSendsAtOnce(self.Kind) {
+		return fmt.Errorf("%w: %s sends at once and cannot ride", ErrRecordDraftInvalid, self.Kind)
+	}
 	return nil
 }
 
@@ -687,6 +776,8 @@ type recordSpoolDraft struct {
 	LogId *Id `json:"log_id,omitempty"`
 	// RecordDraft.Content
 	Content []*RecordContentRef `json:"content,omitempty"`
+	// RecordDraft.Rides
+	Rides bool `json:"rides,omitempty"`
 }
 
 // The draft's own content refs as a header carries them.
@@ -839,6 +930,7 @@ func (self *recordWriter) Append(draft *RecordDraft) ([]*RecordEntryRef, error) 
 		copied := *ref
 		spoolDraft.Content = append(spoolDraft.Content, &copied)
 	}
+	spoolDraft.Rides = draft.Rides || draft.Kind.BodyApart()
 	routes, err := self.routesOf(spoolDraft)
 	if errors.Is(err, errRecordUnrouted) {
 		return self.spoolDraft(spoolDraft, RecordCoverageGapNoVault)
@@ -918,7 +1010,7 @@ func (self *recordWriter) sealOne(env *RecordSealEnv, draft *recordSpoolDraft, r
 	}
 	sealed.agentBody = nil
 	if env.stage == nil {
-		self.enqueue(route, sealed, kind)
+		self.enqueueRiding(route, sealed, kind, draft.Rides || kind.BodyApart())
 	} else {
 		sealed.Clear()
 	}
@@ -1169,12 +1261,24 @@ func (self *recordWriter) load() error {
 			queue := self.queueWithLock(logId)
 			for _, entry := range entries {
 				queue.waitingSeqEntries[entry.Seq] = entry
-				if header, err := entry.Header(); err == nil && recordKindSendsAtOnce(header.Kind()) {
+				header, err := entry.Header()
+				if err != nil {
+					continue
+				}
+				if recordKindSendsAtOnce(header.Kind()) {
 					queue.flushThroughSeq = max(queue.flushThroughSeq, entry.Seq)
+				}
+				// the journal keeps the entry's bytes; its kind says its body goes apart, and rides
+				entry.BodyApart = header.Kind().BodyApart()
+				if entry.BodyApart {
+					queue.ridingSeqs[entry.Seq] = true
 				}
 			}
 			if 0 < len(entries) && queue.firstWaitingMillis == 0 {
 				queue.firstWaitingMillis = self.clock.Now().UnixMilli()
+			}
+			if 0 < len(queue.ridingSeqs) && queue.firstRidingMillis == 0 {
+				queue.firstRidingMillis = self.clock.Now().UnixMilli()
 			}
 		}
 		for _, plan := range plans {

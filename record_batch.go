@@ -22,6 +22,14 @@
 // Before signing a fresh direct entry on a binding, the writer reconciles the verified stream with its local head
 // and replays pending work. Captures spool during startup. A deposit-only writer never reads the stream (§5.3).
 //
+// DESIGN-COMPUTE §24.5's session entries (CTXH-M11-02): a riding entry starts no batch of its own: it waits until an
+// ordinary entry's batch is due, a turn's end releases it, or the ride interval passes, and goes in seq order with
+// what it waits beside, so a header never waits behind a later entry. A body-apart entry's body rides in the push
+// that carries its header, at s/<n>, the n of its e/<n>, unless its log's bodies are held: then the header goes alone,
+// the plan says so, and once the push commits the body waits in bodies/<log_id>/<n>, before the journal record that
+// held it is acknowledged; a later push of the log the hold no longer stops carries waiting bodies beside its entries,
+// and the files go once that push is settled. A deposit carries every entry whole, so a depositor holds no body.
+//
 // Barriers: record.push.before and record.push.after around each send, keyed by the log, with no lock held.
 
 package sidecar
@@ -30,9 +38,13 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/urnetwork/sidecar/protocol"
@@ -48,6 +60,9 @@ type recordLogQueue struct {
 	waitingIngested []*recordIngestedEntry
 	// when the oldest waiting entry was queued, Unix milliseconds
 	firstWaitingMillis int64
+	// the waiting seqs that ride (DESIGN-COMPUTE §24.5), and when the oldest of them was queued
+	ridingSeqs        map[uint64]bool
+	firstRidingMillis int64
 	// the newest seq of an entry that sends at once: a batch is due while a seq at or below it waits
 	flushThroughSeq uint64
 	// the plan outstanding, nil for none
@@ -70,6 +85,7 @@ func (self *recordWriter) queueWithLock(logId Id) *recordLogQueue {
 			logId:             logId,
 			waitingSeqEntries: map[uint64]*RecordSealedEntry{},
 			planSeqEntries:    map[uint64]*RecordSealedEntry{},
+			ridingSeqs:        map[uint64]bool{},
 		}
 		self.logQueues[logId] = queue
 	}
@@ -79,6 +95,29 @@ func (self *recordWriter) queueWithLock(logId Id) *recordLogQueue {
 // Whether the queue holds anything a plan has not taken.
 func (self *recordLogQueue) waitingWithLock() bool {
 	return 0 < len(self.waitingSeqEntries) || 0 < len(self.waitingIngested)
+}
+
+// How many waiting entries do not ride: the ones that make a batch due by count or time.
+func (self *recordLogQueue) ordinaryWaitingWithLock() int {
+	riding := 0
+	for seq := range self.ridingSeqs {
+		if _, ok := self.waitingSeqEntries[seq]; ok {
+			riding += 1
+		}
+	}
+	return len(self.waitingSeqEntries) - riding + len(self.waitingIngested)
+}
+
+// Forgets the riding seqs no longer waiting, and the riding wait once none is.
+func (self *recordLogQueue) pruneRidingWithLock() {
+	for seq := range self.ridingSeqs {
+		if _, ok := self.waitingSeqEntries[seq]; !ok {
+			delete(self.ridingSeqs, seq)
+		}
+	}
+	if len(self.ridingSeqs) == 0 {
+		self.firstRidingMillis = 0
+	}
 }
 
 // Whether an entry that sends at once is waiting.
@@ -123,14 +162,27 @@ func (self *recordLogQueue) adoptPlanWithLock(plan *recordPushPlan) bool {
 	return true
 }
 
-// Puts a sealed entry on its log's queue and wakes the loop, which sends a due batch or arms the queue's timer.
+// Puts a sealed entry on its log's queue and wakes the loop, which sends a due batch or arms the queue's timer: a
+// body-apart kind's rides (DESIGN-COMPUTE §24.5).
 func (self *recordWriter) enqueue(route *recordRoute, sealed *RecordSealedEntry, kind RecordKind) {
+	self.enqueueRiding(route, sealed, kind, kind.BodyApart())
+}
+
+// enqueue, a riding entry waiting for a batch an ordinary one makes due, ReleaseRides, or the ride interval.
+func (self *recordWriter) enqueueRiding(route *recordRoute, sealed *RecordSealedEntry, kind RecordKind, rides bool) {
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		queue := self.queueWithLock(route.logId)
-		if !queue.waitingWithLock() {
-			queue.firstWaitingMillis = self.clock.Now().UnixMilli()
+		nowMillis := self.clock.Now().UnixMilli()
+		queue.pruneRidingWithLock()
+		if rides {
+			if len(queue.ridingSeqs) == 0 {
+				queue.firstRidingMillis = nowMillis
+			}
+			queue.ridingSeqs[sealed.Seq] = true
+		} else if queue.ordinaryWaitingWithLock() == 0 {
+			queue.firstWaitingMillis = nowMillis
 		}
 		queue.waitingSeqEntries[sealed.Seq] = sealed
 		if recordKindSendsAtOnce(kind) {
@@ -176,7 +228,8 @@ func recordLogMode(auth RecordAuthView, sidecarId Id, logId Id) (bool, bool) {
 	return false, false
 }
 
-// Whether a batch is due: full, past its interval, or holding an entry that sends at once.
+// Whether a batch is due: full, past its interval, or holding an entry that sends at once; a riding entry by the ride
+// interval alone, or as any where none is set.
 func (self *recordWriter) dueWithLock(queue *recordLogQueue, deposit bool, nowMillis int64, force bool) bool {
 	if !queue.waitingWithLock() {
 		return false
@@ -184,8 +237,27 @@ func (self *recordWriter) dueWithLock(queue *recordLogQueue, deposit bool, nowMi
 	if force || queue.flushWaitingWithLock() {
 		return true
 	}
-	count := len(queue.waitingSeqEntries) + len(queue.waitingIngested)
+	queue.pruneRidingWithLock()
+	if 0 < len(queue.ridingSeqs) {
+		ridden := time.Duration(nowMillis-queue.firstRidingMillis) * time.Millisecond
+		if 0 < self.rideInterval && self.rideInterval <= ridden {
+			return true
+		}
+		if self.rideInterval <= 0 && queue.ordinaryWaitingWithLock() == 0 {
+			// no ride interval: a riding entry goes as any
+			return self.ordinaryDueWithLock(queue, deposit, len(queue.waitingSeqEntries), ridden)
+		}
+	}
+	ordinary := queue.ordinaryWaitingWithLock()
+	if ordinary == 0 {
+		return false
+	}
 	waited := time.Duration(nowMillis-queue.firstWaitingMillis) * time.Millisecond
+	return self.ordinaryDueWithLock(queue, deposit, ordinary, waited)
+}
+
+// Whether count ordinary entries, the oldest waiting waited, make a batch due.
+func (self *recordWriter) ordinaryDueWithLock(queue *recordLogQueue, deposit bool, count int, waited time.Duration) bool {
 	if deposit {
 		return recordDepositEntryCount <= count || self.settings.DepositByteCount <= queue.waitingByteCountWithLock() ||
 			self.settings.DepositInterval <= waited
@@ -260,7 +332,20 @@ func (self *recordWriter) nextWake() (time.Duration, bool) {
 			if deposit || !ok {
 				interval = self.settings.DepositInterval
 			}
-			at := queue.firstWaitingMillis + interval.Milliseconds()
+			queue.pruneRidingWithLock()
+			at := int64(-1)
+			if 0 < queue.ordinaryWaitingWithLock() {
+				at = queue.firstWaitingMillis + interval.Milliseconds()
+			}
+			if 0 < len(queue.ridingSeqs) {
+				rideAt := queue.firstRidingMillis + interval.Milliseconds()
+				if 0 < self.rideInterval {
+					rideAt = queue.firstRidingMillis + self.rideInterval.Milliseconds()
+				}
+				if at < 0 || rideAt < at {
+					at = rideAt
+				}
+			}
 			if queue.flushWaitingWithLock() {
 				at = nowMillis
 			}
@@ -490,7 +575,21 @@ func (self *recordWriter) pushOf(plan *recordPushPlan) (*RecordStreamPush, error
 	for _, planEntry := range plan.Entries {
 		var row []byte
 		var entryBytes []byte
-		if planEntry.Ingested != nil {
+		if planEntry.Ingested != nil && planEntry.BodyPath != "" {
+			// DESIGN-COMPUTE §24.5: a deposited session entry, whole in its deposit, filed apart here as its
+			// writer would have
+			apart, body, err := recordEntrySplitApart(planEntry.Ingested.Entry, &plan.SlotId, planEntry.KeyIndex)
+			if err != nil {
+				return nil, err
+			}
+			joined, err := RecordSlotRowJoin(planEntry.Ingested.Key, planEntry.Ingested.Salt)
+			if err != nil {
+				return nil, err
+			}
+			entryBytes = apart
+			row = joined
+			push.Bodies = append(push.Bodies, &RecordStreamBody{Path: planEntry.BodyPath, Body: body})
+		} else if planEntry.Ingested != nil {
 			reslotted, err := recordEntryReslot(planEntry.Ingested.Entry, &plan.SlotId, planEntry.KeyIndex)
 			if err != nil {
 				return nil, err
@@ -508,9 +607,19 @@ func (self *recordWriter) pushOf(plan *recordPushPlan) (*RecordStreamPush, error
 			}
 			entryBytes = sealed.EntryBytes(&plan.SlotId, planEntry.KeyIndex)
 			row = sealed.SlotRow(planEntry.KeyIndex).Row
+			if planEntry.BodyPath != "" {
+				push.Bodies = append(push.Bodies, &RecordStreamBody{Path: planEntry.BodyPath, Body: sealed.BodyBytes()})
+			}
 		}
 		push.SlotRows = append(push.SlotRows, &RecordSlotRow{KeyIndex: planEntry.KeyIndex, Row: row})
 		push.Entries = append(push.Entries, &RecordStreamEntry{Path: planEntry.Path, Entry: entryBytes})
+	}
+	for _, planBody := range plan.Bodies {
+		held, err := self.readHeldBody(plan.LogId, planBody.Counter)
+		if err != nil {
+			return nil, err
+		}
+		push.Bodies = append(push.Bodies, &RecordStreamBody{Path: planBody.Path, Body: held.SealedBody})
 	}
 	slices.SortFunc(push.SlotRows, func(a *RecordSlotRow, b *RecordSlotRow) int {
 		return cmp.Compare(a.KeyIndex, b.KeyIndex)
@@ -604,8 +713,17 @@ func (self *recordWriter) finishCommittedPlan(plan *recordPushPlan) error {
 			return err
 		}
 	}
+	// a held body waits in the body store before the journal record holding it goes
+	if err := self.storeHeldBodies(plan); err != nil {
+		return err
+	}
 	if err := self.chain.Acknowledge(plan.LogId, plan.ownSeqs()); err != nil {
 		return err
+	}
+	for _, planBody := range plan.Bodies {
+		if err := self.store.Remove(recordHeldBodyName(plan.LogId, planBody.Counter)); err != nil {
+			return fmt.Errorf("record: a held body: %w", err)
+		}
 	}
 	if err := self.store.Remove(recordPlanName(plan.LogId)); err != nil {
 		return fmt.Errorf("record: plan: %w", err)
@@ -637,4 +755,132 @@ func (self *recordWriter) finishCommittedPlan(plan *recordPushPlan) error {
 // The pin a plan declares.
 func (self *recordPushPlan) authPin() *bridge.AuthPin {
 	return &bridge.AuthPin{Version: self.PinVersion, Chain: bytes.Clone(self.PinChain)}
+}
+
+// The writer's held bodies (DESIGN-COMPUTE §24.5, §24.10): bodies/<log_id>/<counter>, one a session entry's sealed body
+// whose header went ahead while its log's bodies were held, in the record component's sealed directory. A body is
+// written before the journal record that held it is acknowledged, and removed once a push that carried it is settled,
+// so a kill anywhere loses none and sends one at most once more, as the same statement.
+const (
+	recordHeldBodyDirectory = "bodies"
+	recordHeldBodyVersion   = 1
+)
+
+// One held body's document.
+type recordHeldBody struct {
+	Version int `json:"version"`
+	LogId   Id  `json:"log_id"`
+	// its entry's seq in this writer's chain, and its stream counter, the n of its header's e/<n> and its s/<n>
+	Seq        uint64 `json:"seq"`
+	Counter    uint64 `json:"counter"`
+	SealedBody []byte `json:"sealed_body"`
+}
+
+// A held body's file name: its counter in 20 decimal digits, so a listing sorts by counter.
+func recordHeldBodyName(logId Id, counter uint64) string {
+	return fmt.Sprintf("%s/%s/%0*d", recordHeldBodyDirectory, recordChainIdText(logId), recordChainSeqDigitCount, counter)
+}
+
+// The held body at counter, refusing one that does not decode or is not where its name says.
+func (self *recordWriter) readHeldBody(logId Id, counter uint64) (*recordHeldBody, error) {
+	content, err := self.chain.readFile(recordHeldBodyName(logId, counter))
+	if err != nil {
+		return nil, err
+	}
+	if content == nil {
+		return nil, fmt.Errorf("%w: held body %d of log %s is gone", ErrRecordChainCorrupt, counter, logId)
+	}
+	held := &recordHeldBody{}
+	if err := recordChainDecode(content, held); err != nil || held.Version != recordHeldBodyVersion || held.LogId != logId || held.Counter != counter {
+		return nil, fmt.Errorf("%w: held body %d of log %s", ErrRecordChainCorrupt, counter, logId)
+	}
+	return held, nil
+}
+
+// Every body of logId the writer holds, by counter.
+func (self *recordWriter) heldBodies(logId Id) ([]*recordHeldBody, error) {
+	entries, err := self.store.List(recordHeldBodyDirectory + "/" + recordChainIdText(logId) + "/")
+	if err != nil {
+		return nil, err
+	}
+	held := []*recordHeldBody{}
+	for _, entry := range entries {
+		name := entry.Name[strings.LastIndexByte(entry.Name, '/')+1:]
+		counter, err := strconv.ParseUint(name, 10, 64)
+		if err != nil || recordHeldBodyName(logId, counter) != entry.Name {
+			return nil, fmt.Errorf("%w: a held body named %q", ErrRecordChainCorrupt, entry.Name)
+		}
+		body, err := self.readHeldBody(logId, counter)
+		if err != nil {
+			return nil, err
+		}
+		held = append(held, body)
+	}
+	slices.SortFunc(held, func(a *recordHeldBody, b *recordHeldBody) int { return cmp.Compare(a.Counter, b.Counter) })
+	return held, nil
+}
+
+// Writes the bodies plan held back, from the journal records that still hold them: what a commit does before it
+// acknowledges them. A record already acknowledged wrote its body before.
+func (self *recordWriter) storeHeldBodies(plan *recordPushPlan) error {
+	if plan.Deposit {
+		return nil
+	}
+	entries := func() map[uint64]*RecordSealedEntry {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		return maps.Clone(self.queueWithLock(plan.LogId).planSeqEntries)
+	}()
+	for _, planEntry := range plan.Entries {
+		if !planEntry.BodyHeld || planEntry.Ingested != nil {
+			continue
+		}
+		sealed := entries[planEntry.Seq]
+		if sealed == nil {
+			continue
+		}
+		content, err := json.Marshal(&recordHeldBody{
+			Version: recordHeldBodyVersion, LogId: plan.LogId, Seq: planEntry.Seq, Counter: planEntry.Counter, SealedBody: sealed.BodyBytes(),
+		})
+		if err != nil {
+			return err
+		}
+		if err := self.chain.writeFile(recordHeldBodyName(plan.LogId, planEntry.Counter), content); err != nil {
+			return fmt.Errorf("record: a held body: %w", err)
+		}
+	}
+	return nil
+}
+
+// Drops the held bodies of logId at seqs, answering the seqs dropped, ascending. A body a plan carries now stays.
+func (self *recordWriter) dropHeldBodies(logId Id, seqs []uint64) ([]uint64, error) {
+	self.pumpLock.Lock()
+	defer self.pumpLock.Unlock()
+	held, err := self.heldBodies(logId)
+	if err != nil {
+		return nil, err
+	}
+	carried := func() map[uint64]bool {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		carried := map[uint64]bool{}
+		if plan := self.queueWithLock(logId).plan; plan != nil {
+			for _, planBody := range plan.Bodies {
+				carried[planBody.Counter] = true
+			}
+		}
+		return carried
+	}()
+	dropped := []uint64{}
+	for _, body := range held {
+		if !slices.Contains(seqs, body.Seq) || carried[body.Counter] {
+			continue
+		}
+		if err := self.store.Remove(recordHeldBodyName(logId, body.Counter)); err != nil {
+			return dropped, fmt.Errorf("record: a held body: %w", err)
+		}
+		dropped = append(dropped, body.Seq)
+	}
+	slices.Sort(dropped)
+	return dropped, nil
 }

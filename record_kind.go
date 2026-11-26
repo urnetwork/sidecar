@@ -2,6 +2,11 @@
 // class (section 8) and the one body message it parses as (section 6.4), with section 6.2's enumerations of what a
 // RecordHeader and a ReachReceipt label. RECORD.md is the source, and record_kind_test.go holds this file to it.
 //
+// DESIGN-COMPUTE.md §24.5 adds kinds 54 session_entry and 55 session_blob to the raw capture block and class 8 bulk
+// (CTXH-M11-01), ahead of the design-records fold that writes them into RECORD.md (Appendix D; QD-1366): both are the
+// vault's alone, raw and never indexed or projected to the team record (I-20), and both file their bodies apart from
+// their headers, at s/<n> beside e/<n> (BodyApart). record_kind_test.go takes them through its additions lists.
+//
 // A kind's number and name are permanent once released and never reused, and 0 is never written. 1 to 1,023 are the
 // registry's, in blocks by class (section 6.1); 1,024 and up are private use, shown generically, like any kind this
 // build does not know, and never refused (§16.8). 64 to 79 are derived names, which appear in search alone
@@ -78,6 +83,10 @@ const (
 	RecordKindFileEvent  RecordKind = 51
 	RecordKindBlob       RecordKind = 52
 	RecordKindModelCall  RecordKind = 53
+	// DESIGN-COMPUTE.md §24.5's (M11): one message of a run's session tree, and one piece of a part too large for its
+	// node
+	RecordKindSessionEntry RecordKind = 54
+	RecordKindSessionBlob  RecordKind = 55
 
 	// 64 to 79: derived names, from M10, in search alone: a run card or D's run announcement, and D's worker and
 	// repo announcements.
@@ -109,6 +118,8 @@ const (
 	RecordClassRequest    RecordClass = 5
 	RecordClassAccounting RecordClass = 6
 	RecordClassLog        RecordClass = 7
+	// DESIGN-COMPUTE.md §24.5, §24.10's: session_blob, a run's large parts, which expire apart from its nodes
+	RecordClassBulk RecordClass = 8
 )
 
 // How far an entry goes (§16.8's source field; section 6.2's numbers, §16.8's meanings). No writer sets 0, and a
@@ -161,6 +172,9 @@ type recordKindRow struct {
 	// For a kind whose stored body is a Signed (section 6.4): the message the Signed's body holds, and its type.
 	signedBody func() proto.Message
 	signedType bridge.SignedType
+	// The entry's sealed body is filed apart from its header, at s/<n> beside e/<n> (DESIGN-COMPUTE §24.5), so every
+	// reader verifies the header's chain and fetches the body only for the run it opens.
+	bodyApart bool
 }
 
 // Section 6.3's registry and section 6.4's bodies. Rows are added, never changed or removed.
@@ -228,6 +242,14 @@ var recordKindRows = map[RecordKind]recordKindRow{
 	RecordKindFileEvent:  {name: "file_event", class: RecordClassCapture, body: func() proto.Message { return &protocol.FileEventBody{} }},
 	RecordKindBlob:       {name: "blob", class: RecordClassCapture, body: func() proto.Message { return &protocol.BlobBody{} }},
 	RecordKindModelCall:  {name: "model_call", class: RecordClassCapture, body: func() proto.Message { return &protocol.ModelCallBody{} }},
+	RecordKindSessionEntry: {
+		name: "session_entry", class: RecordClassCapture, bodyApart: true,
+		body: func() proto.Message { return &protocol.SessionEntryBody{} },
+	},
+	RecordKindSessionBlob: {
+		name: "session_blob", class: RecordClassBulk, bodyApart: true,
+		body: func() proto.Message { return &protocol.SessionBlobBody{} },
+	},
 
 	// Derived names hold no class: no header carries one.
 	RecordKindRun:    {name: "run"},
@@ -315,6 +337,14 @@ func (self RecordKind) NewBody() (proto.Message, bool) {
 	return row.body(), true
 }
 
+// Whether the kind's entries file their sealed bodies apart from their headers (DESIGN-COMPUTE §24.5): kinds 54 and
+// 55. A kind this build does not know files none, and a reader that finds RecordEntry.body_apart set on one keeps its
+// header and reads its body deferred, as for any (RECORD.md section 5.7's format 1 row).
+func (self RecordKind) BodyApart() bool {
+	row, ok := recordKindRows[self]
+	return ok && row.bodyApart
+}
+
 // For a kind whose stored body is a Signed: a new, empty message of what the Signed's body holds, and the SignedType
 // that Signed must carry. False for every other kind.
 func (self RecordKind) NewSignedBody() (proto.Message, bridge.SignedType, bool) {
@@ -334,6 +364,7 @@ var recordClassNames = map[RecordClass]string{
 	RecordClassRequest:      "request",
 	RecordClassAccounting:   "accounting",
 	RecordClassLog:          "log",
+	RecordClassBulk:         "bulk",
 }
 
 // Section 8's name, or "class n" for a number it does not hold.

@@ -57,6 +57,8 @@ type recordPushPlan struct {
 	PinChain   []byte `json:"pin_chain"`
 	// in the push's order: (writer, seq)
 	Entries []*recordPlanEntry `json:"entries"`
+	// held bodies the push carries, whose headers went before (DESIGN-COMPUTE §24.5)
+	Bodies []*recordPlanBody `json:"bodies,omitempty"`
 }
 
 // One entry's place in a plan.
@@ -68,6 +70,17 @@ type recordPlanEntry struct {
 	Path     string `json:"path,omitempty"`
 	Counter  uint64 `json:"counter,omitempty"`
 	KeyIndex uint32 `json:"key_index"`
+	// DESIGN-COMPUTE §24.5: a body-apart entry's body file in this push, s/<counter>; or, held at a cap, none, and the
+	// body waits in the writer's body store once the push commits
+	BodyPath string `json:"body_path,omitempty"`
+	BodyHeld bool   `json:"body_held,omitempty"`
+}
+
+// A held body a stream push carries beside its entries (DESIGN-COMPUTE §24.5), from the writer's body store.
+type recordPlanBody struct {
+	Seq     uint64 `json:"seq"`
+	Counter uint64 `json:"counter"`
+	Path    string `json:"path"`
 }
 
 // An ingested entry as a plan carries it: its RecordEntry bytes as deposited, its key and salt, and the deposit.
@@ -334,8 +347,10 @@ func (self *recordWriter) buildPlan(ctx context.Context, auth RecordAuthView, lo
 		}
 		for _, entry := range taken {
 			delete(queue.waitingSeqEntries, entry.Seq)
+			delete(queue.ridingSeqs, entry.Seq)
 			queue.planSeqEntries[entry.Seq] = entry
 		}
+		queue.pruneRidingWithLock()
 		queue.waitingIngested = queue.waitingIngested[len(takenIngested):]
 		return taken, takenIngested
 	}()
@@ -365,6 +380,12 @@ func (self *recordWriter) buildPlan(ctx context.Context, auth RecordAuthView, lo
 	slices.SortStableFunc(candidates, func(a *candidate, b *candidate) int {
 		return RecordCompareInPush(a.header, b.header)
 	})
+	holdBodies := func() bool {
+		self.stateLock.Lock()
+		hold := self.holdBodies
+		self.stateLock.Unlock()
+		return hold != nil && hold(logId)
+	}()
 	for index, candidate := range candidates {
 		planEntry := &recordPlanEntry{}
 		if candidate.own != nil {
@@ -387,8 +408,34 @@ func (self *recordWriter) buildPlan(ctx context.Context, auth RecordAuthView, lo
 			}
 			planEntry.Path = path
 			planEntry.KeyIndex = uint32(index)
+			// DESIGN-COMPUTE §24.5: a body-apart entry's body at s/<n>, unless held; an ingested one's always rides
+			apart := candidate.header.Kind().BodyApart()
+			if candidate.own != nil && apart && holdBodies {
+				planEntry.BodyHeld = true
+			} else if apart {
+				if planEntry.BodyPath, err = RecordBodyPath(planEntry.Counter); err != nil {
+					self.restoreTaken(logId, taken, takenIngested)
+					return nil, err
+				}
+			}
 		}
 		plan.Entries = append(plan.Entries, planEntry)
+	}
+	if !deposit && !holdBodies {
+		// held bodies whose headers went before ride beside these entries
+		held, err := self.heldBodies(logId)
+		if err != nil {
+			self.restoreTaken(logId, taken, takenIngested)
+			return nil, err
+		}
+		for _, body := range held[:min(len(held), recordPushEntryCount(self.settings))] {
+			path, err := RecordBodyPath(body.Counter)
+			if err != nil {
+				self.restoreTaken(logId, taken, takenIngested)
+				return nil, err
+			}
+			plan.Bodies = append(plan.Bodies, &recordPlanBody{Seq: body.Seq, Counter: body.Counter, Path: path})
+		}
 	}
 	content, err := json.Marshal(plan)
 	if err == nil {
@@ -427,6 +474,8 @@ type recordEntryFields struct {
 	keySlotId  []byte
 	keyIndex   uint32
 	version    uint32
+	// DESIGN-COMPUTE §24.5's body_apart: sealed_body is empty and the body sits at s/<n> (format 1's reservation)
+	bodyApart bool
 	// every field but key_slot_id and key_index, as stored, in order
 	kept []byte
 }
@@ -474,6 +523,12 @@ func (self *recordEntryFields) parse(entryBytes []byte) error {
 			} else {
 				self.keyIndex = uint32(varint)
 			}
+		case recordEntryBodyApartField:
+			if wireType != protowire.VarintType || seen[number] {
+				return fmt.Errorf("%w: a record entry's body_apart twice or not a varint", ErrRecordStoredInvalid)
+			}
+			varint, _ := protowire.ConsumeVarint(value)
+			self.bodyApart = varint != 0
 		}
 		seen[number] = true
 		if number != recordEntryKeySlotIdField && number != recordEntryKeyIndexField {
@@ -483,7 +538,41 @@ func (self *recordEntryFields) parse(entryBytes []byte) error {
 	if self.signed == nil {
 		return fmt.Errorf("%w: a record entry with no header", ErrRecordStoredInvalid)
 	}
+	if self.bodyApart && len(self.sealedBody) != 0 {
+		return fmt.Errorf("%w: a record entry whose body is apart and inline", ErrRecordStoredInvalid)
+	}
 	return nil
+}
+
+// A whole entry's bytes, its sealed body inline, as a deposit carries one, filed apart as its ingester's stream holds a
+// body-apart kind's (DESIGN-COMPUTE §24.5): the entry with sealed_body out and body_apart set, its key slot named, and
+// the sealed body alone. Every other field stays as stored.
+func recordEntrySplitApart(entryBytes []byte, slotId *Id, keyIndex uint32) ([]byte, []byte, error) {
+	entry := &recordEntryFields{}
+	if err := entry.parse(entryBytes); err != nil {
+		return nil, nil, err
+	}
+	apart := []byte{}
+	for rest := entry.kept; 0 < len(rest); {
+		number, wireType, tagLength := protowire.ConsumeTag(rest)
+		valueLength := protowire.ConsumeFieldValue(number, wireType, rest[tagLength:])
+		field := rest[:tagLength+valueLength]
+		rest = rest[tagLength+valueLength:]
+		if number != recordEntrySealedBodyField && number != recordEntryBodyApartField {
+			apart = append(apart, field...)
+		}
+	}
+	if slotId != nil {
+		apart = protowire.AppendTag(apart, recordEntryKeySlotIdField, protowire.BytesType)
+		apart = protowire.AppendBytes(apart, slotId[:])
+	}
+	if keyIndex != 0 {
+		apart = protowire.AppendTag(apart, recordEntryKeyIndexField, protowire.VarintType)
+		apart = protowire.AppendVarint(apart, uint64(keyIndex))
+	}
+	apart = protowire.AppendTag(apart, recordEntryBodyApartField, protowire.VarintType)
+	apart = protowire.AppendVarint(apart, 1)
+	return apart, entry.sealedBody, nil
 }
 
 // The RecordEntry's stored Signed bytes and sealed_body.

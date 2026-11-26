@@ -13,6 +13,12 @@
 // The directory's kinds, announce, request, decision and erasure_request, take §16.11's classes and caps from
 // directory_fields.go, a stored one through directory_decode.go's bounded decoders.
 //
+// DESIGN-COMPUTE §24.5's kinds 54 session_entry and 55 session_blob, and a model_call's CallContext, are checked here
+// for their shape and caps, which both ends share: the node's ids and hashes at their lengths, its item within
+// SessionItemByteCount, its parts within SessionPartCount, each part kept whole in at most SessionBlobPieceCount blobs
+// up to SessionPartWholeByteCount or by hash and size alone past it, and a blob's piece within BlobByteCount. Whether an
+// item's hash and a node's chain hold is session_format.go's, which a session reader runs over a run's nodes.
+//
 // Package-level functions are safe for concurrent use.
 
 package sidecar
@@ -138,6 +144,20 @@ type RecordBodySettings struct {
 	SupportFixedInByteCount int
 	// A message's body as sent or received, in bytes: 64 KiB, the bound a body's text and fields sit within.
 	SupportBodyByteCount uint64
+
+	// DESIGN-COMPUTE §24.5's session_entry: a node's item as recorded, RFC 8785 JSON after redaction and stubs, in
+	// bytes: 16 KiB, what rides in a push's payload beside its header (DESIGN §11.7); a part that would carry it past
+	// this moves to session_blob entries.
+	SessionItemByteCount int
+	// A node's parts: 64.
+	SessionPartCount int
+	// The session_blob pieces one part is kept whole in: 8, so a part of SessionPartWholeByteCount is eight pieces of
+	// BlobByteCount.
+	SessionBlobPieceCount int
+	// The largest part kept whole, in bytes: 64 MiB (Q-CTXH-8); past it, by hash and size alone, omitted.
+	SessionPartWholeByteCount uint64
+	// A part's media type, in bytes: 255, RFC 6838's 127 bytes of type and of subtype and the slash between.
+	SessionMediaTypeByteCount int
 }
 
 // RECORD.md's values, the only source of their defaults. A fresh value each call.
@@ -190,6 +210,12 @@ func DefaultRecordBodySettings() *RecordBodySettings {
 		SupportCodeNameByteCount:   64,
 		SupportFixedInByteCount:    32,
 		SupportBodyByteCount:       64 * 1024,
+
+		SessionItemByteCount:      16 * 1024,
+		SessionPartCount:          64,
+		SessionBlobPieceCount:     8,
+		SessionPartWholeByteCount: 64 * 1024 * 1024,
+		SessionMediaTypeByteCount: 255,
 	}
 }
 
@@ -201,6 +227,9 @@ const (
 	RecordCoverageSourceScan       = "scan"
 	RecordCoverageSourceTelemetry  = "telemetry"
 	RecordCoverageSourceFileEvents = "file_events"
+	// DESIGN-COMPUTE §24.5, §24.8: the Harness recorded the run natively, and the gateway recorded its model calls
+	RecordCoverageSourceHarness = "harness"
+	RecordCoverageSourceGateway = "gateway"
 )
 
 // Coverage.gaps' codes (RECORD.md section 6.4), each written "code" once or "code:count".
@@ -217,6 +246,9 @@ const (
 	RecordCoverageGapNoVault        = "no_vault"
 	RecordCoverageGapRunFileMissing = "run_file_missing"
 	RecordCoverageGapSpoolDrop      = "spool_drop"
+	// DESIGN-COMPUTE §24.8: a model_call a hook or telemetry reported whose request the gateway never saw, so its
+	// context is only what the transcript shows (Q-CTXH-14)
+	RecordCoverageGapContextPartial = "context_partial"
 )
 
 var recordCoverageSources = []string{
@@ -226,6 +258,8 @@ var recordCoverageSources = []string{
 	RecordCoverageSourceScan,
 	RecordCoverageSourceTelemetry,
 	RecordCoverageSourceFileEvents,
+	RecordCoverageSourceHarness,
+	RecordCoverageSourceGateway,
 }
 
 var recordCoverageGaps = []string{
@@ -241,6 +275,7 @@ var recordCoverageGaps = []string{
 	RecordCoverageGapNoVault,
 	RecordCoverageGapRunFileMissing,
 	RecordCoverageGapSpoolDrop,
+	RecordCoverageGapContextPartial,
 }
 
 // Whether section 6.4 names code as a Coverage source.
@@ -427,8 +462,118 @@ func RecordBodyValidate(kind RecordKind, body proto.Message) error {
 		return recordDisclosureValidate(typed)
 	case *protocol.SupportMessageBody:
 		return recordSupportMessageValidate(typed)
+	case *protocol.SessionEntryBody:
+		return recordSessionEntryValidate(typed)
+	case *protocol.SessionBlobBody:
+		return recordSessionBlobValidate(typed)
 	}
 	return nil
+}
+
+// SessionEntryBody.type's last value, 9 link: 1 message to 9 link, as §24.5's fence numbers them (session_node.go
+// names each).
+const recordSessionNodeTypeLast uint32 = 9
+
+// SessionEntryBody.marks' bits: 0 limited_use (§25.10), 1 private (§7.8). Any other bit is no mark.
+const recordSessionMarkBits uint32 = 1<<0 | 1<<1
+
+// session_entry (DESIGN-COMPUTE §24.5): a random 16-byte node id; a parent node of 16 bytes or none, and a parent run
+// only beside a parent node; a type section §24.5 numbers; the item within SessionItemByteCount and the parts within
+// SessionPartCount; the item and chain hashes of 32 bytes; a same_as node of 16 bytes standing for an item and parts
+// it leaves empty; and only the two marks. Each part holds an RFC 6901 pointer into the item, a 32-byte hash, a media
+// type within its bytes, and either its pieces, 1 to SessionBlobPieceCount blob entry ids of 16 bytes for a part of up
+// to SessionPartWholeByteCount, or, omitted, none at all: a part past it, past the run-hour budget or at a cap.
+func recordSessionEntryValidate(body *protocol.SessionEntryBody) error {
+	settings := DefaultRecordBodySettings()
+	sameAs := len(body.GetSameAs()) != 0
+	checks := []error{
+		recordBodyRule(recordBodyLength(body.GetNodeId(), recordIdByteCount, false), "node_id of %d bytes", len(body.GetNodeId())),
+		recordBodyRule(recordBodyLength(body.GetParentNodeId(), recordIdByteCount, true), "parent_node_id of %d bytes", len(body.GetParentNodeId())),
+		recordBodyRule(recordBodyLength(body.GetParentRunId(), recordIdByteCount, true), "parent_run_id of %d bytes", len(body.GetParentRunId())),
+		recordBodyRule(len(body.GetParentRunId()) == 0 || len(body.GetParentNodeId()) != 0, "a parent run with no parent node"),
+		recordBodyRule(1 <= body.GetType() && body.GetType() <= recordSessionNodeTypeLast, "session node type %d", body.GetType()),
+		recordBodyRule(len(body.GetItem()) <= settings.SessionItemByteCount, "a session item of %d bytes", len(body.GetItem())),
+		recordBodyRule(len(body.GetParts()) <= settings.SessionPartCount, "%d session parts", len(body.GetParts())),
+		recordBodyRule(recordBodyLength(body.GetItemSha256(), recordHashByteCount, false), "item_sha256 of %d bytes", len(body.GetItemSha256())),
+		recordBodyRule(recordBodyLength(body.GetChainSha256(), recordHashByteCount, false), "chain_sha256 of %d bytes", len(body.GetChainSha256())),
+		recordBodyRule(recordBodyLength(body.GetSameAs(), recordIdByteCount, true), "same_as of %d bytes", len(body.GetSameAs())),
+		recordBodyRule(!sameAs || (len(body.GetItem()) == 0 && len(body.GetParts()) == 0), "a same_as node holding an item or parts"),
+		recordBodyRule(sameAs || len(body.GetItem()) != 0, "a session node with no item and no same_as"),
+		recordBodyRule(body.GetMarks()&^recordSessionMarkBits == 0, "session marks %#x", body.GetMarks()),
+	}
+	for _, part := range body.GetParts() {
+		checks = append(checks, recordSessionPartValidate(settings, part))
+	}
+	return errors.Join(checks...)
+}
+
+// One part of a session node: see recordSessionEntryValidate.
+func recordSessionPartValidate(settings *RecordBodySettings, part *protocol.SessionPart) error {
+	pieceCount := len(part.GetBlobEntryIds())
+	checks := []error{
+		recordBodyRule(RecordSessionPointerValid(part.GetPointer()) && len(part.GetPointer()) <= settings.SessionItemByteCount,
+			"a session part pointer of %d bytes that is no RFC 6901 pointer into the item", len(part.GetPointer())),
+		recordBodyRule(recordBodyLength(part.GetSha256(), recordHashByteCount, false), "a session part sha256 of %d bytes", len(part.GetSha256())),
+		recordBodyRule(len(part.GetMediaType()) <= settings.SessionMediaTypeByteCount, "a session part media type of %d bytes", len(part.GetMediaType())),
+	}
+	if part.GetOmitted() {
+		// past SessionPartWholeByteCount, past the run-hour budget, or at a history cap (§24.10): by hash and size alone
+		checks = append(checks, recordBodyRule(pieceCount == 0, "an omitted session part naming %d blobs", pieceCount))
+	} else {
+		checks = append(checks,
+			recordBodyRule(1 <= pieceCount && pieceCount <= settings.SessionBlobPieceCount, "a session part in %d blobs", pieceCount),
+			recordBodyRule(part.GetSize() <= settings.SessionPartWholeByteCount, "a session part of %d bytes kept whole", part.GetSize()),
+			recordBodyRule(part.GetSize() <= uint64(pieceCount)*uint64(settings.BlobByteCount), "a session part of %d bytes in %d blobs", part.GetSize(), pieceCount),
+		)
+	}
+	for _, entryId := range part.GetBlobEntryIds() {
+		checks = append(checks, recordBodyRule(len(entryId) == recordIdByteCount, "a session blob entry id of %d bytes", len(entryId)))
+	}
+	return errors.Join(checks...)
+}
+
+// Whether pointer is an RFC 6901 JSON pointer to a value inside an item: not the whole item, "", but "/" and its
+// reference tokens, where a "~" escapes only "0" and "1".
+func RecordSessionPointerValid(pointer string) bool {
+	if !strings.HasPrefix(pointer, "/") || !utf8.ValidString(pointer) {
+		return false
+	}
+	for i := 0; i < len(pointer); i += 1 {
+		if pointer[i] != '~' {
+			continue
+		}
+		if i+1 == len(pointer) || (pointer[i+1] != '0' && pointer[i+1] != '1') {
+			return false
+		}
+	}
+	return true
+}
+
+// session_blob (DESIGN-COMPUTE §24.5): one piece, index below count, of a part's 1 to SessionBlobPieceCount, the part's
+// 32-byte hash, and content within BlobByteCount.
+func recordSessionBlobValidate(body *protocol.SessionBlobBody) error {
+	settings := DefaultRecordBodySettings()
+	return errors.Join(
+		recordBodyRule(recordBodyLength(body.GetPartSha256(), recordHashByteCount, false), "a blob's part_sha256 of %d bytes", len(body.GetPartSha256())),
+		recordBodyRule(1 <= body.GetCount() && int(body.GetCount()) <= settings.SessionBlobPieceCount, "a part in %d pieces", body.GetCount()),
+		recordBodyRule(body.GetIndex() < body.GetCount(), "piece %d of %d", body.GetIndex(), body.GetCount()),
+		recordBodyRule(len(body.GetContent()) <= settings.BlobByteCount, "a session blob of %d bytes", len(body.GetContent())),
+	)
+}
+
+// A model call's CallContext (ModelCallBody field 15, DESIGN-COMPUTE §24.5): its input, output and system nodes by
+// 16-byte ids, the input always, the request's hash of 32 bytes, and a renderer within the body's identifier bytes.
+func recordCallContextValidate(settings *RecordBodySettings, context *protocol.CallContext) error {
+	checks := []error{
+		recordBodyRule(recordBodyLength(context.GetInputNodeId(), recordIdByteCount, false), "a call context's input_node_id of %d bytes", len(context.GetInputNodeId())),
+		recordBodyRule(recordBodyLength(context.GetSystemNodeId(), recordIdByteCount, true), "a call context's system_node_id of %d bytes", len(context.GetSystemNodeId())),
+		recordBodyRule(recordBodyLength(context.GetRequestSha256(), recordHashByteCount, false), "a call context's request_sha256 of %d bytes", len(context.GetRequestSha256())),
+		recordBodyRule(context.GetRenderer() != "" && len(context.GetRenderer()) <= settings.ModelCallFieldByteCount, "a call context's renderer of %d bytes", len(context.GetRenderer())),
+	}
+	for _, nodeId := range context.GetOutputNodeIds() {
+		checks = append(checks, recordBodyRule(len(nodeId) == recordIdByteCount, "a call context's output node id of %d bytes", len(nodeId)))
+	}
+	return errors.Join(checks...)
 }
 
 // support_message (DESIGN-COMPUTE §28.12): a direction, one of FB's products, an entry in FB's form or none and a seq
@@ -555,6 +700,9 @@ func recordModelCallValidate(body *protocol.ModelCallBody) error {
 		recordBodyRule(route == "" || route == RecordModelCallRouteLocal || route == RecordModelCallRouteTee || route == RecordModelCallRouteDirect,
 			"a route of %d bytes that is not local, tee or direct", len(route)),
 		recordBodyRule(body.GetAttestation() == nil || route == RecordModelCallRouteTee, "an attestation off the tee route"),
+	}
+	if context := body.GetContext(); context != nil {
+		checks = append(checks, recordCallContextValidate(settings, context))
 	}
 	if platform := body.GetPlatform(); platform != nil {
 		evidence := platform.GetEvidence()
@@ -767,6 +915,13 @@ func recordCoverageValidate(body *protocol.Coverage) error {
 	for _, gap := range body.GetGaps() {
 		_, _, ok := RecordCoverageGapParse(gap)
 		checks = append(checks, recordBodyRule(ok, "a coverage gap that is no code or code:count"))
+	}
+	// DESIGN-COMPUTE §24.10's bodies_dropped: ranges of seqs from 1, each first <= last, ascending and apart
+	var previousLast uint64
+	for index, dropped := range body.GetBodiesDropped() {
+		checks = append(checks, recordBodyRule(1 <= dropped.GetFirst() && dropped.GetFirst() <= dropped.GetLast() && (index == 0 || previousLast < dropped.GetFirst()),
+			"a bodies_dropped range %d to %d that is empty, from 0, or not after the one before", dropped.GetFirst(), dropped.GetLast()))
+		previousLast = dropped.GetLast()
 	}
 	return errors.Join(checks...)
 }
