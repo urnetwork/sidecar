@@ -826,8 +826,9 @@ control     a remote-mode Sidecar forwards Search, GetStatus and SetPolicy over 
            row as it stands; revisions stay far below 2^53, so the script compares them exactly
 1 hint     §6.8's one EVALSHA on {scp_<C>}: HSET ver if higher; INCR n -> seq; XADD hint with seq -> h;
            return {h, tok, live}
-2 enqueue  after the script, the owning service, only if tok and the topic is mail, team, evs or core, XADDs
-           to {wakeq_<hash(C) mod 16>}: due now if forced or live is absent, else now + 15 s (a deferred
+2 enqueue  after the script, the owning service, only if tok and the topic is mail, team, evs, core or
+           support (DESIGN-COMPUTE.md §28.9's, which wakes the apps as mail does), XADDs to
+           {wakeq_<hash(C) mod 16>}: due now if forced or live is absent, else now + 15 s (a deferred
            check); forced: §15.6's router on a receiver miss, and POST /sidecar/wake (§6), which writes a core
            hint; an XADD error is retried 3 times within 1 s, then counted
            (urnetwork_wake_enqueue_dropped_total) and dropped, the hint state untouched
@@ -878,12 +879,13 @@ WK5  while the slot's sentinel names its serving master, tok moves only up its r
 ```text
 APNs  apns-push-type background, apns-priority 5   {"aps":{"content-available":1},"t":"mail","v":42}
 FCM   data message, priority high                  {"data":{"t":"mail","v":"42"}}
-      t: mail | team | evs | core (§6.8's topic with any id stripped); v: that topic's version; never an id;
-      APNs's v is the stored decimal string's digits as a JSON integer, never through a float and with no
-      exponent, within uint64, and FCM's stays a string
+      t: mail | team | evs | core | support (§6.8's topic with any id stripped); v: that topic's version;
+      never an id; APNs's v is the stored decimal string's digits as a JSON integer, never through a float
+      and with no exponent, within uint64, and FCM's stays a string
 ```
 
 - **Directory notices (D-SDK-28).** From M8 a phone leases the team directory's `q/<h>/<tgt>/` prefixes for the targets its member approves, and the notice path of each of its own pending requests (§16.11, §11.10), so a decision, a denial's included, rewrites a notice the phone leases. Their hints are `evs:<repo_id>` hints like any lease's (§6.8), so they are wake-class: a request or its decision wakes the phone under topic class `evs`, naming no directory, target or request.
+- **Support wakes** (owner decision 783; DESIGN-COMPUTE.md §28.9). A wake of class `support` has the app's push handler call the sdk's `Support().Wake`, which reads the conversation at once through the core's support client and answers when that read is done, within its `WakeTimeout` (25 s), inside the window an OS gives a background push, with the notifications the read raised, from which the app composes its own words with no reply's text; on the remote backend, whose daemon holds its own push, it answers at once.
 
 **Compute hosts** (owner decisions 733, 741, 768, 772; DESIGN-COMPUTE.md §6.5, §15.3). The app injects `SidecarLocalInferenceHost` (`SetLocalInferenceHost`), the local engine's seam, `SidecarSafetyClassifierHost` (`SetSafetyClassifierHost`), the reduced ONNX Runtime its safety classifier runs on, and `SidecarConnectHost` (`SetConnectHost`), the browser seam a connection's sign-in completes through.
 

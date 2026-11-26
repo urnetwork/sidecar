@@ -1705,7 +1705,8 @@ judged    (owner decisions 706, 707) each statement's authority is judged at its
           device's pin for the ref it stands as verified, judged when it was new, I-16 still refusing a lower
           pin; above the reader's own config state it waits for the log to reach the pin, within
           EvsSettings.AuthPinWaitTimeout (60 s), on every walk, and is judged there, withheld past the bound,
-          the read answering as before; pinned before the reader's retained window and above its ref pin, as a
+          the read answering as before, a subscription's round holding only that ref, one waiter a subscriber
+          waiting for the lowest pin; pinned before the reader's retained window and above its ref pin, as a
           device that started at a base or one long offline meets, it is not judged and counts against no one:
           it stands where it lies on a walk whose chain reaches the head the reader verifies and pins, needing
           no judged statement after it, its signature checked against the signer's identity key in the oldest
