@@ -3015,3 +3015,27 @@ _S792 = "and the build's answers of 2026-11-25, owner decisions 790 to 792. "
 assert STATUS.count(_S792) == 1, 'status moved'
 STATUS = STATUS.replace(_S792, "and the build's answers of 2026-11-25, owner decisions 790 to 792, and DESIGN-COMPUTE.md's "
                         "local models for ur.io, ur.io as the apps and model downloads, 793 to 795. ")
+
+# Owner decision 796 (2026-11-25): the build's answer recorded while the thirteenth fold ran (QD-1420), numbered by
+# it after CO-47 to CO-49, amending owner decision 788 for deletes.
+INDEX += [
+    (796, "One process's deletes under the worker's user",
+     "Where api and taskworker share a process, rev/'s sweep and hold/'s writes go through taskworker's store."),
+]
+for _n, _note in [
+        (788, " Amended by @@OD:796@@: each delete runs through taskworker's store."),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 797))
+DATES.update({796: '2026-11-25'})
+_D795 = "downloaded from the api in chunks checked against a pinned index (795). "
+assert DECISIONS_INTRO.count(_D795) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D795, _D795 + "Last it numbers the build's answer recorded while it ran: where api and taskworker share a "
+    "process, every delete running through taskworker's store (796), amending @@OD:788@@. ")
+_S795 = "local models for ur.io, ur.io as the apps and model downloads, 793 to 795. "
+assert STATUS.count(_S795) == 1, 'status moved'
+STATUS = STATUS.replace(_S795, "local models for ur.io, ur.io as the apps and model downloads, 793 to 795, and the "
+                        "build's answer recorded while they were folded, 796. ")

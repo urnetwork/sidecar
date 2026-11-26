@@ -7,7 +7,7 @@
 | Path | What it is |
 |---|---|
 | `sections/01-CTX.md` … `sections/23-PHASE.md` | DESIGN.md §1-§23, one file per section. The build copies them verbatim, adding only links. |
-| `owner/DECISIONS.md` | The owner's record, entries 1-795. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
+| `owner/DECISIONS.md` | The owner's record, entries 1-796. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
 | `owner/APPLY.md` | The rules for applying the owner's decisions: precedence (§1), supersession, where two decisions disagree (§2), notation (§3), editing rules (§4), and the follow-up decisions 112-136 with the sections each binds (§6-§8). |
 | `CONVENTIONS.md` | The writing conventions every section follows: the owner directive (§0), the owner rules (§1), the section template (§2) and the X registry (§7), which DESIGN.md's X1-X20 table replaced. |
 | `OUTLINE.md` | The original outline: section codes, scope boundaries, and the word budgets that G0's density rule replaced on 2026-11-04. |
@@ -44,7 +44,7 @@ It needs only `python3`; it was built and checked with Python 3.13. The steps, a
 
 The data files are layered. Each `data_*N.py` loads its predecessor with `runpy` and patches it: `data_front10.py` loads `data_front9.py`, back to `data_front3.py`, and the registers, glossary and appendices go the same way. Change the top layer (the `*10` files), or add an `*11` layer that loads them. Comments in the scripts cite working files from the design sessions (the reconcilers' orders, `peer/`, `review/`, `snap/`), which were not imported; they are history.
 
-## Adding owner decision N (796 onward)
+## Adding owner decision N (797 onward)
 
 1. Add entry N to `owner/DECISIONS.md`: the question, the answer, its cost, the options not taken, and what raised it.
 2. In `asm/data_front10.py`, append `(N, "<what it settles>", "<one line>")` to `INDEX`, add `DATES[N]`, and raise the `assert` to `list(range(1, N + 1))`. Update `STATUS` and `DECISIONS_INTRO` where they name a range. `@@OD:k@@` writes a link to decision k.
@@ -1590,3 +1590,34 @@ DESIGN.md and DESIGN-DEFER.md are unchanged by this piece.
 - **§9.9 and §18.5.** Their Go sketches wrapped "owner decisions 687, 792" across two lines, so the citation scan counted neither section for 792; each now keeps the citation on one line, and 792's index row names §9, §13 and §18.
 
 `build.sh` on this folder reproduces DESIGN.md (SHA-256 `d26ab2179b2881e9d13de66ae7a29b83cbbc1f8078e64b23ba9691a7b6274076`) and DESIGN-DEFER.md (SHA-256 `3af6b10c35e06eaa2230e6232dc953d77f4539fe4065623950425ebab41895a6`, unchanged), and the validation shows the counts above but 12,862 section references, with the one unresolved as before.
+
+### RECORD.md takes the session wire
+
+What context history's first two tracks built, CTXH-M11-01 (sidecar bd0acc99) and CTXH-M11-02 (sidecar df339c1c), joins the RECORD.md sections that DESIGN-COMPUTE.md's Appendix D rows name, the compute planner's CA-78 and CA-82 to CA-85, as the compute plan's answer QD-1366 has a fold write it, the tests' additions lines leaving in the same commit. Nothing here takes a number: CO-25 is owner decision 757.
+
+- **RECORD.md.** Section 5.2 takes a `body apart` row: a session entry's `RecordEntry` at `e/<n>`, `sealed_body` empty and `body_apart` set, and its sealed body alone at `s/<n>` in `e/`'s layout, the leaf the header's alone. Section 5.3 takes a `sessions` row, kinds 54 and 55 riding their call's push, a header never waiting and a cap holding back bodies alone; section 5.4's `stream` row the ingester filing a deposited session entry apart; section 5.5 a `bodies` row, its body deferred, withheld or dropped, none alarming, a fetched body held to its commitment and an `s/<n>` file with no header ignored and alarmed, its `states` row naming the three and its `expired` row the exemption for a kind a reader does not know whose erasure gives reason 2; section 5.6's raw kinds 48 to 55; and section 5.7 a check, `body_apart` and `s/` read from format 1. Section 6.1's raw capture block is of class capture or bulk; section 6.3 takes rows 54 `session_entry` and 55 `session_blob`, V in both modes, and a sentence on I-20; section 6.4 their bodies, `SessionEntryBody` and `SessionBlobBody`, which DESIGN-COMPUTE.md 24.5's fence keeps, and `Coverage`'s sources `harness` and `gateway`, gap `context_partial` and field 8; section 7.1's never row raw kinds of class capture or bulk; and section 8 class 8 `bulk`, `session_entry` joining class 1. Section 21's lead and its session bullets say what these sections now carry; the untrusted stub for a node a tagged sidecar other than the member's own enclave wrote, `ur record erase --run`, kind 56 and `ModelCallBody`'s field 15, which DESIGN-COMPUTE.md 6.8's fence keeps, stay there.
+- **§16.8.** The Compute's record primitives paragraph says that RECORD.md's sections 5.2 to 8 give kinds 54 and 55, class 8 and the body's place at `s/<n>`, their bodies staying in DESIGN-COMPUTE.md §24.5's fence, where it said a fold of their own would take them.
+- **The lists.** record_kind_test.go's `testRecordKindAdditions` loses kinds 54 and 55 and `testRecordClassAdditions` class 8, each list kept, empty, for kind 56 and the enclave kinds, with the source constant only those lines read, and its class count reads section 8's eight; record_md_test.go's registry test takes class bulk in the raw capture block and among the kinds section 7.1 never indexes, holding that row's words. No fence changes, so protocol/design_unfenced_test.go is untouched, `ApprovalNotice` staying in `testUnfencedFence`, since no fence writes it.
+- **Outside RECORD.md.** DESIGN-COMPUTE-AMENDMENTS.md's QD-1366 takes a line saying what is carried, and DESIGN-AMENDMENTS.md's lead what the fold wrote.
+
+`build.sh` on this folder reproduces DESIGN.md (SHA-256 `20537c5c37fb512f7bdb305014362ac58e26de63908d92a32d68d9121e094b8b`) and DESIGN-DEFER.md (SHA-256 `3af6b10c35e06eaa2230e6232dc953d77f4539fe4065623950425ebab41895a6`, unchanged), and the validation shows all 795 rows present and cited, 320 superseded-option hits none live, the changed sentence raising none, 12,863 section references with the one unresolved, and 106 DESIGN-DEFER.md entries with 172 pointers; `v7/words.json` was regenerated, and `v7/text_checks.json` regenerated unchanged.
+
+### Owner decision 796 and what was built since the second piece
+
+The owner answered one more question the build raised, QD-1420, on 2026-11-25 while this fold ran, accepting the recommendation under the owner's standing acceptance of recommended options; it takes the next number, after CO-47 to CO-49, and two tracks whose decisions this fold and the twelfth stated ahead of their code have landed since.
+
+| Ledger id | Owner decision | What it settles |
+|---|---|---|
+| QD-1420 | 796 | Where api and taskworker share a process, each delete runs through taskworker's store: `rev/`'s sweep reads the worker's sweep store wherever one is installed, the signing store taking the writes alone, and `hold/`'s current writer is the worker's whenever it is installed. |
+
+- **One process's deletes (796).** §19.4's bullet on the writers that share a process says each delete runs under the user of the role that deletes, api's on the first cluster deleting nothing as xops' policy renders its row, with `hold/`'s order, `rev/`'s two places and the sequencer's two slots, all built (all-process-store-slots, server 91df4a146, 59c67331e, 14cad6626; all-process-worker-deletes, server 62e93daa8, 49291a9fd, f9a741f61); §21.9's preservation holds take a sentence: in such a process placement, a renewal and the pass that ends a hold write through the worker's writer. Owner decision 788's index row notes the amendment, and its entry says it is built, the sequencer having taken the two slots since api's covers no retention.
+- **The user root (791), built.** daemon-label-resolution landed (sidecar e74a8491, 195168c2, df01bdee; sdk 02504962): §18.9's paragraph names the track and commits where it said decided ahead of its code, §12.5's label row says what the daemon does as built, a resolution over each hosted network's own table, a name two tables claim refused as ambiguous, and the label filed at each client generation, and owner decision 791's entry says it is built.
+- **Still ahead of their code.** Owner decision 789 (bridge-wall-clock-wake, running) and 790 (file-cluster-probes-and-floor, queued after this track in its lane) keep their "decided ahead of its code" lines.
+
+`build.sh` on this folder reproduces DESIGN.md (SHA-256 `35b72b152eb420e29ce35ce749d544cf10336e225777874ec1b24bb0c129c658`) and DESIGN-DEFER.md (SHA-256 `3af6b10c35e06eaa2230e6232dc953d77f4539fe4065623950425ebab41895a6`, unchanged), and the validation shows:
+
+- **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item and no §2.8 row, so no guard line.
+- **Owner decisions.** All 796 rows are present and cited; APPLY.md's section pairs hold. `MAXD`, the two range checks and `LATE_DATES` take 796, dated 2026-11-25. One open owner question, Q-REPO-6.
+- **Superseded options.** 320 grep hits, none on a changed line unread, none live.
+- **Text.** No bare placeholders or HTML tags; the one research-sheet id stands; 12,866 section references, with the one unresolved as before. `v7/words.json` was regenerated, and `v7/text_checks.json` regenerated unchanged.
+- **DESIGN-DEFER.md.** 106 entries and 172 pointers, unchanged: 796 defers nothing.
