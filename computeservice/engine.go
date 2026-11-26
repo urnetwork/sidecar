@@ -107,6 +107,8 @@ type ComputeEngineDeps struct {
 	testHandlers map[string]ComputeHandler
 	// A test's admission checks, run after the registered ones.
 	testAdmissionChecks []ComputeAdmissionCheck
+	// A test's catalog versions, in place of compute_catalog_version over Env (broker_catalog.go).
+	testCatalogStore computeCatalogVersionStore
 }
 
 // The engine. See the file header.
@@ -130,6 +132,8 @@ type ComputeEngine struct {
 	handler         http.Handler
 	// the provider adapters this deployment enables, and their gating (provider_registry.go)
 	providers *ComputeProviderRegistry
+	// the newest catalog versions it read (broker_catalog.go)
+	catalog *computeCatalogCache
 
 	// requests in flight, hijacked tunnels and streams among them
 	inFlightCount *sidecar.MonitorValue[int]
@@ -199,6 +203,7 @@ func NewComputeEngine(ctx context.Context, host *sidecar.ServiceHost, settings *
 		return nil, err
 	}
 	self.providers = providers
+	self.catalog = newComputeCatalogCache(self)
 	mux := http.NewServeMux()
 	for _, route := range self.routes {
 		mux.HandleFunc(route.Method+" "+route.Pattern, self.guard(route))
@@ -720,6 +725,8 @@ func (self *ComputeRequest) write(status int, contentType string, headers map[st
 	self.status = status
 	header := self.writer.Header()
 	header.Set("Content-Type", contentType)
+	// the broker's clock, which a device's direct-path nonces are proposed from (§6.6)
+	header.Set(sidecar.ComputeServiceTimeHeader, strconv.FormatInt(self.Now().UnixMilli(), 10))
 	for name, value := range headers {
 		header.Set(name, value)
 	}

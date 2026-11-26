@@ -31,3 +31,11 @@ const (
 	BarrierComputeProviderStatusBefore = "compute.provider.status.before"
 	BarrierComputeProviderStatusAfter  = "compute.provider.status.after"
 )
+
+// The remote catalog's steps (INFER-M12-01), keyed by the version in decimal.
+const (
+	// Around a version's publish, whose insert is its linearization point: of two publishers of one version, the one
+	// that inserts second loses there (broker_catalog.go).
+	BarrierComputeCatalogPublishBefore = "compute.catalog.publish.before"
+	BarrierComputeCatalogPublishAfter  = "compute.catalog.publish.after"
+)

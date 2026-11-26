@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -71,6 +72,7 @@ func (self *ComputeRequest) Stream() (*ComputeStream, bool) {
 	header.Set("Content-Type", computeContentTypeEventStream)
 	header.Set("Cache-Control", "no-cache")
 	header.Set("X-Accel-Buffering", "no")
+	header.Set(sidecar.ComputeServiceTimeHeader, strconv.FormatInt(self.Now().UnixMilli(), 10))
 	self.answered = true
 	self.status = http.StatusOK
 	self.writer.WriteHeader(http.StatusOK)
