@@ -1,10 +1,21 @@
 //go:build !ios_extension
 
 // The readers of a port-limited activated dial grant read its ports alike, through acl_grant_route.go's dial reader
-// (aclGrantDialPortsOf; owner decisions 220 and 804; QD-740, QD-1428): the bridge compile's host dial rows open its
-// sealed detail once a compile with its route reading and wait or alarm for a detail that does not open here as the
-// route rows do. Each test that accepts fails before this change, but for the guards that say they held before.
-// Synthetic values only.
+// (aclGrantDialPortsOf; owner decisions 220 and 804; QD-740, QD-1428):
+//
+//	compile      the bridge compile's host dial rows open its sealed detail once a compile with its route reading, and
+//	             wait or alarm for a detail that does not open here as the route rows do
+//	check        AclEngine.Check's dial or route to a subject reads a document rule by its local detail as AllowInbound
+//	             and AllowRoute read it, at some port or address, as it reads an activated grant by its sealed detail:
+//	             a rule limiting ports only where this device holds them, at no client (question
+//	             acl-grant-port-consistency-check-client-ports), and a route rule only by its prefixes, its
+//	             autogroup:internet or the routes in force its destinations name
+//	active grant AclEngine.ActiveGrant covers a forward at the ports its own sealed detail names by a rule whose ports
+//	             take them, a document rule's local ones or an activated grant's sealed ones, so a forward asked again
+//	             passes as standing on its own grant, and BridgeFiler.ForwardRoute serves a forward the gate passed as
+//	             standing on any rule in force that opens its port
+//
+// Each test that accepts fails before this change, but for the guards that say they held before. Synthetic values only.
 
 package sidecar
 
@@ -12,9 +23,12 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"net/netip"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -224,5 +238,432 @@ func TestCompileOpensAGrantAllowingDialAndRouteOnce(t *testing.T) {
 	}
 	if len(compiled.Waits) != 0 || len(testPortConsistencyUnverified(compiled)) != 0 {
 		t.Errorf("an opened grant waited for %v and alarmed %v", compiled.Waits, compiled.Alarms)
+	}
+}
+
+// One Check of a dial or a route to a sidecar.
+func testPortConsistencyCheck(engine *AclEngine, source Id, action protocol.AclAction, kind AclSelectorKind, destination Id) AclCheck {
+	return engine.Check(AclSidecarSubject(source), action, AclResource{Kind: AclResourceSubject, Subject: AclSelector{Kind: kind, Id: destination}}, aclTestNow)
+}
+
+// An engine of a sidecar's over state with local, nil holding no local detail.
+func testPortConsistencyEngine(t *testing.T, sidecarId Id, state *AclState, local *AclLocalPolicy, opener AclGrantDetails) *AclEngine {
+	t.Helper()
+	engine := NewAclEngine(sidecarId, nil, nil, &AclEngineSettings{ClockSkew: 0})
+	if err := engine.InstallWithGrants(state, local, opener); err != nil {
+		t.Fatal(err)
+	}
+	return engine
+}
+
+// Check's dial to a sidecar reads a document rule limiting ports as AllowInbound does: where this device holds the
+// rule's ports, its local detail, the dial stands, naming the rule; where it holds none, the rule opens no port here,
+// so the dial is refused though the rows take it, as AllowInbound refuses every port. Before this change the rows alone
+// allowed it.
+func TestAclEngineCheckDialsASubjectByADocumentRulesPorts(t *testing.T) {
+	world := newAclEngineWorld(t)
+	state, local := world.install(t, aclTestEnginePin(1, "check dial ports"))
+	phone := AclSidecarSubject(world.phone)
+	if !state.MayDial(phone, AclSidecarSubject(world.laptop), aclTestNow).Allowed {
+		t.Fatal("the rows do not take the phone's dial to the laptop: the refusal below would prove nothing")
+	}
+	ruleId := world.world.documentRuleId(t, "grant", 0)
+	held := testPortConsistencyEngine(t, world.laptop, state, local, nil)
+	if result := testPortConsistencyCheck(held, world.phone, protocol.AclAction_ACL_ACTION_DIAL, AclSelectorSidecar, world.laptop); !result.Allowed ||
+		!bytes.Equal(result.GrantId, ruleId.Bytes()) {
+		t.Errorf("with the rule's ports held: %+v", result)
+	}
+	bare := testPortConsistencyEngine(t, world.laptop, state, nil, nil)
+	if result := testPortConsistencyCheck(bare, world.phone, protocol.AclAction_ACL_ACTION_DIAL, AclSelectorSidecar, world.laptop); result.Allowed ||
+		result.Reason != AclReasonNoGrant {
+		t.Errorf("with no local detail: %+v", result)
+	}
+	if decision := bare.AllowInbound(&AclInbound{Source: phone, IpProtocol: aclIpProtocolTcp, Port: 22}, aclTestNow); decision.Allowed {
+		t.Errorf("with no local detail AllowInbound opened tcp 22: %+v", decision)
+	}
+}
+
+// A world whose document reaches two clients no binding names from the members' devices, one through a rule limiting
+// ports and one through a rule limiting none, and routes the members through three sidecars: an exit by
+// autogroup:internet, a desk by its own routes in force (a rule naming no prefix whose destination is its via), and a
+// router by a prefix.
+type testPortConsistencyCheckWorld struct {
+	world     *aclCompileWorld
+	phone     Id
+	exit      Id
+	desk      Id
+	router    Id
+	limited   Id
+	unlimited Id
+}
+
+func newTestPortConsistencyCheckWorld(t *testing.T) *testPortConsistencyCheckWorld {
+	world := newAclCompileWorld("check narrowing")
+	owner := world.member("owner@narrowing.example", bridge.MemberRole_MEMBER_ROLE_OWNER)
+	self := &testPortConsistencyCheckWorld{world: world}
+	self.phone = world.device("narrowing phone", owner)
+	self.exit = world.device("narrowing exit", owner)
+	self.desk = world.device("narrowing desk", owner)
+	self.router = world.device("narrowing router", owner)
+	self.limited = world.id("narrowing limited client")
+	self.unlimited = world.id("narrowing unlimited client")
+	for _, clientId := range []Id{self.limited, self.unlimited} {
+		world.resolve.Clients = append(world.resolve.Clients, &protocol.ConfigClientResolution{ClientId: clientId.Bytes()})
+	}
+	world.setPolicy(t, `{
+  "grants": [
+    { "src": ["autogroup:member"], "dst": ["client:`+self.limited.String()+`"], "allow": ["dial"], "ip": ["tcp:22"] },
+    { "src": ["autogroup:member"], "dst": ["client:`+self.unlimited.String()+`"], "allow": ["dial"] },
+    { "src": ["autogroup:member"], "dst": ["autogroup:internet"], "via": ["sidecar:`+self.exit.String()+`"], "allow": ["route"] },
+    { "src": ["autogroup:member"], "dst": ["sidecar:`+self.desk.String()+`"], "via": ["sidecar:`+self.desk.String()+`"], "allow": ["route"] },
+    { "src": ["autogroup:member"], "dst": ["ip:198.51.100.0/24"], "via": ["sidecar:`+self.router.String()+`"], "allow": ["route"] },
+  ],
+}`)
+	return self
+}
+
+// The state and local policy.
+func (self *testPortConsistencyCheckWorld) install(t *testing.T) (*AclState, *AclLocalPolicy) {
+	t.Helper()
+	view := self.world.view()
+	view.pin = aclTestEnginePin(1, "check narrowing")
+	state, err := NewAclState(self.world.compile(t), view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	local, err := CompileAclLocal(self.world.input())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return state, local
+}
+
+// Check's dial to a client no binding names counts a rule limiting no ports and not one limiting ports, whose ports the
+// client's own device checks and which §8.10 reaches no legacy client by, the closed direction, as an activated grant's
+// detail names no port at a client. Before this change the rows alone allowed both.
+func TestAclEngineCheckDialsAClientOnlyByARuleLimitingNoPorts(t *testing.T) {
+	world := newTestPortConsistencyCheckWorld(t)
+	state, local := world.install(t)
+	engine := testPortConsistencyEngine(t, world.phone, state, local, nil)
+	phone := AclSidecarSubject(world.phone)
+	for _, clientId := range []Id{world.limited, world.unlimited} {
+		if !state.MayDial(phone, AclClientSubject(clientId, Id{}, nil, ""), aclTestNow).Allowed {
+			t.Fatalf("the rows do not take the phone's dial to client %s: the refusal below would prove nothing", clientId)
+		}
+	}
+	if result := testPortConsistencyCheck(engine, world.phone, protocol.AclAction_ACL_ACTION_DIAL, AclSelectorClient, world.unlimited); !result.Allowed ||
+		!bytes.Equal(result.GrantId, world.world.documentRuleId(t, "grant", 1).Bytes()) {
+		t.Errorf("a rule limiting no ports: %+v", result)
+	}
+	if result := testPortConsistencyCheck(engine, world.phone, protocol.AclAction_ACL_ACTION_DIAL, AclSelectorClient, world.limited); result.Allowed {
+		t.Errorf("a rule limiting ports at a client: %+v", result)
+	}
+}
+
+// Check's route through a sidecar reads a document rule as AllowRoute does at any address: an autogroup:internet rule
+// takes its exit with or without the rule's local detail, since rows carry it; a rule naming a prefix takes its router
+// only where this device holds the prefix; and a rule naming no prefix takes the desk only where the desk, a
+// destination of the rule, serves a route in force, by the routes InstallRoutes last took and none before. The rows
+// take every one of these. Before this change the rows alone allowed each.
+func TestAclEngineCheckRoutesThroughASubjectByADocumentRulesDetail(t *testing.T) {
+	world := newTestPortConsistencyCheckWorld(t)
+	state, local := world.install(t)
+	phone := AclSidecarSubject(world.phone)
+	for _, via := range []Id{world.exit, world.desk, world.router} {
+		if !state.MayRoute(phone, netip.Addr{}, AclSidecarSubject(via), aclTestNow).Allowed {
+			t.Fatalf("the rows do not route the phone through %s: the refusals below would prove nothing", via)
+		}
+	}
+	route := func(engine *AclEngine, via Id) AclCheck {
+		return testPortConsistencyCheck(engine, world.phone, protocol.AclAction_ACL_ACTION_ROUTE, AclSelectorSidecar, via)
+	}
+	held := testPortConsistencyEngine(t, world.phone, state, local, nil)
+	bare := testPortConsistencyEngine(t, world.phone, state, nil, nil)
+	cases := []struct {
+		name    string
+		engine  *AclEngine
+		via     Id
+		allowed bool
+	}{
+		{name: "the exit with the detail", engine: held, via: world.exit, allowed: true},
+		{name: "the exit without it", engine: bare, via: world.exit, allowed: true},
+		{name: "the router with the detail", engine: held, via: world.router, allowed: true},
+		{name: "the router without it", engine: bare, via: world.router},
+		{name: "the desk before any routes", engine: held, via: world.desk},
+		{name: "the desk without the detail", engine: bare, via: world.desk},
+	}
+	for _, c := range cases {
+		if result := route(c.engine, c.via); result.Allowed != c.allowed {
+			t.Errorf("%s: %+v", c.name, result)
+		}
+	}
+	// the desk once it serves a route in force, and the router's routes reaching nothing of the desk's
+	held.InstallRoutes(NewAclServedRoutes([]AclServedRoute{{Advertiser: world.router, Prefixes: []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")}}}))
+	if result := route(held, world.desk); result.Allowed {
+		t.Errorf("the desk while only the router serves a route: %+v", result)
+	}
+	held.InstallRoutes(NewAclServedRoutes([]AclServedRoute{{Advertiser: world.desk, Prefixes: []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")}}}))
+	if result := route(held, world.desk); !result.Allowed || !bytes.Equal(result.GrantId, world.world.documentRuleId(t, "grant", 3).Bytes()) {
+		t.Errorf("the desk serving a route in force: %+v", result)
+	}
+}
+
+// Check's route through a sidecar under a document rule limiting ports stands only where this device holds the rule's
+// ports, as AllowRoute refuses every port of such a rule whose detail it does not hold.
+func TestAclEngineCheckRoutesThroughASubjectOnlyAtPortsTheDeviceHolds(t *testing.T) {
+	world := newAclEngineWorld(t)
+	state, local := world.install(t, aclTestEnginePin(1, "check route ports"))
+	phone := AclSidecarSubject(world.phone)
+	if !state.MayRoute(phone, netip.Addr{}, AclSidecarSubject(world.router), aclTestNow).Allowed {
+		t.Fatal("the rows do not route the phone through the router: the refusal below would prove nothing")
+	}
+	held := testPortConsistencyEngine(t, world.phone, state, local, nil)
+	if result := testPortConsistencyCheck(held, world.phone, protocol.AclAction_ACL_ACTION_ROUTE, AclSelectorSidecar, world.router); !result.Allowed {
+		t.Errorf("with the rule's detail: %+v", result)
+	}
+	bare := testPortConsistencyEngine(t, world.phone, state, nil, nil)
+	if result := testPortConsistencyCheck(bare, world.phone, protocol.AclAction_ACL_ACTION_ROUTE, AclSelectorSidecar, world.router); result.Allowed {
+		t.Errorf("with no local detail: %+v", result)
+	}
+}
+
+// A forward's action of the laptop's to the desktop at one port, as a daemon builds it: version 4, the desktop by id
+// alone in its clear grant_dst, its target port and the port's text sealed in its detail (testWithSealedDetail),
+// under the bridge approvers' requests rule, ending half an hour from the net's time; as stored.
+func testPortConsistencyForward(t *testing.T, net *testBridgeGrantNet, subject Id, protocolName string, port uint32) *StoredCanonicalAction {
+	t.Helper()
+	target := aclTestDst(net.peer.sidecarId)
+	action := testWithSealedDetail(&protocol.CanonicalAction{
+		Kind: uint32(protocol.SidecarActionKind_SIDECAR_ACTION_KIND_FORWARD), Version: canonicalActionVersionSealedGrant,
+		RuleId: testBridgeRequestRuleId, Subject: subject.Bytes(),
+		GrantDst: []string{target}, GrantAllow: []string{"dial"}, ExpiresMillis: net.timeMs + 30*60*1000,
+	}, &protocol.CanonicalActionDetail{TargetPort: port, GrantDst: []string{target + ":" + protocolName + ":" + strconv.FormatUint(uint64(port), 10)}})
+	stored, err := ParseStoredCanonicalAction(testConfigMarshal(t, action))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return stored
+}
+
+// ActiveGrant covers a forward by a port-limited activated dial grant at the ports the grant's sealed detail names
+// there, the forward's own ports read from its own sealed detail: the laptop's forwards to the desktop's tcp 22 and udp
+// 53 pass, and its forwards to tcp 23 and udp 22 do not; nor does any where this device holds neither detail's key,
+// where its opener opens no action, so the forward asks every port, for another spender, or within the clock skew of the
+// grant's end. Before this change a port-limited grant covered no forward at all.
+func TestAclActiveGrantCoversAForwardAtItsDialGrantsPorts(t *testing.T) {
+	net := newTestPortConsistencyNet(t)
+	desktopDst := aclTestDst(net.peer.sidecarId)
+	expiresMs := net.timeMs + 60*60*1000
+	net.activate("standing dial", testPortConsistencyGrantAction(net, []string{"dial"}, &protocol.CanonicalActionDetail{
+		GrantDst: []string{desktopDst + ":tcp:22", desktopDst + ":udp:53"},
+	}, nil))
+	now := time.UnixMilli(net.log.State().TimeMs())
+	laptop := net.host.sidecarId
+	engine := net.grantEngine(net.log, true, nil)
+	cases := []struct {
+		protocolName string
+		port         uint32
+		covered      bool
+	}{
+		{protocolName: "tcp", port: 22, covered: true},
+		{protocolName: "udp", port: 53, covered: true},
+		{protocolName: "tcp", port: 23},
+		{protocolName: "udp", port: 22},
+	}
+	for _, c := range cases {
+		if covered := engine.ActiveGrant(testPortConsistencyForward(t, net, laptop, c.protocolName, c.port), laptop, now); covered != c.covered {
+			t.Errorf("a forward to the desktop's %s %d: covered %t", c.protocolName, c.port, covered)
+		}
+	}
+	forward := testPortConsistencyForward(t, net, laptop, "tcp", 22)
+	view := net.grantViewOf(net.log, true)
+	actionless := &testAclGrantDetailsCount{opener: newAclStateGrantDetails(view.state, view.head, view.RepoKeyAt)}
+	skew := DefaultAclEngineSettings().ClockSkew
+	for name, covered := range map[string]bool{
+		"without the key":                net.grantEngine(net.log, false, nil).ActiveGrant(forward, laptop, now),
+		"an opener that opens no action": net.grantEngine(net.log, true, actionless).ActiveGrant(forward, laptop, now),
+		"another spender":                engine.ActiveGrant(forward, net.peer.sidecarId, now),
+		"within the skew of its end":     engine.ActiveGrant(forward, laptop, time.UnixMilli(expiresMs).Add(-skew)),
+	} {
+		if covered {
+			t.Errorf("%s: the forward is covered", name)
+		}
+	}
+	if !engine.ActiveGrant(forward, laptop, time.UnixMilli(expiresMs).Add(-skew-time.Millisecond)) {
+		t.Error("just before the skew of the grant's end the forward is not covered")
+	}
+	if 0 == actionless.count() {
+		t.Error("the opener that opens no action was never asked for the grant's detail: the engine read nothing")
+	}
+}
+
+// An opener of a test's forwards' own details, sealed in the test's network under generation 3's key
+// (testWithSealedDetail), which opens no activated grant.
+type testPortConsistencyActionOpener struct{}
+
+func (self testPortConsistencyActionOpener) GrantDetail(grantId []byte) (*protocol.CanonicalActionDetail, error) {
+	return nil, ErrAclGrantActionNotHeld
+}
+
+func (self testPortConsistencyActionOpener) actionDetail(action *StoredCanonicalAction) (*protocol.CanonicalActionDetail, error) {
+	return OpenCanonicalActionDetail(action, testActionDetailNetworkId(), testConfigSealKeyAt(testConfigSealKey(testActionDetailGeneration)))
+}
+
+// ActiveGrant covers a forward by a document rule limiting ports at the ports the rule's local detail names: the
+// members' dial rule, tcp 22 and udp 5000 to 5010, covers the phone's forwards to the laptop's tcp 22 and udp 5005 and
+// not its tcp 23; with no local detail held, or an opener that opens no action, no forward. Before this change a rule
+// limiting ports covered no forward.
+func TestAclActiveGrantCoversAForwardByADocumentRulesPorts(t *testing.T) {
+	world := newAclEngineWorld(t)
+	state, local := world.install(t, aclTestEnginePin(1, "active grant ports"))
+	ruleId := world.world.id("forward requests rule").Bytes()
+	forward := func(dst string) *StoredCanonicalAction {
+		action := aclTestGrantAction(ruleId, world.phone, []string{dst}, []string{"dial"}, aclTestNow.Add(time.Hour).UnixMilli())
+		// the target's port is the forward's own, as BridgeFiler.Forward seals it
+		_, ports, err := ParseAclGrantDst(dst)
+		if err != nil {
+			t.Fatal(err)
+		}
+		action.SealedDetail = nil
+		testWithSealedDetail(action, &protocol.CanonicalActionDetail{TargetPort: ports.GetFirst(), GrantDst: []string{dst}})
+		stored, err := ParseStoredCanonicalAction(testConfigMarshal(t, action))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return stored
+	}
+	laptop := aclTestDst(world.laptop)
+	held := testPortConsistencyEngine(t, world.phone, state, local, testPortConsistencyActionOpener{})
+	cases := []struct {
+		dst     string
+		covered bool
+	}{
+		{dst: laptop + ":tcp:22", covered: true},
+		{dst: laptop + ":udp:5005", covered: true},
+		{dst: laptop + ":tcp:23"},
+	}
+	for _, c := range cases {
+		if covered := held.ActiveGrant(forward(c.dst), world.phone, aclTestNow); covered != c.covered {
+			t.Errorf("a forward to %s: covered %t", c.dst, covered)
+		}
+	}
+	bare := testPortConsistencyEngine(t, world.phone, state, nil, testPortConsistencyActionOpener{})
+	if bare.ActiveGrant(forward(laptop+":tcp:22"), world.phone, aclTestNow) {
+		t.Error("with no local detail a forward is covered")
+	}
+	noActions := testPortConsistencyEngine(t, world.phone, state, local, newTestAclFollowupsDetails())
+	if noActions.ActiveGrant(forward(laptop+":tcp:22"), world.phone, aclTestNow) {
+		t.Error("with an opener that opens no action a forward is covered")
+	}
+}
+
+// A forward asked again once its own grant is in force passes as standing (§16.6's step 2), and the forward filed under
+// that pass, naming no grant, is live on the grant: ActiveGrant covers the very action the person approved by the
+// grant's sealed port, and no forward to another port or protocol; ForwardRoute with no grant serves the request on the
+// grant at its expiry, and no other port; and once the grant is revoked neither stands. Before this change ActiveGrant
+// covered no forward by a port-limited grant, and ForwardRoute with no grant read document rules alone, so a forward the
+// gate passed as standing on its grant would not have been live.
+func TestBridgeForwardAskedAgainRidesItsActivatedGrant(t *testing.T) {
+	world := newTestBridgeFileWorld(t, false)
+	ctx := t.Context()
+	net := world.net
+	state := net.log.State()
+	base := state.Base()
+	head, err := world.heads.ReadConfigHead(ctx, base.GetConfigVersion(), base.GetConfigHeadSha256())
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := PlanAclSave(ctx, &AclSaveInput{
+		Policy: []byte(`{"requests":[{"src":["autogroup:member"],"dst":["autogroup:self"],"allow":["dial"]}]}`),
+		Head:   head, State: state, Now: world.clock.Now(), Random: world.filer.random,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	net.writerFold(net.owner, plan.Head, base.GetFoldedThrough())
+	ledger := newTestBridgeLedgerNetOver(t, net)
+	ledger.heads[net.log.State().Base().GetConfigVersion()] = plan.Head
+	world.heads.saved = plan.Head
+	world.filer.args.AclLocal = func() *AclLocalPolicy { return plan.Local }
+	world.install()
+	net.log.settings.AclSpendCheck = NewSpendCheck(nil)
+	world.gate.signDecision = func(action *StoredCanonicalAction) *bridge.Signed {
+		decision := testSpendDecisionBody(action, testConfigId("forward asked again"), world.member,
+			protocol.ApprovalChannel_APPROVAL_CHANNEL_DEVICE, world.hostId, net.log.State().Pin(), world.gate.notAfterMs)
+		return testSpendSignedBy(t, world.laptop.sidecarId, world.laptop.key, decision)
+	}
+	target := world.laptop.sidecarId
+	net.mustPost(world.laptop, bridge.SignedType_SIGNED_BRIDGE_ADDRESS, net.bridgeAddress(world.laptop, testBridgeIpv4(100, 80, 1, 14)))
+	request := &BridgeForwardRequest{Target: target, Protocol: bridgeProtocolUdp, Port: 5353, LocalPort: 10053, Lifetime: 15 * time.Minute}
+	deadline := world.clock.Now().Add(request.Lifetime)
+	filed, err := world.filer.Forward(ctx, world.mcp(), request)
+	if err != nil || len(filed.GrantId) == 0 {
+		t.Fatalf("filing the forward: %+v, %v", filed, err)
+	}
+	calls := world.gate.seen()
+	approved, err := ParseStoredCanonicalAction(calls[len(calls)-1].canonical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	install := func() {
+		t.Helper()
+		acl, err := net.log.State().Acl()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := world.engine.InstallWithGrants(acl, plan.Local, newAclStateGrantDetails(net.log.State(), nil, world.filer.repoKeyAt())); err != nil {
+			t.Fatal(err)
+		}
+	}
+	install()
+	now := world.clock.Now()
+	if !world.engine.ActiveGrant(approved, world.hostId, now) {
+		t.Fatal("the approved forward asked again is not covered by its own grant")
+	}
+	for _, other := range []*BridgeForwardRequest{
+		{Target: target, Protocol: bridgeProtocolUdp, Port: 5354},
+		{Target: target, Protocol: bridgeProtocolTcp, Port: 5353},
+	} {
+		protocolName := map[uint32]string{bridgeProtocolTcp: "tcp", bridgeProtocolUdp: "udp"}[other.Protocol]
+		destination := "sidecar:" + hex.EncodeToString(target.Bytes())
+		stored, err := world.filer.args.Grants.Action(ctx, &protocol.CanonicalAction{Kind: uint32(SidecarActionForward)}, &AclGrantRequest{
+			Subject: world.hostId, GrantDst: []string{destination}, GrantAllow: []string{"dial"},
+			Detail: &protocol.CanonicalActionDetail{TargetPort: other.Port, GrantDst: []string{destination + ":" + protocolName + ":" + strconv.FormatUint(uint64(other.Port), 10)}},
+		}, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if world.engine.ActiveGrant(stored, world.hostId, now) {
+			t.Errorf("a forward to %s %d is covered by the grant of %d", protocolName, other.Port, request.Port)
+		}
+		if route, err := world.filer.ForwardRoute(ctx, other, nil); err != nil || route.Live {
+			t.Errorf("a standing forward to %s %d: %+v, %v", protocolName, other.Port, route, err)
+		}
+	}
+
+	// the gate passes the forward asked again as standing, as its ActiveGrant answered
+	func() {
+		world.gate.stateLock.Lock()
+		defer world.gate.stateLock.Unlock()
+		world.gate.standing = true
+	}()
+	standing, err := world.filer.Forward(ctx, world.mcp(), request)
+	if err != nil || len(standing.GrantId) != 0 {
+		t.Fatalf("the forward asked again under the standing pass: %+v, %v", standing, err)
+	}
+	route, err := world.filer.ForwardRoute(ctx, request, standing.GrantId)
+	if err != nil || !route.Live || !route.ExpiresAt.Equal(deadline) {
+		t.Fatalf("the standing forward's route: %+v, %v", route, err)
+	}
+
+	if _, err := world.filer.Close(ctx, world.confirmed(), filed.GrantId, false); err != nil {
+		t.Fatal(err)
+	}
+	install()
+	if world.engine.ActiveGrant(approved, world.hostId, world.clock.Now()) {
+		t.Error("the forward is covered by its revoked grant")
+	}
+	if route, err := world.filer.ForwardRoute(ctx, request, nil); err != nil || route.Live {
+		t.Errorf("the standing forward's route after the revoke: %+v, %v", route, err)
 	}
 }

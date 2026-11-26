@@ -66,7 +66,10 @@ func (self *BridgeFiler) ResolvePeer(ctx context.Context, name string) (Id, erro
 }
 
 // Resolves the target and the grant that authorized the listener. A different grant cannot keep a withdrawn
-// listener open; a forward filed under a standing rule may use a matching standing rule.
+// listener open; a forward filed under a standing rule may use a matching standing rule, which is any rule in force
+// opening its port, a document's rule by its local detail or an activated dial grant by the ports its sealed detail
+// names at the target, as AclEngine.ActiveGrant passed the forward as standing on either (§16.6's step 2; QD-1428), so
+// it ends with the last of them.
 func (self *BridgeFiler) ForwardRoute(ctx context.Context, request *BridgeForwardRequest, grantId []byte) (*DaemonBridgeForwardRoute, error) {
 	view, err := self.view(ctx)
 	if err != nil {
@@ -98,13 +101,13 @@ func (self *BridgeFiler) ForwardRoute(ctx context.Context, request *BridgeForwar
 		protocol = bridgeProtocolTcp
 	}
 	for _, rule := range acl.DialRules(AclSidecarSubject(view.self), AclSidecarSubject(request.Target), now) {
-		if !bytes.Equal(rule.GrantId, grantId) {
+		if len(grantId) != 0 && !bytes.Equal(rule.GrantId, grantId) {
 			continue
 		}
 		local := policy.Rule(rule.RuleId)
-		if len(grantId) != 0 && rule.PortsLimited {
+		if len(rule.GrantId) != 0 && rule.PortsLimited {
 			actions := view.state.grantActionsAtHead(view.head)
-			local = view.state.grantPortRule(actions[string(grantId)], request.Target, self.repoKeyAt())
+			local = view.state.grantPortRule(actions[string(rule.GrantId)], request.Target, self.repoKeyAt())
 		}
 		if !aclLocalPortsMatch(rule.PortsLimited, local, protocol, request.Port) {
 			continue
