@@ -82,10 +82,11 @@ func testRecordVersionsKnown(versions ...uint32) func(version uint32) bool {
 	}
 }
 
-// §22.5's §16 row: versions 0, 2 and 5 are refused, and 1 parses. Version 3, an access request's (MCP-M6-01), and
-// version 4, a dial or route grant's (QD-740), are known, and neither is a dns action's.
+// §22.5's §16 row: versions 0 and 6 are refused, and 1 parses. Version 3, an access request's (MCP-M6-01), version 4, a
+// dial or route grant's (QD-740), and version 5, DESIGN-COMPUTE.md's kinds' (CACL-M12-01), are known, and none is a dns
+// action's.
 func TestApproverRefusesUnknownVersion(t *testing.T) {
-	for _, version := range []uint32{0, 5} {
+	for _, version := range []uint32{0, 6} {
 		action := testRecordDnsAction()
 		action.Version = version
 		_, err := ParseStoredCanonicalAction(testRecordStored(t, action))
@@ -101,10 +102,17 @@ func TestApproverRefusesUnknownVersion(t *testing.T) {
 	if !bytes.Equal(parsed.Bytes, stored) || !proto.Equal(parsed.Action, testRecordDnsAction()) {
 		t.Error("the parse did not keep the action or its bytes")
 	}
-	// The set is a set: 2, field 37's, known from M10 beside 1, 3 and 4 (RECORD-M10-03); 0 and 5 not.
-	if !CanonicalActionVersionKnown(2) || CanonicalActionVersionKnown(5) || CanonicalActionVersionKnown(0) ||
-		!CanonicalActionVersionKnown(1) || !CanonicalActionVersionKnown(3) || !CanonicalActionVersionKnown(4) {
-		t.Error("the known set is not {1, 2, 3, 4}")
+	// The set is a set: 2, field 37's, known from M10 beside 1, 3 and 4 (RECORD-M10-03), and 5 from M12a; 0 and 6 not.
+	if !CanonicalActionVersionKnown(2) || CanonicalActionVersionKnown(6) || CanonicalActionVersionKnown(0) ||
+		!CanonicalActionVersionKnown(1) || !CanonicalActionVersionKnown(3) || !CanonicalActionVersionKnown(4) ||
+		!CanonicalActionVersionKnown(5) {
+		t.Error("the known set is not {1, 2, 3, 4, 5}")
+	}
+	// version 5 is DESIGN-COMPUTE.md's kinds' and kind 5's, never a dns action's
+	dnsAt5 := testRecordDnsAction()
+	dnsAt5.Version = 5
+	if _, err := ParseStoredCanonicalAction(testRecordStored(t, dnsAt5)); !errors.Is(err, ErrCanonicalActionInvalid) {
+		t.Errorf("a dns action at version 5: %v", err)
 	}
 	// version 2 is the agent-config writes' alone, and field 37 rides only it
 	dns := testRecordDnsAction()

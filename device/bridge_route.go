@@ -10,6 +10,8 @@
 //	            builds the packet is refused and stays the caller's; an entry no link can carry rejects, and never falls
 //	            back to a broader prefix or the default route (§17.7's HA)
 //	unassigned  rejects: an address of the block nobody holds is unreachable
+//	translate   IPv6 to the translator's /96, while ur tun runs it, goes to the translator, which routes its IPv4 form
+//	            (bridge_translate.go; owner decision 778)
 //	service     UDP and TCP to <block>.0.53 port 53 go to the resolver (§12.9); the rest of <block>.0.0/24 rejects
 //	revoked     an entry left with no advertiser rejects for RejectEntryHoldTimeout, then leaves the table (§17.8's
 //	            revocation row): a link the rules dropped with no drain was revoked, so its pins drop at once
@@ -70,6 +72,8 @@ type bridgeRouteEntry struct {
 	kind bridge.BridgeRuleEntryKind
 	// a link entry's advertisers; nil for one with none left, which rejects
 	state *BridgeEntryState
+	// a link entry's advertisers' sidecars, revoked ones left out, which §17.7.1's checks read (RouteTargets)
+	targets []connect.Id
 }
 
 // What a build of the route state found, for the status.
@@ -138,6 +142,12 @@ func (self *Bridge) Route(packet []byte) connect.UserNatClient {
 	state := self.routeState.Load()
 	if state == nil {
 		return nil
+	}
+	// §17.5's translator takes IPv6 to the instances' /96 before the table classifies it (bridge_translate.go)
+	if bridgeRouteIpv6(packet) {
+		if translator := self.translator.Load(); translator != nil && translator.outbound(packet) {
+			return self.translate
+		}
 	}
 	entry := state.table.Classify(packet)
 	if entry == nil {
@@ -501,9 +511,9 @@ func (self *Bridge) buildRouteWithLock(rules *bridge.BridgeRules, overlayEntries
 	entryStates := map[netip.Prefix]*BridgeEntryState{}
 	held := map[netip.Prefix]bool{}
 	var next time.Time
-	add := func(prefix netip.Prefix, kind bridge.BridgeRuleEntryKind, entryState *BridgeEntryState) {
+	add := func(prefix netip.Prefix, kind bridge.BridgeRuleEntryKind, entryState *BridgeEntryState, targets []connect.Id) {
 		tableEntries = append(tableEntries, BridgeEntry{Prefix: prefix, Kind: kind, RuleIndex: len(state.entries)})
-		state.entries = append(state.entries, bridgeRouteEntry{kind: kind, state: entryState})
+		state.entries = append(state.entries, bridgeRouteEntry{kind: kind, state: entryState, targets: targets})
 	}
 	// an entry that lost its last advertiser rejects until its hold ends, then leaves
 	hold := func(prefix netip.Prefix) {
@@ -518,7 +528,7 @@ func (self *Bridge) buildRouteWithLock(rules *bridge.BridgeRules, overlayEntries
 		held[prefix] = true
 		end := since.Add(self.settings.RejectEntryHoldTimeout)
 		if now.Before(end) {
-			add(prefix, bridge.BridgeRuleEntryKind_BRIDGE_RULE_ENTRY_KIND_LINK, nil)
+			add(prefix, bridge.BridgeRuleEntryKind_BRIDGE_RULE_ENTRY_KIND_LINK, nil, nil)
 			findings.heldCount += 1
 			if next.IsZero() || end.Before(next) {
 				next = end
@@ -531,7 +541,7 @@ func (self *Bridge) buildRouteWithLock(rules *bridge.BridgeRules, overlayEntries
 		prefix, _ := bridgeRulePrefix(entry.GetPrefix())
 		rulePrefixes[prefix] = true
 		if entry.GetKind() != bridge.BridgeRuleEntryKind_BRIDGE_RULE_ENTRY_KIND_LINK {
-			add(prefix, entry.GetKind(), nil)
+			add(prefix, entry.GetKind(), nil, nil)
 			continue
 		}
 		// §17.7's sender conflicts: a subnet route over a local network yields to it, until a remap or block change
@@ -553,7 +563,15 @@ func (self *Bridge) buildRouteWithLock(rules *bridge.BridgeRules, overlayEntries
 			continue
 		}
 		delete(self.heldRejects, prefix)
-		add(prefix, entry.GetKind(), entryState)
+		targets := []connect.Id{}
+		for _, link := range entry.GetLinks() {
+			if !revoked(link) && len(link.GetShareId()) == 0 {
+				if target := connect.Id(link.GetTargetSidecarId()); !slices.Contains(targets, target) {
+					targets = append(targets, target)
+				}
+			}
+		}
+		add(prefix, entry.GetKind(), entryState, targets)
 		linkPrefixes = append(linkPrefixes, prefix)
 	}
 	// a link entry the rules dropped was revoked: its pins drop, and it rejects until its hold ends, unless the rules

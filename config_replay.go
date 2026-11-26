@@ -205,6 +205,10 @@ func (self *ConfigLog) startAtBase(entries []*bridge.AuthEntry, chains [][sha256
 	// what b lands on, as far as a reader that starts here knows it: S(0)'s genesis with b's rows
 	genesisState := self.state.Load()
 	start := &configKeptEntry{n: baseN, chain: chains[baseIndex], entry: baseEntry, entryBytes: bytes.Clone(entryBytes[baseIndex]), verdictHeld: true}
+	// a feature this release lacks holds a reader that starts at b, before anything of b is built (§16.6's hold)
+	if err := self.checkBaseAuthFeatures(genesisState, start, rowsBytes); err != nil {
+		return err
+	}
 	start.verdict = ConfigVerdict{
 		Pin:         &bridge.AuthPin{Version: baseN, Chain: bytes.Clone(chains[baseIndex][:])},
 		Kind:        bridge.AuthEntryKindBase,

@@ -23,8 +23,9 @@
 // Without an active grant, expose and forward print the approval prompt and wait: the command asks the daemon again
 // until the decision lands or the wait runs out (§16.6). close is a reading: §17.11 names no spelling for ending a
 // forward or a rule, and bridge_close is its MCP twin. Readable addresses reach the person's terminal only; the
-// daemon's logs name opaque ids alone (I-13). `ur bridge public-tls` is §13's (bridge_public_tls_cmd.go), and invite,
-// accept-invite and activate are shares' (cmd_bridge_share.go).
+// daemon's logs name opaque ids alone (I-13). `ur bridge public-tls` is §13's (bridge_public_tls_cmd.go), invite,
+// accept-invite and activate are shares' (cmd_bridge_share.go), and devices, share, unshare and discovery are §17.7.1's
+// service discovery (cmd_bridge_discovery.go).
 
 package main
 
@@ -85,7 +86,7 @@ func init() {
 			"  ur bridge close <id> [--reset] [--network=<name>]",
 			"  ur bridge egress <egress> [--require-default-egress] [--network=<name>]",
 			"  ur bridge block [<block>] [--network=<name>]",
-		}, append(urBridgeShareUsage, urBridgePublicTlsUsage...)...), "\n"),
+		}, append(append(urBridgeShareUsage, urBridgeDiscoveryUsage...), urBridgePublicTlsUsage...)...), "\n"),
 		summary: "list the network's bridge, expose subnets and ports, forward a client's port",
 		run:     runUrBridge,
 	})
@@ -98,6 +99,10 @@ func runUrBridge(ctx context.Context, cli *urCli, options docopt.Opts) error {
 	protocol := ""
 	if udp {
 		protocol = "udp"
+	}
+	// §17.7.1's devices, share, unshare and discovery (cmd_bridge_discovery.go)
+	if handled, err := runUrBridgeDiscovery(ctx, cli, options, network); handled {
+		return err
 	}
 	switch {
 	case options["public-tls"] == true:

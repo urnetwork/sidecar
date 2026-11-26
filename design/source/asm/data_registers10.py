@@ -183,3 +183,8 @@ Q['Q-BRIDGE-10'] = ("Which service types does a host gather and publish?",
                     "(b), owner decision 778: a curated list, Apple's types included; documents widen or trim it.")
 Q['Q-BRIDGE-11'] = ("How does the advertising proxy name a remote instance whose name and type are already in view on the "
                     "machine?", "(a), owner decision 778: its own name unless taken, then a suffix naming its host.")
+
+# Owner decision 783 (2026-11-24): the support skill narrows D-CTX-4 to FB's own service and triage workspace.
+assert D['D-CTX-4'].startswith('The feedback service is out of scope'), 'D-CTX-4 moved'
+D['D-CTX-4'] = ("The feedback service stays FB's, out of scope; the sidecar's agent surface onto it, the support skill, is "
+                "in scope.")

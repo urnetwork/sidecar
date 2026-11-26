@@ -231,8 +231,13 @@ func TestFieldOutsideKindRefused(t *testing.T) {
 			widened := proto.Clone(action).(*protocol.CanonicalAction)
 			value := widened.ProtoReflect().NewField(field)
 			switch {
+			case field.IsList() && field.Kind() == protoreflect.MessageKind:
+				// a version-5 list of messages (DESIGN-COMPUTE §16.3): one empty element
+				value.List().Append(value.List().NewElement())
 			case field.IsList():
 				value.List().Append(protoreflect.ValueOfString("synthetic"))
+			case field.Kind() == protoreflect.MessageKind:
+				// a version-5 message (DESIGN-COMPUTE §16.3), set empty, which is set all the same
 			case field.Kind() == protoreflect.StringKind:
 				value = protoreflect.ValueOfString("synthetic")
 			case field.Kind() == protoreflect.BytesKind:
@@ -701,8 +706,9 @@ func TestServerPathsHoldToTheirColumns(t *testing.T) {
 // The descriptor lint: every field CanonicalAction declares is claimed by a row or by every action, so a field
 // record.proto adds cannot go unbuilt or unrefused; local_port, weight, alpn and socket_name are gone from it, their
 // numbers reserved, and are ApprovalRequest's 14, 15, 16 and 17, which a row's request column names (QD-740, QD-772),
-// a row requiring only what its column names; field 37 is filled only at version 2 and field 38 only at the versions
-// that seal a detail; and every row's fields exist.
+// a row requiring only what its column names; field 37 is filled only at version 2, field 49 only at version 5, and
+// field 38 only at the versions that seal a detail, 3 and 4 always and 5 on kinds 19 and 21 (DESIGN-COMPUTE §16.3); and
+// every row's fields exist.
 func TestKindTableCoversTheDescriptor(t *testing.T) {
 	descriptor := (&protocol.CanonicalAction{}).ProtoReflect().Descriptor()
 	fields := descriptor.Fields()
@@ -728,7 +734,7 @@ func TestKindTableCoversTheDescriptor(t *testing.T) {
 		}
 	}
 	for _, row := range canonicalActionKindRows {
-		for _, number := range slices.Concat(row.Required, row.Optional, row.Version2, row.Server, row.TemplateRequired) {
+		for _, number := range slices.Concat(row.Required, row.Optional, row.Version2, row.Version5, row.Server, row.TemplateRequired) {
 			if fields.ByNumber(number) == nil {
 				t.Errorf("kind %d names field %d, which CanonicalAction lacks", row.Kind, number)
 			}
@@ -750,9 +756,14 @@ func TestKindTableCoversTheDescriptor(t *testing.T) {
 		if 0 < len(row.Version2) && !slices.Contains(row.Versions, 2) {
 			t.Errorf("kind %d has version-2 fields and no version 2", row.Kind)
 		}
-		sealedVersion := slices.Contains(row.Versions, canonicalActionVersionAccessRequest) || slices.Contains(row.Versions, canonicalActionVersionSealedGrant)
-		if slices.Contains(slices.Concat(row.Required, row.Optional), canonicalActionFieldSealedDetail) != sealedVersion {
-			t.Errorf("kind %d fills field 38 outside versions 3 and 4, or takes one of them without it", row.Kind)
+		alwaysSealed := slices.Contains(row.Versions, canonicalActionVersionAccessRequest) || slices.Contains(row.Versions, canonicalActionVersionSealedGrant)
+		sealedVersion := alwaysSealed || slices.Contains(row.Versions, canonicalActionVersionCompute)
+		fillsDetail := slices.Contains(slices.Concat(row.Required, row.Optional), canonicalActionFieldSealedDetail)
+		if (fillsDetail && !sealedVersion) || (alwaysSealed && !fillsDetail) {
+			t.Errorf("kind %d fills field 38 outside versions 3, 4 and 5, or takes 3 or 4 without it", row.Kind)
+		}
+		if 0 < len(row.Version5) && !slices.Contains(row.Versions, canonicalActionVersionCompute) {
+			t.Errorf("kind %d has version-5 fields and no version 5", row.Kind)
 		}
 		for _, number := range slices.Concat(row.Server, row.TemplateRequired) {
 			if !row.allows(number, row.Versions[0]) && !slices.Contains(row.Version2, number) {

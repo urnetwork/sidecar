@@ -56,7 +56,7 @@ Tiers (16.6): **R** read, with `readOnlyHint`; **W** in-network write; **O** out
 | `record_append` | W | source `agent` (16.8); in a team network, the directory (16.11) |
 | `directory_list`, `directory_requests`; `directory_request` | R; O | 16.11: announcements and requests as stubs; an access request through §5.4's gate (owner decisions 74, 179, 180) |
 | `run_restore` | W; a decision if tainted or for shell paths | `restore` entry (16.7) |
-| DESIGN-COMPUTE.md §15.2's tools: `compute_balance`, `compute_spend`; `enclave_list`, `enclave_status`, `enclave_create`, `enclave_stop`, `enclave_start`, `enclave_delete`, `enclave_exec`; the `agent_*` tools; `web_search`; `listeners_list`; `calendar_list`, `calendar_add`, `calendar_update`, `calendar_delete`; `connections_list`, `service_call` | as that table tiers them: `enclave_create`, `enclave_start` and `enclave_delete` O; `listeners_list`, `connections_list` and `calendar_list` R, and `web_search` R with an untrusted result; calendar writes O (`calendar_write`), an MCP session's run counting as tainted for them; `service_call` R for reads and O (`service_write`) for every write and send; never `connection_request` | DESIGN-COMPUTE.md §15.2 (owner decisions 737, 744, 748, 756, 768, 770) |
+| DESIGN-COMPUTE.md §15.2's tools: `compute_balance`, `compute_spend`; `enclave_list`, `enclave_status`, `enclave_create`, `enclave_stop`, `enclave_start`, `enclave_delete`, `enclave_exec`; the `agent_*` tools; `web_search`; `listeners_list`; `calendar_list`, `calendar_add`, `calendar_update`, `calendar_delete`; `connections_list`, `service_call`; `support_send`, `support_list`, `support_read` and the resource `ur://support/{product}` | as that table tiers them: `enclave_create`, `enclave_start` and `enclave_delete` O; `listeners_list`, `connections_list` and `calendar_list` R, and `web_search` R with an untrusted result; calendar writes O (`calendar_write`), an MCP session's run counting as tainted for them; `service_call` R for reads and O (`service_write`) for every write and send; never `connection_request`; `support_send` O (`support_send`), an MCP session's run counting as tainted for it, so the classifier, which never saw what its harness read, asks the person, `support_list` R and `support_read` R with an untrusted result, the resource's `resources/updated` naming the session agent's items that changed | DESIGN-COMPUTE.md §15.2 (owner decisions 737, 744, 748, 756, 768, 770, 783) |
 | `search`, `search_agents`, `search_status` | R | none on evs but `more`'s fetches by sync position, debited (owner decision 10), and non-writers' read receipts in owner-bound repos (D-MCP-18); untrusted hits' text only on request, tainting the run first (16.10) |
 
 ```text
@@ -91,7 +91,14 @@ mail_send(from_alias, to, cc, bcc, subject, text, in_reply_to?, uses?) -> status
                  to a subset of them spends a use, the agent retrying its first mail (16.6's multi-use row;
                  owner decision 613)
 mail_aliases()   mail_alias_create(alias, group?)   mail_alias_delete(alias)
-socket_list()   socket_status(name)   socket_listen(name, local_port) -> status, grant_id   socket_unlisten(name)
+socket_list()   socket_status(name)   socket_unlisten(name)
+socket_listen(name, local_port, expires?) -> status, grant_id, expires?
+                 expires, an RFC 3339 time ahead, ends the grant an outward listen asks, as tls_publish's does,
+                 so the call made again asks the same end and another end files its own request; absent, the
+                 requests rule's expiresDefault; past its maxExpiry the listen is refused before the gate,
+                 filing nothing, the error's data naming the maximum as max_expiry_millis, never the call's
+                 input; a covering or standing grant asks nothing and passes whatever it asks; the result's
+                 expires is when the grant it names ends, absent where it has none (owner decision 687)
 tls_publish(host, port?, local_port, audience, expires, app_mode?, alpn?) -> url, grant_id, cert_file?
                  port: 443 by default, or 8443, 8883 or 5671 (§13.4; owner decision 121); app_mode http by
                  default, or raw under audience public or link (§13.7); a raw link writes a client key and
@@ -446,14 +453,14 @@ retention   approval files 30 d after not_after; approval_use rows 1 d after the
             taskworker's hourly sweep deletes, never reading create_time (§2.8 api-10)
 AU1  for every approval, effects <= uses, counted at each step 5 component (outbox objects, approval_use
      rows, grant_ids, bridge rule ids, evs versions, alias records, restores, and DESIGN-COMPUTE.md's
-     calendar receipts and service call entries)
+     calendar receipts, service call entries and support posts, one a client_ref)
 AU2  every effect has a durable Reserve or approval_use row, committed before it or in its transaction
 AU3  no crash or lost response frees a use; an uncertain use is completed or reported, never spent by
      another action
 AU4  a retry of the same action returns the original outcome
 ```
 
-**Compute's components** (owner decisions 756, 768, 769; DESIGN-COMPUTE.md §23.8, §23.9, §25.10). Step 5 gains a `calendar` component, which rechecks a kind-25 use's link, target and audience before its first write and any it resumes, and the ledger a `CalendarReceipt{action_id, index, operation, uid, occurrence, expected, state, revision, ref, millis}` per selected event, fsynced `sending` before its request and again with the answer; its Lookup reads the stored action and those receipts, sends an index without one within the use's expiry, keeps a final one, settles one still sending by the read DESIGN-COMPUTE.md §23.9's table allows its provider, an addition by the UID its effect key and original index derive (Graph: `transactionId`), a change or removal by its uid and expected revision, and answers uncertain, sending nothing more until the person's answer, where the read cannot settle it; a kind-25 use is one effect of up to 20 writes. A `service` component finds a kind-26 use's call entry by its effect key and, with none, answers uncertain and never re-sends.
+**Compute's components** (owner decisions 756, 768, 769, 783; DESIGN-COMPUTE.md §23.8, §23.9, §25.10, §28.8). Step 5 gains a `calendar` component, which rechecks a kind-25 use's link, target and audience before its first write and any it resumes, and the ledger a `CalendarReceipt{action_id, index, operation, uid, occurrence, expected, state, revision, ref, millis}` per selected event, fsynced `sending` before its request and again with the answer; its Lookup reads the stored action and those receipts, sends an index without one within the use's expiry, keeps a final one, settles one still sending by the read DESIGN-COMPUTE.md §23.9's table allows its provider, an addition by the UID its effect key and original index derive (Graph: `transactionId`), a change or removal by its uid and expected revision, and answers uncertain, sending nothing more until the person's answer, where the read cannot settle it; a kind-25 use is one effect of up to 20 writes. A `service` component finds a kind-26 use's call entry by its effect key and, with none, answers uncertain and never re-sends. A `support` component reads the `client_ref` that a kind-27 use's stored action carries in its support fields, the one its message was built with, and finds the use's entry at the feedback service by it, a repeat within 7 days answering the same entry, and past them answers uncertain and never sends again but by the person's answer (DESIGN-COMPUTE-AMENDMENTS.md's QD-1398).
 
 **Prompt injection.**
 - **Content is data.** Mail, files, other writers' entries, search hits and outside tool output return only as tagged structured output, which go-sdk also renders as one `TextContent` (Content left nil), in fields tagged `trust` (`own`, `member`, `untrusted`) and `source`, between fixed `BEGIN/END UNTRUSTED DATA` markers inside the strings; instructions and tool descriptions are constants. Search hits carry `trust` and `source` per hit, and an untrusted hit's text returns only on request (16.10).
@@ -486,7 +493,9 @@ monotone    tainted never returns to false within a run; a new run starts untain
 compute     DESIGN-COMPUTE.md adds triggers: a web search's result, read by MCP or by ur search from a bound
             run, the gateway running no search or fetch for a harness (owner decisions 748, 758); the events
             a calendar tool or ur calendar reads, whoever wrote them (owner decision 756); what service_call
-            and a connected service's typed tools read (owner decision 768); an inbox message, summary or
+            and a connected service's typed tools read (owner decision 768); support's replies' text, read by
+            support_read, ur support show or ur support watch --notes, each tainting the run first, a support
+            notice's enumerated fields tainting nothing (owner decision 783); an inbox message, summary or
             status text from an untrusted writer, read through agent_inbox, or agent_list and agent_find
             with untrusted: include; a record entry a tagged sidecar other than the member's own enclave
             wrote, when a run takes it into its context; every call through an enclave's container socket;
@@ -511,7 +520,7 @@ TS1         once a run is tainted, no outward action in it passes the gate on a 
 
 **The config hash.** The adapter extracts only what `ur` wrote: Claude Code's `mcpServers.ur` in `~/.claude.json` (`.mcp.json` with `--project`) and, in `~/.claude/settings.json` (`.claude/settings.json` with `--project`), each `permissions.ask` rule and each hook entry whose command is this `ur`'s absolute path; Codex's `[mcp_servers.ur]` with its per-tool `approval_mode` in `~/.codex/config.toml`, and `ur`'s entries in `~/.codex/hooks.json`; Cursor's `mcpServers.ur` in `~/.cursor/mcp.json` and `ur`'s entries in `~/.cursor/hooks.json`. Each set is rendered as RFC 8785 canonical JSON (TOML parsed to the same form) and hashed with SHA-256, and the harness config hash, RECORD.md's `config_sha256`, is SHA-256 over the per-file hashes in that order, one rule for every file. The sealed value comes from `ur`'s own template at install, never from the file as found, so re-running `ur install-harness` restores entries and cannot bless a widened rule. The check at SessionStart and every 5 min compares a fresh extract, and also counts as changed any other entry that can answer for a `ur` tool: a hook on PermissionRequest, PreToolUse or `beforeMCPExecution` whose matcher covers the `ur` server, or a `permissions.allow` rule naming it, in those files and, at SessionStart, in the project settings files of the session's working directory. An edit elsewhere in a file changes nothing.
 
-**The harness config** (sidecar/design/mocks/recurd-app.html:986-1009), with per-agent overrides, is one file, `harness/config.json`, on the `main` file-mode ref of the member's vault in each network: UTF-8 JSON, one object, `"version": 1`, at most 64 KiB, unknown keys kept verbatim on rewrite and ignored with a warning in `ur status`. A missing file means defaults, an unparsable file or an unknown version means defaults and a `config_unreadable` coverage gap, and a sidecar that cannot read the vault (tagged, cloud) uses defaults. It holds no hook, ask rule or MCP entry: those come only from `ur install-harness`'s own template, and no synced change rewrites a harness file or re-seals a hash. Two keys act (owner decision 452): `record.redact.pii`, `off` or `hash`, default `hash`, from M3 (Redact before seal, below), and `claims`, `{"default": auto|prompt|off, "projects": {<project key>: value}}`, from M6, which `ur directory runs` and `SetRuns` write per member and project and CORE-M6-02 reads at a session's start under D-CORE-18's rule (16.11), a tagged sidecar, which reads no vault, taking the team default and `.ur`; `agents.<label>` overrides those two keys only. `record.capture` is kept and ignored, capture staying this section's fixed set, since a narrowing control weakens R-MCP-4 and needs a person-only surface first; `reach` and `identity` are kept, ignored and warned about, so a `reach:` block files no request until [a later design](DESIGN-DEFER.md#mcp-harness-config-keys) (§8.5). `models` acts (owner decision 743, which amends owner decision 452's wait): the person's model settings, written only by the person's own act, `ur models set` on /dev/tty or `Models().SetSettings` in an app's UI, never through MCP (DESIGN-COMPUTE.md §16.4). DESIGN-COMPUTE.md adds three keys, each written only by the person's own act, never through MCP: `compute.disclosures`, `{"<id>": <version>}`, the disclosures the person acknowledged, by `ur disclosures ack` on /dev/tty or `AckDisclosure` in an app's UI, §5.8's Confirm method `compute.disclosure.ack` in remote mode (owner decision 765); `approvals`, `{"mode": "auto" or "ask", "kinds": {…}}`, the person's automatic-approval setting, `auto` when absent, by `ur approvals mode` on /dev/tty or the apps' Approvals settings, Confirm method `approvals.mode` (owner decision 772); and `compute.indexer_grant`, `{enclave_id, provider, label, setup_by}`, a member's grant of their mailbox to the network's indexer enclave, on /dev/tty or in an app's UI, which each of their devices reads to seat each new incarnation (owner decision 752). The sponsor's agents' enclaves read `compute.disclosures` and `approvals` from the vault as their devices, no reader taking a version an enclave wrote (owner decision 775). `ur install-harness --gateway` installs the gateway's provider entry, the Harness is recorded natively, and the gateway writes `model_call` (owner decision 736; DESIGN-COMPUTE.md §8.8, §8.9). A value applies at each run's next SessionStart and is fixed for that session: a narrower one at once, a wider one (`pii` from `hash` to `off`, a wider `claims`) only after the member confirms on `/dev/tty` or in an app, never through MCP, and the next run's Coverage names the change.
+**The harness config** (sidecar/design/mocks/recurd-app.html:986-1009), with per-agent overrides, is one file, `harness/config.json`, on the `main` file-mode ref of the member's vault in each network: UTF-8 JSON, one object, `"version": 1`, at most 64 KiB, unknown keys kept verbatim on rewrite and ignored with a warning in `ur status`. A missing file means defaults, an unparsable file or an unknown version means defaults and a `config_unreadable` coverage gap, and a sidecar that cannot read the vault (tagged, cloud) uses defaults. It holds no hook, ask rule or MCP entry: those come only from `ur install-harness`'s own template, and no synced change rewrites a harness file or re-seals a hash. Two keys act (owner decision 452): `record.redact.pii`, `off` or `hash`, default `hash`, from M3 (Redact before seal, below), and `claims`, `{"default": auto|prompt|off, "projects": {<project key>: value}}`, from M6, which `ur directory runs` and `SetRuns` write per member and project and CORE-M6-02 reads at a session's start under D-CORE-18's rule (16.11), a tagged sidecar, which reads no vault, taking the team default and `.ur`; `agents.<label>` overrides those two keys only. `record.capture` is kept and ignored, capture staying this section's fixed set, since a narrowing control weakens R-MCP-4 and needs a person-only surface first; `reach` and `identity` are kept, ignored and warned about, so a `reach:` block files no request until [a later design](DESIGN-DEFER.md#mcp-harness-config-keys) (§8.5). `models` acts (owner decision 743, which amends owner decision 452's wait): the person's model settings, written only by the person's own act, `ur models set` on /dev/tty or `Models().SetSettings` in an app's UI, never through MCP (DESIGN-COMPUTE.md §16.4). DESIGN-COMPUTE.md adds four keys, each written only by the person's own act, never through MCP: `compute.disclosures`, `{"<id>": <version>}`, the disclosures the person acknowledged, by `ur disclosures ack` on /dev/tty or `AckDisclosure` in an app's UI, §5.8's Confirm method `compute.disclosure.ack` in remote mode (owner decision 765); `approvals`, `{"mode": "auto" or "ask", "kinds": {…}}`, the person's automatic-approval setting, `auto` when absent, by `ur approvals mode` on /dev/tty or the apps' Approvals settings, Confirm method `approvals.mode` (owner decision 772); and `compute.indexer_grant`, `{enclave_id, provider, label, setup_by}`, a member's grant of their mailbox to the network's indexer enclave, on /dev/tty or in an app's UI, which each of their devices reads to seat each new incarnation (owner decision 752); and `support`, `{"agents": true, "agent_logs": true}`, whether the person's agents may write to URnetwork's support and attach the support log, by `ur support set` on /dev/tty, refused to a caller with a harness process among its ancestors, or the app's support settings, Confirm method `support.settings` (owner decision 783). The sponsor's agents' enclaves read `compute.disclosures` and `approvals` from the vault as their devices, no reader taking a version an enclave wrote (owner decision 775). `ur install-harness --gateway` installs the gateway's provider entry, the Harness is recorded natively, and the gateway writes `model_call` (owner decision 736; DESIGN-COMPUTE.md §8.8, §8.9). A value applies at each run's next SessionStart and is fixed for that session: a narrower one at once, a wider one (`pii` from `hash` to `off`, a wider `claims`) only after the member confirms on `/dev/tty` or in an app, never through MCP, and the next run's Coverage names the change.
 
 **Model calls** (owner decision 463). A Codex run's come from its PostModelRequest hook alone, one `model_call` entry a call with its request id and token counts, and `ur install-harness` writes no `[otel]` table for Codex, removing one an earlier install wrote. A Claude Code run's come from its OpenTelemetry export: `ur install-harness` draws 32 random bytes per install and seals them under `<state>/harness/` beside the template's seal, writes them into Claude Code's `env` block as `OTEL_EXPORTER_OTLP_HEADERS` with an endpoint naming the loopback port it chose and sealed with them, and a re-install restores both; the daemon's receiver (`mcp.IngestTelemetry`) accepts that token, compared in constant time, for `model_call` entries alone, labeled source hook, refuses anything else 401 with nothing recorded, and passes over any record whose resource names Codex. Cursor documents no exporter. The token only adds the harness's own reports, which any same-uid process can already add through `ur hook` (owner decisions 47, 75), so I-7, which keeps out credentials that administer, read or sign, admits it (§2.9).
 
@@ -693,7 +702,9 @@ message CanonicalAction {                   // built by the daemon; hashed as st
   uint32 version = 12;                      // 1; 2 with field 37; 3 for kind access_request (16.11), in fields 8,
                                             // 10, 11, 14, 26, 29 and 38; 4 for a dial or route grant, in fields 8,
                                             // 10, 11, 28, 29 and 38, a share's also 40 (owner decisions 220,
-                                            // 457); approvers that do not know a version refuse it
+                                            // 457); 5 for DESIGN-COMPUTE.md's kinds 19 to 27, in fields 3, 5,
+                                            // 29, 38, 39 and 42 to 80, and for kind 5 with field 49 (owner
+                                            // decisions 737, 749); approvers that do not know a version refuse it
   bool scope = 13;                          // a multi-use template (16.6), which an agent asks for only through
                                             // mail_send's uses (owner decision 613)
   bytes repo_id = 14; string path = 15; bytes content_sha256 = 16; uint64 base_version = 17;  // O-tier evs_write,
@@ -715,10 +726,16 @@ message CanonicalAction {                   // built by the daemon; hashed as st
                                             // SignedType is SIGNED_GRANT_ACTIVATE and network the action's, and
                                             // in a header nonce's place the first 16 bytes of SHA-256 over this
                                             // action as stored with field 38 left out, so it opens only beside
-                                            // the clear fields it was sealed with (owner decisions 220, 457)
+                                            // the clear fields it was sealed with (owner decisions 220, 457);
+                                            // version 5: a CanonicalActionDetail5, kinds 19's and 21's alone,
+                                            // sealed as version 4's is but its aad's SignedType
+                                            // SIGNED_APPROVAL_DECISION, so no broker gate reads a name or a grant
   uint32 egress_mode = 39;                  // egress_change: BridgeEgressMode, beside its subject (29) and,
                                             // under exits, its exits in grant_dst (sidecar:<id> entries or one
-                                            // tag entry); version 1, on no server path (owner decision 462)
+                                            // tag entry); version 1, on no server path (owner decision 462);
+                                            // version 5: the mode at create (19) or the receiving enclave's (24),
+                                            // auto, exits or none, and on 24 also 4, direct, the enclave's default
+                                            // egress off (DESIGN-COMPUTE.md §11.8), a value no other version takes
   bytes share_network_id = 40;              // a share's grant (§8.11): the other network, 16 bytes, on a dial or
                                             // route grant alone, beside its subject, the requesting sidecar; an
                                             // admin's approval covers it as it covers every field (§8.8; owner
@@ -731,6 +748,143 @@ message CanonicalAction {                   // built by the daemon; hashed as st
                                             // approver that cannot name it refuses the action (owner decision 607);
                                             // a template binds it set or empty, so one that leaves it empty covers
                                             // only uses that leave it unset (16.6; owner decision 614)
+  // Version 5's fields (DESIGN-COMPUTE.md §16.3; Compute's record primitives, below), each set only at version 5.
+  // There field 3 is SHA-256 of exactly what the effect sends, field 46 as stored, the node list a continuation
+  // or crossing names, or kind 26's request body; field 5 the composed URL's host (23) or the API host (26), in
+  // punycode; field 29 the enclave's running incarnation or the receiving sidecar (20, 22, 24)
+  EnclaveFields enclave = 42;               // 19, 20, 22, 24; on 19 its name rides in field 38
+  BudgetFields budget = 43;                 // 21
+  string url = 44;                          // 23: the whole URL as the agent composed it
+  string tool = 45;                         // 24: the tool or ur command that sends
+  SendFields send = 46;                     // 24: the whole of what is sent, rendered as untrusted text
+  ContextFields context = 47;               // 24: harness_continue's, or a run's crossing
+  repeated string taint_reasons = 48;       // 23, 24, 26: the requesting run's taint reasons (16.6)
+  bool took_tainted = 49;                   // kind 5 alone, of an enclave leaving none: it took tainted input there
+  string calendar_label = 50;               // 25: the link's label, daemon-built
+  string calendar_host = 51;                // 25: the provider's host, daemon-built
+  string calendar_audience = 52;            // 25: the sharing or publishing the provider reports, else empty
+  repeated CalendarEventAction calendar_events = 53;   // 25: 1 to 20 events, each with its switch on the card
+  bytes calendar_link = 54;                 // 25: the link's repo id
+  bytes calendar_target = 55;               // 25: the SHA-256 that names the link's account and calendar
+  string calendar_name = 56;                // 25: the calendar's display name as the provider reports it
+  reserved 57 to 59;                        // kind 25's
+  ServiceCallFields service_call = 60;      // 26 (owner decision 768)
+  reserved 61 to 69;                        // kind 26's
+  AutoFields auto = 70;                     // 23 to 27: daemon-built, rendered on the card (owner decisions 772,
+                                            // 783)
+  reserved 71 to 79;
+  SupportFields support = 80;               // 27: the whole message, rendered as untrusted text, which field 3's
+                                            // SHA-256 of the SupportBody posted binds (owner decision 783)
+  reserved 81 to 89;                        // kind 27's
+}
+// What field 42 holds: the enclave an action creates, removes, sends into or turns default egress off for
+message EnclaveFields {
+  bytes enclave_id = 1;
+  string name = 2;                          // empty on kind 19, whose name rides in field 38
+  string shape = 3; string provider = 4;
+  string label = 5;                         // DESIGN-COMPUTE.md §4.3's label, as the catalog writes it
+  uint64 price_per_hour = 6;                // nano-USD
+  uint64 incarnation = 7;
+}
+// What field 43 holds, and a launch's budget in field 46: an amount over a period
+message BudgetFields {
+  bytes agent_id = 1;
+  uint32 period = 2;                        // 1 day, 2 month, 3 run
+  uint64 amount = 3;                        // nano-USD
+  uint64 current = 4;                       // nano-USD
+}
+// What field 46 holds: the whole of what a kind-24 action sends
+message SendFields {
+  string target_agent = 1; bytes target_agent_id = 2; bytes target_member_id = 3;
+  uint32 mode = 4;                          // prompt 1, steer 2, follow_up 3; 0 a message
+  string text = 5;
+  string stdin = 6;                         // at most 32 KiB
+  string cwd = 7;
+  repeated RefFields refs = 8;
+  string model = 9;
+  repeated string tools = 10;
+  BudgetFields budget = 11;
+}
+message RefFields { bytes repo_id = 1; string path = 2; uint64 version = 3; }   // one version a send names
+// What field 47 holds: a continuation's or a crossing's run and node, and counts of what its context holds
+message ContextFields {
+  bytes run_id = 1; bytes entry_id = 2;
+  uint32 nodes = 3; uint32 flagged = 4; uint32 untrusted = 5;
+  uint32 mail_messages = 6; uint32 calendar_events = 7; uint32 fetched_pages = 8; uint32 service_results = 9;
+  uint32 act = 10;                          // 1 continue, 2 cross
+}
+// One event of field 53, every string rendered as untrusted text
+message CalendarEventAction {
+  uint32 operation = 1;                     // 1 add, 2 change, 3 remove
+  string uid = 2;
+  string occurrence = 3;
+  string expected = 4;                      // the revision a change or removal expects
+  string title = 5;
+  string start = 6; string end = 7; string zone = 8; bool all_day = 9;
+  string recurrence = 10;
+  string location = 11;
+  repeated string reminders = 12;
+  repeated string attendees = 13;
+  repeated string mails = 14;               // what the provider will mail, and to whom
+  string description = 15;                  // whole
+  CalendarEventFields before = 16;          // a change's prior values
+  string source = 17;                       // the message the agent cites, as its claim
+}
+// A changed event's values before the change, in CalendarEventAction's order, so no message holds itself
+message CalendarEventFields {
+  string title = 1;
+  string start = 2; string end = 3; string zone = 4; bool all_day = 5;
+  string recurrence = 6;
+  string location = 7;
+  repeated string reminders = 8;
+  repeated string attendees = 9;
+  string description = 10;
+}
+// What field 60 holds: the one request a kind-26 action sends
+message ServiceCallFields {
+  bytes connection = 1;                     // the connection's repo id
+  string label = 2; string service = 3; string account = 4;
+  string method = 5; string path = 6; string query = 7; string content_type = 8;
+  string body = 9;                          // whole, at most 32 KiB; field 3 is its SHA-256
+  uint32 class = 10;                        // 1 write, 2 send
+  string feature = 11;
+}
+message AutoFields {                        // what field 70 holds
+  uint32 basis = 1;                         // 1 taint: outward only because its run is tainted; 2 always
+  repeated uint32 rules = 2;                // the auto rules that follow from the action alone, by their numbers
+}
+// What field 80 holds: the whole of a kind-27 message to URnetwork's support, every string rendered as untrusted text
+message SupportFields {
+  string product = 1;                       // urnetwork
+  string entry = 2;                         // the item it continues; empty opens one
+  uint32 kind = 3;                          // the feedback service's hint: 1 bug, 2 feature, 3 question, 4 praise,
+                                            // 5 security, 6 other; 0 none
+  string text = 4;                          // whole, at most 16 KiB of UTF-8
+  BundleManifest bundle = 5;                // the support log's bundle's, where the message carries one
+  repeated FileFields files = 6;            // at most 3, each shown whole on the card
+  bytes client_ref = 7;                     // 16 bytes, the one the message was built with (16.6's support lookup)
+}
+// A support log bundle's manifest: what an agent and a card learn of it, never an event's fields
+message BundleManifest {
+  uint32 events = 1;
+  int64 first = 2; int64 last = 3;          // the window's first and last events, unix seconds
+  uint64 bytes = 4;                         // compressed
+  bytes sha256 = 5;
+  repeated BundleCodeCount codes = 6;       // by component and code
+}
+message BundleCodeCount { string component = 1; string code = 2; uint32 count = 3; }
+message FileFields {                        // one file a support message names
+  string name = 1;                          // its base name
+  uint32 type = 2;                          // 1 UTF-8 text, 2 PNG, 3 JPEG
+  uint64 size = 3;
+  bytes sha256 = 4;
+}
+// What sealed_detail opens to at version 5: what the broker's gates, kinds 19 and 21, do not see
+message CanonicalActionDetail5 {
+  string name = 1;                          // kind 19's enclave name
+  uint32 role = 2;                          // kind 19's: 1 agents, 2 indexer
+  string harness = 3;
+  bytes grant_id = 4;                       // kind 21's gateway grant
 }
 // Rendering (D-MCP-17): approver devices render only these daemon-built fields as the action, with the
 // request's daemon-built 14 to 17 and an opened sealed_detail, and ApprovalRequest.summary and preview as
@@ -772,7 +926,12 @@ message ApprovalDecision {                  // inside §6 Signed, purpose approv
                                             // riding in Signed.webauthn
   bytes requester_sidecar_id = 11;          // the only sidecar that may spend it (16.6)
   AuthPin auth_pin = 12;                    // §7.9's pin the approver evaluated the request under
-  uint32 version = 13;                      // 1
+  uint32 version = 13;                      // 1; 2 adds selected; 3, channel 4's alone, adds DESIGN-COMPUTE.md's
+                                            // auto (15) and auto_verdict (16), which its own fence holds as it
+                                            // extends this one, and may carry selected; a reader that does not
+                                            // know a version refuses it whole (owner decisions 756, 772)
+  repeated uint32 selected = 14;            // version 2's: the indexes of the events a kind-25 decision approves,
+                                            // ascending, an empty list approving none
 }
 message ApprovalCancel { bytes approval_id = 1; }  // inside §6 Signed, purpose approval (16.6's ledger)
 message ReachReceipt {                      // coalesced per (grant, peer) per 5 min, and a TLS front's publish
@@ -805,14 +964,20 @@ enum SidecarActionKind {                    // §5.4's order, new kinds appendin
   SIDECAR_ACTION_KIND_DNS_SET = 12; SIDECAR_ACTION_KIND_DNS_DELETE = 13; SIDECAR_ACTION_KIND_MAIL_SEND = 14;
   SIDECAR_ACTION_KIND_ACCESS_REQUEST = 15; SIDECAR_ACTION_KIND_PAYMENT = 16; SIDECAR_ACTION_KIND_RESTORE = 17;
   SIDECAR_ACTION_KIND_MAIL_TLS_UNAUTHENTICATED = 18;   // §14.4's TL4 allowance (owner decision 436)
-  // DESIGN-COMPUTE.md appends 19 to 26 (§5.4), which record.proto takes with their code
+  // DESIGN-COMPUTE.md §16.3's (§5.4), each at version 5 alone (owner decisions 737, 749, 756, 768, 772, 783)
+  SIDECAR_ACTION_KIND_ENCLAVE_CREATE = 19; SIDECAR_ACTION_KIND_ENCLAVE_EGRESS_DIRECT = 20;
+  SIDECAR_ACTION_KIND_COMPUTE_BUDGET_RAISE = 21; SIDECAR_ACTION_KIND_ENCLAVE_DELETE = 22;
+  SIDECAR_ACTION_KIND_FETCH_UNLISTED_URL = 23; SIDECAR_ACTION_KIND_TAINTED_SEND = 24;
+  SIDECAR_ACTION_KIND_CALENDAR_WRITE = 25; SIDECAR_ACTION_KIND_SERVICE_WRITE = 26;
+  SIDECAR_ACTION_KIND_SUPPORT_SEND = 27;    // DESIGN-COMPUTE.md §28.8's message to URnetwork's support
 }
 enum SidecarRisk { SIDECAR_RISK_UNSPECIFIED = 0; SIDECAR_RISK_NORMAL = 1; SIDECAR_RISK_HIGH = 2; }
 enum ApprovalVerdict { APPROVAL_VERDICT_UNSPECIFIED = 0; APPROVAL_VERDICT_APPROVE = 1; APPROVAL_VERDICT_DENY = 2; }
 enum ApprovalChannel {                      // ApprovalDecision.channel and AclRequestRule.evidence
   APPROVAL_CHANNEL_UNSPECIFIED = 0; APPROVAL_CHANNEL_DEVICE = 1; APPROVAL_CHANNEL_PRESENCE = 2;
   APPROVAL_CHANNEL_HARNESS = 3;
-  // DESIGN-COMPUTE.md appends APPROVAL_CHANNEL_AUTO = 4 (owner decision 772), its own fence holding it
+  // DESIGN-COMPUTE.md appends APPROVAL_CHANNEL_AUTO = 4, at decision version 3 alone (owner decision 772),
+  // which record.proto declares and its own fence holds as it extends this one
 }
 ```
 
@@ -823,11 +988,13 @@ bytes      the leaf hash covers Signed.body, the header's bytes exactly as store
 kinds      RECORD.md's v1 registry; an unknown kind is kept, verified and shown generically, never refused
 values     CanonicalAction.kind, ApprovalRequest.risk and ApprovalDecision.decision and channel stay uint32, and
            record.proto declares their four enums, each 0 UNSPECIFIED, written by no one: SidecarActionKind 1
-           to 18 in §5.4's order, new kinds appending, 18 being §14.4's TL4 allowance (owner decision
-           436), DESIGN-COMPUTE.md's 19 to 26 and channel 4 auto joining with their code (Compute's record
-           primitives, below); SidecarRisk 1 normal, 2 high; ApprovalVerdict
+           to 27 in §5.4's order, new kinds appending, 18 being §14.4's TL4 allowance (owner decision
+           436) and 19 to 27 DESIGN-COMPUTE.md's, at CanonicalAction version 5 alone (Compute's record
+           primitives, below), 27, support_send, the support skill's (owner decision 783);
+           SidecarRisk 1 normal, 2 high; ApprovalVerdict
            (decision) 1 approve, 2 deny; ApprovalChannel (channel, and AclRequestRule.evidence) 1 device,
-           2 presence, 3 harness, as RECORD.md section 6.2; audience and app_mode hold acl.proto's
+           2 presence, 3 harness, 4 auto, DESIGN-COMPUTE.md's, at ApprovalDecision version 3 alone, as
+           RECORD.md section 6.2; audience and app_mode hold acl.proto's
            AclAudience and AclAppMode, a publish's action always writing the resolved non-zero value
            (members 1, http 1) and a gate mapping a request's 0 to 1 before it compares; an approver,
            spender or gate refuses 0 or an unknown value of any of these, the kinds row's "kept" covering
@@ -838,7 +1005,9 @@ values     CanonicalAction.kind, ApprovalRequest.risk and ApprovalDecision.decis
 server     a CanonicalAction bound for a GrantActivate or a gate sets only kind, version, scope and the fields
            that path's gate sees: a grant 8, 10, 11, 28 and 29, version 4's also 38, sealed, and a share's
            40, a publish's also 5, 6, 7, 33 and 35; a version-3 access_request 8, 10, 11, 14, 26, 29 and 38;
-           a dns_* action 8 and 18 to 21; api, every reader's GrantActivate check and each gate parse the
+           a dns_* action 8 and 18 to 21; at version 5 only the broker's two, kind 19's create 38, sealed,
+           39 and 42, and kind 21's raise 38, sealed, and 43, every other version-5 action taking no server
+           path (DESIGN-COMPUTE.md §16.3); api, every reader's GrantActivate check and each gate parse the
            stored bytes and refuse any other set field, so a socket_listen's grant carries only its grant_dst's
            sock: entry and an egress_change goes to no server; AD4 stands (16.6)
 order      within one stream, (evs push version, position in the push), each push's entries sorted by
@@ -860,7 +1029,7 @@ semantics  DESIGN.md's, which RECORD.md may not change: the logs' reader and wri
            request_sha256 and payload_sha256
 ```
 
-**Compute's record primitives** (owner decisions 737, 749, 756, 757, 768, 772; DESIGN-COMPUTE.md §16.3, §23.9, §24.5, §25.10, §27.9). `CanonicalAction` version 5, which approvers, spenders and gates that do not know it refuse, adds fields 42-49 and `CanonicalActionDetail5` in field 38 for kinds 19-24, field 49 on kind 5; for kind 25 fields 50 `calendar_label`, 51 `calendar_host`, 52 `calendar_audience` and 53, a repeated `CalendarEventAction` (operation, uid, occurrence, the revision a change or removal expects, title, start, end, zone, all-day, recurrence, location, reminders, attendees, what the provider mails to whom, the whole description, the fields before a change, the cited source), all rendered as untrusted text, 54 `calendar_link`, the link's repo id, 55 `calendar_target`, the SHA-256 that names its account and calendar, which an approving device recomputes from its own copy of the link, signing nothing where they differ, and 56 `calendar_name`, 57-59 reserved; 60-69 for kind 26; and 70, `AutoFields{basis, rules}`, on kinds 23-26, 71-79 reserved. `ApprovalDecision.selected` (field 14), at decision version 2, holds the indexes of the events a kind-25 decision approves, an empty list approving none, `ur approve <id> --events <i>,…` selecting them at a terminal; version 3, for channel 4 `auto` alone, sets field 15 `auto` and carries 16 `auto_verdict`, an `AutoVerdict` (verdict, reason, score, threshold, the model and its SHA-256, the inputs' SHA-256, windows, the run's and the day's counts), its `evidence_sha256` that of its `auto_verdict` entry, and a reader that predates version 3 refuses it whole. `Coverage` takes field 8, `bodies_dropped`, repeated `SeqRange{first, last}`, the writer's seqs in its log whose session bodies its spool dropped, gap `spool_drop`. RECORD.md section 12's evidence level 4 is a verified TEE platform, `ModelCallBody` takes fields 11 to 15, the last, `CallContext`, its `request_sha256` covering parts by hash, and RECORD.md's compute section adds kinds 54 `session_entry`, 55 `session_blob` and 56 `auto_verdict` and class 8 `bulk`. The fences above and record.proto take each with its code; until then DESIGN-COMPUTE.md's fences hold them, which protocol's fence test reads as unbuilt.
+**Compute's record primitives** (owner decisions 737, 749, 756, 757, 768, 772, 783; DESIGN-COMPUTE.md §16.3, §23.9, §24.5, §25.10, §27.9, §28.8, §28.12). `CanonicalAction` version 5, which approvers, spenders and gates that do not know it refuse, adds fields 42-49 for kinds 19-24, field 49 on kind 5, and `CanonicalActionDetail5` in field 38 for kinds 19 and 21 alone, the two whose actions reach a broker gate; for kind 25 fields 50 `calendar_label`, 51 `calendar_host`, 52 `calendar_audience` and 53, a repeated `CalendarEventAction` (operation, uid, occurrence, the revision a change or removal expects, title, start, end, zone, all-day, recurrence, location, reminders, attendees, what the provider mails to whom, the whole description, the fields before a change, the cited source), all rendered as untrusted text, 54 `calendar_link`, the link's repo id, 55 `calendar_target`, the SHA-256 that names its account and calendar, which an approving device recomputes from its own copy of the link, signing nothing where they differ, and 56 `calendar_name`, 57-59 reserved; 60-69 for kind 26; and 70, `AutoFields{basis, rules}`, on kinds 23-26, 71-79 reserved, its rules those of DESIGN-COMPUTE.md §27.7's that follow from the action alone, by their numbers. The support skill adds kind 27 `support_send`, an agent's message to URnetwork's support from a tainted run, a run carrying the `private` mark, an MCP session, a harness process's `ur support send` or an enclave's container socket, or naming a file, built with fields 3, the SHA-256 of the support body posted, 48, 70 and 80, its support fields (product, entry, kind, text, the support log's bundle manifest, files and `client_ref`), 81-89 reserved, rendered on the card as untrusted text, its text at most 16 KiB of UTF-8 and its files at most 3, `CanonicalActionSettings`' `SupportTextMaxByteCount` and `SupportFileMaxCount`, whose defaults `SupportSettings` shares; field 70's basis is taint for a tainted run's plain message and always where the mark or a file makes it outward, and §27.7's rules take `private_data` and `attachment` after `inputs_unknown`, so the numbers before them stand, both following from the action alone (owner decision 783). `ApprovalDecision.selected` (field 14), at decision version 2, holds the indexes of the events a kind-25 decision approves, an empty list approving none, `ur approve <id> --events <i>,…` selecting them at a terminal; version 3, for channel 4 `auto` alone, sets field 15 `auto` and carries 16 `auto_verdict`, an `AutoVerdict` (verdict, reason, score, threshold, the model and its SHA-256, the inputs' SHA-256, windows, the run's and the day's counts), its `evidence_sha256` that of its `auto_verdict` entry, and a reader that predates version 3 refuses it whole. `Coverage` takes field 8, `bodies_dropped`, repeated `SeqRange{first, last}`, the writer's seqs in its log whose session bodies its spool dropped, gap `spool_drop`. RECORD.md section 12's evidence level 4 is a verified TEE platform, `ModelCallBody` takes fields 11 to 15, the last, `CallContext`, its `request_sha256` covering parts by hash, and RECORD.md's compute section adds kinds 54 `session_entry`, 55 `session_blob` and 56 `auto_verdict` and class 8 `bulk`, and for the support skill kind 30 `support_message`, its team projection holding no text. record.proto declares version 5's fields and messages, kinds 19 to 27, field 80 with its `SupportFields`, `BundleManifest`, `BundleCodeCount` and `FileFields`, `selected`, `auto`, `auto_verdict` and channel 4, and the fences above write them, all but `auto`, `auto_verdict` and channel 4, which DESIGN-COMPUTE.md's own fence holds as it extends §16.8's. record.proto also declares kind 30's body, `SupportMessageBody`, which DESIGN-COMPUTE.md §28.12's fence holds, and `ModelCallBody`'s fields 11 to 14, which DESIGN-COMPUTE.md's fence holds as it extends RECORD.md section 12's, and RECORD.md's sections 6.2, 6.3, 6.4 and 8 give kinds 27 and 30 (support-skill, sidecar 87dfd366, 56b16138; INFER-M11-07, f01213b4); `Coverage`'s field 8, `ModelCallBody`'s field 15, kinds 54 to 56 and class 8 join the fences, RECORD.md and record.proto with their code, DESIGN-COMPUTE.md's fences holding them until then, which protocol's fence test reads as unbuilt.
 
 - **Storage (Q-ARCH-9 (a); owner decision 2).** Entries are named by a stream's own counter n from 1, at `e/<n div 4,194,304>/<(n div 2,048) mod 2,048>/<n>`, each part decimal (RECORD.md section 5.2), 2,048 to a leaf directory and about 15 billion to a stream, n equal to seq in a stream that holds no ingested entry; a directory's name table (about 128 B a row: child token, kind, and a sealed name with its nonce and tag; up to 140 B while a path-epoch copy carries it with its `EvsName.epoch`) stays within 256 KiB, 280 KiB carried, inside §11.7's 4,096 children and 448 KiB of name table; per entry evs sees only a token path, padded size, key slot and push time, never record kinds, agents, runs or bodies. A push carries up to 64 entries or 1 s of them into the append-only stream, in one part, their keys 64 to a slot object (owner decisions 137, 140), spilling inline bodies to segments (§11.8). Slot ids are random per push statement (§11.6): a retry of the same statement keeps them, and a push rebuilt after a refusal, such as a deposit re-wrapped to a newer drop key after 412 GATE_CLOSED, draws new ones; `key_slot_id` and `key_index` lie outside the signed header, so re-slotting re-signs no entry.
 - **Chain.** `seq` and `prev_sha256` chain each writer's entries, so writers never contend and work offline. Readers verify chains after decrypting and pin each writer's head (I-16): a withheld or rewritten entry shows as a gap or a fork. Ingested deposits keep their writer's chain.
@@ -2120,7 +2289,7 @@ sdk           GetDirectory() *SidecarDirectory, nil outside a team network: List
 
 **Q-MCP-5 (closed 2026-11-03).** By the design review, not peer review: (b), another device's identity key or a presence key signs approvals, with an SSHSIG for high risk (D-CORE-6), which owner decision 279 later dropped; owner decision 75 adds harness evidence (D-MCP-9); applied in 16.6.
 
-**Q-MCP-6.** May harness evidence approve an outward action in a tainted run (I-9), when any same-uid process can produce it? **Decided by owner 2026-11-04 (owner decision 142):** (c), by default only device or presence evidence, and harness evidence where the matching `requests` rule's own `evidence` names it, never through `evidenceDefault`; untainted runs keep owner decision 75's fallback. 16.6's `harness_ok`, D-MCP-9 and I-9 state it, frozen with `record.proto` at M3's entry review. **Amended by owner 2026-11-23 (owner decision 772):** for DESIGN-COMPUTE.md's kinds 23 and 24 and the tainted cases of 25 and 26, whose action says basis taint and names no rule, channel `auto`, the requesting device's own safety classifier, decides first in the person's auto mode, the default, recorded and never presented as a person's approval, the person asked where it does not approve; every other action as before. *Residual:* none.
+**Q-MCP-6.** May harness evidence approve an outward action in a tainted run (I-9), when any same-uid process can produce it? **Decided by owner 2026-11-04 (owner decision 142):** (c), by default only device or presence evidence, and harness evidence where the matching `requests` rule's own `evidence` names it, never through `evidenceDefault`; untainted runs keep owner decision 75's fallback. 16.6's `harness_ok`, D-MCP-9 and I-9 state it, frozen with `record.proto` at M3's entry review. **Amended by owner 2026-11-23 (owner decision 772):** for DESIGN-COMPUTE.md's kinds 23 and 24 and the tainted cases of 25 and 26, whose action says basis taint and names no rule, channel `auto`, the requesting device's own safety classifier, decides first in the person's auto mode, the default, recorded and never presented as a person's approval, the person asked where it does not approve; every other action as before. **Amended by owner 2026-11-24 (owner decision 783):** kind 27's tainted case joins them, a run's message to URnetwork's support, one fixed recipient the person chose, with no file and no `private` mark; a message with a file or from a marked run, and an MCP session's, a harness process's or a container socket's, asks the person. *Residual:* none.
 
 **Q-MCP-7.** Should a run's title and project reach the network's coordination log without the agent claiming them, so that members and their agents find who works on what? **Decided by owner 2026-11-05 (owner decision 170):** (c): in team networks runs announce by default, the harness config's `claims` defaulting to `auto` there and `off` in personal networks, members opting out per member and project; owner decision 126's boundary narrows to session contents (16.10, 16.11; I-20) (options (a), never, and (b), off by default, not taken). *Residual:* none.
 

@@ -80,8 +80,8 @@ INTRO = {
           "owners define the messages. ControlId messages ride `PushHint` on a topic (§6.8) and are hints: clients "
           "resync over HTTPS on any gap. Services 0x11 (§8) and 0x18 (§16) define no messages, nor 0x19 (§17) of this "
           "design's own; DESIGN-COMPUTE.md adds EVIDENCE and EVIDENCE_RESULT (0x1406, 0x1407) and LISTENERS and "
-          "LISTENERS_RESULT (0x1901, 0x1902), which join this table when §6.11's fence takes them (owner decisions "
-          "752, 770). Each "
+          "LISTENERS_RESULT (0x1901, 0x1902) (owner decisions 752, 770), which §6.11's fence holds and this table "
+          "lists. Each "
           "statement carried in `Signed` has a `SignedType` in §6.11's registry, service << 8 \\| n, which the "
           "signature covers. The keyless device role parses only `protocol/bridge`'s `signed.proto`, `auth.proto` "
           "and `bridge.proto` (§4.4)."),
@@ -92,10 +92,10 @@ INTRO = {
           "state is objects in the file cluster (owner decision 2), placed per repo on one metadata cluster (owner "
           "decision 145), and Redis holds only their soft state (owner decision 136)."),
     'E_CONNECT': ("§4.6's rows for connect's `sidecar` branch, verbatim (X9). Dispositions follow owner decisions 22, "
-                  "85 and 86 (C14 into M4, C18 in M6), 609, which withdraws C19, and 691 and 692 (C21 and C22), under "
-                  "D-REPO-5: each change is generic, additive, off by default and wire-compatible, tested in connect and "
-                  "merged to connect `main` first, but C21, which corrects connect's own session recovery, is on by "
-                  "default, and C21 and C22 reach `main` by the owner's upstreaming."),
+                  "85 and 86 (C14 into M4, C18 in M6), 609, which withdraws C19, 691 and 692 (C21 and C22) and 730 "
+                  "(C23), under D-REPO-5: each change is generic, additive, off by default and wire-compatible, tested in "
+                  "connect and merged to connect `main` first, but C21 and C23, which correct connect's own session "
+                  "recovery and restart path, are on by default, and C21 to C23 reach `main` by the owner's upstreaming."),
     'F': ("Every statement in sidecar/design/PLAN.md (381 lines), traced to the sections that carry it. Status values: kept, "
           "refined, amended, superseded by the owner directive, departed (with the Q- item and owner decision that "
           "settled it), and n/a. Built from the PLAN review's table and updated to the edited sections' \"Departures "
@@ -116,6 +116,28 @@ MESSAGES = _replace(MESSAGES, '(service 0x19)',
     ('(service 0x19)', '—', '—',
      "§17 defines none: bridge rules ride the config repo (owner decision 5), its statements and `WindowDelegation` "
      "being `SignedType` 0x1901-0x1908; `BridgeSlice` is withdrawn", '§17.16'))
+# The pairs §6.11's fence holds that the table above left out: remote search and the disclosed SHTS, and
+# DESIGN-COMPUTE.md's two, which §6.11's fence took with their code (types.proto).
+MESSAGES = _insert_after(MESSAGES, '`EvsHeadCheck`, `EvsHeadCheckResult`',
+    ('`SearchRequest`, `SearchReply`', '0x1404, 0x1405', 'app host ↔ indexer (RPC)',
+     "Remote search at a designated search indexer, on the pair's Network contract: data where reach allows, "
+     "otherwise the control class (D-PROTO-21; owner decisions 175, 178)", '§11.14'))
+MESSAGES = _insert_after(MESSAGES, '`SearchRequest`, `SearchReply`',
+    ('`EVIDENCE`, `EVIDENCE_RESULT`', '0x1406, 0x1407', "member device ↔ the network's indexer enclave (RPC)",
+     "A member's device asking the indexer enclave for its evidence (DESIGN-COMPUTE.md §11.6, §11.10; owner "
+     "decision 752)", '§6.11'))
+MESSAGES = _insert_after(MESSAGES, '`SmtpProof`, `SmtpProofResult`',
+    ('`SmtpHandshake`, `SmtpHandshakeResult`', '0x1607, 0x1608', 'sidecar ↔ smtpedge (RPC), M9',
+     "TLS 1.3's disclosed SHTS, sent as soon as the handshake ends; the edge answers OK, or INVALID and ends the "
+     "connection; TLS 1.2 sends none", '§14.5'))
+MESSAGES = _insert_after(MESSAGES, '(service 0x19)',
+    ('`LISTENERS`, `LISTENERS_RESULT`', '0x1901, 0x1902', 'peer ↔ peer (RPC), on the control class too',
+     "A host's listeners, asked live (DESIGN-COMPUTE.md §26.8; owner decision 770)", '§6.11'))
+# Service discovery's watch, which §6.11's fence took with types.proto's declaration (owner decision 778).
+MESSAGES = _insert_after(MESSAGES, '`DnsZoneChanged`',
+    ('`DnsSdWatch`, `DnsSdWatchResult`', '0x1B02, 0x1B03', 'peer ↔ peer (RPC), on data-class contracts only',
+     "A viewer's watch of a host for the DNS-SD instances the host would let it reach (§17.7.1; owner decision 778)",
+     '§12.9.1'))
 
 # ------------------------------------------------------------------ Appendix D: carried messages
 # The carried-in cell names a SignedType range only where §6.11's registry comment names the statement itself:
@@ -427,10 +449,10 @@ def connect_rows(t4):
 _T4 = _section(4)
 CONNECT = connect_rows(_T4)
 assert [r[0] for r in CONNECT] == ['C1', 'C2', 'C3', 'C4', 'C5', 'C6a', 'C6b', 'C7', 'C8', 'C9', 'C10', 'C11', 'C12',
-                                   'C13', 'C14', 'C15', 'C16', 'C17', 'C18', 'C19', 'C20', 'C21', 'C22'], \
+                                   'C13', 'C14', 'C15', 'C16', 'C17', 'C18', 'C19', 'C20', 'C21', 'C22', 'C23'], \
     [r[0] for r in CONNECT]
 assert ('Dispositions follow owner decisions 22, 85 (C14 into M4), 86 (C18), 609 (C19 withdrawn, reversing owner '
-        'decision 176) and 691 and 692 (C21 and C22), under D-REPO-5') in _T4, \
+        'decision 176), 691 and 692 (C21 and C22) and 730 (C23), under D-REPO-5') in _T4, \
     "§4.6's lead changed: update INTRO['E_CONNECT']"
 
 # ------------------------------------------------------------------ Appendix F
@@ -501,7 +523,8 @@ def appendix_g(t2):
               "citations resolve.")
     text = (f"§2.8 holds `metadata_list.yml` ({ver.group(1)}, updated {ver.group(2)} for {ver.group(3)}), the list the "
             "product promises: URnetwork's servers never receive plaintext content or keys, in any mode, and see only "
-            "the values it names (D-TRUST-4), with one bounded exception, the platform report listener (§2.8). This "
+            "the values it names (D-TRUST-4), with two bounded exceptions, the platform report listener and the support "
+            "conversation (§2.8). This "
             "appendix no longer copies it, so the two cannot drift. " + census)
     return {'version': ver.group(1), 'date': ver.group(2), 'scope': ver.group(3), 'rows': len(rows),
             'withdrawn': wd, 'families': {p: len(ns) for p, ns in fam.items()}, 'spans': spans, 'census': census,

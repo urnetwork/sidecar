@@ -2846,3 +2846,135 @@ _S197 = "as the design-records tracks fold them. "
 assert STATUS.count(_S197) == 1, 'status moved'
 STATUS = STATUS.replace(_S197, "as the design-records tracks fold them, and on 2026-11-24 with owner decision 778, "
                         "service discovery across hosts. ")
+
+# Owner decisions 779-782 (2026-11-24): the build's answers recorded after the eighth late fold that are not the compute
+# planner's own (QD-1393 to QD-1397), folded by the eleventh fold, track dr19-support-fold.
+INDEX += [
+    (779, "The evaluator's twelve repositories",
+     "The competition evaluator's sidecar/1 release takes operator-core as its twelfth repository before it is "
+     'qualified.'),
+    (780, "evs's read fan-out bounded",
+     "evs bounds a push's and a read's store reads in flight, and the file clusters their connections to a host."),
+    (781, "A T3 Net's setup rides out resets",
+     "A T3 Net's setup retries a reset from the local stack's MinIO, and it rereads admin info after a real clock move."),
+    (782, 'Coalesced hints',
+     'A superseded hint is a repeat and goes as its seq alone; a topic keeps up to 64 distinct hint bodies a batch.'),
+]
+for _n, _note in [
+        (267, " Extended by @@OD:779@@: sidecar/1 also takes operator-core, twelve repositories."),
+        (646, ' Amended by @@OD:781@@: the reread waits for a move past a threshold, 30 s by default.'),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 783))
+DATES.update({_n: '2026-11-24' for _n in range(779, 783)})
+_D778 = "taking Bonjour names per viewer beside @@OD:770@@'s listeners. "
+assert DECISIONS_INTRO.count(_D778) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D778, _D778 + "An eleventh fold numbers the build's answers recorded after the eighth late fold: the evaluator's "
+    "twelve repositories (779), extending @@OD:267@@; evs's read fan-out bounded (780); a T3 Net's setup riding out "
+    "resets (781), amending @@OD:646@@; and coalesced hints, a superseded one sent as its seq alone (782). ")
+_S778 = "and on 2026-11-24 with owner decision 778, service discovery across hosts. "
+assert STATUS.count(_S778) == 1, 'status moved'
+STATUS = STATUS.replace(_S778, "and on 2026-11-24 with owner decision 778, service discovery across hosts, and the "
+                        "build's later answers, owner decisions 779 to 782. ")
+
+# Owner decisions 783 and 784 (2026-11-24): DESIGN-COMPUTE.md's support skill, CO-45 and CO-46, folded by the eleventh
+# fold after the build's answers it numbered first.
+INDEX += [
+    (783, 'Compute: the support skill',
+     "The built-in tools include the support skill, the app's support chat: agents send feedback with logs and read "
+     'replies (CO-45).'),
+    (784, "Compute: the support skill's answers",
+     'The support conversation is fully read by the platform, nothing sealed; files and private data ask; triage may '
+     'use a named subprocessor (CO-46).'),
+]
+for _n, _note in [
+        (142, ' Amended by @@OD:783@@: and for a tainted run\'s message to URnetwork\'s support.'),
+        (772, " Amended by @@OD:783@@: kind 27, a message to URnetwork's support, joins the kinds it decides."),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 785))
+DATES.update({783: '2026-11-24', 784: '2026-11-24'})
+_D782 = "and coalesced hints, a superseded one sent as its seq alone (782). "
+assert DECISIONS_INTRO.count(_D782) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D782, _D782 + "It then enters DESIGN-COMPUTE.md's owner statements of 2026-11-24, CO-45 and CO-46, its support "
+    "skill: agents writing into the app's support conversation with sidecar's own content-free log, notified of "
+    "replies and reading them (783), amending @@OD:772@@, and the owner's answers to its questions (784), the "
+    "conversation meant to be fully read by the platform, the one exception the owner approved to §2.8's statement "
+    "beside the report listener's. ")
+_S782 = "and the build's later answers, owner decisions 779 to 782. "
+assert STATUS.count(_S782) == 1, 'status moved'
+STATUS = STATUS.replace(_S782, "and the build's later answers, owner decisions 779 to 782, and DESIGN-COMPUTE.md's "
+                        "support skill, 783 and 784. ")
+
+# Owner decisions 785-789 (2026-11-24): the build's answers recorded after the eleventh fold (QD-1399, QD-1400 and
+# QD-1402 to QD-1404), folded by the twelfth fold, track dr20-late-fold; QD-1401, a compute answer, takes no number.
+INDEX += [
+    (785, "api's own hold/ writer",
+     "api installs its own hold/ writer, so a hold's renewal from api's staff route writes in an api-only process."),
+    (786, 'sidecar_clients a hard cap at connect',
+     "The connect gate counts a network's live sidecar clients and adds the client's entry in one Redis script."),
+    (787, 'Client-paced store connections uncapped',
+     "A store connection held at a client's own pace goes through a second, uncapped transport per host."),
+    (788, "One process keeps api's stores",
+     "Where api and taskworker share a process, the worker keeps api's rev/ store and log sequencer installed."),
+    (789, 'The bridge rereads the clock on a wake',
+     "device.Bridge publishes again when the device wakes or its clock steps; a desktop's wait is capped too."),
+]
+for _n, _note in [
+        (780, " Narrowed by @@OD:787@@: a connection held at a client's own pace counts against no cap."),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 790))
+DATES.update({_n: '2026-11-24' for _n in range(785, 790)})
+_D784 = "beside the report listener's. "
+assert DECISIONS_INTRO.count(_D784) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D784, _D784 + "A twelfth fold numbers the build's answers recorded after the eleventh: api's own hold/ writer "
+    "(785); sidecar_clients a hard cap at connect (786), following @@OD:4@@; client-paced store connections outside "
+    "the file clusters' cap (787), narrowing @@OD:780@@; one process keeping api's rev/ store and log sequencer "
+    "(788); and the bridge reading the wall clock again on a wake or a clock step (789). ")
+_S784 = "and DESIGN-COMPUTE.md's support skill, 783 and 784. "
+assert STATUS.count(_S784) == 1, 'status moved'
+STATUS = STATUS.replace(_S784, "and DESIGN-COMPUTE.md's support skill, 783 and 784, and the build's answers after "
+                        "it, owner decisions 785 to 789. ")
+
+# Owner decisions 790-792 (2026-11-25): the build's answers recorded after the twelfth fold (QD-1405 to QD-1407 and
+# QD-1419), folded by the thirteenth fold, track designmd-fold-co47-to-co49; QD-1408 to QD-1418, the compute plan's,
+# take no number.
+INDEX += [
+    (790, "The file clusters' cap judges no host or store",
+     "A request the cap's queue left under a second marks no host; the clusters' checks and the stores' probes go "
+     'uncapped.'),
+    (791, 'The user root in the embedded host table',
+     "The embedded host table carries user_root, which the published list leaves out, so labels resolve from M2."),
+    (792, "A listen's grant lifetime in the sdk",
+     "SidecarSockets.ListenExpires asks a tls/ or smtp/ listen's grant lifetime; GetGrantExpiresMillis reads its end."),
+]
+for _n, _note in [
+        (282, ' Extended by @@OD:791@@: the table also carries the user root.'),
+        (687, ' Extended by @@OD:792@@: an app asks it through the sdk\'s `ListenExpires`.'),
+        (780, ' Narrowed by @@OD:790@@: a request the queue left under a second marks no host, and checks go uncapped.'),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 793))
+DATES.update({_n: '2026-11-25' for _n in range(790, 793)})
+_D789 = "and the bridge reading the wall clock again on a wake or a clock step (789). "
+assert DECISIONS_INTRO.count(_D789) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D789, _D789 + "A thirteenth fold numbers the build's answers recorded after the twelfth: the file clusters' cap "
+    "judging no host or store (790), narrowing @@OD:780@@ beside @@OD:787@@; the user root in the embedded host table "
+    "(791), extending @@OD:282@@; and a listen's grant lifetime in the sdk (792), extending @@OD:687@@. ")
+_S789 = "and the build's answers after it, owner decisions 785 to 789. "
+assert STATUS.count(_S789) == 1, 'status moved'
+STATUS = STATUS.replace(_S789, "and the build's answers after it, owner decisions 785 to 789, and the build's answers "
+                        "of 2026-11-25, owner decisions 790 to 792. ")

@@ -1,0 +1,26 @@
+# The protocol/record.proto fields DESIGN-COMPUTE.md's version 5 adds that a server reads, for I-18 (CACL-M11-04): each
+# field's number and type, and the §2.8 row that shows it. `sees` quotes that row, so a row that stops saying it fails
+# §22.7's guard. Version 5 reaches a server only as kind 19's create, POST compute/v1/enclaves (compute-4), and kind
+# 21's raise, POST compute/v1/budget/raise (compute-6), each with its decision, and every other server path refuses a
+# version-5 action whole (DESIGN-COMPUTE §16.3; CheckCanonicalActionForServer). So kind 19's fields 38, 39 and 42 and
+# kind 21's 38 and 43 are here; the rest of version 5's fields, and ApprovalDecision's selected, auto and auto_verdict,
+# which no server gate takes, are testdata/metadata/fields.yml's unset lines. A field the row does not name yet sits
+# under `pending` with the question that asks for its words; the label and price per hour took compute-4's words
+# from the owner's answer QD-1388 in metadata_list.yml v69.
+
+# kind 19's create: its mode at create and its enclave (field 38, sealed, keeps fields.yml's line)
+CanonicalAction.egress_mode: {number: 39, type: uint32, row: compute-4, sees: "egress mode (already api-7's)"}
+CanonicalAction.enclave: {number: 42, type: EnclaveFields, row: compute-4, sees: "shape, provider"}
+EnclaveFields.enclave_id: {number: 1, type: bytes, row: compute-4, sees: "per enclave: id"}
+EnclaveFields.shape: {number: 3, type: string, row: compute-4, sees: "shape"}
+EnclaveFields.provider: {number: 4, type: string, row: compute-4, sees: "provider"}
+EnclaveFields.label: {number: 5, type: string, row: compute-4, sees: "the label and price per hour its create's action shows"}
+EnclaveFields.price_per_hour: {number: 6, type: uint64, row: compute-4, sees: "price per hour its create's action shows"}
+EnclaveFields.incarnation: {number: 7, type: uint64, row: compute-4, sees: "incarnations"}
+
+# kind 21's raise: the budget it passes (field 38, sealed, keeps fields.yml's line)
+CanonicalAction.budget: {number: 43, type: BudgetFields, row: compute-6, sees: "each raise kind 21 approved"}
+BudgetFields.agent_id: {number: 1, type: bytes, row: compute-6, sees: "budget amounts by subject id"}
+BudgetFields.period: {number: 2, type: uint32, row: compute-6, sees: "each raise kind 21 approved"}
+BudgetFields.amount: {number: 3, type: uint64, row: compute-6, sees: "budget amounts"}
+BudgetFields.current: {number: 4, type: uint64, row: compute-6, sees: "what each subject's budgets have spent"}

@@ -12,6 +12,10 @@
 
 package sidecar
 
+import (
+	"time"
+)
+
 // DESIGN-COMPUTE §6, inference: the catalog, the router, the local engine and the remote path.
 type InferSettings struct {
 	// §6.3's names. The longest canonical name, alias or search id a parse reads, in bytes: 96, the bound §7.5's
@@ -45,6 +49,41 @@ type InferSettings struct {
 	// classes, so a laptop or desktop below the next floor still gets the largest default its memory fits. Empty
 	// recommends nothing.
 	LocalDefaults []*InferLocalDefault
+
+	// §6.4's stream. The events a call's channel holds ahead of its reader: 64, a few seconds of a fast local model's
+	// deltas at the Harness's 30 renders a second, past which the router holds them, folding text, reasoning and
+	// argument deltas, so a slow reader never blocks the engine. Non-positive holds one.
+	EventBufferCount int
+	// The most a call's held events may come to, in bytes, before the router stops the call, answering canceled: 16
+	// MiB, many times the longest answer a model's maximum output gives, so only a reader that stopped reading reaches
+	// it, and a stopped reader holds no engine. Non-positive stops a call whose reader falls behind at all.
+	EventPendingMaxByteCount int
+
+	// §6.5's engine helper, ur-engine. The longest request line the daemon sends the helper and the helper reads, in
+	// bytes: 64 MiB, a whole conversation with its images, which the gateway bounds at 32 MiB of body (§8.7) and base64
+	// grows by a third. A protocol limit both ends read from these settings. Non-positive refuses every request.
+	EngineRequestMaxByteCount int
+	// The longest answer line the helper writes and the daemon reads, in bytes: 1 MiB, far past any delta or a tool
+	// call's arguments as the engine parses them. A line past it ends the helper. Non-positive refuses every answer.
+	EngineAnswerMaxByteCount int
+	// The helpers the daemon runs at once, one a loaded model: 2, so a second model loads beside a first without
+	// unloading it, and a third stops the least recently used idle one. Non-positive starts none.
+	EngineProcessMaxCount int
+	// The most engines of one model a helper holds, each running one call at a time: 2, §6.5's "up to two on a desktop
+	// with the memory for both", a second only where the device's memory holds the model's minimum twice over. Below 2
+	// holds one.
+	EngineInstanceMaxCount int
+	// How long a helper may take to load its model: 5 minutes, a 16 GB model read from a slow disk. Past it the helper is
+	// ended and the call answers engine_failed. Non-positive ends every load at once.
+	EngineLoadTimeout time.Duration
+	// How long a canceled call's helper may take to stop it before the helper is ended, which frees its engine: 10
+	// seconds, many times a stream's cancel. Non-positive ends the helper at once.
+	EngineCancelTimeout time.Duration
+	// How long a helper asked to exit, its input closed, may take before it is killed: 5 seconds. Non-positive kills it
+	// at once.
+	EngineStopTimeout time.Duration
+	// The bytes of a helper's stderr the daemon keeps for its log when the helper ends: 64 KiB. Non-positive keeps none.
+	EngineStderrMaxByteCount int
 }
 
 // One of §6.5's defaults by memory: the local model a device of its classes gets with at least its memory.
@@ -68,6 +107,16 @@ func DefaultInferSettings() *InferSettings {
 		ToolBudgetWindowDivisor:     4,
 		ManifestMaxByteCount:        4 * 1024 * 1024,
 		ManifestFileMaxByteCount:    64 * 1024 * 1024 * 1024,
+		EventBufferCount:            64,
+		EventPendingMaxByteCount:    16 * 1024 * 1024,
+		EngineRequestMaxByteCount:   64 * 1024 * 1024,
+		EngineAnswerMaxByteCount:    1024 * 1024,
+		EngineProcessMaxCount:       2,
+		EngineInstanceMaxCount:      2,
+		EngineLoadTimeout:           5 * time.Minute,
+		EngineCancelTimeout:         10 * time.Second,
+		EngineStopTimeout:           5 * time.Second,
+		EngineStderrMaxByteCount:    64 * 1024,
 		LocalDefaults: []*InferLocalDefault{
 			{
 				Name:               "local-gemma-4-26b-a4b-off",

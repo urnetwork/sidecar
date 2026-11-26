@@ -1,0 +1,2 @@
+{"type":"link","id":"a1b2c3d4","parentId":"9f8e7d6c","timestamp":"2026-11-24T12:00:00.000Z","to":"child","agentId":"019a0000-0000-7000-8000-000000000002","runId":"019a0000-0000-7000-8000-000000000003","place":"local"}
+{"type":"link","id":"0badc0de","parentId":null,"timestamp":"2026-11-24T12:00:00.000Z","to":"parent","agentId":"019a0000-0000-7000-8000-000000000001","runId":"019a0000-0000-7000-8000-000000000004","place":"local","nodeId":"a1b2c3d4"}

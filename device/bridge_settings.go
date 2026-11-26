@@ -125,6 +125,32 @@ type BridgeSettings struct {
 	ResolverWorkerCount int
 	// How long one pass-through query may take upstream: 5 s, a stub resolver's own retry interval. Positive.
 	ResolverUpstreamTimeout time.Duration
+	// The window the resolver's stateless TCP advertises: 65,535 B, TCP's largest without scaling. Positive, at most
+	// 65,535.
+	ResolverTcpWindow int
+	// The most one TCP answer segment carries: 536 B, the MSS a peer that names none takes (RFC 9293 §3.7.1), since a
+	// stateless resolver keeps no MSS the SYN named. Positive.
+	ResolverTcpSegmentByteCount int
+
+	// The TTL of every DNS-SD answer and denial the device gives (§12.9.1; owner decision 778): 10 s, RFC 8766
+	// §5.5.1's cap for clients without DNS Push, so a withdrawn instance leaves a unicast client's cache within it.
+	// Positive, at least a second.
+	DiscoveryTtl time.Duration
+	// The largest UDP DNS-SD answer for an asker that sends no EDNS0 record: 512 B (RFC 1035 §4.2.1); past it the
+	// answer drops its additionals, then sets TC, and the asker comes again over TCP. Positive.
+	DiscoveryUdpByteCount int
+	// The largest UDP DNS-SD answer an EDNS0 asker's payload size may raise it to: 1,232 B, a payload that crosses
+	// IPv6's minimum MTU unfragmented. Positive.
+	DiscoveryEdnsByteCount int
+	// The most instances a discovery view holds: 16,384, §17.7.1's InstanceCount from each of its WatchHostCount hosts
+	// (256 times 64). An instance past it is left out and counted. Positive.
+	DiscoveryInstanceCount int
+	// §17.5's IPv6 translator (bridge_translate.go): the least tun MTU it runs on, 1,280 B, IPv6's minimum link MTU
+	// (RFC 8200 §5); and the largest translated IPv4 packet that may still fragment downstream, taking an
+	// identification with DF clear, 1,260 B, that minimum less the 20 bytes the smaller header saves (RFC 7915 §5.1),
+	// a larger one going with DF set. Both positive.
+	TranslatorMinMtu                int
+	TranslatorFragmentableByteCount int
 
 	// The slots of the ring the provider hook reports reach events into (bridge_reach.go): 1,024 on desktop, 256 on
 	// mobile, about 112 bytes each, held for the bridge's life. A flow a granted row admits while every slot is held
@@ -145,34 +171,42 @@ type BridgeSettings struct {
 // §17's values, for a desktop: a daemon, a desktop network process or a VPS.
 func DefaultBridgeSettings() *BridgeSettings {
 	return &BridgeSettings{
-		PinSlotCount:             8192,
-		PinTcpIdleTimeout:        600 * time.Second,
-		PinIdleTimeout:           5 * time.Minute,
-		PinTouchInterval:         1 * time.Second,
-		LinkDownTimeout:          30 * time.Second,
-		LinkConnectTimeout:       3 * time.Second,
-		LinkIdleTimeout:          600 * time.Second,
-		LinkRebuildInterval:      6 * 24 * time.Hour,
-		LinkBuildTimeout:         30 * time.Second,
-		LinkBindingMaxByteCount:  4 * 1024,
-		WindowDelegation:         bridge.DefaultWindowDelegationSettings(),
-		ShareCert:                bridge.DefaultShareCertSettings(),
-		LinkCountMax:             64,
-		LinkRoomIdleTimeout:      60 * time.Second,
-		RejectPerSecond:          20,
-		RejectBurst:              40,
-		RejectSourceSlotCount:    256,
-		RejectEntryHoldTimeout:   600 * time.Second,
-		NameTtl:                  60 * time.Second,
-		ResolverQueueCount:       64,
-		ResolverWorkerCount:      4,
-		ResolverUpstreamTimeout:  5 * time.Second,
-		RulesMaxByteCount:        8 * 1024 * 1024,
-		RulesMaxFieldCount:       1024 * 1024,
-		RevocationMaxCount:       4 * 1024,
-		RevocationIdMaxByteCount: 64,
-		ReachQueueCount:          1024,
-		ReachWaitingCount:        1024,
+		PinSlotCount:                    8192,
+		PinTcpIdleTimeout:               600 * time.Second,
+		PinIdleTimeout:                  5 * time.Minute,
+		PinTouchInterval:                1 * time.Second,
+		LinkDownTimeout:                 30 * time.Second,
+		LinkConnectTimeout:              3 * time.Second,
+		LinkIdleTimeout:                 600 * time.Second,
+		LinkRebuildInterval:             6 * 24 * time.Hour,
+		LinkBuildTimeout:                30 * time.Second,
+		LinkBindingMaxByteCount:         4 * 1024,
+		WindowDelegation:                bridge.DefaultWindowDelegationSettings(),
+		ShareCert:                       bridge.DefaultShareCertSettings(),
+		LinkCountMax:                    64,
+		LinkRoomIdleTimeout:             60 * time.Second,
+		RejectPerSecond:                 20,
+		RejectBurst:                     40,
+		RejectSourceSlotCount:           256,
+		RejectEntryHoldTimeout:          600 * time.Second,
+		NameTtl:                         60 * time.Second,
+		ResolverQueueCount:              64,
+		ResolverWorkerCount:             4,
+		ResolverUpstreamTimeout:         5 * time.Second,
+		ResolverTcpWindow:               65535,
+		ResolverTcpSegmentByteCount:     536,
+		DiscoveryTtl:                    10 * time.Second,
+		DiscoveryUdpByteCount:           512,
+		DiscoveryEdnsByteCount:          1232,
+		DiscoveryInstanceCount:          16 * 1024,
+		TranslatorMinMtu:                1280,
+		TranslatorFragmentableByteCount: 1260,
+		RulesMaxByteCount:               8 * 1024 * 1024,
+		RulesMaxFieldCount:              1024 * 1024,
+		RevocationMaxCount:              4 * 1024,
+		RevocationIdMaxByteCount:        64,
+		ReachQueueCount:                 1024,
+		ReachWaitingCount:               1024,
 	}
 }
 
@@ -208,6 +242,7 @@ func (self *BridgeSettings) validate() error {
 		{name: "RejectEntryHoldTimeout", value: self.RejectEntryHoldTimeout},
 		{name: "NameTtl", value: self.NameTtl},
 		{name: "ResolverUpstreamTimeout", value: self.ResolverUpstreamTimeout},
+		{name: "DiscoveryTtl", value: self.DiscoveryTtl},
 	}
 	for _, duration := range positiveDurations {
 		if duration.value <= 0 {
@@ -229,6 +264,13 @@ func (self *BridgeSettings) validate() error {
 		{name: "RevocationMaxCount", value: self.RevocationMaxCount},
 		{name: "RevocationIdMaxByteCount", value: self.RevocationIdMaxByteCount},
 		{name: "LinkBindingMaxByteCount", value: self.LinkBindingMaxByteCount},
+		{name: "ResolverTcpWindow", value: self.ResolverTcpWindow},
+		{name: "ResolverTcpSegmentByteCount", value: self.ResolverTcpSegmentByteCount},
+		{name: "DiscoveryUdpByteCount", value: self.DiscoveryUdpByteCount},
+		{name: "DiscoveryEdnsByteCount", value: self.DiscoveryEdnsByteCount},
+		{name: "DiscoveryInstanceCount", value: self.DiscoveryInstanceCount},
+		{name: "TranslatorMinMtu", value: self.TranslatorMinMtu},
+		{name: "TranslatorFragmentableByteCount", value: self.TranslatorFragmentableByteCount},
 	}
 	for _, count := range positiveCounts {
 		if count.value <= 0 {
@@ -237,6 +279,12 @@ func (self *BridgeSettings) validate() error {
 	}
 	if self.PinTouchInterval < 0 {
 		return errors.Join(ErrBridgeSettingsInvalid, errors.New("PinTouchInterval is negative"))
+	}
+	if 0xFFFF < self.ResolverTcpWindow {
+		return errors.Join(ErrBridgeSettingsInvalid, errors.New("ResolverTcpWindow is past what TCP's header holds"))
+	}
+	if self.DiscoveryTtl < time.Second {
+		return errors.Join(ErrBridgeSettingsInvalid, errors.New("DiscoveryTtl is under a second"))
 	}
 	if bridgeRejectTokensMax < self.RejectBurst {
 		return errors.Join(ErrBridgeSettingsInvalid, errors.New("RejectBurst is past what a bucket holds"))

@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -367,18 +368,29 @@ func TestBridgeExposeRoutesAndMaps(t *testing.T) {
 }
 
 // A forward is outward, bound to the call's run, and listens on this host's loopback alone, whatever the daemon's
-// --listen is: it waits, then answers its grant's id and its listener. Its expiry is the grant's lifetime in whole
-// seconds, never shorter than asked.
+// --listen is: it waits, then answers its grant's id and its listener. Its expires reaches the bridges as the end it
+// names, in ms and never before the time asked, so the same call made again a minute on asks the same end and waits on
+// the same request, where a lifetime worked out from the clock asked a later end at each call and filed anew.
 func TestBridgeForwardListensOnLoopbackUnderTheRun(t *testing.T) {
 	env := newTestBridgeToolEnv(t)
 	conn := env.conn("2025-06-18")
 	target := sidecar.NewId().String()
-	expires := env.clock.Now().Add(90*time.Minute + 300*time.Millisecond).UTC()
+	expires := env.clock.Now().Add(90*time.Minute + 300*time.Millisecond + 250*time.Microsecond).UTC()
 	arguments := map[string]any{"target": target, "port": 22, "local_port": 2222, "expires": expires.Format(time.RFC3339Nano)}
 
 	pending := testBridgeFilingOf(t, env.callTool(conn, "2025-06-18", "bridge_forward", arguments))
 	if pending.Status != "approval_pending" || pending.ApprovalId == "" || pending.GrantId != "" || pending.ForwardId != "" {
 		t.Fatalf("with no decision: %+v", pending)
+	}
+	// asked again a minute on with the same expires, the forward hands the bridges the same params, the same end, so
+	// the filer finds the same request
+	env.clock.Advance(time.Minute)
+	if again := testBridgeFilingOf(t, env.callTool(conn, "2025-06-18", "bridge_forward", arguments)); again.Status != "approval_pending" ||
+		again.ApprovalId != pending.ApprovalId {
+		t.Fatalf("asked again a minute on: %+v, where the first waited on %s", again, pending.ApprovalId)
+	}
+	if asked := env.bridges.taken(); len(asked) != 2 || !reflect.DeepEqual(asked[0].forward, asked[1].forward) {
+		t.Fatalf("asked again a minute on, the forward's params moved: %+v, then %+v", asked[0].forward, asked[len(asked)-1].forward)
 	}
 	env.bridges.set(true, nil)
 	filed := testBridgeFilingOf(t, env.callTool(conn, "2025-06-18", "bridge_forward", arguments))
@@ -395,16 +407,16 @@ func TestBridgeForwardListensOnLoopbackUnderTheRun(t *testing.T) {
 			!slices.Equal(params.Listen, []string{"127.0.0.1"}) {
 			t.Errorf("a forward's params: %+v", params)
 		}
-		// 90 min and 300 ms rounds up to 5,401 s
-		if params.LifetimeSeconds != 5401 {
-			t.Errorf("the lifetime is %d s", params.LifetimeSeconds)
+		// the end itself, its 250 µs past the ms rounding up to the next ms, and no lifetime from the clock
+		if want := expires.Truncate(time.Millisecond).Add(time.Millisecond).UnixMilli(); params.ExpiresMs != want || params.LifetimeSeconds != 0 {
+			t.Errorf("the end is %d ms and the lifetime %d s, not %d ms", params.ExpiresMs, params.LifetimeSeconds, want)
 		}
 	}
 	// with no expires the requests rule's lifetime stands
 	env.callTool(conn, "2025-06-18", "bridge_forward", map[string]any{"target": target, "port": 22, "local_port": 2223})
 	calls := env.bridges.taken()
-	if last := calls[len(calls)-1].forward; last.LifetimeSeconds != 0 {
-		t.Errorf("with no expires the lifetime is %d s", last.LifetimeSeconds)
+	if last := calls[len(calls)-1].forward; last.LifetimeSeconds != 0 || last.ExpiresMs != 0 {
+		t.Errorf("with no expires the lifetime is %d s and the end %d ms", last.LifetimeSeconds, last.ExpiresMs)
 	}
 }
 

@@ -1,0 +1,142 @@
+# The support log's registry (DESIGN-COMPUTE §28.7; FB section 10.3's versioned file): every code a component of
+# sidecar, ur, the Harness or the apps writes to the support log, and every field a code may carry, each typed. The
+# support log takes no free text of any kind, so what a bundle can say is exactly what this file declares, and a code
+# or a field is added by a reviewable diff here.
+#
+# Rules, which check/support_log_test.go holds:
+#   - numbers are permanent: a component, enum value, field or code keeps its number once released and none is
+#     reused, so a ring written by one release reads under the next; entries are appended, never renumbered;
+#   - a field's type is one of enum (its values listed under enums), count (FB's occurrences buckets), duration,
+#     size, version (format-checked), boolean or token (an object's id, held only as a salted HMAC: a sidecar, repo,
+#     run, agent, enclave, entry or request);
+#   - a code names its component, its severity (info, degraded or failed) and the fields it may carry, nothing else;
+#   - raise version whenever a code, a field, an enum value or a bucket is added.
+#
+# support_log_registry.go is generated from this file. Regenerate it with
+#   SIDECAR_REGENERATE_SUPPORT_LOG=1 go test -tags sidecar_check -run '^TestSupportLogRegistryIsCurrent$' ./check
+# and a reviewer reads both diffs.
+
+version: 2
+
+# How a count, a duration and a size are told: the first bucket whose max the value is at or under, else the last,
+# which has none. Counts are FB section 10.3's occurrences, with 0 before them.
+buckets:
+  count:
+    - {label: "0", max: 0}
+    - {label: "1", max: 1}
+    - {label: "2-9", max: 9}
+    - {label: "10-99", max: 99}
+    - {label: "100+"}
+  # milliseconds
+  duration:
+    - {label: "<10ms", max: 9}
+    - {label: "10-99ms", max: 99}
+    - {label: "100-999ms", max: 999}
+    - {label: "1-9s", max: 9999}
+    - {label: "10-59s", max: 59999}
+    - {label: "1-9m", max: 599999}
+    - {label: "10-59m", max: 3599999}
+    - {label: "1-23h", max: 86399999}
+    - {label: "1d+"}
+  # bytes
+  size:
+    - {label: "0", max: 0}
+    - {label: "<1KiB", max: 1023}
+    - {label: "1-63KiB", max: 65535}
+    - {label: "64KiB-1MiB", max: 1048575}
+    - {label: "1-15MiB", max: 16777215}
+    - {label: "16-255MiB", max: 268435455}
+    - {label: "256MiB+"}
+
+# What writes the codes: each process's components, by the area that builds them.
+components:
+  - {name: support_log, number: 1}
+  - {name: daemon, number: 2}
+  - {name: app, number: 3}
+  - {name: support, number: 4}
+
+# Enumerated values, numbered from 1 in the order listed. A value is appended, never removed or reordered.
+enums:
+  # why a daemon stopped
+  stop_reason: [idle, signal, closed, failed]
+  # why the ring dropped a segment
+  prune_reason: [age, size]
+  # why a ring's segment could not be read whole
+  unreadable_reason: [truncated, checksum, malformed, unopened]
+  # a support message's tier (§28.5)
+  tier: [human, released, agent, auto]
+  # what support_send answered (§28.4, §28.14)
+  outcome: [sent, queued, approval_pending, declined, not_sent]
+  # the refusals that fail only their call (§28.6, §28.14)
+  refusal:
+    - disclosure_required
+    - secret_in_message
+    - hidden_text
+    - support_off
+    - rate_limited
+    - support_queue_full
+    - support_paused
+    - too_long
+    - not_text
+    - file_refused
+    - not_found
+    - no_host
+    - grant_required
+  # how a post to the feedback service ended, as a class, never the service's text
+  post_result: [accepted, replayed, client_error, rate_limited, server_error, unreachable, tls_failed, timeout, unauthorized]
+  # who decided a kind-27 use (§28.8)
+  decider: [none, classifier, person]
+  # the support client's event stream (§28.9)
+  stream_state: [opened, closed, failed]
+
+fields:
+  - {name: count, number: 1, type: count}
+  - {name: release, number: 2, type: version}
+  - {name: auto_spawned, number: 3, type: boolean}
+  - {name: uptime, number: 4, type: duration}
+  - {name: stop_reason, number: 5, type: enum, enum: stop_reason}
+  - {name: segments, number: 6, type: count}
+  - {name: ring_bytes, number: 7, type: size}
+  - {name: prune_reason, number: 8, type: enum, enum: prune_reason}
+  - {name: unreadable_reason, number: 9, type: enum, enum: unreadable_reason}
+  - {name: entry, number: 10, type: token, object: entry}
+  - {name: run, number: 11, type: token, object: run}
+  - {name: agent, number: 12, type: token, object: agent}
+  - {name: request, number: 13, type: token, object: request}
+  - {name: tier, number: 14, type: enum, enum: tier}
+  - {name: outcome, number: 15, type: enum, enum: outcome}
+  - {name: refusal, number: 16, type: enum, enum: refusal}
+  - {name: attempts, number: 17, type: count}
+  - {name: waited, number: 18, type: duration}
+  - {name: body_bytes, number: 19, type: size}
+  - {name: with_bundle, number: 20, type: boolean}
+  - {name: files, number: 21, type: count}
+  - {name: tainted, number: 22, type: boolean}
+  - {name: decider, number: 23, type: enum, enum: decider}
+  - {name: post_result, number: 24, type: enum, enum: post_result}
+  - {name: stream_state, number: 25, type: enum, enum: stream_state}
+  - {name: sidecar, number: 26, type: token, object: sidecar}
+
+codes:
+  # the support log itself
+  - {component: support_log, code: opened, number: 1, severity: info, fields: [segments, ring_bytes]}
+  - {component: support_log, code: events_dropped, number: 2, severity: degraded, fields: [count]}
+  - {component: support_log, code: segment_pruned, number: 3, severity: info, fields: [prune_reason, segments]}
+  - {component: support_log, code: segment_unreadable, number: 4, severity: degraded, fields: [unreadable_reason]}
+  - {component: support_log, code: field_refused, number: 5, severity: degraded, fields: [count]}
+  - {component: support_log, code: write_failed, number: 6, severity: failed, fields: [count]}
+  # ur daemon's process
+  - {component: daemon, code: started, number: 7, severity: info, fields: [release, auto_spawned]}
+  - {component: daemon, code: stopped, number: 8, severity: info, fields: [stop_reason, uptime]}
+  # the apps' sidecar, in the app's process
+  - {component: app, code: started, number: 9, severity: info, fields: [release]}
+  - {component: app, code: stopped, number: 10, severity: info, fields: [uptime]}
+  # the support client (§28.6 to §28.14)
+  - {component: support, code: message_refused, number: 11, severity: degraded, fields: [refusal, tier, agent, run]}
+  - {component: support, code: message_queued, number: 12, severity: info, fields: [outcome, tier, body_bytes, with_bundle, files, tainted, decider, agent, run, request]}
+  - {component: support, code: message_posted, number: 13, severity: info, fields: [post_result, attempts, waited, entry]}
+  - {component: support, code: post_failed, number: 14, severity: degraded, fields: [post_result, attempts]}
+  - {component: support, code: message_given_up, number: 15, severity: failed, fields: [attempts, waited, entry]}
+  - {component: support, code: stream_changed, number: 16, severity: info, fields: [stream_state, post_result]}
+  - {component: support, code: event_received, number: 17, severity: info, fields: [entry]}
+  - {component: support, code: token_failed, number: 18, severity: degraded, fields: [post_result]}

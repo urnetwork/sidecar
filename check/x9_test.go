@@ -191,6 +191,15 @@ var x9Rows = []x9Row{
 		defaultOffNotNeeded: "an encryption event type appended to the enum, so earlier values keep their numbers, and seen only by " +
 			"a caller that registers for encryption events; TestNackDemotionReportsThePeerSessionLost pins when it fires",
 	},
+	{
+		// owner decision 730 (QD-1232), on connect's sidecar branch; upstreaming it to connect's main is the owner's
+		id: "C23", disposition: x9Lands, milestone: 1, task: "connect-restart-first-stream (connect 0c25db80, 7cc26e9a)",
+		marker: "NothingDeliveredAckCount", markerKind: x9MarkerName,
+		defaultOffNotNeeded: "on by default by owner decision 730: it corrects connect's own restart path, so no client keeps the " +
+			"old behavior, and Ack.nothing_delivered is additive, a legacy peer on either side keeping today's recovery; connect's " +
+			"TestRestartedClientsFirstOpenReachesItsListenerWithoutItsResend and " +
+			"TestRestartedClientGetsItsListenersAnswerWithoutTheListenersBackoff pin the new one",
+	},
 }
 
 // The row with that id, or nil.
@@ -867,7 +876,7 @@ func TestX9ReadyForMain(t *testing.T) {
 
 // Every row of §4.6 is in the table once, with the fields its disposition needs.
 func TestX9RowsAreSection46(t *testing.T) {
-	want := []string{"C1", "C2", "C3", "C4", "C5", "C6a", "C6b", "C7", "C8", "C9", "C10", "C11", "C12", "C13", "C14", "C15", "C16", "C17", "C18", "C19", "C20", "C21", "C22"}
+	want := []string{"C1", "C2", "C3", "C4", "C5", "C6a", "C6b", "C7", "C8", "C9", "C10", "C11", "C12", "C13", "C14", "C15", "C16", "C17", "C18", "C19", "C20", "C21", "C22", "C23"}
 	got := []string{}
 	for _, row := range x9Rows {
 		got = append(got, row.id)

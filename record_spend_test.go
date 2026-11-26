@@ -1014,6 +1014,12 @@ func TestGateFieldsMustEqualRequest(t *testing.T) {
 // a preview, and its server column keeps every gated action from carrying them (TestGateFieldsMustEqualRequest).
 func TestAd4NoRunOrAgentInInputs(t *testing.T) {
 	forbidden := []string{"run", "agent", "recipient", "preview"}
+	// names that hold one of the words and none of what AD4 keeps out, each with why
+	allowed := map[string]string{
+		// DESIGN-COMPUTE §27.9's count of a run's automatic approvals, a number and no run's id, on a version-3
+		// decision, which no server gate takes
+		"AutoVerdict.RunCount": "a count, never an id",
+	}
 	canonicalAction := reflect.TypeOf(protocol.CanonicalAction{})
 	seen := map[reflect.Type]bool{}
 	var walk func(path string, typ reflect.Type)
@@ -1029,6 +1035,9 @@ func TestAd4NoRunOrAgentInInputs(t *testing.T) {
 		}
 		seen[typ] = true
 		check := func(name string) {
+			if _, ok := allowed[typ.Name()+"."+name]; ok {
+				return
+			}
 			for _, word := range forbidden {
 				if strings.Contains(strings.ToLower(name), word) {
 					t.Errorf("%s.%s names a %s", path, name, word)

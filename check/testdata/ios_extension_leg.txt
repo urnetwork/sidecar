@@ -13,6 +13,7 @@ acl_audit.go
 acl_compile.go
 acl_compile_atoms.go
 acl_compile_targets.go
+acl_compute_features.go
 acl_consent.go
 acl_eval.go
 acl_evs.go
@@ -45,6 +46,8 @@ api_token_schedule.go
 api_token_source.go
 api_transport.go
 api_transport_connect.go
+approval_compute_kinds.go
+approval_compute_support.go
 bridge_compile.go
 bridge_compile_grants.go
 bridge_compile_local.go
@@ -254,9 +257,11 @@ mls_treekem.go
 mls_treemath.go
 monitor.go
 protocol/acl.pb.go
+protocol/attest.pb.go
 protocol/config.pb.go
 protocol/core.pb.go
 protocol/directory.pb.go
+protocol/dns_sd_name.go
 protocol/doc.go
 protocol/envelope.pb.go
 protocol/evs.pb.go

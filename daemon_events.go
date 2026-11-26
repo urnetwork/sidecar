@@ -119,6 +119,8 @@ type DaemonEvent struct {
 	DnsAlarm          string              `json:"dns_alarm,omitempty"`
 	CtAlarm           string              `json:"ct_alarm,omitempty"`
 	MailReceiverAlarm string              `json:"mail_receiver_alarm,omitempty"`
+	// upgrade_required: the authorization features this release lacks, by name, comma separated (§16.6's hold).
+	AuthFeatures string `json:"auth_features,omitempty"`
 }
 
 // SidecarEvent.Erasure as the events method answers it, its times in unix milliseconds.
@@ -187,6 +189,7 @@ func newDaemonEvent(networkId *Id, originSidecarId *Id, event *SidecarEvent) *Da
 		DnsAlarm:          string(event.DnsAlarm),
 		CtAlarm:           string(event.CtAlarm),
 		MailReceiverAlarm: string(event.MailReceiverAlarm),
+		AuthFeatures:      event.AuthFeatures.String(),
 	}
 	if erasure := event.Erasure; erasure != nil {
 		wire.Erasure = &DaemonEventErasure{

@@ -11,9 +11,12 @@
 // under §7.9's sealed-body format, so its clear grant_dst names subjects alone, never an ip: prefix or a port. Every
 // version-4 action carries one, a template's included, so no such grant reads as one to every port.
 // Version 3 is kind access_request alone, in fields 8, 10, 11, 14, 26 and 29 with its port and port text in field 38
-// the same way (16.11), 27 leaving its clear set. Field 38 is set in no other version, and bridge_forward takes no
+// the same way (16.11), 27 leaving its clear set. Field 38 is set in no other version but 5, and bridge_forward takes no
 // other version than 4: the shape before the answer, a version-1 forward with its port in the clear, is refused by
-// every parser, as NewCanonicalAction builds none. At every version a clear grant_dst names its destination alone,
+// every parser, as NewCanonicalAction builds none. Version 5 is DESIGN-COMPUTE.md's (§16.3; CACL-M12-01): kinds 19 to
+// 26 alone, and kind 5 with field 49, in fields 3, 5, 29, 38 (a CanonicalActionDetail5 on kinds 19 and 21), 39 and 42
+// to 70, no field past 41 set at any other version; its rules are approval_compute_kinds.go's, which every parser here
+// holds. At every version a clear grant_dst names its destination alone,
 // since a GrantActivate carries a prefix or a port only sealed (owner decision 220), so no parser admits what the
 // builder refuses.
 //
@@ -75,6 +78,8 @@ const (
 	canonicalActionVersionAccessRequest = 3
 	// A dial or route grant's version, its prefixes and ports in sealed_detail (QD-740).
 	canonicalActionVersionSealedGrant = 4
+	// DESIGN-COMPUTE.md's version (§16.3): kinds 19 to 26 alone, and kind 5 with field 49.
+	canonicalActionVersionCompute = 5
 )
 
 // §16.8's limits on a CanonicalAction, which every builder, approver, spender and gate holds alike (QD-702): the
@@ -84,12 +89,30 @@ const (
 type CanonicalActionSettings struct {
 	// A preview, rendered as untrusted text: 2 KiB (§16.8).
 	PreviewMaxByteCount int
+	// A kind-24 send's stdin, field 46's, which its card shows whole: 32 KiB (DESIGN-COMPUTE §16.3). Past it the
+	// action is refused, never cut.
+	SendStdinMaxByteCount int
+	// A kind-26 call's body, field 60's, which its card shows whole and field 3 hashes: 32 KiB (DESIGN-COMPUTE §25.10).
+	ServiceBodyMaxByteCount int
+	// A kind-25 action's events, field 53's, each a card with its switch and one write of the use's effect: 20
+	// (DESIGN-COMPUTE §23.9, §16.3). An action holds at least one.
+	CalendarEventMaxCount int
+	// A kind-27 message's text, field 80's, which its card shows whole: 16 KiB of UTF-8, FB section 11's bound on a
+	// message, which the support client's form check reads too (DESIGN-COMPUTE §28.6).
+	SupportTextMaxByteCount int
+	// A kind-27 message's files, field 80's: 3 (§28.7).
+	SupportFileMaxCount int
 }
 
-// §16.8's values. A fresh value each call.
+// §16.8's values, and DESIGN-COMPUTE.md's for version 5. A fresh value each call.
 func DefaultCanonicalActionSettings() *CanonicalActionSettings {
 	return &CanonicalActionSettings{
-		PreviewMaxByteCount: 2 * 1024,
+		PreviewMaxByteCount:     2 * 1024,
+		SendStdinMaxByteCount:   32 * 1024,
+		ServiceBodyMaxByteCount: 32 * 1024,
+		CalendarEventMaxCount:   20,
+		SupportTextMaxByteCount: 16 * 1024,
+		SupportFileMaxCount:     3,
 	}
 }
 
@@ -113,10 +136,13 @@ var canonicalActionSealedGrantAllows = []string{"dial", "route"}
 
 // Whether this build's approvers know a CanonicalAction version: 1 at M3, 3, access_request's, at M6 (MCP-M6-01),
 // 4, a dial or route grant's sealed form (QD-740), and 2, field 37's versioning, at M10 (RECORD-M10-03), which the
-// agent-config writes alone take; the evs write honors field 37 only under §19.11's format2 gate (EvsVersioningFor).
+// agent-config writes alone take; the evs write honors field 37 only under §19.11's format2 gate (EvsVersioningFor);
+// and 5, DESIGN-COMPUTE.md's kinds 19 to 26 and kind 5's field 49, at M12a (CACL-M12-01), whose rules are
+// approval_compute_kinds.go's.
 func CanonicalActionVersionKnown(version uint32) bool {
 	switch version {
-	case 1, canonicalActionVersionVersioning, canonicalActionVersionAccessRequest, canonicalActionVersionSealedGrant:
+	case 1, canonicalActionVersionVersioning, canonicalActionVersionAccessRequest, canonicalActionVersionSealedGrant,
+		canonicalActionVersionCompute:
 		return true
 	}
 	return false
@@ -174,7 +200,13 @@ func canonicalActionCheck(action *protocol.CanonicalAction, known func(version u
 		// the one kind whose grant is a dial or route grant, and it takes no version that seals nothing
 		return fmt.Errorf("%w: kind %s at version %d", ErrCanonicalActionInvalid, kind, version)
 	}
-	sealedVersion := version == canonicalActionVersionAccessRequest || version == canonicalActionVersionSealedGrant
+	if approvalComputeKind(SidecarActionKind(kind)) && version != canonicalActionVersionCompute {
+		// DESIGN-COMPUTE.md's kinds take version 5 alone, which a build that does not know it refuses whole
+		return fmt.Errorf("%w: kind %s at version %d", ErrCanonicalActionInvalid, kind, version)
+	}
+	// version 5 seals a detail too, kinds 19's and 21's alone (approval_compute_kinds.go's rows)
+	sealedVersion := version == canonicalActionVersionAccessRequest || version == canonicalActionVersionSealedGrant ||
+		version == canonicalActionVersionCompute
 	setFields := []protoreflect.FieldNumber{}
 	message.Range(func(field protoreflect.FieldDescriptor, value protoreflect.Value) bool {
 		setFields = append(setFields, field.Number())
@@ -182,6 +214,10 @@ func canonicalActionCheck(action *protocol.CanonicalAction, known func(version u
 	})
 	for _, number := range setFields {
 		if number == canonicalActionFieldVersioning && version != canonicalActionVersionVersioning {
+			return fmt.Errorf("%w: field %d at version %d", ErrCanonicalActionInvalid, number, version)
+		}
+		if canonicalActionFieldEnclave <= number && version != canonicalActionVersionCompute {
+			// DESIGN-COMPUTE.md's fields, 42 on, are version 5's alone
 			return fmt.Errorf("%w: field %d at version %d", ErrCanonicalActionInvalid, number, version)
 		}
 		if number == canonicalActionFieldSealedDetail && !sealedVersion {
@@ -234,9 +270,15 @@ func canonicalActionCheck(action *protocol.CanonicalAction, known func(version u
 			return fmt.Errorf("%w: app_mode %d", ErrCanonicalActionInvalid, appMode)
 		}
 	}
-	if kind == protocol.SidecarActionKind_SIDECAR_ACTION_KIND_EGRESS_CHANGE || action.GetEgressMode() != 0 ||
-		action.GetRequireDefaultEgress() {
+	// version 5's kinds 19 and 24 name an enclave's egress mode in field 39, which their rules hold
+	if kind == protocol.SidecarActionKind_SIDECAR_ACTION_KIND_EGRESS_CHANGE || action.GetRequireDefaultEgress() ||
+		(action.GetEgressMode() != 0 && !approvalComputeKind(SidecarActionKind(kind))) {
 		if err := checkEgressChangeAction(action); err != nil {
+			return err
+		}
+	}
+	if version == canonicalActionVersionCompute {
+		if err := approvalComputeActionCheck(action, setFields, DefaultCanonicalActionSettings()); err != nil {
 			return err
 		}
 	}
@@ -406,6 +448,10 @@ func OpenCanonicalActionDetail(action *StoredCanonicalAction, networkId Id, repo
 	sealed := action.Action.GetSealedDetail()
 	if len(sealed) == 0 {
 		return nil, nil
+	}
+	if action.Action.GetVersion() == canonicalActionVersionCompute {
+		// a version-5 detail is a CanonicalActionDetail5 under its own context (OpenCanonicalActionDetail5)
+		return nil, fmt.Errorf("%w: a version-5 action's detail opened as version 3's or 4's", ErrCanonicalActionInvalid)
 	}
 	sealContext, err := CanonicalActionDetailSealContext(networkId, action.Bytes)
 	if err != nil {

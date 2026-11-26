@@ -33,10 +33,34 @@
 // journals so that every card it writes after leaves them out; a field of its own, never an entry's id, since every
 // reader of a note takes entry_ids as entries erased (§16.11's moderation row; QD-1148, owner decision 664).
 // design_unfenced_test.go writes CanonicalActionDetail, which no fence does.
+//
+// DESIGN-COMPUTE.md's version 5 (§16.3, §23.9, §25.10, §27.9; owner decisions 737, 749, 756, 757, 768, 772), this
+// file's one change for it (CACL-M11-04; CONTRACTS C-26): CanonicalAction's fields 42 to 56, 60 and 70, with 57 to 59,
+// 61 to 69 and 71 to 79 reserved, each message they hold numbered in the order the design writes its fields, the
+// sealed CanonicalActionDetail5 that field 38 carries at version 5, kinds 19 to 26, ApprovalDecision's selected at its
+// version 2 and auto and auto_verdict at its version 3, AutoVerdict, and channel 4, auto. §16.3's list is a text
+// fence, so design_unfenced_test.go writes these fields and messages, as testFenceAdditions and testUnfencedFence,
+// until a design-records fold writes them into §16.8's; §27.9's proto fence writes auto, auto_verdict, AutoVerdict and
+// channel 4. No field holds a oneof: version tells field 38 which message it holds, and every text an approver's card
+// shows is a string, every amount a uint64 of nano-USD, every enumerated value a uint32, as §16.8's are.
+//
+// DESIGN-COMPUTE.md §6.8's ModelCallBody fields 11 to 14 (INFER-M11-07; CONTRACTS C-26): the attestation of a TEE call
+// §5 verified, the route, the catalog version and the platform field, attested only with that attestation, and the
+// import of protocol/attest.proto, whose AttestationResult field 11 holds. Field 15, CallContext, is CTXH-M11-01's.
+//
+// DESIGN-COMPUTE.md §24.5's session wire (CTXH-M11-01; CONTRACTS C-26): kinds 54 session_entry's and 55 session_blob's
+// bodies, SessionEntryBody, SessionPart and SessionBlobBody, as §24.5's fence writes them; CallContext, ModelCallBody
+// field 15; RecordEntry.body_apart = 6, a session entry's sealed body filed apart from its header, at s/<n> beside its
+// e/<n> (Appendix D's RECORD.md 5.2 to 5.7 rows), which every reader learns at format 1; Coverage.bodies_dropped = 8
+// with SeqRange (Appendix D's Coverage row); and ApprovalNotice, owner decision 573's per-request notice at
+// a/<approval_id>, shaped as §16.11's DirectoryNotice (compute-plan-approval-notice-bytes, QD-1234). Each travels only
+// sealed, inside an entry or a vault file, so none adds a server-visible field (§24.11), and design_unfenced_test.go
+// writes what no fence does yet: body_apart, bodies_dropped, SeqRange and ApprovalNotice.
 
 syntax = "proto3";
 package urnetwork.sidecar;
 
+import "protocol/attest.proto";
 import "protocol/bridge/auth.proto";
 import "protocol/bridge/signed.proto";
 
@@ -76,6 +100,9 @@ message RecordEntry {                       // header: §6 Signed, purpose recor
   bytes key_slot_id = 3;                    // with key_index, the body key's slot object and index (Erasure)
   uint32 version = 4;                       // 1
   uint32 key_index = 5;
+  bool body_apart = 6;                      // a session entry's (kinds 54, 55; DESIGN-COMPUTE §24.5): sealed_body
+                                            // empty, the sealed body alone at s/<n>, the n of this e/<n>, opened with
+                                            // the key row named here; read from format 1 (RECORD.md section 5.7)
 }
 // The writer's identity key signs the header; from v1 an agent subkey may sign inside the body (§5.5).
 
@@ -87,8 +114,9 @@ message CanonicalAction {                   // built by the daemon; hashed as st
   repeated string cidrs = 9; repeated string grant_dst = 10; repeated string grant_allow = 11;
   uint32 version = 12;                      // 1; 2 with field 37; 3 for kind access_request (16.11), in fields 8,
                                             // 10, 11, 14, 26, 29 and 38; 4 for a dial or route grant, in fields 8,
-                                            // 10, 11, 28, 29 and 38, a share's also 40; approvers that do not know
-                                            // a version refuse it
+                                            // 10, 11, 28, 29 and 38, a share's also 40; 5 for DESIGN-COMPUTE.md's
+                                            // kinds 19 to 26, in fields 3, 5, 29, 38, 39 and 42 to 70, and for kind
+                                            // 5 with field 49 (§16.3); approvers that do not know a version refuse it
   bool scope = 13;                          // a multi-use template (16.6)
   bytes repo_id = 14; string path = 15; bytes content_sha256 = 16; uint64 base_version = 17;  // O-tier evs_write,
                                                         // evs_delete; mail_alias_delete's mailcfg record (16.6)
@@ -127,6 +155,150 @@ message CanonicalAction {                   // built by the daemon; hashed as st
                                             // devices to keep default egress on, sealed in its BridgeEgressBody, so
                                             // an approval shows and binds it (QD-1053, QD-1060); version 1, on no
                                             // server path, and unset reads as before
+  // Version 5's fields (DESIGN-COMPUTE.md §16.3), each set only at version 5. At version 5 field 3 is SHA-256 of
+  // exactly what the effect sends: field 46 as stored, the node list a continuation or crossing names, or kind 26's
+  // request body; field 5 the composed URL's host (23) or the API host (26), in punycode; field 29 the enclave's
+  // running incarnation or the receiving sidecar (20, 22, 24); field 38 a sealed CanonicalActionDetail5 (19, 21),
+  // whose aad's SignedType is SIGNED_APPROVAL_DECISION; field 39 the mode at create (19), or the receiving
+  // enclave's (24): BridgeEgressMode's auto, exits or none, and on kind 24 also 4, direct, the enclave's default
+  // egress off (§11.8; QD-1391), a value no other version's field 39 takes.
+  EnclaveFields enclave = 42;               // 19, 20, 22, 24; on 19 its name rides in field 38
+  BudgetFields budget = 43;                 // 21
+  string url = 44;                          // 23: the whole URL as the agent composed it
+  string tool = 45;                         // 24: the tool or ur command that sends
+  SendFields send = 46;                     // 24: the whole of what is sent, rendered as untrusted text
+  ContextFields context = 47;               // 24: harness_continue's, or a run's crossing (§7.8)
+  repeated string taint_reasons = 48;       // 23, 24, 26: the requesting run's taint reasons (DESIGN §16.6)
+  bool took_tainted = 49;                   // kind 5 alone, of an enclave leaving none: it took tainted input there
+                                            // (§7.10); an action that sets it is version 5
+  string calendar_label = 50;               // 25 (§23.9): the link's label, daemon-built
+  string calendar_host = 51;                // 25: the provider's host, daemon-built
+  string calendar_audience = 52;            // 25: the sharing or publishing the provider reports, else empty
+  repeated CalendarEventAction calendar_events = 53;   // 25: 1 to 20 events, each with its switch on the card
+  bytes calendar_link = 54;                 // 25: the link's repo id
+  bytes calendar_target = 55;               // 25: the SHA-256 that names the link's account and calendar (§23.6)
+  string calendar_name = 56;                // 25: the calendar's display name as the provider reports it
+  reserved 57 to 59;                        // kind 25's
+  ServiceCallFields service_call = 60;      // 26 (§25.10)
+  reserved 61 to 69;                        // kind 26's
+  AutoFields auto = 70;                     // 23 to 27 (§27.9): daemon-built, rendered on the card
+  reserved 71 to 79;
+  SupportFields support = 80;               // 27 (DESIGN-COMPUTE §28.8): the whole message, rendered as untrusted text
+  reserved 81 to 89;                        // kind 27's
+}
+// What field 42 holds: the enclave an action creates, removes, sends into or turns default egress off for.
+message EnclaveFields {
+  bytes enclave_id = 1;
+  string name = 2;                          // empty on kind 19, whose name rides in field 38
+  string shape = 3; string provider = 4;
+  string label = 5;                         // §4.3's label, as the catalog writes it
+  uint64 price_per_hour = 6;                // nano-USD
+  uint64 incarnation = 7;
+}
+// What field 43 holds, and a launch's budget in field 46: an amount over a period.
+message BudgetFields {
+  bytes agent_id = 1;
+  uint32 period = 2;                        // 1 day, 2 month, 3 run
+  uint64 amount = 3;                        // nano-USD
+  uint64 current = 4;                       // nano-USD
+}
+// What field 46 holds: the whole of what a kind-24 action sends.
+message SendFields {
+  string target_agent = 1; bytes target_agent_id = 2; bytes target_member_id = 3;
+  uint32 mode = 4;                          // §7.10's prompt 1, steer 2 and follow_up 3; 0 a message
+  string text = 5;
+  string stdin = 6;                         // at most 32 KiB
+  string cwd = 7;
+  repeated RefFields refs = 8;
+  string model = 9;
+  repeated string tools = 10;
+  BudgetFields budget = 11;
+}
+// One version a send names, or a release carries.
+message RefFields { bytes repo_id = 1; string path = 2; uint64 version = 3; }
+// What field 47 holds: a continuation's or a crossing's run and node, and counts of what its context holds.
+message ContextFields {
+  bytes run_id = 1; bytes entry_id = 2;
+  uint32 nodes = 3; uint32 flagged = 4; uint32 untrusted = 5;
+  uint32 mail_messages = 6; uint32 calendar_events = 7; uint32 fetched_pages = 8; uint32 service_results = 9;
+  uint32 act = 10;                          // 1 continue, 2 cross
+}
+// One event of field 53 (§23.9), every string rendered as untrusted text.
+message CalendarEventAction {
+  uint32 operation = 1;                     // 1 add, 2 change, 3 remove
+  string uid = 2;
+  string occurrence = 3;
+  string expected = 4;                      // the revision a change or removal expects
+  string title = 5;
+  string start = 6; string end = 7; string zone = 8; bool all_day = 9;
+  string recurrence = 10;
+  string location = 11;
+  repeated string reminders = 12;
+  repeated string attendees = 13;
+  repeated string mails = 14;               // what the provider will mail, and to whom
+  string description = 15;                  // whole
+  CalendarEventFields before = 16;          // a change's prior values
+  string source = 17;                       // the message the agent cites, as its claim
+}
+// A changed event's values before the change, the event's own fields in CalendarEventAction's order, so no message
+// holds itself.
+message CalendarEventFields {
+  string title = 1;
+  string start = 2; string end = 3; string zone = 4; bool all_day = 5;
+  string recurrence = 6;
+  string location = 7;
+  repeated string reminders = 8;
+  repeated string attendees = 9;
+  string description = 10;
+}
+// What field 60 holds: the one request a kind-26 action sends (§25.10).
+message ServiceCallFields {
+  bytes connection = 1;                     // the connection's repo id
+  string label = 2; string service = 3; string account = 4;
+  string method = 5; string path = 6; string query = 7; string content_type = 8;
+  string body = 9;                          // whole, at most 32 KiB; field 3 is its SHA-256
+  uint32 class = 10;                        // 1 write, 2 send
+  string feature = 11;
+}
+// What field 70 holds (§27.9).
+message AutoFields {
+  uint32 basis = 1;                         // 1 taint: outward only because its run is tainted; 2 always
+  repeated uint32 rules = 2;                // §27.7's rules that follow from the action alone, by their numbers
+}
+// What field 80 holds (DESIGN-COMPUTE §16.3, §28.8): the whole of a kind-27 message, rendered on the card as
+// untrusted text, which field 3's SHA-256 of the SupportBody posted binds.
+message SupportFields {
+  string product = 1;                       // urnetwork
+  string entry = 2;                         // the item it continues; empty opens one
+  uint32 kind = 3;                          // FB section 4's hint: 1 bug, 2 feature, 3 question, 4 praise, 5 security,
+                                            // 6 other; 0 none
+  string text = 4;                          // whole, at most 16 KiB of UTF-8
+  BundleManifest bundle = 5;                // the support log's bundle's, where the message carries one
+  repeated FileFields files = 6;            // at most 3, each shown whole on the card
+  bytes client_ref = 7;                     // 16 bytes (§28.6)
+}
+// A support log bundle's manifest (§28.7): what an agent and a card learn of it, never an event's fields.
+message BundleManifest {
+  uint32 events = 1;
+  int64 first = 2; int64 last = 3;          // the window's first and last events, unix seconds
+  uint64 bytes = 4;                         // compressed
+  bytes sha256 = 5;
+  repeated BundleCodeCount codes = 6;       // by component and code
+}
+message BundleCodeCount { string component = 1; string code = 2; uint32 count = 3; }
+// One file a support message names (§28.7).
+message FileFields {
+  string name = 1;                          // its base name
+  uint32 type = 2;                          // 1 UTF-8 text, 2 PNG, 3 JPEG
+  uint64 size = 3;
+  bytes sha256 = 4;
+}
+// What sealed_detail opens to at version 5 (§16.3): what the broker's gates, kinds 19 and 21, do not see.
+message CanonicalActionDetail5 {
+  string name = 1;                          // kind 19's enclave name
+  uint32 role = 2;                          // kind 19's: 1 agents, 2 indexer
+  string harness = 3;
+  bytes grant_id = 4;                       // kind 21's gateway grant
 }
 // What sealed_detail opens to: what a dial or route grant's clear fields may not hold (QD-740).
 message CanonicalActionDetail {
@@ -176,7 +348,24 @@ message ApprovalDecision {                  // inside §6 Signed, purpose approv
                                             // in Signed.webauthn (record-md-presence-evidence-sha256)
   bytes requester_sidecar_id = 11;          // the only sidecar that may spend it (16.6)
   AuthPin auth_pin = 12;                    // §7.9's pin the approver evaluated the request under
-  uint32 version = 13;                      // 1
+  uint32 version = 13;                      // 1; 2 adds selected; 3, channel 4's alone, adds auto and auto_verdict
+                                            // and may carry selected; a reader that does not know a version refuses
+                                            // it whole (DESIGN-COMPUTE.md §23.9, §27.9)
+  repeated uint32 selected = 14;            // version 2's: the indexes of the events a kind-25 decision approves,
+                                            // ascending, an empty list approving none (§23.9)
+  bool auto = 15;                           // version 3's: the requesting sidecar's classifier decided, not a person
+  AutoVerdict auto_verdict = 16;            // version 3's (§27.9)
+}
+// ApprovalDecision.auto_verdict (DESIGN-COMPUTE.md §27.9): the verdict a channel-4 decision rests on, whose entry,
+// RECORD.md's kind 56, holds the rest.
+message AutoVerdict {
+  uint32 verdict = 1;                       // 1 allow; an ask files no decision
+  uint32 reason = 2;                        // 1 clean
+  uint32 score = 3; uint32 threshold = 4;   // basis points
+  string model = 5; bytes model_sha256 = 6; // as the release's manifest pins them
+  bytes inputs_sha256 = 7;                  // SHA-256 over the auto_verdict entry's inputs and payload, as stored
+  uint32 windows = 8;                       // how many windows it scored
+  uint32 run_count = 9; uint32 day_count = 10;  // this run's and this device's, this one included
 }
 message ApprovalCancel { bytes approval_id = 1; }  // inside §6 Signed, purpose approval (16.6's ledger)
 message ReachReceipt {                      // coalesced per (grant, peer) per 5 min, and a TLS front's publish
@@ -192,7 +381,10 @@ message Coverage {                          // at run end, or after 10 min idle 
   repeated string gaps = 5;  // hook failures, missed events, changed configs, downtime, truncation,
                              // oversize, bypass modes, redactions
   uint64 first_seq = 6; uint64 last_seq = 7;
+  repeated SeqRange bodies_dropped = 8;     // DESIGN-COMPUTE §24.5, §24.10: the writer's seqs in this log whose
+                                            // session bodies its spool dropped, gap spool_drop, ascending, apart
 }
+message SeqRange { uint64 first = 1; uint64 last = 2; }   // first <= last, from 1
 message RetentionPolicy {                   // Signed (purpose record-entry) by the log's admin
   bytes log_id = 1; uint32 class = 2;       // a kind class, announce among them (keep_days 30, 16.11)
   uint32 keep_days = 3; uint32 searchable_days = 4; bool archive = 5;
@@ -214,6 +406,12 @@ enum SidecarActionKind {
   SIDECAR_ACTION_KIND_DNS_SET = 12; SIDECAR_ACTION_KIND_DNS_DELETE = 13; SIDECAR_ACTION_KIND_MAIL_SEND = 14;
   SIDECAR_ACTION_KIND_ACCESS_REQUEST = 15; SIDECAR_ACTION_KIND_PAYMENT = 16; SIDECAR_ACTION_KIND_RESTORE = 17;
   SIDECAR_ACTION_KIND_MAIL_TLS_UNAUTHENTICATED = 18;
+  // DESIGN-COMPUTE.md §16.3's, each at version 5 alone
+  SIDECAR_ACTION_KIND_ENCLAVE_CREATE = 19; SIDECAR_ACTION_KIND_ENCLAVE_EGRESS_DIRECT = 20;
+  SIDECAR_ACTION_KIND_COMPUTE_BUDGET_RAISE = 21; SIDECAR_ACTION_KIND_ENCLAVE_DELETE = 22;
+  SIDECAR_ACTION_KIND_FETCH_UNLISTED_URL = 23; SIDECAR_ACTION_KIND_TAINTED_SEND = 24;
+  SIDECAR_ACTION_KIND_CALENDAR_WRITE = 25; SIDECAR_ACTION_KIND_SERVICE_WRITE = 26;
+  SIDECAR_ACTION_KIND_SUPPORT_SEND = 27;    // DESIGN-COMPUTE.md §28.8's
 }
 // ApprovalRequest.risk: numeric order is the max §5.4 takes, and an agent may only raise it.
 enum SidecarRisk { SIDECAR_RISK_UNSPECIFIED = 0; SIDECAR_RISK_NORMAL = 1; SIDECAR_RISK_HIGH = 2; }
@@ -223,6 +421,7 @@ enum ApprovalVerdict { APPROVAL_VERDICT_UNSPECIFIED = 0; APPROVAL_VERDICT_APPROV
 enum ApprovalChannel {
   APPROVAL_CHANNEL_UNSPECIFIED = 0; APPROVAL_CHANNEL_DEVICE = 1; APPROVAL_CHANNEL_PRESENCE = 2;
   APPROVAL_CHANNEL_HARNESS = 3;
+  APPROVAL_CHANNEL_AUTO = 4;                // DESIGN-COMPUTE.md §27.9: decision version 3 alone
 }
 
 // RECORD.md section 5.4: a deposit file's one message, sealed under its object key (§11.12).
@@ -502,6 +701,65 @@ message ModelCallBody {                     // model_call (M6)
   uint64 cache_read_tokens = 6; uint64 cache_write_tokens = 7;
   uint64 reported_micro_usd = 8;            // the harness's own amount, else 0
   int64 started_millis = 9; uint32 duration_millis = 10;
+  AttestationResult attestation = 11;       // remote TEE calls only (DESIGN-COMPUTE §6.8)
+  string route = 12;                        // "local" | "tee" | "direct"; empty on a hook's or a harness's own call
+  uint64 catalog_version = 13;              // the broker's catalog version a remote call named
+  ModelField platform = 14;                 // evidence 4: the policy profile verified; the model stays evidence 2
+  CallContext context = 15;                 // the call's place in the run's session tree (DESIGN-COMPUTE §24.5)
+}
+
+// DESIGN-COMPUTE.md §24.5: a run's session tree, one node an entry, its large parts as blobs, and a model call's place
+// in it (M11). Kinds 54 and 55 are V's alone, raw and never indexed (I-20), and file their bodies apart (body_apart).
+message SessionEntryBody {                  // session_entry: one message of a run's session tree
+  bytes node_id = 1;                        // 16 random bytes
+  bytes parent_node_id = 2;                 // empty at a root; may name another run's node (24.7)
+  bytes parent_run_id = 3;                  // set when the parent is another run's
+  uint32 type = 4;                          // 1 message, 2 model_change, 3 thinking_level_change, 4 usage,
+                                            // 5 compaction, 6 branch_summary, 7 custom, 8 custom_message, 9 link
+  bytes item = 5;                           // the Harness's Pi v3 entry, or the gateway's API item, RFC 8785 JSON,
+                                            // after redaction and stubs (24.9); <= 16 KiB, larger parts in blobs
+  repeated SessionPart parts = 6;           // <= 64
+  bytes item_sha256 = 7;                    // of the item as recorded, its parts by their hashes
+  bytes chain_sha256 = 8;                   // SHA-256(the parent's chain_sha256 || item_sha256), a root's parent
+                                            // counting as 32 zero bytes
+  bytes same_as = 9;                        // an earlier entry of this run holding the same item; item, parts empty
+  uint32 redactions = 10; uint32 stubs = 11;  // markers in the item (24.9)
+  uint32 marks = 12;                        // from this node on the run carries: bit 0 limited_use, §25.10's
+                                            // mark; bit 1 private, §7.8's (CO-43)
+}
+message SessionPart {
+  string pointer = 1;                       // RFC 6901 pointer to the part within the item
+  bytes sha256 = 2; uint64 size = 3; string media_type = 4;
+  repeated bytes blob_entry_ids = 5;        // <= 8 session_blob entries, in order; empty when omitted
+  bool omitted = 6;                         // past 64 MiB: kept by hash and size only
+}
+message SessionBlobBody {                   // session_blob: one piece of a part
+  bytes part_sha256 = 1; uint32 index = 2; uint32 count = 3;
+  bytes content = 4;                        // <= 8 MiB, after redaction
+}
+message CallContext {                       // ModelCallBody field 15 (§6.8)
+  bytes input_node_id = 1;                  // the context's last message; the path from it to its root is the rest
+  repeated bytes output_node_ids = 2;       // what the response wrote
+  bytes system_node_id = 3;                 // the system message in force
+  bytes request_sha256 = 4;                 // SHA-256 of the InferRequest (§6.4) as recorded, RFC 8785, each
+                                            // part's bytes replaced by {pointer, sha256, size}, so pruning a
+                                            // blob leaves the call checkable (24.6)
+  bool exact = 5;                           // the recorded request is the one sent: no marker, stub or omission
+  string renderer = 6;                      // harness-<version> or gateway-<api>-<version> (24.6)
+  bytes params = 7;                         // the request's fields beside system, tools and messages, RFC 8785
+  bool sign_in_withheld = 8;                // sign-in mail withheld from this call's rendering (§23.4)
+}
+
+// a/<approval_id> in the requester's vault (owner decision 573's remedy; DESIGN-COMPUTE §24.7): one approval request's
+// hint, versionless and sealed as any vault file, which an approver's phone leases in place of the whole approval log.
+// Shaped as §16.11's DirectoryNotice (compute-plan-approval-notice-bytes, QD-1234). It names no approver and no action
+// text, and nothing about a request is trusted from it: the phone reads the request entry from its log.
+message ApprovalNotice {
+  bytes approval_id = 1; bytes requester_sidecar_id = 2;
+  uint64 entry_seq = 3;                     // the approval entry's seq in the requester's stream
+  int64 not_after_millis = 4;               // the request's own not_after_millis
+  uint32 state = 5;                         // 1 pending, 2 decided; a cancel removes the notice
+  uint32 kind = 6;                          // the request's CanonicalAction.kind, a SidecarActionKind
 }
 
 // RECORD.md section 13.1: run cost (M6).
@@ -516,4 +774,25 @@ message ModelUsage {
   uint64 calls = 6;
   uint64 reported_micro_usd = 7;            // the sum of what the harness reported, else 0
   bool complete = 8;                        // false where coverage has a gap that may hide calls
+}
+
+// DESIGN-COMPUTE.md §28.12: the support conversation's messages in the vault, the team record's projection holding
+// no V: field.
+message SupportMessageBody {                // support_message (M13b)
+  uint32 direction = 1;                     // 1 sent, 2 received
+  string product = 2;                       // urnetwork
+  string entry = 3;                         // FB's id; empty until the service acknowledges it
+  uint32 seq = 4;                           // FB's event seq; 0 for a message not yet acknowledged
+  uint32 type = 5;                          // FB section 4's event types, in its order; 0 UNSPECIFIED
+  uint32 tier = 6;                          // 1 human, 2 released, 3 agent
+  bytes client_ref = 7;                     // joins a sent message to its acknowledgment
+  string text = 8;                          // V: exactly the text sent, or the reply received
+  string agent_label = 9;                   // V: the sending agent's name and where it ran
+  BundleManifest bundle = 10;               // V: events, window, size, SHA-256, codes by component
+  repeated FileFields files = 11;           // V: name, type, size, SHA-256
+  bytes body_sha256 = 12;                   // of the body sent or received
+  uint64 body_bytes = 13;
+  uint32 status = 14; string fixed_in = 15; // a status event's
+  bytes approval_id = 16;                   // a kind-27 use's
+  uint32 disclosure_version = 17;           // a sent message's support:urnetwork version
 }

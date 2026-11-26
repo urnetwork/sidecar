@@ -10,7 +10,7 @@
 //     is a member's data.
 //   - socket_status(name) is the daemon's listen on name: whether it serves, drains, how many streams are in flight,
 //     and the local port.
-//   - socket_listen(name, local_port) listens an application name, forwarding each admitted stream to
+//   - socket_listen(name, local_port, expires?) listens an application name, forwarding each admitted stream to
 //     127.0.0.1:<local_port>, serving false while that port refuses. Under a covering grant, §8's local allow of listen
 //     on sock:<name> for this sidecar, it runs as W: rate-limited and recorded, its grant_id in the result. With none it
 //     is outward, §5.4's gate with a CanonicalAction of kind listen naming the socket by its grant_dst alone, its token
@@ -22,10 +22,25 @@
 //     spendable decision runs into the GrantActivate the approval fixes; each action is kept as its request was filed
 //     until its expiry, so the listen asked again after a person approves spends the decision rather than filing
 //     anew; and a listen no requests rule takes names no rule, passing on a standing grant alone and refused with
-//     nothing filed where none covers it. A use that came to not_done refuses the listen and an uncertain one answers
-//     unavailable, which the same listen asked again completes. A network whose K_sock this daemon does not hold yet
+//     nothing filed where none covers it. The use is done only once this device's engine holds the grant it
+//     activated, waited on in the network's config, so the listen registers on a grant the log holds where the
+//     sockets service reads it rather than being refused by the service. A use that came to not_done refuses the
+//     listen and an uncertain one, its grant not yet in the engine among them, answers unavailable, which the same
+//     listen asked again completes: the gate then passes it under the grant it activated, and the result names that
+//     grant as it names one a use activated. A network whose K_sock this daemon does not hold yet
 //     takes no outward listen, as its sockets would register none. tls/ is tls_publish's, smtp/ a receiver's, share/
 //     ur share's and ur/ the platform's: each is refused here.
+//
+//     expires, an RFC 3339 time ahead, is when the grant an outward listen asks ends, as tls_publish's expires is
+//     (owner decision 687): an end rather than a time from now, so the call made again asks the same one, and its
+//     action is kept by that end beside the name and the port, so a listen asking another end files its own request.
+//     The requests rule's maxExpiry holds it: past it the listen is refused before the gate, filing nothing, the
+//     error's data naming the maximum as max_expiry_millis beside its constant text. Absent, the rule's
+//     expiresDefault. A covering grant or a standing one asks nothing, so it passes the listen whatever expires asks.
+//     The result's expires is when the grant it names ends: the action's expiry for the grant a decision on it
+//     activated, now or before, and a covering grant's end as this daemon's engine holds it; absent where it names no
+//     grant or the grant has no end, a document's rule. The listen itself, on an application name, asks the daemon's
+//     sockets for no expiry, since its grant is asked here.
 //   - socket_unlisten(name) ends the daemon's listen on name at once (§9.9's Close); streams accepted stay.
 //
 // No result holds a key, a seal, a token path or a credential (I-7), and the framework's matcher holds every result to
@@ -34,6 +49,7 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"errors"
@@ -80,8 +96,19 @@ var (
 	errMcpSocketUnavailable = NewMcpError(McpCodeUnavailable, "this daemon holds no sockets for tools: run ur status in your own terminal", false)
 	errMcpSocketHeld        = NewMcpError(McpCodeRefused,
 		"no grant covers this listen, and no approval of it could be spent: a person may grant this sidecar listen on the name", false)
-	errMcpSocketTaken = NewMcpError(McpCodeFailedPrecondition, "this daemon already listens on that name: socket_unlisten it first", false)
+	errMcpSocketTaken   = NewMcpError(McpCodeFailedPrecondition, "this daemon already listens on that name: socket_unlisten it first", false)
+	errMcpSocketExpires = NewMcpError(McpCodeInvalidArguments, "expires is an RFC 3339 time ahead", false)
 )
+
+// The refusal of an outward listen whose expires is past the requests rule's maxExpiry: constant text, and the
+// maximum in its data, which is the rule's and never the call's input (I-7).
+func mcpSocketMaxExpiryError(maxExpiry time.Duration) *McpError {
+	return &McpError{
+		Code:            McpCodeRefused,
+		Message:         "expires is past the requests rule's maxExpiry, which the error's max_expiry_millis names: ask an earlier end, or none for the rule's default",
+		MaxExpiryMillis: maxExpiry.Milliseconds(),
+	}
+}
 
 // socket_list takes nothing but the network.
 type mcpSocketListIn struct{}
@@ -125,6 +152,9 @@ type mcpSocketStatusOut struct {
 type mcpSocketListenIn struct {
 	Name      string `json:"name"`
 	LocalPort int    `json:"local_port"`
+	// RFC 3339: when the grant an outward listen asks ends, at most the requests rule's maxExpiry from now; the
+	// rule's expiresDefault when absent
+	Expires string `json:"expires,omitempty"`
 }
 
 // socket_listen's data.
@@ -135,6 +165,8 @@ type mcpSocketListenOut struct {
 	// activated.
 	GrantId    string `json:"grant_id,omitempty"`
 	ApprovalId string `json:"approval_id,omitempty"`
+	// RFC 3339: when the grant named ends; absent where it names none, or the grant has no end.
+	Expires string `json:"expires,omitempty"`
 	// It takes tickets now: its local port answered.
 	Serving bool `json:"serving"`
 }
@@ -167,9 +199,10 @@ func mcpSocketTargetPort(target string) int {
 }
 
 // The §5.4 action an uncovered socket_listen on name, forwarding to localPort, goes through Authorize as, with its
-// effect: kind listen naming the socket by grantDst alone (QD-772), grant-backed (the file header). The tool sets the
-// request's detail beside it. A test replaces it.
-type mcpSocketListenActionFunction func(ctx context.Context, call *McpCall, name string, localPort int, grantDst string) (*sidecar.SidecarAction, error)
+// effect: kind listen naming the socket by grantDst alone (QD-772), grant-backed (the file header), its grant ending at
+// expires, zero for the requests rule's expiresDefault. The tool sets the request's detail beside it. A test replaces
+// it.
+type mcpSocketListenActionFunction func(ctx context.Context, call *McpCall, name string, localPort int, grantDst string, expires time.Time) (*sidecar.SidecarAction, error)
 
 // What an outward socket_listen builds its grant on: a grant filer over the engine the network's gate reads its
 // standing grants from, nil while none stands.
@@ -187,25 +220,49 @@ func (self *mcpSidecarNetwork) socketListenGrants() *sidecar.AclGrantFiler {
 	return sidecar.NewAclGrantFiler(self.Sidecar, engine)
 }
 
-// What an outward socket_listen's action is kept by (sidecar.GrantActionKeeper): its network, and the name and the
-// local port its request binds beside it.
+// What an outward socket_listen waits on for the grant its approval activates to reach this device's engine before it
+// registers (sidecar.SocketListenGrantArgs.Config): the network's verified config, nil while none stands, so a fresh
+// grant leaves the use uncertain.
+type mcpSocketGrantConfig interface {
+	socketListenConfig() sidecar.AclGrantConfig
+}
+
+// See mcpSocketGrantConfig: the client whose follower installs states in the engine socketListenGrants builds on, or
+// the client the network was built with.
+func (self *mcpSidecarNetwork) socketListenConfig() sidecar.AclGrantConfig {
+	_, client := self.policy()
+	if client == nil {
+		return nil
+	}
+	return client
+}
+
+// What an outward socket_listen's action is kept by (sidecar.GrantActionKeeper): its network, the name and the local
+// port its request binds beside it, and the end it asks, ms, 0 for the rule's default, so a listen asking another end
+// files its own request rather than presenting one filed for another.
 type mcpSocketListenKey struct {
 	networkId sidecar.Id
 	name      string
 	localPort int
+	expiresMs int64
 }
 
 // The production action (the file header): sidecar.SocketListenGrantAction on the network's grant filer for its
-// sidecar, each action kept until its expiry by one keeper for the server's life, then NewSidecarAction bound to the
-// call's run and its session's agent. now reads the time a grant's expiry is measured from.
-// sidecar.ErrSocketUnavailable where the network stands no engine or holds no identity yet, and
-// sidecar.ErrAclGrantFile where no grant could cover the listen.
+// sidecar, its grant ending at expires or the rule's default, each action kept until its expiry by one keeper for the
+// server's life, its grant waited on in the network's config, then NewSidecarAction bound to the call's run and its
+// session's agent. now reads the time a grant's expiry is measured from. sidecar.ErrSocketUnavailable where the
+// network stands no engine or holds no identity yet, and sidecar.ErrAclGrantFile where no grant could cover the listen,
+// with an *sidecar.AclGrantMaxExpiryError beside it where expires is past the requests rule's maxExpiry.
 func newMcpSocketListenAction(now func() time.Time) mcpSocketListenActionFunction {
 	keeper := sidecar.NewGrantActionKeeper[mcpSocketListenKey]()
-	return func(ctx context.Context, call *McpCall, name string, localPort int, grantDst string) (*sidecar.SidecarAction, error) {
+	return func(ctx context.Context, call *McpCall, name string, localPort int, grantDst string, expires time.Time) (*sidecar.SidecarAction, error) {
 		var grants *sidecar.AclGrantFiler
 		if holder, ok := call.Network.(mcpSocketGrants); ok {
 			grants = holder.socketListenGrants()
+		}
+		var config sidecar.AclGrantConfig
+		if holder, ok := call.Network.(mcpSocketGrantConfig); ok {
+			config = holder.socketListenConfig()
 		}
 		var identity *sidecar.SidecarIdentity
 		if network, ok := mcpToolNetworkOf(call); ok {
@@ -216,14 +273,20 @@ func newMcpSocketListenAction(now func() time.Time) mcpSocketListenActionFunctio
 		}
 		runId := call.RunId
 		agentId := mcpCallAgentId(call)
+		key := mcpSocketListenKey{networkId: call.NetworkId, name: name, localPort: localPort}
+		if !expires.IsZero() {
+			key.expiresMs = expires.UnixMilli()
+		}
 		stored, effect, err := sidecar.SocketListenGrantAction(ctx, &sidecar.SocketListenGrantArgs{
-			Grants:   grants,
-			Subject:  identity.SidecarId,
-			GrantDst: grantDst,
-			Detail:   mcpSocketListenDetail(name, localPort),
-			RunId:    &runId,
-			AgentId:  agentId,
-		}, keeper, mcpSocketListenKey{networkId: call.NetworkId, name: name, localPort: localPort}, now())
+			Grants:    grants,
+			Subject:   identity.SidecarId,
+			GrantDst:  grantDst,
+			Detail:    mcpSocketListenDetail(name, localPort),
+			RunId:     &runId,
+			AgentId:   agentId,
+			Config:    config,
+			ExpiresAt: expires,
+		}, keeper, key, now())
 		if err != nil {
 			return nil, err
 		}
@@ -252,15 +315,46 @@ type mcpSocketKeys interface {
 	SocketKeyRing() *sidecar.SocketKeyRing
 }
 
+// What a covered socket_listen reads its covering grant's end from: the network's grants in force for this sidecar,
+// McpTeamNetwork's (AclEngine.Grants).
+type mcpSocketGrantList interface {
+	Grants(now time.Time) []sidecar.AclGrantInfo
+}
+
+// When the grant grantId ends, RFC 3339, among the call's network's grants in force at now: "" where the network lists
+// none such or the grant has no end, a document's rule.
+func mcpSocketGrantExpires(call *McpCall, grantId []byte, now time.Time) string {
+	list, ok := call.Network.(mcpSocketGrantList)
+	if !ok || len(grantId) == 0 {
+		return ""
+	}
+	for _, grant := range list.Grants(now) {
+		if bytes.Equal(grant.GrantId, grantId) && 0 < grant.ExpiresMs {
+			return time.UnixMilli(grant.ExpiresMs).UTC().Format(time.RFC3339)
+		}
+	}
+	return ""
+}
+
+// When the grant an outward listen's action asked ends, RFC 3339: its stored expiry, which the grant a decision on it
+// activated ends at; "" for an action that names none.
+func mcpSocketActionExpires(action *sidecar.SidecarAction) string {
+	stored, err := sidecar.ParseStoredCanonicalAction(action.Canonical)
+	if err != nil || len(stored.Action.GetRuleId()) == 0 || stored.Action.GetExpiresMillis() <= 0 {
+		return ""
+	}
+	return time.UnixMilli(stored.Action.GetExpiresMillis()).UTC().Format(time.RFC3339)
+}
+
 func init() {
 	registerMcpTools(func(catalog *McpCatalog, server *McpServer) {
-		addSocketTools(catalog, func() McpSockets { return mcpSocketsOf(server) }, newMcpSocketListenAction(server.clock.Now))
+		addSocketTools(catalog, func() McpSockets { return mcpSocketsOf(server) }, newMcpSocketListenAction(server.clock.Now), server.clock.Now)
 	})
 }
 
 // Registers the four socket tools on catalog, acting through what sockets answers per call and building an uncovered
-// listen's action with listenAction.
-func addSocketTools(catalog *McpCatalog, sockets func() McpSockets, listenAction mcpSocketListenActionFunction) {
+// listen's action with listenAction. now reads the time an expires is measured from.
+func addSocketTools(catalog *McpCatalog, sockets func() McpSockets, listenAction mcpSocketListenActionFunction, now func() time.Time) {
 	none := func(call *McpCall, in *mcpSocketNameIn) ([]McpAccess, error) { return nil, nil }
 
 	AddTool(catalog, &McpToolSpec[mcpSocketListIn]{
@@ -341,6 +435,13 @@ func addSocketTools(catalog *McpCatalog, sockets func() McpSockets, listenAction
 		if in.LocalPort < 1 || 65535 < in.LocalPort {
 			return nil, errMcpSocketPort
 		}
+		var expires time.Time
+		if in.Expires != "" {
+			expires, err = time.Parse(time.RFC3339, in.Expires)
+			if err != nil || !now().Before(expires) {
+				return nil, errMcpSocketExpires
+			}
+		}
 		held := sockets()
 		if held == nil {
 			return nil, errMcpSocketUnavailable
@@ -349,7 +450,9 @@ func addSocketTools(catalog *McpCatalog, sockets func() McpSockets, listenAction
 		out := &mcpSocketListenOut{}
 		grantId, covered := McpCoveringGrant(ctx)
 		if covered {
+			// the covering grant asks nothing, so expires asks nothing of it either
 			out.GrantId = hex.EncodeToString(grantId)
+			out.Expires = mcpSocketGrantExpires(call, grantId, now())
 		} else {
 			// outward: §5.4's gate first (I-8), whose answer may be pending
 			authorizer, ok := call.Network.(mcpAuthorizer)
@@ -369,11 +472,16 @@ func addSocketTools(catalog *McpCatalog, sockets func() McpSockets, listenAction
 			if err != nil {
 				return nil, errMcpSocketHeld
 			}
-			action, err := listenAction(ctx, call, name, in.LocalPort, grantDst)
-			if errors.Is(err, sidecar.ErrSocketUnavailable) {
+			action, err := listenAction(ctx, call, name, in.LocalPort, grantDst, expires)
+			var maxExpiry *sidecar.AclGrantMaxExpiryError
+			switch {
+			case errors.Is(err, sidecar.ErrSocketUnavailable):
 				return nil, mcpSocketError(err)
-			}
-			if err != nil {
+			case errors.As(err, &maxExpiry):
+				// a requests rule takes the listen for no longer than its maximum, which the refusal names: nothing is
+				// filed
+				return nil, mcpSocketMaxExpiryError(maxExpiry.MaxExpiry)
+			case err != nil:
 				// no requests rule takes the listen and no standing grant covers it: nothing is filed
 				return nil, errMcpSocketHeld
 			}
@@ -392,7 +500,9 @@ func addSocketTools(catalog *McpCatalog, sockets func() McpSockets, listenAction
 				switch outcome.State {
 				case sidecar.ApprovalOutcomeDone:
 					if 0 < len(outcome.EffectRef) {
+						// the grant a decision on this action activated, now or before, which ends at its expiry
 						out.GrantId = hex.EncodeToString(outcome.EffectRef)
+						out.Expires = mcpSocketActionExpires(action)
 					}
 				case sidecar.ApprovalOutcomeNotDone:
 					return nil, errMcpSocketHeld

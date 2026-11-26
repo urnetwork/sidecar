@@ -55,6 +55,9 @@ type FakeApiSettings struct {
 	ClientTokenTimeout time.Duration
 	// How long a service token lasts: 15 minutes (§7.8, owner decision 2).
 	ServiceTokenTimeout time.Duration
+	// The most repo: scopes one service token carries: §7.8's 64, keeping the bearer under the lb's 8 KiB header
+	// line, as server's exchange holds it.
+	ServiceTokenMaxRepoScopeCount int
 	// How far a DPoP proof's iat may sit from the api's clock, either way: §7.4's 60 s.
 	DpopIatWindow time.Duration
 	// How long a spent jti is kept per client: §7.4's 120 s, twice the iat window, so no proof replays inside it.
@@ -83,20 +86,21 @@ type FakeApiSettings struct {
 
 func DefaultFakeApiSettings() *FakeApiSettings {
 	return &FakeApiSettings{
-		Origin:                   "https://api.sidecartest.example",
-		AuthOrigin:               "https://auth.sidecartest.example",
-		ServiceDomain:            "sidecartest.example",
-		ClientTokenTimeout:       7 * 24 * time.Hour,
-		ServiceTokenTimeout:      15 * time.Minute,
-		DpopIatWindow:            60 * time.Second,
-		DpopReplayTimeout:        120 * time.Second,
-		DpopMaxJtiByteCount:      256,
-		ProjectionPageCount:      1024,
-		AppendAttemptCount:       64,
-		MaxRequestByteCount:      16 * 1024 * 1024,
-		LeaseReapAfter:           35 * time.Minute,
-		MaxCloseByteCount:        64,
-		IdentityBindingPageCount: 64,
+		Origin:                        "https://api.sidecartest.example",
+		AuthOrigin:                    "https://auth.sidecartest.example",
+		ServiceDomain:                 "sidecartest.example",
+		ClientTokenTimeout:            7 * 24 * time.Hour,
+		ServiceTokenTimeout:           15 * time.Minute,
+		ServiceTokenMaxRepoScopeCount: 64,
+		DpopIatWindow:                 60 * time.Second,
+		DpopReplayTimeout:             120 * time.Second,
+		DpopMaxJtiByteCount:           256,
+		ProjectionPageCount:           1024,
+		AppendAttemptCount:            64,
+		MaxRequestByteCount:           16 * 1024 * 1024,
+		LeaseReapAfter:                35 * time.Minute,
+		MaxCloseByteCount:             64,
+		IdentityBindingPageCount:      64,
 	}
 }
 

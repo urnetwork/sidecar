@@ -197,10 +197,10 @@ func TestRecordApprovalsRefusesAnUnknownActionVersion(t *testing.T) {
 	requester := world.device(true)
 	approver := world.device(true)
 	requesterRecord := requester.open()
-	// a version this build does not know: 2 is known from M10 (RECORD-M10-03)
+	// a version this build does not know: 2 is known from M10 (RECORD-M10-03) and 5 from M12a (CACL-M12-01)
 	later, err := proto.Marshal(&protocol.CanonicalAction{
 		Kind:     uint32(sidecar.SidecarActionDnsSet),
-		Version:  5,
+		Version:  6,
 		DnsName:  "app.example",
 		DnsType:  "A",
 		DnsValue: "198.51.100.7",

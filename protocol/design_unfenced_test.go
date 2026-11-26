@@ -15,9 +15,15 @@ package protocol
 // Each block names its file, as a fence does, and each declaration says where the design writes it. A declaration
 // that gains a real fence is then written twice, which says to take it out of here.
 const testUnfencedFence = `
-// sidecar/protocol/acl.proto
-// §8.8's RepoCreate row and QD-102 fix the values of the creation marker.
-enum RepoInbox { REPO_INBOX_NONE = 0; REPO_INBOX_GROUP = 1; REPO_INBOX_ADMIN = 2; }
+// sidecar/protocol/attest.proto
+// DESIGN-COMPUTE.md §5.4's freshness tickets, which it gives as field lists without numbers: deterministic protobuf in
+// attest.proto by compute-plan-ticket-distribution's answer (QD-1379), numbered in the order written (ATTEST-M12-01).
+message ComputePolicyTicketBatch { bytes batch_id = 1; int64 signed_at_ms = 2; int64 expires_ms = 3; }
+message ComputePolicyTicket {
+  uint32 format = 1; ComputePolicyTicketBatch batch = 2; uint64 policy_version = 3; int64 not_before_ms = 4;
+  int64 not_after_ms = 5;
+}
+message ComputePolicyTicketFile { bytes ticket = 1; bytes signature = 2; }
 // sidecar/protocol/envelope.proto
 // §6.5: each result has its request's fields.
 message HelloResult {
@@ -633,7 +639,20 @@ message MailSpamModel { uint32 version = 1; repeated uint32 counts = 2; }
 // record-m2-01-canonical-action-detail's answer (QD-740): what CanonicalAction.sealed_detail opens to, a dial or
 // route grant's prefixes and ports and a version-3 access request's, with the numbers the answer gives.
 message CanonicalActionDetail { repeated string cidrs = 1; uint32 target_port = 2; repeated string grant_dst = 3; }
+// DESIGN-COMPUTE.md §24.10's Coverage.bodies_dropped ranges (Appendix D's Coverage row), which no fence numbers
+// (CTXH-M11-01, compute-plan-record-registry-fold).
+message SeqRange { uint64 first = 1; uint64 last = 2; }
+// Owner decision 573's per-request notice at a/<approval_id> (DESIGN-COMPUTE.md §24.7), to which the design gives no
+// bytes: compute-plan-approval-notice-bytes' answer (QD-1234), shaped as §16.11's DirectoryNotice (CTXH-M11-01).
+message ApprovalNotice {
+  bytes approval_id = 1; bytes requester_sidecar_id = 2; uint64 entry_seq = 3; int64 not_after_millis = 4;
+  uint32 state = 5; uint32 kind = 6;
+}
 `
+
+// Where context history's wire comes from: DESIGN-COMPUTE.md §24.5 and §24.10 and Appendix D's RECORD.md rows (CO-25),
+// which design-records folds into DESIGN.md's §16.8 and RECORD.md (compute-plan-record-registry-fold, QD-1366).
+const testSessionSource = "DESIGN-COMPUTE.md §24.5, §24.10 (CO-25; CTXH-M11-01, compute-plan-record-registry-fold)"
 
 // Fields the owner's answers add to messages the design fences, ahead of design-records' fold, each with the question
 // that holds its answer. Each joins the fence it extends, so both directions stay exact, and one the design comes to
@@ -643,8 +662,23 @@ var testFenceAdditions = []struct {
 	field    testFenceField
 	question string
 }{
-	{message: "RepoCreate", field: testFenceField{name: "inbox", number: 4, typeName: "RepoInbox"}, question: "plan-MAIL-group-inbox (QD-102)"},
-	{message: "AclRepo", field: testFenceField{name: "inbox", number: 14, typeName: "RepoInbox"}, question: "plan-MAIL-group-inbox (QD-102)"},
+	// DESIGN-COMPUTE.md §24.5's body_apart and §24.10's bodies_dropped, which DESIGN.md's §16.8 fence takes at the fold
+	{message: "RecordEntry", field: testFenceField{name: "body_apart", number: 6, typeName: "bool"}, question: testSessionSource},
+	{message: "Coverage", field: testFenceField{name: "bodies_dropped", number: 8, typeName: "SeqRange", repeated: true}, question: testSessionSource},
+}
+
+// Numbers an owner's answer reserves in a message the design fences, ahead of design-records' fold, each with the
+// question that holds its answer.
+type testFenceReservedAddition struct {
+	message  string
+	numbers  []int32
+	question string
+}
+
+// Numbers the owner's answers reserve in messages the design fences, ahead of design-records' fold. Each joins the
+// reservations of the fence it extends, as testFenceAdditions' fields join its fields, and one the design comes to
+// write or reserve fails until its line here leaves.
+var testFenceReservedAdditions = []testFenceReservedAddition{
 }
 
 // One field an owner's answer takes out of a message the design fences, its number reserved.
@@ -674,12 +708,6 @@ type testFenceValueAddition struct {
 // that holds its answer. Each joins the fence it extends, as testFenceAdditions' fields do, and one the design comes
 // to write fails until its line here leaves.
 var testFenceValueAdditions = []testFenceValueAddition{
-	// DESIGN-COMPUTE.md's MessageType values, reserved once by CARCH-M11-05 (CONTRACTS C-25) ahead of design-records' fold
-	// of its Appendix D rows: the indexer enclave's evidence beside SEARCH, and listeners' live ask in service 0x19
-	{enum: "MessageType", name: "EVIDENCE", number: 0x1406, question: "DESIGN-COMPUTE.md Appendix D's §6.6 row (CA-60), compute-plan-enc-readings (QD-1243)"},
-	{enum: "MessageType", name: "EVIDENCE_RESULT", number: 0x1407, question: "DESIGN-COMPUTE.md Appendix D's §6.6 row (CA-60), compute-plan-enc-readings (QD-1243)"},
-	{enum: "MessageType", name: "LISTENERS", number: 0x1901, question: "DESIGN-COMPUTE.md Appendix D's §6.11 MessageType 0x19 row (CA-61)"},
-	{enum: "MessageType", name: "LISTENERS_RESULT", number: 0x1902, question: "DESIGN-COMPUTE.md Appendix D's §6.11 MessageType 0x19 row (CA-61)"},
 }
 
 // One value an owner's answer takes out of an enum the design fences, its number reserved.

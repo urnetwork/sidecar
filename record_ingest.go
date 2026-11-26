@@ -17,7 +17,9 @@
 //	          deposit brings no erased body back
 //	7 chain   a gap or fork is kept, never dropped: readers alarm on it (section 5.5), and nothing here judges it
 //	8 write   a new slot row, then the entry in the ingester's next push, unless its stream holds the leaf already;
-//	          once each entry of a deposit is written or refused, one CONSUME covers it
+//	          once each entry of a deposit is written or refused, one CONSUME covers it; a deposited session entry,
+//	          whole in its deposit, is filed apart as its writer would file it, its header at e/<n> and its body at
+//	          s/<n> of the same push (DESIGN-COMPUTE §24.5; the plan's BodyPath), its body never held here
 //
 // No entry's outcome holds the ref back: a deposit waiting for its write is consumed by a later pass, after the
 // writer's commit. A kill between the write's commit and the CONSUME leaves the deposit, and the next pass finds the

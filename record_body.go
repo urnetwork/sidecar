@@ -7,10 +7,17 @@
 //
 // Hook payloads and agent text reach these bodies redacted already (§16.7, D-MCP-5): this layer checks what it is
 // given and redacts nothing itself, so a credential is kept out by the redactor before sealing (I-7). Bodies of the
-// kinds M6 adds (model, cost, attestation, disclosure, the log upkeep, file_event, model_call) have their caps in
-// RECORD.md sections 10 to 13 and their own tasks; until those land they pass here unchecked, and nothing writes one.
+// kinds M6 adds (model, cost, attestation, disclosure, the log upkeep, file_event) have their caps in RECORD.md
+// sections 10 to 13 and their own tasks; until those land they pass here unchecked, and nothing writes one. model_call
+// is checked here: its identifiers within their bytes, and DESIGN-COMPUTE §6.8's evidence rule (recordModelCallValidate).
 // The directory's kinds, announce, request, decision and erasure_request, take §16.11's classes and caps from
 // directory_fields.go, a stored one through directory_decode.go's bounded decoders.
+//
+// DESIGN-COMPUTE §24.5's kinds 54 session_entry and 55 session_blob, and a model_call's CallContext, are checked here
+// for their shape and caps, which both ends share: the node's ids and hashes at their lengths, its item within
+// SessionItemByteCount, its parts within SessionPartCount, each part kept whole in at most SessionBlobPieceCount blobs
+// up to SessionPartWholeByteCount or by hash and size alone past it, and a blob's piece within BlobByteCount. Whether an
+// item's hash and a node's chain hold is session_format.go's, which a session reader runs over a run's nodes.
 //
 // Package-level functions are safe for concurrent use.
 
@@ -23,6 +30,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -96,6 +104,8 @@ type RecordBodySettings struct {
 	InventoryRepoCount int
 	// A model manifest field's bytes, an identifier: 128.
 	ModelFieldByteCount int
+	// A model_call's model, provider and request id, each in bytes: 128, as record.proto writes them.
+	ModelCallFieldByteCount int
 	// A cost entry's usages, by model: 16 (section 13.1).
 	CostUsageCount int
 	// A ledger_scope's repo ids: 256.
@@ -111,6 +121,43 @@ type RecordBodySettings struct {
 	BlobByteCount int
 	// The paths a tool call names: 256.
 	ToolPathCount int
+	// DESIGN-COMPUTE §28.12's support_message: a message's or a reply's text, in bytes: 64 KiB, the most of one event
+	// the support client reads (SupportSettings.EventMaxByteCount), past a message's 16 KiB and room for a reply support
+	// wrote.
+	SupportTextByteCount int
+	// A support_message's agent label, the agent's registered name and where it ran, in bytes: 192, a 64-byte name and
+	// its place.
+	SupportAgentLabelByteCount int
+	// A support_message's files: 3 (§28.7), CanonicalActionSettings' SupportFileMaxCount, which field 80 holds to.
+	SupportFileCount int
+	// One file's base name, in bytes: 255, a file system's.
+	SupportFileNameByteCount int
+	// One file's bytes: 10 MiB (§28.7, FB section 9).
+	SupportFileByteCount uint64
+	// A bundle's compressed bytes: 4 MiB (§28.7).
+	SupportBundleByteCount uint64
+	// A bundle manifest's codes by component: 256, past every code the support log's registry declares.
+	SupportBundleCodeCount int
+	// A component's or a code's name in a bundle manifest, in bytes: 64.
+	SupportCodeNameByteCount int
+	// A status event's fixed_in, a version or next, in bytes: 32 (SupportSettings.VersionMaxByteCount's).
+	SupportFixedInByteCount int
+	// A message's body as sent or received, in bytes: 64 KiB, the bound a body's text and fields sit within.
+	SupportBodyByteCount uint64
+
+	// DESIGN-COMPUTE §24.5's session_entry: a node's item as recorded, RFC 8785 JSON after redaction and stubs, in
+	// bytes: 16 KiB, what rides in a push's payload beside its header (DESIGN §11.7); a part that would carry it past
+	// this moves to session_blob entries.
+	SessionItemByteCount int
+	// A node's parts: 64.
+	SessionPartCount int
+	// The session_blob pieces one part is kept whole in: 8, so a part of SessionPartWholeByteCount is eight pieces of
+	// BlobByteCount.
+	SessionBlobPieceCount int
+	// The largest part kept whole, in bytes: 64 MiB (Q-CTXH-8); past it, by hash and size alone, omitted.
+	SessionPartWholeByteCount uint64
+	// A part's media type, in bytes: 255, RFC 6838's 127 bytes of type and of subtype and the slash between.
+	SessionMediaTypeByteCount int
 }
 
 // RECORD.md's values, the only source of their defaults. A fresh value each call.
@@ -144,6 +191,7 @@ func DefaultRecordBodySettings() *RecordBodySettings {
 		InventoryModelCount:       16,
 		InventoryRepoCount:        64,
 		ModelFieldByteCount:       128,
+		ModelCallFieldByteCount:   128,
 		CostUsageCount:            16,
 		LedgerRepoCount:           256,
 		LedgerProjectCount:        256,
@@ -151,6 +199,23 @@ func DefaultRecordBodySettings() *RecordBodySettings {
 		CaptureByteCount:          1024 * 1024,
 		BlobByteCount:             8 * 1024 * 1024,
 		ToolPathCount:             256,
+
+		SupportTextByteCount:       64 * 1024,
+		SupportAgentLabelByteCount: 192,
+		SupportFileCount:           DefaultCanonicalActionSettings().SupportFileMaxCount,
+		SupportFileNameByteCount:   255,
+		SupportFileByteCount:       10 * 1024 * 1024,
+		SupportBundleByteCount:     4 * 1024 * 1024,
+		SupportBundleCodeCount:     256,
+		SupportCodeNameByteCount:   64,
+		SupportFixedInByteCount:    32,
+		SupportBodyByteCount:       64 * 1024,
+
+		SessionItemByteCount:      16 * 1024,
+		SessionPartCount:          64,
+		SessionBlobPieceCount:     8,
+		SessionPartWholeByteCount: 64 * 1024 * 1024,
+		SessionMediaTypeByteCount: 255,
 	}
 }
 
@@ -162,6 +227,9 @@ const (
 	RecordCoverageSourceScan       = "scan"
 	RecordCoverageSourceTelemetry  = "telemetry"
 	RecordCoverageSourceFileEvents = "file_events"
+	// DESIGN-COMPUTE §24.5, §24.8: the Harness recorded the run natively, and the gateway recorded its model calls
+	RecordCoverageSourceHarness = "harness"
+	RecordCoverageSourceGateway = "gateway"
 )
 
 // Coverage.gaps' codes (RECORD.md section 6.4), each written "code" once or "code:count".
@@ -178,6 +246,9 @@ const (
 	RecordCoverageGapNoVault        = "no_vault"
 	RecordCoverageGapRunFileMissing = "run_file_missing"
 	RecordCoverageGapSpoolDrop      = "spool_drop"
+	// DESIGN-COMPUTE §24.8: a model_call a hook or telemetry reported whose request the gateway never saw, so its
+	// context is only what the transcript shows (Q-CTXH-14)
+	RecordCoverageGapContextPartial = "context_partial"
 )
 
 var recordCoverageSources = []string{
@@ -187,6 +258,8 @@ var recordCoverageSources = []string{
 	RecordCoverageSourceScan,
 	RecordCoverageSourceTelemetry,
 	RecordCoverageSourceFileEvents,
+	RecordCoverageSourceHarness,
+	RecordCoverageSourceGateway,
 }
 
 var recordCoverageGaps = []string{
@@ -202,6 +275,7 @@ var recordCoverageGaps = []string{
 	RecordCoverageGapNoVault,
 	RecordCoverageGapRunFileMissing,
 	RecordCoverageGapSpoolDrop,
+	RecordCoverageGapContextPartial,
 }
 
 // Whether section 6.4 names code as a Coverage source.
@@ -352,6 +426,8 @@ func RecordBodyValidate(kind RecordKind, body proto.Message) error {
 		return errors.Join(checks...)
 	case *protocol.ModelManifest:
 		return recordModelManifestValidate(typed, false)
+	case *protocol.ModelCallBody:
+		return recordModelCallValidate(typed)
 	case *protocol.RunCostBody:
 		return recordBodyRule(len(typed.GetUsage()) <= settings.CostUsageCount, "%d model usages", len(typed.GetUsage()))
 	case *protocol.LedgerScopeBody:
@@ -384,8 +460,171 @@ func RecordBodyValidate(kind RecordKind, body proto.Message) error {
 		return recordLogCheckpointValidate(typed)
 	case *protocol.DisclosureBody:
 		return recordDisclosureValidate(typed)
+	case *protocol.SupportMessageBody:
+		return recordSupportMessageValidate(typed)
+	case *protocol.SessionEntryBody:
+		return recordSessionEntryValidate(typed)
+	case *protocol.SessionBlobBody:
+		return recordSessionBlobValidate(typed)
 	}
 	return nil
+}
+
+// SessionEntryBody.type's last value, 9 link: 1 message to 9 link, as §24.5's fence numbers them (session_node.go
+// names each).
+const recordSessionNodeTypeLast uint32 = 9
+
+// SessionEntryBody.marks' bits: 0 limited_use (§25.10), 1 private (§7.8). Any other bit is no mark.
+const recordSessionMarkBits uint32 = 1<<0 | 1<<1
+
+// session_entry (DESIGN-COMPUTE §24.5): a random 16-byte node id; a parent node of 16 bytes or none, and a parent run
+// only beside a parent node; a type section §24.5 numbers; the item within SessionItemByteCount and the parts within
+// SessionPartCount; the item and chain hashes of 32 bytes; a same_as node of 16 bytes standing for an item and parts
+// it leaves empty; and only the two marks. Each part holds an RFC 6901 pointer into the item, a 32-byte hash, a media
+// type within its bytes, and either its pieces, 1 to SessionBlobPieceCount blob entry ids of 16 bytes for a part of up
+// to SessionPartWholeByteCount, or, omitted, none at all: a part past it, past the run-hour budget or at a cap.
+func recordSessionEntryValidate(body *protocol.SessionEntryBody) error {
+	settings := DefaultRecordBodySettings()
+	sameAs := len(body.GetSameAs()) != 0
+	checks := []error{
+		recordBodyRule(recordBodyLength(body.GetNodeId(), recordIdByteCount, false), "node_id of %d bytes", len(body.GetNodeId())),
+		recordBodyRule(recordBodyLength(body.GetParentNodeId(), recordIdByteCount, true), "parent_node_id of %d bytes", len(body.GetParentNodeId())),
+		recordBodyRule(recordBodyLength(body.GetParentRunId(), recordIdByteCount, true), "parent_run_id of %d bytes", len(body.GetParentRunId())),
+		recordBodyRule(len(body.GetParentRunId()) == 0 || len(body.GetParentNodeId()) != 0, "a parent run with no parent node"),
+		recordBodyRule(1 <= body.GetType() && body.GetType() <= recordSessionNodeTypeLast, "session node type %d", body.GetType()),
+		recordBodyRule(len(body.GetItem()) <= settings.SessionItemByteCount, "a session item of %d bytes", len(body.GetItem())),
+		recordBodyRule(len(body.GetParts()) <= settings.SessionPartCount, "%d session parts", len(body.GetParts())),
+		recordBodyRule(recordBodyLength(body.GetItemSha256(), recordHashByteCount, false), "item_sha256 of %d bytes", len(body.GetItemSha256())),
+		recordBodyRule(recordBodyLength(body.GetChainSha256(), recordHashByteCount, false), "chain_sha256 of %d bytes", len(body.GetChainSha256())),
+		recordBodyRule(recordBodyLength(body.GetSameAs(), recordIdByteCount, true), "same_as of %d bytes", len(body.GetSameAs())),
+		recordBodyRule(!sameAs || (len(body.GetItem()) == 0 && len(body.GetParts()) == 0), "a same_as node holding an item or parts"),
+		recordBodyRule(sameAs || len(body.GetItem()) != 0, "a session node with no item and no same_as"),
+		recordBodyRule(body.GetMarks()&^recordSessionMarkBits == 0, "session marks %#x", body.GetMarks()),
+	}
+	for _, part := range body.GetParts() {
+		checks = append(checks, recordSessionPartValidate(settings, part))
+	}
+	return errors.Join(checks...)
+}
+
+// One part of a session node: see recordSessionEntryValidate.
+func recordSessionPartValidate(settings *RecordBodySettings, part *protocol.SessionPart) error {
+	pieceCount := len(part.GetBlobEntryIds())
+	checks := []error{
+		recordBodyRule(RecordSessionPointerValid(part.GetPointer()) && len(part.GetPointer()) <= settings.SessionItemByteCount,
+			"a session part pointer of %d bytes that is no RFC 6901 pointer into the item", len(part.GetPointer())),
+		recordBodyRule(recordBodyLength(part.GetSha256(), recordHashByteCount, false), "a session part sha256 of %d bytes", len(part.GetSha256())),
+		recordBodyRule(len(part.GetMediaType()) <= settings.SessionMediaTypeByteCount, "a session part media type of %d bytes", len(part.GetMediaType())),
+	}
+	if part.GetOmitted() {
+		// past SessionPartWholeByteCount, past the run-hour budget, or at a history cap (§24.10): by hash and size alone
+		checks = append(checks, recordBodyRule(pieceCount == 0, "an omitted session part naming %d blobs", pieceCount))
+	} else {
+		checks = append(checks,
+			recordBodyRule(1 <= pieceCount && pieceCount <= settings.SessionBlobPieceCount, "a session part in %d blobs", pieceCount),
+			recordBodyRule(part.GetSize() <= settings.SessionPartWholeByteCount, "a session part of %d bytes kept whole", part.GetSize()),
+			recordBodyRule(part.GetSize() <= uint64(pieceCount)*uint64(settings.BlobByteCount), "a session part of %d bytes in %d blobs", part.GetSize(), pieceCount),
+		)
+	}
+	for _, entryId := range part.GetBlobEntryIds() {
+		checks = append(checks, recordBodyRule(len(entryId) == recordIdByteCount, "a session blob entry id of %d bytes", len(entryId)))
+	}
+	return errors.Join(checks...)
+}
+
+// Whether pointer is an RFC 6901 JSON pointer to a value inside an item: not the whole item, "", but "/" and its
+// reference tokens, where a "~" escapes only "0" and "1".
+func RecordSessionPointerValid(pointer string) bool {
+	if !strings.HasPrefix(pointer, "/") || !utf8.ValidString(pointer) {
+		return false
+	}
+	for i := 0; i < len(pointer); i += 1 {
+		if pointer[i] != '~' {
+			continue
+		}
+		if i+1 == len(pointer) || (pointer[i+1] != '0' && pointer[i+1] != '1') {
+			return false
+		}
+	}
+	return true
+}
+
+// session_blob (DESIGN-COMPUTE §24.5): one piece, index below count, of a part's 1 to SessionBlobPieceCount, the part's
+// 32-byte hash, and content within BlobByteCount.
+func recordSessionBlobValidate(body *protocol.SessionBlobBody) error {
+	settings := DefaultRecordBodySettings()
+	return errors.Join(
+		recordBodyRule(recordBodyLength(body.GetPartSha256(), recordHashByteCount, false), "a blob's part_sha256 of %d bytes", len(body.GetPartSha256())),
+		recordBodyRule(1 <= body.GetCount() && int(body.GetCount()) <= settings.SessionBlobPieceCount, "a part in %d pieces", body.GetCount()),
+		recordBodyRule(body.GetIndex() < body.GetCount(), "piece %d of %d", body.GetIndex(), body.GetCount()),
+		recordBodyRule(len(body.GetContent()) <= settings.BlobByteCount, "a session blob of %d bytes", len(body.GetContent())),
+	)
+}
+
+// A model call's CallContext (ModelCallBody field 15, DESIGN-COMPUTE §24.5): its input, output and system nodes by
+// 16-byte ids, the input always, the request's hash of 32 bytes, and a renderer within the body's identifier bytes.
+func recordCallContextValidate(settings *RecordBodySettings, context *protocol.CallContext) error {
+	checks := []error{
+		recordBodyRule(recordBodyLength(context.GetInputNodeId(), recordIdByteCount, false), "a call context's input_node_id of %d bytes", len(context.GetInputNodeId())),
+		recordBodyRule(recordBodyLength(context.GetSystemNodeId(), recordIdByteCount, true), "a call context's system_node_id of %d bytes", len(context.GetSystemNodeId())),
+		recordBodyRule(recordBodyLength(context.GetRequestSha256(), recordHashByteCount, false), "a call context's request_sha256 of %d bytes", len(context.GetRequestSha256())),
+		recordBodyRule(context.GetRenderer() != "" && len(context.GetRenderer()) <= settings.ModelCallFieldByteCount, "a call context's renderer of %d bytes", len(context.GetRenderer())),
+	}
+	for _, nodeId := range context.GetOutputNodeIds() {
+		checks = append(checks, recordBodyRule(len(nodeId) == recordIdByteCount, "a call context's output node id of %d bytes", len(nodeId)))
+	}
+	return errors.Join(checks...)
+}
+
+// support_message (DESIGN-COMPUTE §28.12): a direction, one of FB's products, an entry in FB's form or none and a seq
+// only with an entry, an event type, a tier and a status among those numbered, a 16-byte client_ref or none, the text,
+// the label, the bundle's manifest and the files within their caps, the hashes and ids at their lengths, a sent
+// message's support:urnetwork version and no approval on an event received.
+func recordSupportMessageValidate(body *protocol.SupportMessageBody) error {
+	settings := DefaultRecordBodySettings()
+	direction := body.GetDirection()
+	checks := []error{
+		recordBodyRule(direction == supportDirectionSent || direction == supportDirectionReceived, "support direction %d", direction),
+		recordBodyRule(body.GetProduct() == SupportProductUrnetwork || body.GetProduct() == supportProductRecurd, "a support product of %d bytes", len(body.GetProduct())),
+		recordBodyRule(body.GetEntry() == "" || supportEntryPattern.MatchString(body.GetEntry()), "a support entry outside FB's form"),
+		recordBodyRule(body.GetEntry() != "" || body.GetSeq() == 0, "a support seq with no entry"),
+		recordBodyRule(body.GetType() <= supportEventTypeLast, "support event type %d", body.GetType()),
+		recordBodyRule(body.GetTier() <= supportTierNumberLast, "support tier %d", body.GetTier()),
+		recordBodyRule(recordBodyLength(body.GetClientRef(), supportClientRefByteCount, true), "a client_ref of %d bytes", len(body.GetClientRef())),
+		recordBodyRule(len(body.GetText()) <= settings.SupportTextByteCount && utf8.ValidString(body.GetText()), "support text of %d bytes", len(body.GetText())),
+		recordBodyRule(len(body.GetAgentLabel()) <= settings.SupportAgentLabelByteCount, "a support agent label of %d bytes", len(body.GetAgentLabel())),
+		recordBodyRule(len(body.GetFiles()) <= settings.SupportFileCount, "%d support files", len(body.GetFiles())),
+		recordBodyRule(recordBodyLength(body.GetBodySha256(), recordHashByteCount, true), "a support body_sha256 of %d bytes", len(body.GetBodySha256())),
+		recordBodyRule(body.GetBodyBytes() <= settings.SupportBodyByteCount, "a support body of %d bytes", body.GetBodyBytes()),
+		recordBodyRule(body.GetStatus() <= supportStatusLast, "support status %d", body.GetStatus()),
+		recordBodyRule(len(body.GetFixedIn()) <= settings.SupportFixedInByteCount, "a fixed_in of %d bytes", len(body.GetFixedIn())),
+		recordBodyRule(recordBodyLength(body.GetApprovalId(), recordIdByteCount, true), "a support approval_id of %d bytes", len(body.GetApprovalId())),
+		recordBodyRule(direction != supportDirectionSent || 0 < body.GetDisclosureVersion(), "a sent support message with no disclosure version"),
+		recordBodyRule(direction != supportDirectionReceived || len(body.GetApprovalId()) == 0, "a received support event naming an approval"),
+	}
+	if bundle := body.GetBundle(); bundle != nil {
+		checks = append(checks,
+			recordBodyRule(bundle.GetFirst() <= bundle.GetLast(), "a support bundle whose window ends before it starts"),
+			recordBodyRule(bundle.GetBytes() <= settings.SupportBundleByteCount, "a support bundle of %d bytes", bundle.GetBytes()),
+			recordBodyRule(recordBodyLength(bundle.GetSha256(), recordHashByteCount, true), "a support bundle sha256 of %d bytes", len(bundle.GetSha256())),
+			recordBodyRule(len(bundle.GetCodes()) <= settings.SupportBundleCodeCount, "%d support bundle codes", len(bundle.GetCodes())),
+		)
+		for _, code := range bundle.GetCodes() {
+			component, name := code.GetComponent(), code.GetCode()
+			checks = append(checks, recordBodyRule(
+				0 < len(component) && len(component) <= settings.SupportCodeNameByteCount && 0 < len(name) && len(name) <= settings.SupportCodeNameByteCount,
+				"a support bundle code's names of %d and %d bytes", len(component), len(name)))
+		}
+	}
+	for _, file := range body.GetFiles() {
+		checks = append(checks,
+			recordBodyRule(0 < len(file.GetName()) && len(file.GetName()) <= settings.SupportFileNameByteCount, "a support file name of %d bytes", len(file.GetName())),
+			recordBodyRule(supportFileTypeText <= file.GetType() && file.GetType() <= supportFileTypeJpeg, "support file type %d", file.GetType()),
+			recordBodyRule(file.GetSize() <= settings.SupportFileByteCount, "a support file of %d bytes", file.GetSize()),
+			recordBodyRule(recordBodyLength(file.GetSha256(), recordHashByteCount, false), "a support file sha256 of %d bytes", len(file.GetSha256())),
+		)
+	}
+	return errors.Join(checks...)
 }
 
 // ModelField.evidence (RECORD.md section 12): how a manifest's field is known.
@@ -434,6 +673,47 @@ func recordModelManifestValidate(body *protocol.ModelManifest, writer bool) erro
 					"%s evidence %d: the weights digest alone is measured", item.name, evidence),
 			)
 		}
+	}
+	return errors.Join(checks...)
+}
+
+// ModelCallBody.route (DESIGN-COMPUTE §6.8): where a call ran. A hook's or a harness's own model_call has none.
+const (
+	RecordModelCallRouteLocal  = "local"
+	RecordModelCallRouteTee    = "tee"
+	RecordModelCallRouteDirect = "direct"
+)
+
+// model_call (RECORD.md section 12, DESIGN-COMPUTE §6.8, D-INFER-4): model, provider and request id within their bytes;
+// a route, where there is one, of local, tee or direct; an attestation only on the TEE route; and the platform field at
+// evidence 4, attested, only on the TEE route with the attestation set and naming the profile it verified, else at
+// declared or reported. No other field of the body carries evidence, so nothing claims more than what is behind it:
+// weaker evidence is never presented as attested (D-RECORD-11). A writer holds a body to it before it seals, and a
+// reader after it opens one, so a stored body that claims an attestation it does not carry shows no body.
+func recordModelCallValidate(body *protocol.ModelCallBody) error {
+	settings := DefaultRecordBodySettings()
+	route := body.GetRoute()
+	checks := []error{
+		recordBodyRule(len(body.GetModel()) <= settings.ModelCallFieldByteCount, "model of %d bytes", len(body.GetModel())),
+		recordBodyRule(len(body.GetProvider()) <= settings.ModelCallFieldByteCount, "provider of %d bytes", len(body.GetProvider())),
+		recordBodyRule(len(body.GetRequestId()) <= settings.ModelCallFieldByteCount, "request_id of %d bytes", len(body.GetRequestId())),
+		recordBodyRule(route == "" || route == RecordModelCallRouteLocal || route == RecordModelCallRouteTee || route == RecordModelCallRouteDirect,
+			"a route of %d bytes that is not local, tee or direct", len(route)),
+		recordBodyRule(body.GetAttestation() == nil || route == RecordModelCallRouteTee, "an attestation off the tee route"),
+	}
+	if context := body.GetContext(); context != nil {
+		checks = append(checks, recordCallContextValidate(settings, context))
+	}
+	if platform := body.GetPlatform(); platform != nil {
+		evidence := platform.GetEvidence()
+		attested := evidence == RecordModelEvidenceAttested
+		verified := route == RecordModelCallRouteTee && body.GetAttestation() != nil && platform.GetValue() != "" &&
+			platform.GetValue() == body.GetAttestation().GetProfileId()
+		checks = append(checks,
+			recordBodyRule(len(platform.GetValue()) <= settings.ModelFieldByteCount, "platform of %d bytes", len(platform.GetValue())),
+			recordBodyRule(RecordModelEvidenceDeclared <= evidence && (evidence <= RecordModelEvidenceReported || attested), "platform evidence %d", evidence),
+			recordBodyRule(!attested || verified, "a platform attested without a verified TEE attestation naming its profile"),
+		)
 	}
 	return errors.Join(checks...)
 }
@@ -636,6 +916,13 @@ func recordCoverageValidate(body *protocol.Coverage) error {
 		_, _, ok := RecordCoverageGapParse(gap)
 		checks = append(checks, recordBodyRule(ok, "a coverage gap that is no code or code:count"))
 	}
+	// DESIGN-COMPUTE §24.10's bodies_dropped: ranges of seqs from 1, each first <= last, ascending and apart
+	var previousLast uint64
+	for index, dropped := range body.GetBodiesDropped() {
+		checks = append(checks, recordBodyRule(1 <= dropped.GetFirst() && dropped.GetFirst() <= dropped.GetLast() && (index == 0 || previousLast < dropped.GetFirst()),
+			"a bodies_dropped range %d to %d that is empty, from 0, or not after the one before", dropped.GetFirst(), dropped.GetLast()))
+		previousLast = dropped.GetLast()
+	}
 	return errors.Join(checks...)
 }
 
@@ -726,16 +1013,19 @@ var recordKindsProjected = []RecordKind{
 	RecordKindRestore,
 	RecordKindCoverage,
 	RecordKindCost,
+	// DESIGN-COMPUTE.md §28.12: V and T, T's copy holding no text
+	RecordKindSupportMessage,
 }
 
 // record.proto's V: marks, by message and field name: what T's projection leaves empty. record_body_test.go holds this
 // table to record.proto's comments.
 var recordTeamStrippedFields = map[protoreflect.FullName][]protoreflect.Name{
-	"urnetwork.sidecar.ContextBody":     {"branch", "title", "truncations", "prompts"},
-	"urnetwork.sidecar.InstructionFile": {"name"},
-	"urnetwork.sidecar.ChangedPath":     {"path", "blob_entry_id"},
-	"urnetwork.sidecar.PermissionBody":  {"tool_name", "arguments_sha256"},
-	"urnetwork.sidecar.RestoreBody":     {"paths"},
+	"urnetwork.sidecar.ContextBody":        {"branch", "title", "truncations", "prompts"},
+	"urnetwork.sidecar.InstructionFile":    {"name"},
+	"urnetwork.sidecar.ChangedPath":        {"path", "blob_entry_id"},
+	"urnetwork.sidecar.PermissionBody":     {"tool_name", "arguments_sha256"},
+	"urnetwork.sidecar.RestoreBody":        {"paths"},
+	"urnetwork.sidecar.SupportMessageBody": {"text", "agent_label", "bundle", "files"},
 }
 
 // ContextBody.project, which T leaves empty when the run's repo is private (its comment).

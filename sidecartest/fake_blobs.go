@@ -9,6 +9,9 @@
 //     offset clock has that offset here;
 //   - a parked write lands before the next request on its key or never (D-OPS-20), unless it has not
 //     reached the store (DelayInNetwork);
+//   - a Get, GetRange or PutStream on a ctx sidecar.WithBlobClientPaced marks is recorded by its
+//     operation and key (ClientPacedRequests): the requests a real store's client sends outside its cap
+//     on a host's connections (QD-1402), which this fake, keeping no connections, serves as any other;
 //   - no key may be a path prefix of another (§11.8's keys row; owner decision 234): a write that breaks
 //     this is recorded and, through settings.Report, fails the test. A real store takes it and then lists
 //     the shorter key as one object without descending, so only this fake can catch it early. A byte
@@ -280,6 +283,16 @@ func (self *FakeBlobs) RequestCount(clusterId string, op string) int {
 	return cluster.requestCounts[op]
 }
 
+// The Gets, GetRanges and PutStreams that reached one cluster on a ctx sidecar.WithBlobClientPaced marks, in order,
+// each as its operation and key ("get seg/..."), so a test can see which of a route's requests go outside a real
+// store's cap on a host's connections.
+func (self *FakeBlobs) ClientPacedRequests(clusterId string) []string {
+	cluster := self.clusters[clusterId]
+	cluster.stateLock.Lock()
+	defer cluster.stateLock.Unlock()
+	return slices.Clone(cluster.clientPacedRequests)
+}
+
 func (self *FakeBlobs) blocking(wait func()) {
 	if self.barriers != nil {
 		self.barriers.Blocking(wait)
@@ -327,6 +340,8 @@ type fakeBlobCluster struct {
 	sortedKeys    []string
 	delayed       []*delayedBlobRequest
 	requestCounts map[string]int
+	// each Get, GetRange and PutStream on a client-paced ctx, as its operation and key
+	clientPacedRequests []string
 }
 
 func (self *fakeBlobCluster) ClusterId() string {
@@ -580,6 +595,16 @@ func (self *fakeBlobCluster) keyEquals(key string) func(string) bool {
 	return func(other string) bool { return other == key }
 }
 
+// Records a request whose body ctx says moves at a client's own pace (ClientPacedRequests).
+func (self *fakeBlobCluster) notePaced(ctx context.Context, op string, key string) {
+	if !sidecar.BlobClientPaced(ctx) || isInspecting(ctx) {
+		return
+	}
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.clientPacedRequests = append(self.clientPacedRequests, op+" "+key)
+}
+
 func (self *fakeBlobCluster) PutIfNoneMatch(ctx context.Context, key string, body []byte, options *sidecar.BlobPutOptions) (string, error) {
 	if err := options.Validate(); err != nil {
 		return "", err
@@ -641,6 +666,7 @@ func (self *fakeBlobCluster) PutStream(ctx context.Context, key string, body io.
 	// no request deadline: the store's bound runs from the last byte, which has just gone
 	deadline := self.now().Add(self.store.settings.StreamTimeout)
 	var newEtag string
+	self.notePaced(ctx, FaultOpPut, key)
 	err = self.request(ctx, FaultOpPut, key, true, deadline, self.keyEquals(key), func() error {
 		if _, exists := self.objects[key]; exists {
 			return sidecar.ErrBlobPrecondition
@@ -659,6 +685,7 @@ func (self *fakeBlobCluster) PutStream(ctx context.Context, key string, body io.
 
 func (self *fakeBlobCluster) Get(ctx context.Context, key string) (*sidecar.BlobObject, error) {
 	var object *sidecar.BlobObject
+	self.notePaced(ctx, FaultOpGet, key)
 	err := self.request(ctx, FaultOpGet, key, false, self.deadline(ctx), self.keyEquals(key), func() error {
 		blob, exists := self.objects[key]
 		if !exists {
@@ -678,6 +705,7 @@ func (self *fakeBlobCluster) Get(ctx context.Context, key string) (*sidecar.Blob
 
 func (self *fakeBlobCluster) GetRange(ctx context.Context, key string, offset int64, byteCount int64) (*sidecar.BlobObject, error) {
 	var object *sidecar.BlobObject
+	self.notePaced(ctx, FaultOpGet, key)
 	err := self.request(ctx, FaultOpGet, key, false, self.deadline(ctx), self.keyEquals(key), func() error {
 		blob, exists := self.objects[key]
 		if !exists {

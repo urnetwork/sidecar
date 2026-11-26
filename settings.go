@@ -125,6 +125,8 @@ type SidecarSettings struct {
 	Listeners *ListenersSettings
 	// §27's automatic approvals (safety_settings.go).
 	Safety *SafetySettings
+	// §28's support skill: the support log and the support client (support_settings.go).
+	Support *SupportSettings
 
 	// Envelopes one component's queue holds. Complete envelopes wait here without blocking the
 	// inline handler, and a full queue drops and counts (§5.4; connect/CODESTYLE.md:119). Default
@@ -168,6 +170,9 @@ type SidecarSettings struct {
 	// The time the Sidecar reads and waits on (clock.go). Nil, the default, is real time; a test
 	// passes sidecartest's FakeClock. connect's own timers stay real (X9).
 	Clock Clock
+	// The process's support log (DESIGN-COMPUTE §28.7; support_log.go), which a host opens once for its process and
+	// every Sidecar it runs writes through: ur daemon's ring, or an app's. Nil, the default, writes nothing.
+	SupportLog SupportLogWriter
 }
 
 // §5.6's alarms (identity_alarms.go) and §7.10's cleanup (identity_cleanup.go) on the device.
@@ -596,7 +601,8 @@ type SidecarTlsSettings struct {
 	// patience.
 	CertOrderPollMaxInterval time.Duration
 	// The first wait after an order's refusal or failure before the background pass tries that name again: 1 min,
-	// doubling from there. A person's EnsureTlsCertificate does not wait on it.
+	// doubling from there. A person's EnsureTlsCertificate does not wait on it. An order whose certs token was refused
+	// for good waits on no time: the name is held until the device's state or its enrollment moves (tls_cert_manager.go).
 	CertRetryMinInterval time.Duration
 	// The longest that wait grows to: 1 h.
 	CertRetryMaxInterval time.Duration
@@ -1025,6 +1031,12 @@ type SidecarSocketSettings struct {
 	// retry (§9.6's step 6): 2 s, a reading, inside the dialer's 5 s accept timeout so the dialer still has time for
 	// its backup.
 	ListenPositionWait time.Duration
+	// How long a listen whose approval has just activated its grant waits for this device's engine to hold the grant
+	// before it registers, on the network's config up to the GrantActivate's receipt (socket_listen_grant.go, MCP's
+	// socket_listen; acl_grant_keep.go's landed row): 30 s, a reading, a publish's PublishGrantLandTimeout and a
+	// forward's AddressLandTimeout, well past §8.9's p99 of 5 s. A grant not held by then answers uncertain, which the
+	// listen asked again completes.
+	ListenGrantLandTimeout time.Duration
 	// What an smtp/ listen's max_streams of 0 takes: 16, a receiver's (§15.5). Other names take the registration
 	// format's default (SocketFormatSettings.DefaultMaxStreams).
 	ReceiverMaxStreams int
@@ -1089,6 +1101,7 @@ func DefaultSidecarSocketSettings() *SidecarSocketSettings {
 		DialQuotaMaxWait:        30 * time.Second,
 		ListenDrainTimeout:      30 * time.Second,
 		ListenPositionWait:      2 * time.Second,
+		ListenGrantLandTimeout:  30 * time.Second,
 		ReceiverMaxStreams:      16,
 		Forward: &SidecarSocketForwardSettings{
 			TargetDialTimeout:     2 * time.Second,
@@ -1289,6 +1302,7 @@ func DefaultSidecarSettings() *SidecarSettings {
 		Oauth:         DefaultOauthSettings(),
 		Listeners:     DefaultListenersSettings(),
 		Safety:        DefaultSafetySettings(),
+		Support:       DefaultSupportSettings(),
 
 		ComponentQueueMessageCount: 256,
 		ComponentQueueByteCount:    1024 * 1024,

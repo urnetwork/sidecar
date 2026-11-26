@@ -78,6 +78,8 @@ var testComputeFencePlacements = map[string]testComputeFencePlacement{
 	"ApprovalChannel":  {path: "protocol/record.proto", extends: true},
 	"AutoVerdictBody":  {path: "protocol/record.proto"},
 	"AutoInput":        {path: "protocol/record.proto"},
+	// §28.12's kind 30 support_message, whose body RECORD.md section 6.4 takes beside the other kinds' (support-skill)
+	"SupportMessageBody": {path: "protocol/record.proto"},
 }
 
 // A fence's block comments, which DESIGN-COMPUTE.md's use (ApprovalChannel's /* DESIGN's 0-3 */) and DESIGN.md's do not.
@@ -378,10 +380,11 @@ func testParseFencesWith(t *testing.T, fences *testFences, document []byte, pars
 }
 
 // Every fenced proto block in DESIGN.md and RECORD.md, then testUnfencedFence, read into one set of declarations,
-// with testFenceAdditions' fields and testFenceValueAdditions' values joining the fences they extend and
-// testFenceReservations' fields and testFenceValueReservations' values leaving theirs. A declaration that later gains a fence is then written twice, which
-// says to take it out of testUnfencedFence, and an added field or value the design comes to write, or a reserved one
-// it comes to reserve, fails until its line leaves its list.
+// with testFenceAdditions' fields, testFenceReservedAdditions' numbers and testFenceValueAdditions' values joining the
+// fences they extend and testFenceReservations' fields and testFenceValueReservations' values leaving theirs. A
+// declaration that later gains a fence is then written twice, which says to take it out of testUnfencedFence, and an
+// added field, number or value the design comes to write, or a reserved one it comes to reserve, fails until its line
+// leaves its list.
 func testReadFences(t *testing.T) *testFences {
 	fences := &testFences{messages: map[string]*testFenceMessage{}, enums: map[string]*testFenceEnum{}}
 	count := testParseFences(t, fences, testReadDesign(t))
@@ -417,6 +420,9 @@ func testReadFences(t *testing.T) *testFences {
 			continue
 		}
 		message.fields = append(message.fields, addition.field)
+	}
+	for _, finding := range testApplyReservedAdditions(fences, testFenceReservedAdditions) {
+		t.Error(finding)
 	}
 	for _, finding := range testApplyValueAdditions(fences, testFenceValueAdditions) {
 		t.Error(finding)
@@ -501,6 +507,56 @@ func testJoinComputeFences(fences *testFences, compute *testFences, placements m
 		}
 	}
 	return findings
+}
+
+// Joins each number to the reservations of the message it extends, and says which cannot join: a message no fence
+// writes, or a number its fence now writes as a field or reserves itself, whose line should leave the list.
+func testApplyReservedAdditions(fences *testFences, additions []testFenceReservedAddition) []string {
+	findings := []string{}
+	for _, addition := range additions {
+		message := fences.messages[addition.message]
+		if message == nil {
+			findings = append(findings, fmt.Sprintf("%s reserves %v by %s, and no fence writes that message", addition.message, addition.numbers, addition.question))
+			continue
+		}
+		for _, number := range addition.numbers {
+			written := slices.ContainsFunc(message.fields, func(field testFenceField) bool { return field.number == number })
+			if written || slices.Contains(message.reservedNumbers, number) {
+				findings = append(findings, fmt.Sprintf("the design now writes or reserves %s's %d: drop it from testFenceReservedAdditions (%s)", addition.message, number, addition.question))
+				continue
+			}
+			message.reservedNumbers = append(message.reservedNumbers, number)
+		}
+	}
+	return findings
+}
+
+// The reserved-number list's own checks, on fences planted for it: a number joins the reservations, and one the fence
+// already writes as a field or reserves, or a message no fence writes, is a finding rather than a second copy.
+func TestFenceReservedAdditionsJoinOnlyWhatTheDesignLeavesOut(t *testing.T) {
+	planted := func() *testFences {
+		return &testFences{enums: map[string]*testFenceEnum{}, messages: map[string]*testFenceMessage{
+			"Planted": {
+				path:            "protocol/types.proto",
+				fields:          []testFenceField{{name: "kept", number: 1, typeName: "uint32"}},
+				reservedNumbers: []int32{9},
+			},
+		}}
+	}
+	fences := planted()
+	findings := testApplyReservedAdditions(fences, []testFenceReservedAddition{{message: "Planted", numbers: []int32{2, 3}, question: "q"}})
+	if message := fences.messages["Planted"]; len(findings) != 0 || !slices.Equal(message.reservedNumbers, []int32{9, 2, 3}) {
+		t.Errorf("new numbers: %v, %+v", findings, message)
+	}
+	for _, addition := range []testFenceReservedAddition{
+		{message: "Planted", numbers: []int32{1}, question: "q"},
+		{message: "Planted", numbers: []int32{9}, question: "q"},
+		{message: "Unwritten", numbers: []int32{2}, question: "q"},
+	} {
+		if findings := testApplyReservedAdditions(planted(), []testFenceReservedAddition{addition}); len(findings) != 1 {
+			t.Errorf("%s %v: %v", addition.message, addition.numbers, findings)
+		}
+	}
 }
 
 // Takes each field out of the fence that writes it and reserves its number there, and says which cannot leave: a

@@ -16,6 +16,9 @@
 //	the log's rows    members and sidecars the atoms expand over, and the acl statements' rows: activated grants,
 //	                  the folded access logs, suspensions, spent grant ids and BridgeRows' egress modes
 //	bridge/ledger/    the routes the head's bridge ledger holds active at its fold, read only by CompileAcl
+//	service_settings  auth_features, the authorization features the head turns on, whose implicit fragments a network
+//	                  with no document compiles after the frozen implicit document (DESIGN-COMPUTE §16.6;
+//	                  aclImplicitFeatureRules), and nothing else of the record
 //
 // What it writes: has_document; evidence_default, the document's effective evidenceDefault as channel values, all
 // three where it names none, the implicit document's included, which every verifier reads for an action no requests
@@ -85,6 +88,10 @@ type AclCompileInput struct {
 	// rows' routes from them, a standing one only where this compile's own policy covers it (QD-764). Nil reads them
 	// from the head NewAclCompileInput was given, when CompileAcl first needs them; with no head, none.
 	BridgeRoutes []*BridgeLedgerRule
+	// The authorization features the head's ServiceSettings turns on (DESIGN-COMPUTE §16.6), whose implicit rules a
+	// network with no document compiles after the frozen implicit document (aclImplicitFeatureRules): a part of the
+	// head, so the compile stays a function of it.
+	AuthFeatures AuthFeature
 
 	// the head the input came from, nil for an input built by hand
 	head *ConfigHead
@@ -144,6 +151,11 @@ func NewAclCompileInput(head *ConfigHead, rows *ConfigCompileRows) (*AclCompileI
 		return nil, fmt.Errorf("%w: bridge: %w", ErrAclCompile, err)
 	}
 	input.Bridge = input.Statements.GetBridge()
+	settings, _, err := head.ServiceSettings()
+	if err != nil {
+		return nil, fmt.Errorf("%w: service_settings: %w", ErrAclCompile, err)
+	}
+	input.AuthFeatures = AuthFeature(settings.GetAuthFeatures())
 	input.head = head
 	return input, nil
 }
@@ -343,6 +355,9 @@ type AclLocalPolicy struct {
 	Requests []AclLocalRequest
 	// The names behind the atoms and repos the rows name, for previews (§8.8's Saving).
 	Names []AclLocalName
+	// The document's discovery block, nil with none or no document: what §17.7.1's effective list of service types
+	// reads (owner decision 778). It enters no row.
+	Discovery *AclDiscoveryBlock
 }
 
 // One rule's detail.
@@ -472,6 +487,9 @@ func newAclCompilerTables(input *AclCompileInput) (*aclCompiler, error) {
 	}
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrAclCompile, err)
+	}
+	if self.hasDocument {
+		self.local.Discovery = self.policy.Discovery
 	}
 	if err := self.indexTables(); err != nil {
 		return nil, err
@@ -696,6 +714,11 @@ func (self *aclCompiler) compile() error {
 		}
 		rows.Requests = append(rows.Requests, requestRow)
 		self.local.Requests = append(self.local.Requests, local)
+	}
+
+	// the implicit rules each feature the head turns on adds, after the frozen implicit document (§16.6's implicit row)
+	if err := self.aclImplicitFeatureRules(rows, ruleIds, requestIds); err != nil {
+		return err
 	}
 
 	kindRules, err := self.compileKindRules()

@@ -1,0 +1,197 @@
+{
+  "version": 3,
+  "not_after_ms": 1801440000000,
+  "roots": {
+    "intel_sgx": ["f2cba730408d1a3b1e4a3898e1951a5b3552f7e5751153c8e29729abfd41cc4d"],
+    "amd_arks": [
+      {"family": "milan", "sha256": "4dde42ad3d7fb30f6f896ad343444dec7fbcbc807b1d741400e6e4ffbecfc9ee"},
+      {"family": "genoa", "sha256": "c06af4164be01caf635aafc7613ded387a15e31cc55adb3d5cc6090f4e1496cd"},
+      {"family": "turin", "sha256": "c3191d1af6dc6b2336f6104536383bcd7e53e68fb6e0d1e972f3862db4a3cba0"}
+    ],
+    "nvidia_device": ["a28a46a2020e0c6493bee8952600407cd3c17112da303cc451c532d57fa85fc5"],
+    "nvidia_nras": ["de515c1684d2232120814f75c56a88f2ef20aeb9ed0aaedda1dadb54d9de3fd9"]
+  },
+  "tcb": {
+    "tdx": {
+      "statuses": ["UpToDate", "SWHardeningNeeded"],
+      "advisories": ["INTEL-SA-00000"],
+      "min_tcb_evaluation_data_number": 17
+    },
+    "snp": {
+      "min_firmware": [
+        {"family": "milan", "build": 31},
+        {"family": "genoa", "build": 30},
+        {"family": "turin", "build": 8}
+      ],
+      "policy_bits_set": 65536,
+      "policy_bits_clear": 524288
+    },
+    "max_ages": [
+      {"vendor": "intel", "collateral_days": 7, "revocation_days": 7},
+      {"vendor": "amd", "collateral_days": 7, "revocation_days": 7},
+      {"vendor": "nvidia", "collateral_days": 7, "revocation_days": 7}
+    ]
+  },
+  "providers": [
+    {
+      "id": "teetest",
+      "cpus": ["tdx"],
+      "schemes": ["chutes-e2e-v1"],
+      "label": "AP",
+      "roots": [{"name": "test-vm-root-ca", "sha256": "8dca02de514920e7962a333d065079b29d10a4acf293a48a40d13149cd1ab3cc"}],
+      "models": [{"model": "test-model-27b", "provider_model_id": "chute-test-0001"}],
+      "profiles": [
+        {
+          "id": "teetest-2026.11.1",
+          "guest_version": "2026.11.1",
+          "cpu": "tdx",
+          "mrtd": "aef5956966b09b1c42fb8464b6146f7b23542e90f689579b86386dd6b616985ea43cc021496f9a428e3669fe6f2cfebb",
+          "rtmr0": "fa838c3c01bce4691af878fb648e6b333ca9c97eb0824b1a7a5e7ccff4a9124a77b01b76e69d58816a67d1ea3775f2f4",
+          "rtmr1": "04a82b18337a768f3dcb9b772003376e4487cd62641895318f39ea7ef6e376ca4a273966b8dc33e0e8a49482c7ee78ef",
+          "rtmr2": "36fe8ba486cb4456f40452b6ce9626ec71ede78a4ea06e7deaa6a9da4a9c68cc6e0e215d444a08b38dd06d1ae6969a84",
+          "rtmr3": "711029a6cf8e542d2bd77c2434862ec59fb88d86c5e29ec67e14c752abd037b70ae877c426500a875bd1c212a02c371f",
+          "xfam": "e702060000000000",
+          "measurement": "",
+          "single_socket": false,
+          "gpu_model": "b200",
+          "gpu_count": 8,
+          "payload_root_sha256": "",
+          "expires_ms": 1811808000000,
+          "replayed": [],
+          "review": "reproduced",
+          "review_list_sha256": ""
+        }
+      ]
+    },
+    {
+      "id": "enclavetest",
+      "cpus": ["snp"],
+      "schemes": ["ur-enclave-v1", "ur-enclave-session-v1"],
+      "label": "AP",
+      "roots": [],
+      "models": [],
+      "profiles": [
+        {
+          "id": "ur-enclave-2026.11.1-enclavetest",
+          "guest_version": "2026.11.1",
+          "cpu": "snp",
+          "mrtd": "",
+          "rtmr0": "",
+          "rtmr1": "",
+          "rtmr2": "",
+          "rtmr3": "",
+          "xfam": "",
+          "measurement": "332ce86683cd076e9e700743d36a8cc4125c3269dc76282ac2ac290fdabaffb3844cb83f2a17b733e36bb7cdd574afe4",
+          "single_socket": true,
+          "gpu_model": "",
+          "gpu_count": 0,
+          "payload_root_sha256": "f5deb23a5b22acfcd60e56169e498b2f0246b397ec86fd74282031aa3e7b40a2",
+          "expires_ms": 1811808000000,
+          "replayed": [
+            {
+              "register": "pcr12",
+              "events": [
+                "14c795baef1229956e39c6d81c0c511bb3800a180133f0ef5ca866f102a1d12e",
+                "c719eaa28d2b8d1a97bfca10b38c7454f4042e029d57e79e6dd6d58c83e9f6f9"
+              ]
+            }
+          ],
+          "review": "listed",
+          "review_list_sha256": "4d2e755c1e721cc46ef5ac07afa42edc9880995fe1aae95679700434f801aa77"
+        }
+      ]
+    }
+  ],
+  "direct": {
+    "providers": [
+      {
+        "slug": "directtest",
+        "api_host": "api.direct-test.example",
+        "receiver_hotkey": "5TestReceiverHotkeyForVectorsOnly",
+        "netuid": 64,
+        "targets": [{"method": "POST", "path": "/v1/chat/completions"}],
+        "models": [
+          {
+            "model": "test-model-35b",
+            "provider_model_id": "test/model-35b",
+            "aliases": ["test-model-35b-latest"],
+            "zero_retention": true,
+            "upstreams": []
+          }
+        ]
+      }
+    ],
+    "limited_use": ["teetest-test-model-27b", "directtest-test-model-35b"]
+  },
+  "search": {"host":   "search.test.example", "asset": {"network": "test-chain", "contract": "0x0000000000000000000000000000000000000000"},
+             "ceiling_nano_usd": 15000000, "payee_fresh": false},
+  "disclosures": [
+    {
+      "id": "inference:local",
+      "version": 1,
+      "revision": 0,
+      "grace_days": 14,
+      "since_ms": 1793491200000,
+      "locales": [
+        {
+          "locale": "en",
+          "summary": "On this device: the model runs here, and no server takes part in a call.",
+          "exposed": [
+            "Your conversation's history, kept in EVS so your devices can continue it. URnetwork's storage holds it encrypted, and sees its sizes and when it is written and read, so it can tell when this device is in a conversation and roughly how much is said, never what.",
+            "What the agent's tools send out: a web search, which has its own disclosure, a page fetch or a calendar call.",
+            "Hugging Face, which serves the model file, sees the download and the address it came from.",
+            "Anyone who can use this device unlocked."
+          ],
+          "private": [
+            "What you and the model said: no server takes part in a call, which sends no request and makes no charge."
+          ]
+        },
+        {
+          "locale": "de",
+          "summary": "Auf diesem Gerät: ein Testtext, der nur die Übersetzungen prüft.",
+          "exposed": ["Ein Testeintrag."],
+          "private": ["Ein Testeintrag."]
+        }
+      ]
+    },
+    {
+      "id": "inference:teetest",
+      "version": 1,
+      "revision": 0,
+      "grace_days": 14,
+      "since_ms": 1793491200000,
+      "locales": [
+        {
+          "locale": "en",
+          "summary": "A test provider's line, in a TEE that keeps its miners out.",
+          "exposed": ["A test item."],
+          "private": ["A test item."]
+        }
+      ]
+    },
+    {
+      "id": "inference:directtest",
+      "version": 2,
+      "revision": 1,
+      "grace_days": 0,
+      "since_ms": 1792022400000,
+      "locales": [
+        {
+          "locale": "en",
+          "summary": "Not in a TEE: a test provider reads everything in this conversation.",
+          "exposed": ["A test item."],
+          "private": ["A test item."]
+        }
+      ]
+    }
+  ],
+  "services": [ { "service" : "test" , "hosts" : [ "issuer.test.example" ] } ],
+  "custody": [
+    {"provider": "teetest", "registry": "test-registry", "chips": [{"kind": "intel_ppid", "id": "dfb1282eb3c4b12850ccab641091f186"}]}
+  ],
+  "revoked": {
+    "profiles": ["teetest-2026.10.1"],
+    "chips": [{"kind": "amd_chip_id", "id": "822bc2599c25fcec77a2acc809e4847def98af03db058ea43019a959b838aae7a1a9cdb477300b6b19d593955d3c2d4f69b9a3ea266f7a56f36b2d2b7c2b00d7"}],
+    "gpu_serials": ["TEST-GPU-0001"]
+  }
+}

@@ -366,6 +366,27 @@ func (self *testForwarderWorld) bind(device testConfigDevice) {
 	self.bindings[device.sidecarId] = signed
 }
 
+// The config repo's key holders' digest at the net's tip and its time, which an honest rotator's GenRotate carries
+// (§10.9's holders row).
+func (self *testForwarderWorld) holdersSha256() []byte {
+	self.t.Helper()
+	state := self.net.log.State()
+	holders, err := KeyHolders(state, self.net.configRepoId(), time.UnixMilli(state.TimeMs()))
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	return holders.Sha256()
+}
+
+// The cause an honest rotator gives a generation of the config: REQUEST for generation 1, and REMOVE past it, which
+// §10.9's cause row takes whether or not the state requires it (gkm_verify_rotation.go's readings).
+func testForwarderCause(generation uint64) GkmCause {
+	if generation == 1 {
+		return GkmCauseRequest
+	}
+	return GkmCauseRemove
+}
+
 // The config group's next generation at gkm, rotated by the owner's device, its key the one the net seals that
 // generation's bodies under, with a DelegationWrap for each Delegation among recipients.
 func (self *testForwarderWorld) rotate(recipients ...testForwarderRecipient) uint64 {
@@ -373,31 +394,7 @@ func (self *testForwarderWorld) rotate(recipients ...testForwarderRecipient) uin
 	self.gkm.stateLock.Lock()
 	generation := uint64(len(self.gkm.generations)) + 1
 	self.gkm.stateLock.Unlock()
-	repoId := self.net.configRepoId()
-	repoKey := testConfigSealKey(generation).repoKey
-	state := self.net.log.State()
-	holders := sha256.Sum256([]byte("forwarder test holders"))
-	rotate := &protocol.GenRotate{
-		GroupId: self.groupId.Bytes(), RepoId: repoId.Bytes(), Generation: generation,
-		Commitment: gkmCommitment(repoId, generation, repoKey), Cause: uint32(GkmCauseSchedule),
-		Auth: state.Pin(), TimeMs: state.TimeMs(), HoldersSha256: holders[:],
-	}
-	if 1 < generation {
-		parentKey := testConfigSealKey(generation - 1).repoKey
-		linkKey, err := gkmDeriveKey(repoKey, repoId, EvsKeyPurposeLink, generation, nil)
-		if err != nil {
-			self.t.Fatal(err)
-		}
-		genLink, err := gkmSeal(linkKey, parentKey, gkmGenLinkAad(repoId, generation, GkmCauseSchedule))
-		if err != nil {
-			self.t.Fatal(err)
-		}
-		rotate.ParentCommitment, rotate.Genlink = gkmCommitment(repoId, generation-1, parentKey), genLink
-	}
-	signed, err := SignGenRotate(rotate, gkmForwardSigner(self.net.owner))
-	if err != nil {
-		self.t.Fatal(err)
-	}
+	signed := self.genRotateBy(self.net.owner, self.groupId, self.net.configRepoId(), generation, testConfigSealKey(generation-1).repoKey)
 	self.gkm.stateLock.Lock()
 	self.gkm.generations = append(self.gkm.generations, signed)
 	self.gkm.stateLock.Unlock()

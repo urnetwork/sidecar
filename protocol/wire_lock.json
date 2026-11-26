@@ -297,7 +297,9 @@
         {"number":6401,"name":"LISTENERS"},
         {"number":6402,"name":"LISTENERS_RESULT"},
         {"number":6657,"name":"CORE_HINT"},
-        {"number":6913,"name":"DNS_ZONE_CHANGED"}
+        {"number":6913,"name":"DNS_ZONE_CHANGED"},
+        {"number":6914,"name":"DNS_SD_WATCH"},
+        {"number":6915,"name":"DNS_SD_WATCH_RESULT"}
       ],
       "reserved_numbers": [[5122,5123]],
       "reserved_names": ["EVS_HEAD_CHECK","EVS_HEAD_CHECK_RESULT"]

@@ -245,6 +245,25 @@ cases:
         meta-1: {settle_passed_build: 18f97e70b, hdd_capacity_ops: 9000}
       no_file_clusters: [seg-1, meta-2]
 
+  - name: compute's gate as config/<env>/sidecar.yml writes it from M12 opens nothing (CSRV-M12-03)
+    file: |
+      sidecar:
+        compute: {enabled: false, networks: [], percent: 0}
+    expect: {}
+
+  - name: compute's gate opened to a listed network admits it and no other, and takes writes
+    file: |
+      sidecar:
+        compute: {enabled: true, networks: [5ca1ab1e-0000-4000-8000-000000000004], percent: 0}
+    expect:
+      services:
+        compute:
+          enabled: true
+          writes: true
+          percent: 0
+          admits: [5ca1ab1e-0000-4000-8000-000000000004]
+          refuses: [5ca1ab1e-0000-4000-8000-000000000028, 5ca1ab1e-0000-4000-8000-00000000009a]
+
   - name: a gate for a service no reader knows opens nothing
     file: |
       sidecar:

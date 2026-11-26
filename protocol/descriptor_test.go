@@ -38,9 +38,11 @@ func TestEvsExactHeadCapabilityWire(t *testing.T) {
 // §4.4's files and those the service sections add, each registered by its root-relative path.
 var testProtoFiles = []string{
 	"protocol/acl.proto",
+	"protocol/attest.proto",
 	"protocol/config.proto",
 	"protocol/core.proto",
 	"protocol/directory.proto",
+	"protocol/dns.proto",
 	"protocol/envelope.proto",
 	"protocol/evs.proto",
 	"protocol/evsindex.proto",
@@ -248,7 +250,7 @@ func TestEnumNumbersStable(t *testing.T) {
 				"MAIL_INGRESS": 0x1701, "MAIL_HINT": 0x1702,
 				"LISTENERS": 0x1901, "LISTENERS_RESULT": 0x1902, // DESIGN-COMPUTE §26.8 (CARCH-M11-05)
 				"CORE_HINT":        0x1A01,
-				"DNS_ZONE_CHANGED": 0x1B01,
+				"DNS_ZONE_CHANGED": 0x1B01, "DNS_SD_WATCH": 0x1B02, "DNS_SD_WATCH_RESULT": 0x1B03, // §12.9.1 (owner decision 778)
 			},
 		},
 	}
@@ -805,6 +807,9 @@ func TestConfigReservationsEqualTheDecidedList(t *testing.T) {
 			"mail_strict": 7, "record_cost": 8, "record_required": 9,
 			// Team scopes' signed first bindings (QD-1163)
 			"team_scopes": 10,
+			// the authorization features, reserved with the hold before the first release a user runs (DESIGN-COMPUTE
+			// §16.6; owner decision 775; CACL-M11-02)
+			"auth_features": 11,
 		},
 		"ServiceDirectorySettings": {"runs": 1, "workers": 2},
 		"VersioningRules":          {"rules": 1},

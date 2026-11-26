@@ -324,7 +324,9 @@ func (self *EvsEngine) serveUploadSegment(request *EvsRequest) {
 	}
 	key := SegmentKey(request.RepoId, segmentId)
 	uploadTime := request.Now()
-	_, err = segmentCluster.PutStream(request.Ctx, key, io.MultiReader(bytes.NewReader(header), request.Http.Body), byteCount, segmentId[:])
+	// the client's body as it arrives, which the lb streams through: at the client's pace, outside the file clusters'
+	// cap on a host's connections (QD-1402)
+	_, err = segmentCluster.PutStream(sidecar.WithBlobClientPaced(request.Ctx), key, io.MultiReader(bytes.NewReader(header), request.Http.Body), byteCount, segmentId[:])
 	stored := err == nil
 	if stored && deps.Hdd != nil {
 		// the cluster took the PUT whatever the answer below

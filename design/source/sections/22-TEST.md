@@ -4,7 +4,7 @@
 
 This section owns verification: tiers, harness, hot-path gates, fuzzing, scenarios, privacy, admission and revocation suites, load, soak, the fault-schedule program, storage benchmarks, conformance, platform budgets and internal review gates. Sections keep their targets and mechanisms; this one names each target's test, invariant and gate. §19 owns environments, §23 milestones and the gate map.
 
-Compute's verification, its tiers, gates, fuzz targets, scenarios and conformance, is DESIGN-COMPUTE.md §18, which adds to this section's suites and is built with the compute tracks (owner decisions 733, 746, 771).
+Compute's verification, its tiers, gates, fuzz targets, scenarios and conformance, is DESIGN-COMPUTE.md §18, which adds to this section's suites and is built with the compute tracks (owner decisions 733, 746, 771), the support skill's among them: a canary corpus driven through every component's inputs that leaves no byte in any support log's ring or bundle, the secret scan refusing an agent's message, and a message posted only to the policy's support host, filed in its member's thread (owner decision 783).
 
 ### 22.2 Requirements
 
@@ -279,7 +279,9 @@ Parentheses hold T1 tests; the rest run in T2 and T3. Inline server paths (contr
       old reading and the other's debit flushed between: the second reservation is clamped by the balance's floor in
       Redis and the balance ends at zero, never below (DESIGN-DETAILS.md section 13); meter rows re-sent after Stripe's
       24 h dedup window replace, never add, and a correction is a new version (FS-43); declared sidecars get no Public
-      contract, only sidecar_clients
+      contract, only sidecar_clients; sidecar nominations racing for a network's last slots admit exactly its limit,
+      a failed nomination releasing its slot and a replaced resident keeping its successor's entry (owner decision
+      786)
 §21   TTL sweeps on an injected clock; an access-log row per read; holds pause only sweeps, GC and a drop's deletions,
       the last silently (owner decision 184; FS-92), each kind to its deadline (FS-48); abuse clocks on a fake clock
       across a weekend, every registrar or registry notice paging (FS-49); FS-48's and FS-49's T2 are pure tests of
@@ -884,10 +886,17 @@ real        T3 runs each T3 row through server's real handlers and stores (api, 
             nothing; T3 keeps each row whole and moves time in one reviewed file, server/sidecart3/clock.go: its
             Blobs wrapper records each key's write on the schedule's clock and returns it as LastModified, Advance
             shortens by PEXPIRE the Redis TTLs of the families a row names, and api takes the clock through a test
-            seam beside DenyPostgresForTest; after an Advance the Net rereads its file clusters' admin info once,
-            holding every later blob request until that reread has finished, so none after a move goes on with
-            stale admin info, whatever their order, to a 503 and a retry on a clock no one moves
-            (server/sidecart3/faults.go; owner decision 646); a clause that depends on Postgres now() or a
+            seam beside DenyPostgresForTest; once an Advance has moved the Net's clock past a threshold since its
+            last reread, sidecart3.Settings' AdminInfoRereadAfter, by default the file clusters' CheckInterval
+            (30 s), and refused at their CheckStaleAfter, the Net
+            rereads its file clusters' admin info once, holding every later blob request until that reread has
+            finished, so none after such a move goes on with stale admin info, whatever their order, to a 503 and
+            a retry on a clock no one moves, while a clock following real time in small steps rereads about once
+            in 30 s (server/sidecart3/faults.go; owner decisions 646, 781); a Net's construction rides out a
+            connection reset from the local stack's MinIO, sending MakeBucket and the clusters' first admin read
+            again after a transport failure alone, never a refusal such as AccessDenied, up to sidecart3.Settings'
+            SetupRetryCount (5) times SetupRetryWait (1 s) apart (owner decision 781), since setup against a real
+            store is not what a row tests; a clause that depends on Postgres now() or a
             script's Redis TIME after an Advance runs on T2 alone, since neither moves; the catalog's store_clock
             flag marks each translated clause, gate reports say so, and FS-114 and 22.9's file-cluster suite
             never use the wrapper

@@ -94,6 +94,11 @@ func TestBridgeRevocationsCloseExactlyTheirTags(t *testing.T) {
 
 // §22.5's reset against drain: a route withdrawn to drain keeps admitting until max(drain_seconds, 600 s) from its
 // start, then the bridge publishes and closes its tag; withdrawn with reset, it closes at once.
+//
+// run, which times the drain's end, sets its timer as a duration from its own read of the clock. The state returns
+// here with run between that read and the timer's arm, held there so this comes on every run: under load tip-check
+// moved the clock to 300 s inside that window, and run's timer stood 600 s after the move. The clock moves only once
+// the timer at the floor stands.
 func TestBridgeResetAgainstDrain(t *testing.T) {
 	routed := egressTestTag(egressTestUntagged, sidecartest.BridgeFixtureRouteId(1))
 	start := time.UnixMilli(egressTestTimeMs)
@@ -101,12 +106,24 @@ func TestBridgeResetAgainstDrain(t *testing.T) {
 	draining.Served[0].DrainingSince = egressTestTimeMs
 	draining.Served[0].DrainUntil = egressTestTimeMs + 30_000
 
-	drain := newStateTest(t, dispositionTestFixture(), true)
+	var clock *stateTestHeldClock
+	drain := newStateTestWithSettings(t, dispositionTestFixture(), true, func(settings *device.BridgeSettings) {
+		clock = newStateTestHeldClock(settings)
+	})
+	// the fixture times nothing, so run's next arm is the drain's
+	held, release := clock.holdNextAfter()
+	t.Cleanup(release)
 	drain.log.Tick()
 	drain.setState(draining, true)
 	if tags, _ := drain.closer.take(); 0 < len(tags) {
 		t.Fatalf("a drain closed %v at once", tags)
 	}
+	drain.awaitHeld(held)
+	if pending := drain.clock.PendingTimers(); 0 < len(pending) {
+		t.Fatalf("timers at %v before run armed the drain's", pending)
+	}
+	release()
+	drain.awaitTimerAt(start.Add(600 * time.Second))
 	flow := drain.flow(egressTestUntagged, connect.IpProtocolTcp, "192.168.50.20:443")
 	// past drain_until, still inside 600 s from the drain's start
 	drain.clock.AdvanceTo(start.Add(300 * time.Second))
@@ -132,6 +149,63 @@ func TestBridgeResetAgainstDrain(t *testing.T) {
 	}
 	if tags, _ := reset.closer.take(); !slices.Equal(tags, []uint64{routed}) {
 		t.Fatalf("a reset closed %v", tags)
+	}
+}
+
+// The drain's floor counts from its start, not from when the bridge sees the drain (§22.5, §17.5's removed row): the
+// draining state arrives 30 s after the drain began, and run, held where it arms its timer for the state before, reads
+// it only once the clock is at 300 s, as a loaded device's run might, yet its timer stands at the drain's start plus
+// 600 s, not 600 s after either, and the route's tag closes there.
+func TestBridgeDrainFloorCountsFromTheDrainsStart(t *testing.T) {
+	routed := egressTestTag(egressTestUntagged, sidecartest.BridgeFixtureRouteId(1))
+	start := time.UnixMilli(egressTestTimeMs)
+	floor := start.Add(600 * time.Second)
+	// a map's expiry an hour on gives run a timer to arm for the state before, past the floor
+	before := dispositionTestFixture()
+	before.Maps[0].Expires = egressTestTimeMs + egressTestHourMs
+	draining := dispositionTestFixture()
+	draining.Maps[0].Expires = before.Maps[0].Expires
+	draining.Served[0].DrainingSince = egressTestTimeMs
+	draining.Served[0].DrainUntil = egressTestTimeMs + 30_000
+
+	var clock *stateTestHeldClock
+	var held <-chan struct{}
+	var release func()
+	test := newStateTestWithSettings(t, before, true, func(settings *device.BridgeSettings) {
+		clock = newStateTestHeldClock(settings)
+		// nothing times the bridge until the state before, so run's first arm is its expiry's
+		held, release = clock.holdNextAfter()
+	})
+	t.Cleanup(release)
+	test.awaitHeld(held)
+
+	// run has set no timer yet, so no move here fires one
+	test.clock.AdvanceTo(start.Add(30 * time.Second))
+	test.log.Tick()
+	test.setState(draining, true)
+	if tags, _ := test.closer.take(); 0 < len(tags) {
+		t.Fatalf("a drain closed %v at once", tags)
+	}
+	flow := test.flow(egressTestUntagged, connect.IpProtocolTcp, "192.168.50.20:443")
+	test.clock.AdvanceTo(start.Add(300 * time.Second))
+	if test.verdict(flow) != connect.EgressVerdictPass {
+		t.Fatal("a draining route stopped admitting before its floor")
+	}
+	// run arms its stale timer, sees the state changed and reads the draining state and the clock at 300 s
+	release()
+	test.awaitTimerAt(floor)
+	if pending := test.clock.PendingTimers(); !pending[0].Equal(floor) || slices.ContainsFunc(pending, start.Add(900*time.Second).Equal) {
+		t.Fatalf("timers at %v, want the first at the floor %v", pending, floor)
+	}
+	if tags, _ := test.closer.take(); 0 < len(tags) {
+		t.Fatalf("closed %v during the drain", tags)
+	}
+	test.advanceTo(floor)
+	if tags, _ := test.closer.take(); !slices.Equal(tags, []uint64{routed}) {
+		t.Fatalf("the drain's end closed %v", tags)
+	}
+	if test.verdict(flow) != connect.EgressVerdictDeny {
+		t.Fatal("a drained route still admits")
 	}
 }
 

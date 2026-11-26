@@ -2,16 +2,25 @@
 // service-settings-7-9-admin-settings-command, built on its recommendation):
 //
 //	ur admin settings [--mail-strict=<mail_strict>] [--record-cost=<record_cost>] [--record-required=<record_required>]
+//	ur admin settings --feature=<feature>
 //
 // Each value is on or off. With no option it prints the three as this device honors them: mail_strict, §15.4's
 // mail.strict, off unless set; record_cost, whether per-run cost totals go to the team record as well as each
 // member's vault, on unless the Team turns it off; record_required, whether each member's ur install-harness writes
-// fail-closed hooks, off unless set. Otherwise it signs, only after a yes on /dev/tty, through a Confirm method: the
-// daemon files every option given in one ServiceSettings into the config head, the head's other settings kept, from an
-// Owner's or Admin's device that runs the network's config writer (sidecar.SaveServiceSettings), and refuses any other
-// device before it signs anything. A value other than on or off refuses as the options parse. The daemon refuses a
-// caller with a harness process among its ancestors, by the pid it read off the socket, and no MCP tool reaches any
-// of it, so record_required is never set through MCP.
+// fail-closed hooks, off unless set; and DESIGN-COMPUTE §16.6's authorization features, each on or off with whether this
+// device may turn it on. Otherwise it signs, only after a yes on /dev/tty, through a Confirm method: the daemon files
+// every option given in one ServiceSettings into the config head, the head's other settings kept, from an Owner's or
+// Admin's device that runs the network's config writer (sidecar.SaveServiceSettings), and refuses any other device
+// before it signs anything. A value other than on or off refuses as the options parse. The daemon refuses a caller
+// with a harness process among its ancestors, by the pid it read off the socket, and no MCP tool reaches any of it, so
+// record_required is never set through MCP.
+//
+// --feature turns one authorization feature on (CACL-M11-03): agent_repos, compute_policy, listeners or enclaves, a
+// name that is none refused before anything is asked. It reads the feature's state first and refuses, asking nothing,
+// one this device may not turn on, saying why: this release does not implement it, the services serving the network do
+// not yet, or only the network's Owners and Admins can, whom it names. Otherwise the question says the feature stays
+// on, since no command turns one off, and which of the network's sidecars would pause until they update; on a yes the
+// Confirm method admin.settings.feature files it (sidecar.TurnOnAuthFeature), which the daemon refuses as the root does.
 
 package main
 
@@ -30,12 +39,17 @@ import (
 const (
 	urMethodAdminSettingsShow = "admin.settings.show"
 	urMethodAdminSettings     = "admin.settings"
+	// Turning an authorization feature on: a Confirm method, as the apps' prompt calls it in remote mode.
+	urMethodAdminSettingsFeature = "admin.settings.feature"
 )
 
 var _ = registerUrAdminPart(&urAdminPart{
-	word:  "settings",
-	usage: []string{"  ur admin settings [--mail-strict=<mail_strict>] [--record-cost=<record_cost>] [--record-required=<record_required>] [--network=<network>]"},
-	run:   runUrAdminSettings,
+	word: "settings",
+	usage: []string{
+		"  ur admin settings [--mail-strict=<mail_strict>] [--record-cost=<record_cost>] [--record-required=<record_required>] [--network=<network>]",
+		"  ur admin settings --feature=<feature> [--network=<network>]",
+	},
+	run: runUrAdminSettings,
 })
 
 func init() {
@@ -49,9 +63,11 @@ type urAdminSettingsParams struct {
 	MailStrict     string `json:"mail_strict,omitempty"`
 	RecordCost     string `json:"record_cost,omitempty"`
 	RecordRequired string `json:"record_required,omitempty"`
+	// admin.settings.feature's alone: the feature's name.
+	Feature string `json:"feature,omitempty"`
 }
 
-// The three as this device honors them, or as a change filed them, each on or off.
+// The three as this device honors them, or as a change filed them, each on or off, and the authorization features.
 type urAdminSettingsReply struct {
 	// The network is a Team's: its config names a team record or a directory.
 	Team bool `json:"team,omitempty"`
@@ -60,6 +76,18 @@ type urAdminSettingsReply struct {
 	MailStrict     string `json:"mail_strict,omitempty"`
 	RecordCost     string `json:"record_cost,omitempty"`
 	RecordRequired string `json:"record_required,omitempty"`
+	// Each authorization feature as this device sees it, in bit order; absent where the daemon could not say.
+	Features []*sidecar.AuthFeatureStatus `json:"features,omitempty"`
+}
+
+// The feature named name among the reply's, nil if absent.
+func (self *urAdminSettingsReply) feature(name string) *sidecar.AuthFeatureStatus {
+	for _, status := range self.Features {
+		if status != nil && status.Name == name {
+			return status
+		}
+	}
+	return nil
 }
 
 // A setting's value as ur prints it.
@@ -114,6 +142,15 @@ func urAdminSettingsChangeOf(params *urAdminSettingsParams) (*sidecar.ServiceSet
 	return change, nil
 }
 
+// The feature --feature names, one of the four.
+func urAdminSettingsFeatureOf(name string) (sidecar.AuthFeature, error) {
+	feature, err := sidecar.ParseAuthFeature(name)
+	if err != nil {
+		return 0, fmt.Errorf("--feature is agent_repos, compute_policy, listeners or enclaves, not %q", name)
+	}
+	return feature, nil
+}
+
 // The admin settings methods over target's networks, when it hosts them.
 func urAdminSettingsMethods(target urDaemonTarget) []*sidecar.DaemonMethod {
 	if network, ok := target.(*urDaemonNetwork); !ok || network.daemon == nil {
@@ -128,7 +165,12 @@ func urAdminSettingsMethods(target urDaemonTarget) []*sidecar.DaemonMethod {
 				if err != nil {
 					return nil, err
 				}
-				return urAdminSettingsReplyOf(honored), nil
+				reply := urAdminSettingsReplyOf(honored)
+				// the features read the same verified state; a failure leaves them out rather than failing the settings
+				if statuses, err := call.Sidecar.AuthFeatureStatuses(); err == nil {
+					reply.Features = statuses
+				}
+				return reply, nil
 			},
 		},
 		{
@@ -155,21 +197,91 @@ func urAdminSettingsMethods(target urDaemonTarget) []*sidecar.DaemonMethod {
 				return urAdminSettingsReplyOf(filed), nil
 			},
 		},
+		{
+			Name:    urMethodAdminSettingsFeature,
+			Network: true,
+			Confirm: true,
+			Handler: func(ctx context.Context, call *sidecar.DaemonCall) (any, error) {
+				params := &urAdminSettingsParams{}
+				if err := decodeUrParams(call, params); err != nil {
+					return nil, err
+				}
+				feature, err := urAdminSettingsFeatureOf(params.Feature)
+				if err != nil {
+					return nil, err
+				}
+				// a person confirmed it on /dev/tty or in an app's UI, which the Confirm method holds the call to; the
+				// root refuses a caller under a harness process
+				return call.Sidecar.TurnOnAuthFeature(ctx, &sidecar.AuthFeatureTurnOnArgs{
+					Feature:         feature,
+					Confirmed:       true,
+					HarnessAncestor: call.Sidecar.HarnessAncestor(ctx, urCallPid(call)),
+				})
+			},
+		},
 	}
 }
 
-// The params the options ask for: a value other than on or off refuses here, before anything is asked or signed.
+// The params the options ask for: a value other than on or off, or a feature that is none of the four, refuses here,
+// before anything is asked or signed.
 func urAdminSettingsParamsOf(options docopt.Opts) (*urAdminSettingsParams, error) {
 	params := &urAdminSettingsParams{
 		Network:        urOptionString(options, "--network"),
 		MailStrict:     urOptionString(options, "--mail-strict"),
 		RecordCost:     urOptionString(options, "--record-cost"),
 		RecordRequired: urOptionString(options, "--record-required"),
+		Feature:        urOptionString(options, "--feature"),
 	}
 	if _, err := urAdminSettingsChangeOf(params); err != nil {
 		return nil, err
 	}
+	if params.Feature != "" {
+		if _, err := urAdminSettingsFeatureOf(params.Feature); err != nil {
+			return nil, err
+		}
+	}
 	return params, nil
+}
+
+// What a feature's line says after its state: whether, and why not, this device may turn it on.
+func urAdminSettingsFeatureNote(status *sidecar.AuthFeatureStatus) string {
+	switch {
+	case status.On:
+		return ""
+	case !status.Implemented:
+		return "not offered: this release does not implement it"
+	case !status.SupportKnown:
+		return "not offered now: the services' features are not known here, since this device has no current answer from api"
+	case !status.Supported:
+		return "not offered: the services serving this network do not implement it yet"
+	case !status.MayTurnOn:
+		memberIds := []string{}
+		for _, memberId := range status.AdminMemberIds {
+			memberIds = append(memberIds, memberId.String())
+		}
+		return "only the network's Owners and Admins can turn it on: " + strings.Join(memberIds, ", ")
+	}
+	note := fmt.Sprintf("ur admin settings --feature %s turns it on", status.Name)
+	if pausing := urAdminSettingsPausing(status); pausing != "" {
+		note += "; " + pausing
+	}
+	return note
+}
+
+// Which sidecars would pause until they update at the feature's turning-on, as api listed them to this device; empty
+// where it listed none.
+func urAdminSettingsPausing(status *sidecar.AuthFeatureStatus) string {
+	if !status.PausingKnown || (len(status.PausingSidecarIds) == 0 && !status.PausingMore) {
+		return ""
+	}
+	sidecarIds := []string{}
+	for _, sidecarId := range status.PausingSidecarIds {
+		sidecarIds = append(sidecarIds, sidecarId.String())
+	}
+	if status.PausingMore {
+		sidecarIds = append(sidecarIds, "and more")
+	}
+	return fmt.Sprintf("these sidecars would pause until they update: %s", strings.Join(sidecarIds, ", "))
 }
 
 // The settings' lines as ur prints them.
@@ -188,6 +300,24 @@ func printUrAdminSettings(cli *urCli, reply *urAdminSettingsReply) {
 	if !reply.Team {
 		cli.printf("this network names no team record or directory: record_cost changes nothing until it does\n")
 	}
+	if 0 < len(reply.Features) {
+		cli.printf("authorization features, each turned on by ur admin settings --feature <name> and never off:\n")
+		for _, status := range reply.Features {
+			if status == nil {
+				continue
+			}
+			printUrAdminSettingsFeature(cli, status)
+		}
+	}
+}
+
+// One feature's line.
+func printUrAdminSettingsFeature(cli *urCli, status *sidecar.AuthFeatureStatus) {
+	line := fmt.Sprintf("  %-15s %s", status.Name+":", urAdminSettingsWord(status.On))
+	if note := urAdminSettingsFeatureNote(status); note != "" {
+		line += ": " + note
+	}
+	cli.printf("%s\n", line)
 }
 
 // Prints the settings, or signs the change after a yes on /dev/tty.
@@ -195,6 +325,9 @@ func runUrAdminSettings(ctx context.Context, cli *urCli, options docopt.Opts) er
 	params, err := urAdminSettingsParamsOf(options)
 	if err != nil {
 		return err
+	}
+	if params.Feature != "" {
+		return runUrAdminSettingsFeature(ctx, cli, params)
 	}
 	if params.MailStrict == "" && params.RecordCost == "" && params.RecordRequired == "" {
 		reply := &urAdminSettingsReply{}
@@ -227,5 +360,42 @@ func runUrAdminSettings(ctx context.Context, cli *urCli, options docopt.Opts) er
 	}
 	cli.printf("ServiceSettings filed, honored from the base that names the head:\n")
 	printUrAdminSettings(cli, reply)
+	return nil
+}
+
+// Turns params' feature on after a yes on /dev/tty, having read its state first: see the file header.
+func runUrAdminSettingsFeature(ctx context.Context, cli *urCli, params *urAdminSettingsParams) error {
+	shown := &urAdminSettingsReply{}
+	if err := cli.callDaemon(ctx, urMethodAdminSettingsShow, &urAdminSettingsParams{Network: params.Network}, false, shown); err != nil {
+		return err
+	}
+	status := shown.feature(params.Feature)
+	if status == nil {
+		return fmt.Errorf("the daemon could not say whether %s may be turned on here: nothing was signed", params.Feature)
+	}
+	if status.On {
+		cli.printf("%s is on for this network already\n", status.Name)
+		return nil
+	}
+	if !status.MayTurnOn {
+		return fmt.Errorf("%s stays off: %s; nothing was signed", status.Name, urAdminSettingsFeatureNote(status))
+	}
+	question := fmt.Sprintf("Turn on %s for this network? It stays on: no command turns it off.", status.Name)
+	if pausing := urAdminSettingsPausing(status); pausing != "" {
+		question += " Of its sidecars, " + pausing + "."
+	}
+	confirmed, err := confirmOnTty(cli, question)
+	if err != nil {
+		return err
+	}
+	if !confirmed {
+		return errors.New("not confirmed: nothing was signed")
+	}
+	reply := &sidecar.AuthFeatureStatus{}
+	if err := cli.callDaemon(ctx, urMethodAdminSettingsFeature, &urAdminSettingsParams{Network: params.Network, Feature: params.Feature}, true, reply); err != nil {
+		return err
+	}
+	cli.printf("%s filed into the network's ServiceSettings, on from the base that names the head:\n", reply.Name)
+	printUrAdminSettingsFeature(cli, reply)
 	return nil
 }

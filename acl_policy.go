@@ -81,6 +81,17 @@ type AclPolicy struct {
 	ExpiresDefault time.Duration
 	// The channels a requests rule accepts when it names none: all three unless the document says.
 	EvidenceDefault []AclEvidence
+	// The DNS-SD service types the network's hosts gather and publish beyond or short of §17.7.1's default list (owner
+	// decision 778). Nil without a discovery block. It stays on devices and enters no row, since no gate reads it.
+	Discovery *AclDiscoveryBlock
+}
+
+// The discovery block (§8.5; owner decision 778): {"allow": [...], "deny": [...]}, each a service type, `_<name>._tcp`
+// or `_<name>._udp` by RFC 6763 §7's rule (protocol.ParseDnsSdServiceType), lowercased. The effective list is the
+// default list with allow added and deny taken away (bridge_discovery_types.go).
+type AclDiscoveryBlock struct {
+	Allow []string
+	Deny  []string
 }
 
 // One entry of groups.
@@ -517,9 +528,53 @@ func (self *aclPolicyReader) readPolicy(policy *AclPolicy) error {
 				policy.EvidenceDefault, err = aclPolicyReadList(self, parseAclEvidence, false)
 				return err
 			}
+		case "discovery":
+			return func() (err error) {
+				policy.Discovery, err = self.readDiscovery()
+				return err
+			}
 		}
 		return nil
 	})
+}
+
+// discovery: the service types allowed and denied beyond the default list (§8.5; owner decision 778). Either list may
+// be empty or absent; a type in both is refused, since the document would say two things of it.
+func (self *aclPolicyReader) readDiscovery() (*AclDiscoveryBlock, error) {
+	discovery := &AclDiscoveryBlock{Allow: []string{}, Deny: []string{}}
+	readTypes := func() ([]string, error) {
+		return aclPolicyReadList(self, func(text string) (string, error) {
+			name, transport, ok := protocol.ParseDnsSdServiceType(text)
+			if !ok {
+				return "", aclPolicyRefusal("not a service type, _<name>._tcp or _udp")
+			}
+			return "_" + name + "." + transport, nil
+		}, true)
+	}
+	err := self.readFields(func(key string) func() error {
+		switch key {
+		case "allow":
+			return func() (err error) {
+				discovery.Allow, err = readTypes()
+				return err
+			}
+		case "deny":
+			return func() (err error) {
+				discovery.Deny, err = readTypes()
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	for _, allowed := range discovery.Allow {
+		if slices.Contains(discovery.Deny, allowed) {
+			return nil, self.refuse(aclPolicyRefusal("a service type both allowed and denied"))
+		}
+	}
+	return discovery, nil
 }
 
 // groups: group:<name> to its members, which a group may hold none of.

@@ -4,7 +4,10 @@
 // the config's generations with no sidecar role running.
 //
 //	projection   ReadConfigProjection, the Forwarder's ConfigProjectionReader
-//	gkm          Gkm, the Forwarder's ForwarderGkm: gkm's reads under service tokens F's exchange answers
+//	gkm          Gkm, the Forwarder's ForwarderGkm: gkm's reads under service tokens F's exchange answers, each read
+//	             with the scopes it granted (QD-1230), and the config's r presented as the scope the state the
+//	             Forwarder last judged gives F, so a read the exchange refuses while api's gate lags that state is
+//	             ridden out (forwardingClientGkm)
 //	binding      Binding, the Forwarder's binding reader: GET /sidecar/identity/<sidecar_id>'s current binding, which
 //	             the Forwarder verifies under the identity key its judged state admits
 //	refresh      Refresh: GET /auth/refresh with F's proof, answering the new token and installing nothing; the
@@ -31,6 +34,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
+	"time"
 
 	"github.com/urnetwork/sidecar/protocol"
 )
@@ -48,14 +53,14 @@ type ForwardingClientArgs struct {
 	// F's ClientKey seed, 32 bytes, from the component's key store (fwd.<net8>.<slot>.client). Copied: the caller may
 	// erase its own.
 	ClientKeySeed []byte
-	// This device's clock, which proofs' iat read against api's; nil is real time.
+	// This device's clock, which proofs' iat read against api's and gkm's reads wait on; nil is real time.
 	Clock Clock
 }
 
 // F's api and gkm (the file's comment).
 type ForwardingClient struct {
 	api *SidecarApi
-	gkm *GkmApi
+	gkm *forwardingClientGkm
 	// the service urls it was built with, which the head reader reads evs's from
 	evsUrl string
 }
@@ -76,21 +81,25 @@ func NewForwardingClient(args *ForwardingClientArgs) (*ForwardingClient, error) 
 	}
 	api.SetByJwt(args.ByJwt)
 	api.setDpopSigner(signer)
+	// as Sidecar.GkmApiArgs wires a member's: the token with the scopes the exchange granted it, the settings' gkm
+	// settings and the clock. Each read exchanges, so no token is kept and none is forgotten after gkm's 401.
 	gkm, err := NewGkmApi(&GkmApiArgs{
 		GkmUrl:    args.Settings.GkmUrl,
 		Transport: api.Transport(),
-		ServiceToken: func(ctx context.Context, resource string, scopes []string) (string, error) {
+		GrantedServiceToken: func(ctx context.Context, resource string, scopes []string) (string, []string, error) {
 			token, err := api.ExchangeToken(ctx, resource, scopes)
 			if err != nil {
-				return "", err
+				return "", nil, err
 			}
-			return token.AccessToken, nil
+			return token.AccessToken, slices.Clone(token.Scopes), nil
 		},
+		Settings: args.Settings.Gkm,
+		Clock:    args.Clock,
 	})
 	if err != nil {
 		return nil, err
 	}
-	return &ForwardingClient{api: api, gkm: gkm, evsUrl: args.Settings.EvsUrl}, nil
+	return &ForwardingClient{api: api, gkm: &forwardingClientGkm{api: gkm}, evsUrl: args.Settings.EvsUrl}, nil
 }
 
 // The Forwarder's ConfigProjectionReader: GET /network/config/projection?after= on F.
@@ -98,9 +107,61 @@ func (self *ForwardingClient) ReadConfigProjection(ctx context.Context, after ui
 	return self.api.ReadConfigProjection(ctx, after)
 }
 
-// The Forwarder's ForwarderGkm, on F's exchange.
+// The Forwarder's ForwarderGkm, on F's exchange, which takes the scope each state the Forwarder judges gives F
+// (forwardingClientGkm).
 func (self *ForwardingClient) Gkm() ForwarderGkm {
 	return self.gkm
+}
+
+// What the Forwarder hands a ForwarderGkm that takes it, before each compile's reads of gkm: the state that compile
+// judged. The forwarding client's takes it (forwardingClientGkm); any other ForwarderGkm reads as it always did.
+type forwarderGkmJudged interface {
+	// Takes the state the Forwarder judged for sidecarId, its forwarding role's sidecar, at now.
+	judgedState(state *ConfigState, sidecarId Id, now time.Time)
+}
+
+// F's GkmApi as the Forwarder reads gkm through it. Its reads present the config's r as the scope the state the
+// Forwarder last judged gives F, its verified state's (GkmApi.SetRepoScopes), so a read the exchange refuses
+// invalid_scope while api's gate lags that state is asked again ReadRetryWait apart until ExchangeScopeWaitTimeout has
+// passed since its first such answer, as a member's read is (QD-1230; §8.9's targets), and one the exchange cannot
+// answer yet, no answer from api or its 429 or 5xx, goes again within ExchangeRetryCount. Before a state is judged,
+// and at one that gives F nothing, a read presents that scope as one no verified state backs, and its first failure to
+// get a token ends it, as every read did before QD-1230. Safe for concurrent use, as GkmApi is.
+type forwardingClientGkm struct {
+	api *GkmApi
+}
+
+// Sets the scope F's reads present to the one state gives sidecarId's forwarding client F at gkm, by §7.8's
+// forward_only row as AclExchangeScopes grants it, which the ios_extension leg does not link: the config repo's r while
+// the sidecar's forwarding Delegation is live at the state and §8's rows give the sidecar r there at now, else none.
+// The row's other condition, that F is the newest active forwarding child of the sidecar's current client, only api
+// knows: an F that is not is refused invalid_grant, a refusal for good that no read rides out.
+func (self *forwardingClientGkm) judgedState(state *ConfigState, sidecarId Id, now time.Time) {
+	scopes := []GkmRepoScope{}
+	if state != nil && sidecarId != (Id{}) && state.ForwardingDelegation(sidecarId) != nil {
+		configRepoId, idErr := IdFromBytes(state.Genesis().GetConfigRepoId())
+		acl, aclErr := state.Acl()
+		if idErr == nil && aclErr == nil && configRepoId != (Id{}) &&
+			acl.EvsAccess(AclSidecarSubject(sidecarId), configRepoId, AclTokenAudienceGkm, now).Rights.Has(AclEvsRead) {
+			scopes = append(scopes, GkmRepoScope{RepoId: configRepoId, Role: GkmScopeRoleRead})
+		}
+	}
+	self.api.SetRepoScopes(scopes)
+}
+
+// GkmApi's, under F's token.
+func (self *forwardingClientGkm) Generations(ctx context.Context, repoId Id, groupId Id, since uint64) (*protocol.GkmGenerationsReply, error) {
+	return self.api.Generations(ctx, repoId, groupId, since)
+}
+
+// GkmApi's, under F's token.
+func (self *forwardingClientGkm) Wraps(ctx context.Context, repoId Id, groupId Id, generation uint64, query *GkmWrapsQuery) (*protocol.GkmWrapsReply, error) {
+	return self.api.Wraps(ctx, repoId, groupId, generation, query)
+}
+
+// GkmApi's, under F's token.
+func (self *forwardingClientGkm) Forms(ctx context.Context, repoId Id) (*protocol.GkmFormsReply, error) {
+	return self.api.Forms(ctx, repoId)
 }
 
 // The Forwarder's binding reader: sidecarId's current binding as api signed it. A record with none is an error.
@@ -150,4 +211,8 @@ func (self *ForwardingClient) String() string {
 	return "ForwardingClient{}"
 }
 
-var _ ConfigProjectionReader = (*ForwardingClient)(nil)
+var (
+	_ ConfigProjectionReader = (*ForwardingClient)(nil)
+	_ ForwarderGkm           = (*forwardingClientGkm)(nil)
+	_ forwarderGkmJudged     = (*forwardingClientGkm)(nil)
+)

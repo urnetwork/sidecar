@@ -2,12 +2,12 @@
 
 This file holds the answers DESIGN-COMPUTE.md does not yet carry, for the owner to fold when they revise it.
 
-The compute planner raised 151 questions about DESIGN-COMPUTE.md on 2026-11-24 (`.stack/questions/compute-plan-*.md`, listed in `.stack/plan/COMPUTE-PLAN.md`), and the owner answered all of them the same day, QD-1233 to QD-1383, each with the recommended option, under the owner's standing acceptance of recommended options (2026-11-16, restated 2026-11-19). The run's question ledger (`.stack/decisions/LEDGER.json`), `.stack/decisions/RESOLUTIONS.md` and `.stack/decisions/later-pending.md` record them outside git; this file is their durable copy in the sidecar repo, each answer stated as the rule it makes. Track dr17-compute-answers wrote it on 2026-11-24. One answer recorded after them that amends DESIGN-COMPUTE.md alone, QD-1386, the catalog's tie rule, which the build raised while implementing §6.3 (INFER-M11-01) and the owner answered the same day, is filed under §6 by track dr17-late-fold, which folded the rest of that day's later answers into DESIGN.md.
+The compute planner raised 151 questions about DESIGN-COMPUTE.md on 2026-11-24 (`.stack/questions/compute-plan-*.md`, listed in `.stack/plan/COMPUTE-PLAN.md`), and the owner answered all of them the same day, QD-1233 to QD-1383, each with the recommended option, under the owner's standing acceptance of recommended options (2026-11-16, restated 2026-11-19). The run's question ledger (`.stack/decisions/LEDGER.json`), `.stack/decisions/RESOLUTIONS.md` and `.stack/decisions/later-pending.md` record them outside git; this file is their durable copy in the sidecar repo, each answer stated as the rule it makes. Track dr17-compute-answers wrote it on 2026-11-24. One answer recorded after them that amends DESIGN-COMPUTE.md alone, QD-1386, the catalog's tie rule, which the build raised while implementing §6.3 (INFER-M11-01) and the owner answered the same day, is filed under §6 by track dr17-late-fold, which folded the rest of that day's later answers into DESIGN.md. Five more the build raised while implementing the compute policy (CACL-M11-01, CACL-M11-04, CACL-M11-05 and CACL-M12-01), QD-1388 to QD-1392, which the owner answered the same day, each with the recommended option, are filed under §14 and §16 by track dr19-support-fold; what they change in DESIGN.md it already carries, QD-1388's words in §2.8's compute-4 since metadata_list.yml v69, and QD-1389's to QD-1391's in §8.4 and §16.8 since the tenth fold. One more, QD-1398, the support skill's `client_ref` for kind 27, which the build raised implementing DESIGN-COMPUTE.md §28 and the owner answered the same day, is filed under §28 by the same track, which states its lookup in DESIGN.md's §16.6. One more, QD-1401, where the `ur-engine` helper's main lives, which the build raised implementing §6.5 (INFER-M11-02) and the owner answered the same day with the recommended option, is filed under §6 by track dr20-late-fold, the twelfth fold, which numbered that day's other answers as DESIGN.md's owner decisions 785 to 789; it amends the plan's reading QD-1247, whose second reading says so, and changes nothing DESIGN.md carries. The owner folded four of the plan's readings into DESIGN-COMPUTE.md §26 on 2026-11-24, aligning its listeners with DESIGN.md's service discovery (owner decision 778; commit e9478d45): QD-1248 (`Deliver` on app hosts), QD-1249 (the listeners file's `desc_by` and `v4_uncertain` and the `LISTENERS` bodies), QD-1250 (`BridgeListenerReach` in `device/`) and QD-1251 (a labeled UDP socket above the ephemeral threshold), so they left this file, as its folding rule has a folded item do; track dr18-compute-fences took them out.
 
 The answers are of two kinds:
 
 - **Appendix answers**, QD-1258 to QD-1365, 108 in all, below by the DESIGN-COMPUTE.md section that asks them. Each answers a question of DESIGN-COMPUTE.md's question register (Appendix B): the 101 open owner questions of Appendix G.2, whose recommended answers the owner let stand with CO-44 ("Let recommendations stand", 2026-11-23), and 7 more that a compute task's plan cites, whose decider Appendix B gives as peer review (Q-CTRUST-2, Q-INFER-7, Q-HARN-6, Q-GW-7, Q-ENC-7, Q-ENC-14, Q-GIT-1) and whose answers stood as the design (CO-14). Every one takes the answer DESIGN-COMPUTE.md already gives, so the rule is the design's own; what the document does not carry yet is that the owner has decided it. One, QD-1260 (Q-BAL-16), is also the G.1 decision Appendix G calls still open, which the second review added after CO-42 and CO-44.
-- **The plan's own readings**, QD-1233 to QD-1257 and QD-1366 to QD-1383, 43 in all, in a section of their own after the appendix answers. The planners raised them where DESIGN-COMPUTE.md leaves a format, a route, a module or a name open, or disagrees with itself or with the code (COMPUTE-PLAN.md's "What the design leaves contradictory or unbuildable"): command names that already exist, modules the design does not name, routes and bytes it gives no form. Each is a rule DESIGN-COMPUTE.md does not state, and some change DESIGN.md or RECORD.md through Appendix D as well, which the item's first line says.
+- **The plan's own readings**, QD-1233 to QD-1257 and QD-1366 to QD-1383, 43 in all, 39 left here, in a section of their own after the appendix answers. The planners raised them where DESIGN-COMPUTE.md leaves a format, a route, a module or a name open, or disagrees with itself or with the code (COMPUTE-PLAN.md's "What the design leaves contradictory or unbuildable"): command names that already exist, modules the design does not name, routes and bytes it gives no form. Each is a rule DESIGN-COMPUTE.md does not state, and some change DESIGN.md or RECORD.md through Appendix D as well, which the item's first line says.
 
 **Precedence.** Where an item here and DESIGN-COMPUTE.md differ, the item governs until it is folded, as sidecar/DESIGN-AMENDMENTS.md's items govern DESIGN.md's text. The compute tasks build to these items, and to DESIGN-COMPUTE.md where they are silent. DESIGN-COMPUTE.md governs the points it owns over DESIGN.md until a design-records track folds its Appendix D (its front matter); an item that changes what Appendix D carries changes what that fold takes into DESIGN.md.
 
@@ -23,10 +23,10 @@ A reading appears in every row whose section it amends, and is written once, bel
 |---|---|---|
 | §1 Context, scope and requirements | | QD-1253 |
 | §2 Trust model and invariants | QD-1276, QD-1277 | QD-1242 |
-| §3 Architecture and flows | | QD-1244, QD-1250 |
+| §3 Architecture and flows | | QD-1244 |
 | §4 Providers | QD-1344 | QD-1247, QD-1257 |
 | §5 Attestation and the policy | | QD-1242, QD-1243, QD-1254, QD-1256, QD-1379 |
-| §6 Inference | QD-1324, QD-1325, QD-1326; QD-1386, the build's | QD-1237, QD-1241, QD-1246, QD-1247, QD-1370 |
+| §6 Inference | QD-1324, QD-1325, QD-1326; QD-1386 and QD-1401, the build's | QD-1237, QD-1241, QD-1246, QD-1247, QD-1370 |
 | §7 The Harness | QD-1313 to QD-1323 | QD-1255 |
 | §8 The local gateway | QD-1306 to QD-1312 | QD-1254 |
 | §9 The compute balance | QD-1258 to QD-1262 | QD-1238, QD-1247, QD-1252, QD-1376 |
@@ -34,9 +34,9 @@ A reading appears in every row whose section it amends, and is written once, bel
 | §11 Secure enclaves | QD-1289 to QD-1298 | QD-1243, QD-1254, QD-1255 |
 | §12 The bundled SSH | QD-1364, QD-1365 | QD-1243 |
 | §13 The bundled git | QD-1304, QD-1305 | |
-| §14 Server services, routes, tables and metadata | | QD-1237, QD-1239, QD-1241, QD-1243, QD-1245, QD-1246, QD-1252, QD-1367, QD-1374, QD-1375, QD-1377 |
+| §14 Server services, routes, tables and metadata | QD-1388, the build's | QD-1237, QD-1239, QD-1241, QD-1243, QD-1245, QD-1246, QD-1252, QD-1367, QD-1374, QD-1375, QD-1377 |
 | §15 CLI, MCP, sdk and app surfaces | | QD-1247, QD-1253, QD-1380, QD-1381, QD-1382 |
-| §16 Policy, budgets and approvals | QD-1263, QD-1264 | |
+| §16 Policy, budgets and approvals | QD-1263, QD-1264; QD-1389 to QD-1392, the build's | |
 | §17 Abuse, safety and legal process | | QD-1382 |
 | §19 Phasing and milestones | QD-1274, QD-1275 | QD-1233, QD-1255 |
 | §20 The recURd skill | QD-1351 to QD-1355 | QD-1378, QD-1380 |
@@ -45,10 +45,11 @@ A reading appears in every row whose section it amends, and is written once, bel
 | §23 Mail and calendar for agents | QD-1335 to QD-1343 | QD-1235, QD-1236 |
 | §24 Context history in EVS | QD-1278 to QD-1288 | QD-1234, QD-1240, QD-1366 |
 | §25 Connected services | QD-1265 to QD-1273 | QD-1381 |
-| §26 Listeners | QD-1327 to QD-1334 | QD-1248, QD-1249, QD-1250, QD-1251 |
+| §26 Listeners | QD-1327 to QD-1334 | |
 | §27 Automatic approvals and the safety classifier | QD-1345 to QD-1350 | QD-1366, QD-1368 to QD-1373 |
+| §28 The support skill | QD-1398, the build's | |
 | Appendix B, question register; Appendix G, open decisions | every appendix answer | |
-| Appendix D, amendments to DESIGN.md | | QD-1234, QD-1237, QD-1238, QD-1240, QD-1243, QD-1252, QD-1254, QD-1255, QD-1366, QD-1367, QD-1374, QD-1378 |
+| Appendix D, amendments to DESIGN.md | QD-1388 and QD-1390, the build's, which DESIGN.md already carries | QD-1234, QD-1237, QD-1238, QD-1240, QD-1243, QD-1252, QD-1254, QD-1255, QD-1366, QD-1367, QD-1374, QD-1378 |
 | Appendix F, use-case coverage | | QD-1382 |
 
 ## §2 Trust model and invariants
@@ -105,6 +106,13 @@ Builds: CTRUST-M11-01. Question: `compute-plan-q-infer-7-disclosure-per-provider
 The lower of the two, on the order off < minimal < low < medium < high < xhigh < max: medium against a model listing low and high runs at low, xhigh against high and max at high, minimal against off and low at off. Why: an alias then never runs a model harder, slower or dearer than its request asked, the conservative choice for the person's balance and budgets and what most providers' own tables do for medium; a person who wants a particular effort names the full name, which Q-INFER-5 already leaves them. §6.3 gave no tie rule.
 
 Builds: INFER-M11-01 (`inferNearestEffort`, held by `TestInferNearestEffort` and `TestInferAliasMapsToNearestEffort`), already built. Question: `infer-m11-01-alias-effort-tie.md`.
+
+### QD-1401: Where does `ur-engine`'s main live, since check's §4.9 rule keeps cli one package and QD-1247 put the main in `cli/ur-engine/`?
+*§6.5 (the helper's executable), amending QD-1247's second reading. A question the build raised (infer-m11-02), answered by the owner on 2026-11-24, one at a time. Option 1, the recommendation.*
+
+`ur-engine` is built from the cli package itself: cli/main.go takes `//go:build !ur_engine`, and a new cli/main_ur_engine.go, `//go:build ur_engine`, holds the helper's main, `os.Exit(sidecar.InferEngineHelperMain())`, so `go build -tags ur_engine -o ur-engine ./` in cli makes the helper and the plain build makes `ur`. No check rule or release change: cli stays one package, as DESIGN.md §4.9's rule keeps it for the release's module-path rewrite, which would import a package `cli/ur-engine` by a path nothing provides. The helper's executable links `ur`'s code, about `ur`'s size rather than §6.5's "second small executable", but its main runs only the helper's loop, holds no key and gets its own identifier, entitlements and confinement (INFER-M11-05), the runtime separation D-INFER-2 asks for. Why: it satisfies DESIGN.md §4.9 and D-INFER-2 with no change to the release's rewrite or to check; a small binary of its own would need a §4.9 exemption and a release-rewrite change, and a nested module would grow DESIGN.md §4.7's module table.
+
+Builds: INFER-M11-02 (the main, held out of its landing until this answer), INFER-M11-05 (its packaging). Question: `infer-m11-02-ur-engine-main-location.md`.
 
 ## §7 The Harness
 
@@ -377,6 +385,15 @@ No: CO-6 gives the local Harness EVS for storage, and a GitHub remote would be n
 
 Builds: GIT-M13-02. Question: `compute-plan-q-git-2-other-remotes-github-local-harness.md`.
 
+## §14 Server services, routes, tables and metadata
+
+### QD-1388: Should §2.8's compute-4 name the provider's label and the price per hour that kind 19's action shows the broker?
+*§14.6's compute-4, and through Appendix D's row for DESIGN §2.8's list. A question the build raised (CACL-M11-04), answered by the owner on 2026-11-24, one at a time. Option 1, the recommendation.*
+
+compute-4's sees gains "and the label and price per hour its create's action shows, the catalog's own values for its shape and provider", and kind 19's action stays as §16.3 writes it, field 42's `EnclaveFields` carrying both to the broker. Why: the values add nothing a server does not hold, and the broker comparing the approved price with its catalog's is worth keeping. DESIGN.md's §2.8 carries the words since metadata_list.yml v69 (track dr19-support-fold), so only §14.6's row waits for the owner's revision.
+
+Builds: CACL-M11-04 (testdata/approval_compute/metadata_rows.yml's `EnclaveFields.label` and `EnclaveFields.price_per_hour`, which quote compute-4 since v69), already built. Question: `cacl-m11-04-compute4-create-label-price.md`.
+
 ## §16 Policy, budgets and approvals
 
 ### QD-1263 (Q-CACL-1): Is each remote inference call an outward action?
@@ -392,6 +409,34 @@ Builds: INFER-M11-03, CACL-M12-05. Question: `compute-plan-q-cacl-1-remote-infer
 Every provider and label, with TEE-only one setting away, as CO-18 says. Every model carries its label in the catalog and on every message, and the apps put the TEE-only switch beside the model picker.
 
 Builds: CACL-M11-01, INFER-M11-03, CACL-M12-03. Question: `compute-plan-q-cacl-3-new-network-use.md`.
+
+### QD-1389: What action word does a rule on `compute:buy` take, which §16.2 names none for?
+*§16.2, and §16.5's defaults for `compute:buy`. A question the build raised (CACL-M11-05), answered by the owner on 2026-11-24, one at a time. Option 1, the recommendation.*
+
+`buy`, as acl.proto declares it (`ACL_ACTION_BUY` = 12): `{"src": [...], "dst": ["compute:buy"], "allow": ["buy"]}`, one word for buying credits, redeeming a code and setting auto-renew. Why: one word covers §16.2's one row, and the value is already numbered in its place. DESIGN.md's §8.4 names it since the tenth fold (track dr18-compute-fences).
+
+Builds: CACL-M11-05 (the value, declared), CACL-M12-04 (the parse). Question: `cacl-m11-05-compute-buy-action-word.md`.
+
+### QD-1390: Does version 5's sealed detail ride kinds 19 and 21 alone, as field 38's row says, or kinds 19 to 24, as §16.3's prose and Appendix D say?
+*§16.3 (field 38's row and its prose), §16.7's D-CACL-5 and Appendix D's §16.8 row. A question the build raised (CACL-M12-01), answered by the owner on 2026-11-24, one at a time. Option 1, the recommendation.*
+
+Kinds 19 and 21 alone, as field 38's row says; §16.3's prose and Appendix D's "19-24" read as "the kinds 19-24 that a gate sees". No change to the code. Why: the detail exists to keep a name and a grant from the broker's gates, and only kinds 19 and 21 reach one. DESIGN.md's §16.8 names kinds 19 and 21 since the tenth fold (track dr18-compute-fences).
+
+Builds: CACL-M11-04, CACL-M12-01 (built for 19 and 21; a kind that seals is a row change). Question: `cacl-m12-01-sealed-detail-kinds.md`.
+
+### QD-1391: How does a version-5 action's field 39 name an enclave whose default egress is off (§11.8's `direct`), which `BridgeEgressMode` has no value for?
+*§16.3 (field 39 on kinds 19 and 24) and §11.8. A question the build raised (CACL-M12-01), answered by the owner on 2026-11-24, one at a time. Option 1, the recommendation.*
+
+Field 39 at version 5 alone takes a fourth value, 4 `direct`, documented in record.proto's comment and read only by version 5's rules and render, `BridgeEgressMode` unchanged, so no wire changes outside version 5: the rules accept 1 to 4 at version 5 and the render names 4 `direct`. Why: it keeps the forwarding role's enum as it is, binds the mode in the action the approval signs, and touches only version 5's rules and render. DESIGN.md's §16.8 carries it since the tenth fold (track dr18-compute-fences), as CACL-M12-01 built it, 4 on kind 24.
+
+Builds: CACL-M12-01 (the rules and render); kind 24's card into a direct-egress enclave naming its mode (HARN, SKILL and SSH). Question: `cacl-m12-01-version5-direct-egress-mode.md`.
+
+### QD-1392: Is a harness config version's writer judged at the newest verified state or at its push's own pin?
+*§16.6 (the reading row), §16.4 and IC-23. A question the build raised (CACL-M11-01), answered by the owner on 2026-11-24, one at a time. Option 1, the recommendation, as built.*
+
+At the newest verified state, not at its push's own pin: a stolen device's last change to `tee_only`, `allow` or `approvals` is dropped the moment the device is revoked, with no compromise cascade, and IC-23's enclave rule still holds, bit 3 refused whatever the time. Cost: a lost device's legitimate last change is dropped too, the file reading as the version before it, which can be wider (`tee_only` back off, say) until the person sets it again with `ur models set`, each such version raising one `record_alarm` `path_rule`. Why: it is the closed reading and needs nothing of evs, where judging at the push's pin would need the push's authorization pin on `EvsHistoryVersion`, the state at that pin and a compromise cascade that voids the versions it parks.
+
+Builds: CACL-M11-01 (models_member_config.go), already built. Question: `cacl-m11-01-harness-config-writer-when.md`.
 
 ## §19 Phasing and milestones
 
@@ -852,6 +897,15 @@ Never: a tainted run's send goes to the person. Writes, to the person's own data
 
 Builds: SAFE-M13-15. Question: `compute-plan-q-safe-9-classifier-decide-tainted-run-s.md`.
 
+## §28 The support skill
+
+### QD-1398: Does a kind-27 message post under the client_ref its message was built with, or one derived from the use's effect key, when field 3 must hash the SupportBody that names it?
+*§28.6 (the `client_ref`), §28.8 (kind 27's effect and lookup), §16.3 (fields 3 and 80) and §28.10 (the `SupportBody`). A question the build raised (support-skill), answered by the owner on 2026-11-24, one at a time. Option 1, the recommendation, as built.*
+
+A kind-27 message posts under one `client_ref`, fixed when the message is built: the run's (run id ‖ tool call id) for a Harness run, 16 random bytes otherwise. Field 80 and the `SupportBody` carry it, field 3 hashes that body, and the post's `Idempotency-Key` is it; the use's effect key maps to it in the outbox, and the lookup reads field 80's `client_ref` from the stored action and asks the service for that entry, so each use posts the one message once, the outbox holding one item per `client_ref`. The decider and its tier are posted beside the body rather than in it. §28.6's kind-27 derivation becomes "the message's own". Why: it keeps §16.3's field 80 and §28.10's body as written, makes field 3 bind exactly what leaves, and still posts each message once under one key; leaving the `client_ref` out of field 80 would change §16.3's format and stop the card and the record joining a decision to its message. DESIGN.md's §16.6 states the `support` component's lookup so (track dr19-support-fold).
+
+Builds: the support skill's client (support-skill: support_client.go, approval_compute_support.go), already built. Question: `support-skill-kind27-client-ref.md`.
+
 ## The plan's own readings
 
 The 43 rules the planners read where DESIGN-COMPUTE.md leaves a format, a route, a module or a name open, each the option the question recommended. They are in the order of the section each mainly amends, Appendix D's last; the index lists every section each one touches.
@@ -862,13 +916,6 @@ The 43 rules the planners read where DESIGN-COMPUTE.md leaves a format, a route,
 From the version's effective instant: each disclosure entry of §5.4's signed policy gains `since_ms`, that instant, signed with the policy, and the grace runs from it, exact and the same on every device. Why: running it from when each device first sees the version would have devices disagree, and one long offline would see a fresh grace.
 
 Builds: ATTEST-M11-01, CTRUST-M12-01. Question: `compute-plan-disclosure-grace-start.md`.
-
-### QD-1250: May the viewer's reach evaluation for listeners live in `device/`, which §3.3 puts in the root package that may not import `device/`?
-*Amends §3.3 and §26.7. Option 1.*
-
-Yes: the viewer's reach evaluation for listeners lives in `device/` (`BridgeListenerReach`, proposed), the same evaluation the bridge's hook runs, and cli and the sdk install it into the root through a seam. The root keeps everything else §3.3 lists for listeners in `listeners_*.go`: discovery, the classifier, the publisher and the viewer's merge. Why: the root may not import `device/` (D-SDK-20, check/layering_test.go), and a copy of the rule evaluation in the root would be a second implementation of the hook's rules that could drift.
-
-Builds: LSTN-M13-04. Question: `compute-plan-lstn-reach-in-device.md`.
 
 ### QD-1257: How does reconciliation read what each provider billed for a day, which §10.7 compares and §4.6's adapter interface cannot supply?
 *Amends §4.6 and §10.7. Option 1.*
@@ -911,7 +958,7 @@ Builds: INFER-M12-05. Question: `compute-plan-direct-settle-route.md`.
 All five stand:
 
 1. Each provider slug of §4.6 has a fixed smallint code, an identifier, both kept in `compute_provider`; `compute_charge.provider` (§9.4) holds the code.
-2. The `ur-engine` helper's main lives in `cli/ur-engine/` (§6.5).
+2. The `ur-engine` helper's main lives in `cli/ur-engine/` (§6.5). QD-1401, under §6 above, amends it: the main is the cli package's own, under the `ur_engine` build tag, since check's §4.9 rule keeps cli one package.
 3. A direct call's `none` label on its `model_call` (§6.8) is read from the route the router took, not from the catalog entry.
 4. `models_list` is a Harness tool only (§7.5), not an MCP tool (§15.2).
 5. `ComputeInferHeader` lives in protocol/infer.proto, not compute.proto as §6.6 places it, with the same name and fields, so no wire byte changes.
@@ -1086,27 +1133,6 @@ Builds: CTXH-M11-01, CTXH-M11-07. Question: `compute-plan-approval-notice-bytes.
 `GET /sidecar/limits` also answers the network's stored bytes and the time they were counted. It needs no new metadata row, since the count is already server-visible under DESIGN §20's rows. Why: one field on an existing route; a route of its own would be a separate surface for one number, and the device's own estimate from its own pushes would drift on a network of several devices.
 
 Builds: CTXH-M11-06. Question: `compute-plan-ctxh-stored-count.md`.
-
-### QD-1249: What fields carry §26.5's Windows `v4?` mark and the rest of `desc_by`, and what are the live ask's `LISTENERS` and `LISTENERS_RESULT` bodies?
-*Amends §26.5, §26.6 and §26.8. Option 1.*
-
-In protocol/listeners.proto: the listeners file's `desc_by` is an enum of every description source §26.5 lists, not only `program` and `label`; a boolean `v4_uncertain` carries the Windows `v4?` mark, an IPv4 listener whose dual-stack state is unknown; and the live ask's messages are `LISTENERS {device_scope, include_own_view}` and `LISTENERS_RESULT {file, own_view_entries}`. Why: complete and deterministic.
-
-Builds: LSTN-M13-01. Question: `compute-plan-lstn-file-fields.md`.
-
-### QD-1251: Should listeners list UDP services above the ephemeral port threshold, since Q-LSTN-6's own WireGuard example on port 51820 is never listed under §26.5's rule?
-*Amends §26.5. Option 1.*
-
-§26.5's rule stands, and a UDP socket above its OS's ephemeral threshold is listed only once its person labels it (`ur listeners label 51820/udp`), so WireGuard on 51820 appears once labeled. Why: it keeps the rule, which lists no client's socket, and gives the person the one act that lists a server on a high port; listing every bound UDP socket would list every client's ephemeral socket too.
-
-Builds: LSTN-M13-04. Question: `compute-plan-lstn-udp-high-ports.md`.
-
-### QD-1248: Where does §26.7's `Deliver` run on an app host, where `ur tun` does not run?
-*Amends §26.7, beside §26.10. Option 1.*
-
-On an app host, the apps' VPN component (owner decision 197), where no `ur tun` runs, a listed flow is delivered through the VPN component's existing map, which keeps the non-loopback map after C16, to the listed entry's non-loopback address, never to loopback; a loopback-only entry there is shown as unreachable from other devices. Why: the rule's intent on the host that exists; refusing delivery on app hosts would leave a phone's listed services unreachable.
-
-Builds: LSTN-M13-09. Question: `compute-plan-lstn-deliver-app-hosts.md`.
 
 ### QD-1370: Does the safety classifier run as `ur __engine classify` inside `ur` (§27.5) or in the separate `ur-engine` helper (§6.5)?
 *Amends §27.5, beside §6.5. Option 1.*

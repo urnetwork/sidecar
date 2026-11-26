@@ -89,7 +89,78 @@ func recordStreamsSuiteCases() []recordStreamsSuiteCase {
 		{name: "an erased key is unreadable", run: caseRecordStreamsEraseRemovesKey},
 		{name: "nothing to erase is recorded", run: caseRecordStreamsNothingToErase},
 		{name: "a commit is a hint", run: caseRecordStreamsSubscribe},
+		{name: "a body file lists by path and reads on demand", run: caseRecordStreamsBodiesApart},
 	}
+}
+
+// DESIGN-COMPUTE §24.5's body files: a push's s/<n> beside its e/<n>, or in a later push for an earlier header, each
+// listed by path alone in its version, read only by ReadBody under its version and path, NOT_FOUND elsewhere, and
+// created once, as an entry file is.
+func caseRecordStreamsBodiesApart(ctx context.Context, world RecordStreamsWorld, repoId sidecar.Id) error {
+	writerId := sidecar.NewId()
+	if err := world.Grant(repoId, writerId, RecordStreamsScope{Read: true, Write: true}); err != nil {
+		return err
+	}
+	// the writer reads its own stream back, as the other cases do: a reader of an owner-bound repo that is not its
+	// writer deposits its receipt first, which is the record's and not the binding's (§16.8)
+	writer := world.For(writerId)
+	reader := writer
+	pathOf := func(n uint64, body bool) string {
+		if body {
+			path, _ := sidecar.RecordBodyPath(n)
+			return path
+		}
+		path, _ := sidecar.RecordStreamPath(n)
+		return path
+	}
+	first := recordStreamsSuitePush(world, writerId, pathOf(1, false), pathOf(2, false))
+	first.Bodies = []*sidecar.RecordStreamBody{{Path: pathOf(1, true), Body: []byte("sealed body 1")}}
+	if _, err := writer.Append(ctx, repoId, first); err != nil {
+		return fmt.Errorf("a push with a body: %w", err)
+	}
+	// the second header's body rides a later push, beside a third header
+	second := recordStreamsSuitePush(world, writerId, pathOf(3, false))
+	second.Bodies = []*sidecar.RecordStreamBody{{Path: pathOf(2, true), Body: []byte("sealed body 2")}}
+	if _, err := writer.Append(ctx, repoId, second); err != nil {
+		return fmt.Errorf("a later push with an earlier header's body: %w", err)
+	}
+	versions, err := reader.ReadStream(ctx, repoId, writerId, 0)
+	if err != nil {
+		return err
+	}
+	if len(versions) != 2 || len(versions[0].Entries) != 2 || len(versions[0].Bodies) != 1 || len(versions[1].Bodies) != 1 {
+		return fmt.Errorf("the versions read: %d", len(versions))
+	}
+	if versions[0].Bodies[0].Path != pathOf(1, true) || versions[1].Bodies[0].Path != pathOf(2, true) {
+		return fmt.Errorf("body files listed at %s and %s", versions[0].Bodies[0].Path, versions[1].Bodies[0].Path)
+	}
+	for _, entry := range versions[0].Entries {
+		if entry.Path == pathOf(1, true) || entry.Path == pathOf(2, true) {
+			return fmt.Errorf("a body file read as an entry")
+		}
+	}
+	body, err := reader.ReadBody(ctx, repoId, writerId, versions[0].Version, pathOf(1, true))
+	if err != nil || !bytes.Equal(body, []byte("sealed body 1")) {
+		return fmt.Errorf("the first body read %q: %v", body, err)
+	}
+	body, err = reader.ReadBody(ctx, repoId, writerId, versions[1].Version, pathOf(2, true))
+	if err != nil || !bytes.Equal(body, []byte("sealed body 2")) {
+		return fmt.Errorf("the second body read %q: %v", body, err)
+	}
+	if err := wantRecordStreamRefusal("a body under another version", errOf(reader.ReadBody(ctx, repoId, writerId, versions[1].Version, pathOf(1, true))),
+		protocol.EvsRefusalCode_EVS_REFUSAL_NOT_FOUND); err != nil {
+		return err
+	}
+	if err := wantRecordStreamRefusal("a body no push created", errOf(reader.ReadBody(ctx, repoId, writerId, versions[0].Version, pathOf(3, true))),
+		protocol.EvsRefusalCode_EVS_REFUSAL_NOT_FOUND); err != nil {
+		return err
+	}
+	again := recordStreamsSuitePush(world, writerId, pathOf(4, false))
+	again.Bodies = []*sidecar.RecordStreamBody{{Path: pathOf(1, true), Body: []byte("another body 1")}}
+	if err := wantRecordStreamRefusal("a body file created twice", errOf(writer.Append(ctx, repoId, again)), protocol.EvsRefusalCode_EVS_REFUSAL_PATH_CONFLICT); err != nil {
+		return err
+	}
+	return nil
 }
 
 // A world whose pushes must declare a pin of its own chain, as evs's gate and a binding's verified state hold them

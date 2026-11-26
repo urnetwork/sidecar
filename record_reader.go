@@ -12,6 +12,22 @@
 //	6 kind    a known kind's body keeps its stored bytes, which the caller parses as its one message; an unknown kind
 //	          is kept, verified and shown generically, never refused
 //
+// DESIGN-COMPUTE §24.5's session entries (CTXH-M11-02, D-CTXH-10): an entry whose RecordEntry sets body_apart holds
+// its header at e/<n> and its sealed body alone at s/<n> of the same stream, in the same push or a later one. Steps 1
+// to 4 take its header as any, so its writer's chain verifies seq by seq whatever its bodies; at step 5 its body is
+//
+//	deferred  its s/<n> file is in the stream and this reader has not fetched it
+//	withheld  no s/<n> file stands yet: its writer still holds it, as at a cap (§24.10)
+//	dropped   its writer's coverage names its seq in bodies_dropped, or its writer is revoked or removed
+//
+// none of which alarms or moves a chain, while a missing header is still a gap and a second at one seq a fork. A body
+// file at s/<n> with no header at e/<n> in its push or an earlier one is ignored and raises bad_entry. FetchBodies
+// fetches bodies on demand, for a run opened, continued, forked or exported (CTXH-M11-04, -05), holding each to its
+// header's body_commitment as step 5 holds any: a match completes the entry, which reads live, and a mismatch shows it
+// invalid and raises bad_entry. A reader whose FetchEveryBody says so, a log's mirror, fetches every body at each sync.
+// The kind plays no part: a reader that knows neither kind still verifies the chains whole and shows such entries
+// generically, their bodies deferred (RECORD.md section 5.7's format 1 row).
+//
 // A failure at steps 1 to 3 ignores the entry and raises bad_entry; a pin this state has not reached stops that
 // stream's read at the push, to read again once it has. An ERASE read from the log's erasure ref, by a key it names or
 // by its note's entries (record_erase.go), or an erasure entry naming an entry, erases every copy of it: its body goes
@@ -55,6 +71,12 @@ const (
 	RecordEntryForked RecordEntryState = "forked"
 	// A checkpoint leaf with no entry, after a site loss.
 	RecordEntryLost RecordEntryState = "lost"
+	// DESIGN-COMPUTE §24.5's body-apart entry, its header verified: its body's s/<n> file is in the stream, not fetched.
+	RecordEntryDeferred RecordEntryState = "deferred"
+	// No s/<n> file stands for its body yet: its writer holds it.
+	RecordEntryWithheld RecordEntryState = "withheld"
+	// Its writer's coverage names its seq in bodies_dropped, or its writer is revoked or removed: the body never comes.
+	RecordEntryDropped RecordEntryState = "dropped"
 )
 
 // ErasureBody.reason's value for expiry under a retention policy, RecordErasureReasonRetention of record_erase.go,
@@ -64,6 +86,12 @@ const recordErasureReasonExpiry uint32 = 2
 // Whether the entry's key is gone for good, by a person's erasure or by expiry: the header is all that is left.
 func (self RecordEntryState) KeyGone() bool {
 	return self == RecordEntryErased || self == RecordEntryExpired
+}
+
+// Whether a body-apart entry's body is not held here (deferred, withheld or dropped): its header stands, verified, and
+// none of these alarms.
+func (self RecordEntryState) BodyAway() bool {
+	return self == RecordEntryDeferred || self == RecordEntryWithheld || self == RecordEntryDropped
 }
 
 var (
@@ -82,6 +110,9 @@ type RecordEntryCopy struct {
 	// rules judge an announce entry (the M6 carrier row's "the entry's push's auth pin standing for at").
 	AuthPin    *bridge.AuthPin
 	TimeMillis int64
+	// A body-apart copy's body file, s/<n> of its stream, and the version that created it; 0 while none stands.
+	BodyPath    string
+	BodyVersion uint64
 }
 
 // One verified entry, as a reader holds it.
@@ -113,6 +144,8 @@ type RecordReadEntry struct {
 	AgentProvenance RecordAgentProvenance
 	// The header's tainted: reading its text taints the reader's run first (§16.6, I-9).
 	Flagged bool
+	// The entry's RecordEntry set body_apart (DESIGN-COMPUTE §24.5): its body sits at s/<n>, fetched on demand.
+	BodyApart bool
 	// time_ms of the earliest push holding a copy, which evs bounds where time_millis is the writer's word.
 	PushTimeMillis int64
 	// time_millis more than TimeSkewTimeout past the push time.
@@ -201,6 +234,9 @@ type RecordReaderArgs struct {
 	UnretainedAtHead bool
 	// The bound an agent subkey's certificate is held to in a version-2 entry (§5.5); nil is the format's default.
 	AgentSubkeys *SidecarAgentSubkeySettings
+	// Whether this reader fetches every body-apart entry's body of logId at each sync (DESIGN-COMPUTE §24.5): a log's
+	// mirror's, which holds them all. Nil fetches only what FetchBodies asks.
+	FetchEveryBody func(logId Id) bool
 }
 
 // The logs this sidecar reads, as verified so far.
@@ -216,6 +252,8 @@ type RecordReader struct {
 	// RecordReaderArgs.UnretainedAtHead
 	unretainedAtHead bool
 	agentSubkeys     *SidecarAgentSubkeySettings
+	// RecordReaderArgs.FetchEveryBody, which SetFetchEveryBody may set later; read under stateLock
+	fetchEveryBody func(logId Id) bool
 
 	stateLock sync.Mutex
 	logs      map[Id]*recordReadLog
@@ -272,6 +310,10 @@ type recordReadLog struct {
 	streamPushes map[Id][]*RecordReadPush
 	// the last sync read every stream to its head
 	complete bool
+	// each stream's body-apart entries by their e/<n> counter, which a body file at s/<n> completes
+	streamCounterEntries map[Id]map[uint64]*RecordReadEntry
+	// each writer's seqs whose bodies its coverage says its spool dropped (DESIGN-COMPUTE §24.10)
+	writerDroppedRanges map[Id][]*protocol.SeqRange
 }
 
 // A reader over args, reading nothing until its first Sync. Store is required; nil settings are the defaults.
@@ -309,7 +351,15 @@ func NewRecordReader(args *RecordReaderArgs) *RecordReader {
 
 		unretainedAtHead: args.UnretainedAtHead,
 		agentSubkeys:     agentSubkeys,
+		fetchEveryBody:   args.FetchEveryBody,
 	}
+}
+
+// Sets which logs this reader fetches every body of at each sync, as a mirror holds them (RecordReaderArgs.FetchEveryBody).
+func (self *RecordReader) SetFetchEveryBody(fetchEveryBody func(logId Id) bool) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.fetchEveryBody = fetchEveryBody
 }
 
 // The authorization state now, failing closed.
@@ -343,6 +393,9 @@ func (self *RecordReader) readLog(logId Id) *recordReadLog {
 			expiredEntryIds: map[Id]bool{},
 			streamRefIds:    map[Id]Id{},
 			streamPushes:    map[Id][]*RecordReadPush{},
+
+			streamCounterEntries: map[Id]map[uint64]*RecordReadEntry{},
+			writerDroppedRanges:  map[Id][]*protocol.SeqRange{},
 		}
 		self.logs[logId] = log
 	}
@@ -429,8 +482,19 @@ func (self *RecordReader) Sync(ctx context.Context, logId Id) error {
 		return err
 	}
 	self.checkChains(auth, log)
+	self.checkBodies(auth, log)
 	if err := self.pin(log); err != nil {
 		return err
+	}
+	fetchEveryBody := func() func(logId Id) bool {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		return self.fetchEveryBody
+	}()
+	if fetchEveryBody != nil && fetchEveryBody(logId) {
+		if _, err := self.fetchBodiesWithLock(ctx, streams, log, nil); err != nil {
+			return err
+		}
 	}
 	hooks := func() []func(ctx context.Context, logId Id) {
 		self.stateLock.Lock()
@@ -581,6 +645,15 @@ func (self *RecordReader) readVersion(ctx context.Context, streams RecordStreams
 			return ok
 		}()
 		if held {
+			if arrival.fields.bodyApart {
+				func() {
+					self.stateLock.Lock()
+					defer self.stateLock.Unlock()
+					if entry, ok := log.leafEntries[leaf]; ok {
+						log.noteBodyApartWithLock(streamId, entryCopy, entry)
+					}
+				}()
+			}
 			continue
 		}
 		entry := &RecordReadEntry{
@@ -596,18 +669,26 @@ func (self *RecordReader) readVersion(ctx context.Context, streams RecordStreams
 		}
 		skew := self.settings.TimeSkewTimeout
 		entry.Skewed = time.Duration(header.Header.GetTimeMillis()-version.TimeMillis)*time.Millisecond > skew
-		if entryCopy.SlotId != (Id{}) && !slotRead {
-			slot, err := streams.ReadSlot(ctx, log.logId, version.SlotId)
-			if err == nil {
-				for _, row := range slot.Rows {
-					slotRows[row.KeyIndex] = row.Row
+		if arrival.fields.bodyApart {
+			// DESIGN-COMPUTE §24.5: its body is apart at s/<n>, fetched on demand, so neither its key row nor its body
+			// is read now; until a body file stands, its writer holds it
+			entry.BodyApart = true
+			entry.Version = max(arrival.fields.version, recordEntryVersion)
+			entry.State = RecordEntryWithheld
+		} else {
+			if entryCopy.SlotId != (Id{}) && !slotRead {
+				slot, err := streams.ReadSlot(ctx, log.logId, version.SlotId)
+				if err == nil {
+					for _, row := range slot.Rows {
+						slotRows[row.KeyIndex] = row.Row
+					}
+				} else if code, ok := RecordStreamRefusalCode(err); !ok || code != protocol.EvsRefusalCode_EVS_REFUSAL_NOT_FOUND {
+					return false, err
 				}
-			} else if code, ok := RecordStreamRefusalCode(err); !ok || code != protocol.EvsRefusalCode_EVS_REFUSAL_NOT_FOUND {
-				return false, err
+				slotRead = true
 			}
-			slotRead = true
+			self.openBody(log.logId, writerId, entry, arrival.fields, slotRows, entryCopy.SlotId == version.SlotId)
 		}
-		self.openBody(log.logId, writerId, entry, arrival.fields, slotRows, entryCopy.SlotId == version.SlotId)
 		self.chainEntry(auth, log, writerId, entry)
 		func() {
 			self.stateLock.Lock()
@@ -620,10 +701,25 @@ func (self *RecordReader) readVersion(ctx context.Context, streams RecordStreams
 			}
 			log.leafEntries[leaf] = entry
 			log.ordered = append(log.ordered, entry)
+			if entry.BodyApart {
+				log.noteBodyApartWithLock(streamId, entryCopy, entry)
+			}
 		}()
 		if entry.Kind() == RecordKindErasure && entry.Body != nil {
 			self.applyErasureEntry(log, entry)
 		}
+		if entry.Kind() == RecordKindCoverage && entry.Body != nil {
+			self.applyCoverageEntry(log, writerId, entry)
+		}
+	}
+	// a body file completes the header at its n in this stream, from this push or an earlier one
+	orphans := func() int {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		return log.takeBodyFilesWithLock(streamId, version)
+	}()
+	for range orphans {
+		self.raise(SidecarRecordAlarmBadEntry, log.logId, &streamId)
 	}
 	// only a push read whole counts: one cut by a failed slot read is read again
 	self.stateLock.Lock()
@@ -743,6 +839,214 @@ func (self *RecordReader) chainEntry(auth RecordAuthView, log *recordReadLog, wr
 		entry.State = RecordEntryForked
 		self.raise(SidecarRecordAlarmChainFork, log.logId, &writerId)
 	}
+}
+
+// Notes a body-apart copy at its stream's e/<n>, for the body file at s/<n> that completes it, and reads its body
+// dropped where its writer's coverage already names its seq.
+func (self *recordReadLog) noteBodyApartWithLock(streamId Id, entryCopy *RecordEntryCopy, entry *RecordReadEntry) {
+	n, ok := RecordStreamPathCounter(entryCopy.Path)
+	if !ok {
+		return
+	}
+	counterEntries := self.streamCounterEntries[streamId]
+	if counterEntries == nil {
+		counterEntries = map[uint64]*RecordReadEntry{}
+		self.streamCounterEntries[streamId] = counterEntries
+	}
+	counterEntries[n] = entry
+	writerId := recordIdOf(entry.Header.Header.GetWriterSidecarId())
+	if entry.State == RecordEntryWithheld && recordSeqInRanges(self.writerDroppedRanges[writerId], entry.Header.Header.GetSeq()) {
+		entry.State = RecordEntryDropped
+	}
+}
+
+// Takes a version's body files: each s/<n> whose stream holds a body-apart header at e/<n>, from this push or an
+// earlier one, completes that copy, its entry deferred where it was withheld or dropped; the count of those with no
+// such header, which the caller alarms and which are otherwise ignored.
+func (self *recordReadLog) takeBodyFilesWithLock(streamId Id, version *RecordStreamVersion) int {
+	orphans := 0
+	for _, bodyFile := range version.Bodies {
+		n, ok := RecordBodyPathCounter(bodyFile.Path)
+		entry := self.streamCounterEntries[streamId][n]
+		if !ok || entry == nil {
+			orphans += 1
+			continue
+		}
+		for _, entryCopy := range entry.Copies {
+			if entryCopy.StreamSidecarId == streamId && entryCopy.Path != "" {
+				if copyN, ok := RecordStreamPathCounter(entryCopy.Path); ok && copyN == n && entryCopy.BodyVersion == 0 {
+					entryCopy.BodyPath = bodyFile.Path
+					entryCopy.BodyVersion = version.Version
+				}
+			}
+		}
+		if entry.State == RecordEntryWithheld || entry.State == RecordEntryDropped {
+			entry.State = RecordEntryDeferred
+		}
+	}
+	return orphans
+}
+
+// Whether seq lies in one of ranges.
+func recordSeqInRanges(ranges []*protocol.SeqRange, seq uint64) bool {
+	for _, dropped := range ranges {
+		if dropped.GetFirst() <= seq && seq <= dropped.GetLast() {
+			return true
+		}
+	}
+	return false
+}
+
+// A coverage entry's bodies_dropped (DESIGN-COMPUTE §24.10): its writer's withheld bodies at those seqs read dropped,
+// and so do any whose headers come later.
+func (self *RecordReader) applyCoverageEntry(log *recordReadLog, writerId Id, coverage *RecordReadEntry) {
+	body := &protocol.Coverage{}
+	if err := proto.Unmarshal(coverage.Body, body); err != nil || len(body.GetBodiesDropped()) == 0 {
+		return
+	}
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	log.writerDroppedRanges[writerId] = append(log.writerDroppedRanges[writerId], body.GetBodiesDropped()...)
+	for _, entry := range log.ordered {
+		if entry.State == RecordEntryWithheld && recordIdOf(entry.Header.Header.GetWriterSidecarId()) == writerId &&
+			recordSeqInRanges(body.GetBodiesDropped(), entry.Header.Header.GetSeq()) {
+			entry.State = RecordEntryDropped
+		}
+	}
+}
+
+// A withheld body whose writer is revoked or removed never comes: it reads dropped (DESIGN-COMPUTE §24.5).
+func (self *RecordReader) checkBodies(auth RecordAuthView, log *recordReadLog) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	gone := map[Id]bool{}
+	for _, entry := range log.ordered {
+		if entry.State != RecordEntryWithheld {
+			continue
+		}
+		writerId := recordIdOf(entry.Header.Header.GetWriterSidecarId())
+		removed, judged := gone[writerId]
+		if !judged {
+			_, member := auth.Member(writerId)
+			_, sponsored := auth.Sponsor(writerId)
+			_, compromised := auth.CompromisedSince(writerId)
+			removed = (!member && !sponsored) || compromised
+			gone[writerId] = removed
+		}
+		if removed {
+			entry.State = RecordEntryDropped
+		}
+	}
+}
+
+// Fetches the bodies of logId's deferred entries that match selects, nil for every one (DESIGN-COMPUTE §24.5, §24.7):
+// what a device does as it opens, continues, forks or exports a run. Each body is held to its header's commitment as
+// step 5 holds any, a match completing its entry, which reads live, and a mismatch showing it invalid and raising
+// bad_entry; a key an ERASE took reads erased. Answers how many it completed; the first failure to read stops it,
+// keeping what it completed. One sync or fetch of a log at a time.
+func (self *RecordReader) FetchBodies(ctx context.Context, logId Id, selects func(entry *RecordReadEntry) bool) (int, error) {
+	log := self.readLog(logId)
+	log.syncLock.Lock()
+	defer log.syncLock.Unlock()
+	if !self.authNow().Reads(logId, self.sidecarId) {
+		return 0, fmt.Errorf("%w: %s", ErrRecordNotReader, logId)
+	}
+	return self.fetchBodiesWithLock(ctx, self.streams(), log, selects)
+}
+
+// FetchBodies' work, with the log's sync lock held.
+func (self *RecordReader) fetchBodiesWithLock(ctx context.Context, streams RecordStreams, log *recordReadLog, selects func(entry *RecordReadEntry) bool) (int, error) {
+	type pending struct {
+		entry     *RecordReadEntry
+		view      *RecordReadEntry
+		entryCopy RecordEntryCopy
+		writerId  Id
+	}
+	pendings := func() []*pending {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		pendings := []*pending{}
+		for _, entry := range log.ordered {
+			if entry.State != RecordEntryDeferred {
+				continue
+			}
+			index := slices.IndexFunc(entry.Copies, func(entryCopy *RecordEntryCopy) bool { return entryCopy.BodyVersion != 0 })
+			if index < 0 {
+				continue
+			}
+			pendings = append(pendings, &pending{
+				entry: entry, view: entry.clone(), entryCopy: *entry.Copies[index],
+				writerId: recordIdOf(entry.Header.Header.GetWriterSidecarId()),
+			})
+		}
+		return pendings
+	}()
+	fetched := 0
+	slotRows := map[Id]map[uint32][]byte{}
+	for _, p := range pendings {
+		if selects != nil && !selects(p.view) {
+			continue
+		}
+		rows, read := slotRows[p.entryCopy.SlotId]
+		if !read {
+			rows = map[uint32][]byte{}
+			slot, err := streams.ReadSlot(ctx, log.logId, p.entryCopy.SlotId)
+			if err == nil {
+				for _, row := range slot.Rows {
+					rows[row.KeyIndex] = row.Row
+				}
+			} else if code, ok := RecordStreamRefusalCode(err); !ok || code != protocol.EvsRefusalCode_EVS_REFUSAL_NOT_FOUND {
+				return fetched, err
+			}
+			slotRows[p.entryCopy.SlotId] = rows
+		}
+		if _, ok := rows[p.entryCopy.KeyIndex]; !ok {
+			// its key gone: nothing opens the body, which reads erased
+			func() {
+				self.stateLock.Lock()
+				defer self.stateLock.Unlock()
+				if p.entry.State == RecordEntryDeferred {
+					recordEraseEntryWithLock(p.entry)
+				}
+			}()
+			continue
+		}
+		sealedBody, err := streams.ReadBody(ctx, log.logId, p.entryCopy.StreamSidecarId, p.entryCopy.BodyVersion, p.entryCopy.BodyPath)
+		if code, ok := RecordStreamRefusalCode(err); ok && code == protocol.EvsRefusalCode_EVS_REFUSAL_NOT_FOUND {
+			// a BASE took the file: the body stays away, unfetched
+			continue
+		}
+		if err != nil {
+			return fetched, err
+		}
+		opened := p.view
+		opened.State = RecordEntryLive
+		fields := &recordEntryFields{sealedBody: sealedBody, keyIndex: p.entryCopy.KeyIndex, version: opened.Version}
+		self.openBody(log.logId, p.writerId, opened, fields, rows, true)
+		func() {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			if p.entry.State != RecordEntryDeferred {
+				// erased meanwhile: nothing of the body is kept
+				clear(opened.Body)
+				clear(opened.Salt)
+				clear(opened.Sealed)
+				return
+			}
+			p.entry.State = opened.State
+			p.entry.Body = opened.Body
+			p.entry.Salt = opened.Salt
+			p.entry.Sealed = opened.Sealed
+			p.entry.BodyInvalid = opened.BodyInvalid
+			p.entry.BodyGeneric = opened.BodyGeneric
+			p.entry.AgentProvenance = opened.AgentProvenance
+			log.searchRevision++
+		}()
+		if !opened.BodyInvalid {
+			fetched += 1
+		}
+	}
+	return fetched, nil
 }
 
 // Raises each writer's gap: at once for a writer with no deposit right on the log, past ChainGapTimeout for one that

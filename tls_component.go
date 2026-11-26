@@ -58,6 +58,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
@@ -113,9 +114,8 @@ type TlsComponent struct {
 	networkId Id
 	// the names the manager orders for, which an app listener's server names come from
 	names func(ctx context.Context) (*TlsCertNames, error)
-	// the manager's service token, which a call certs answered 401 asks again, and the keeper's drop of the token
-	// refused, nil for a serviceToken that keeps none
-	serviceToken       func(ctx context.Context, resource string, scopes []string) (string, error)
+	// the keeper's drop of the token certs refused, before a call certs answered 401 asks the manager's token again;
+	// nil for a service token that keeps none
 	forgetServiceToken func(resource string, scopes []string)
 	setSource          func(source TlsCertificateSource) error
 	// nil when the component runs no CT watch
@@ -203,9 +203,12 @@ func (self *Sidecar) tlsCertNames(ctx context.Context) (*TlsCertNames, error) {
 	if scoped && (scope.Label == "" || scope.MemberId != (Id{}) && !acl.ConsentedFor(identity.SidecarId, scope.MemberId)) {
 		return nil, ErrTlsPublishUnavailable
 	}
-	return tlsDeviceZoneNames(zone, scope.Label, func(owner string) bool {
+	names := tlsDeviceZoneNames(zone, scope.Label, func(owner string) bool {
 		return tlsDevicePublishGrant(acl, identity.SidecarId, owner, tlsCustomPublishPorts, self.clock.Now())
-	}), nil
+	})
+	// the state the grants were read at, past which a name held for a certs token refused for good is tried again
+	names.PinVersion = state.Pin().GetVersion()
+	return names, nil
 }
 
 // The carrier's canonical operator owners and this device's verified publish grants select its custom SANs.
@@ -348,7 +351,6 @@ func NewTlsComponent(ctx context.Context, args *TlsComponentArgs) (*TlsComponent
 		manager:            manager,
 		networkId:          args.Manager.NetworkId,
 		names:              args.Manager.Names,
-		serviceToken:       args.Manager.ServiceToken,
 		forgetServiceToken: args.ForgetServiceToken,
 		setSource:          args.SetSource,
 		setCtWatch:         args.SetCtWatch,
@@ -444,14 +446,14 @@ func (self *TlsComponent) Attach(env *SidecarEnv) error {
 	return nil
 }
 
-// Drops the certs token the manager presented, which certs answered 401, and mints the call's next: the manager's
-// ServiceToken for its certs audience with no scope, as the manager asks its own.
+// Drops the certs token the manager presented, which certs answered 401, and mints the call's next as the manager
+// asks its own (TlsCertManager.certsServiceToken), so a token that could not be had carries errTlsCertNoServiceToken
+// and one refused for good holds the name as the manager's own refusal does.
 func (self *TlsComponent) renewServiceToken(ctx context.Context) (string, error) {
-	resource := self.manager.settings.CertsResource
 	if self.forgetServiceToken != nil {
-		self.forgetServiceToken(resource, nil)
+		self.forgetServiceToken(self.manager.settings.CertsResource, nil)
 	}
-	return self.serviceToken(ctx, resource, nil)
+	return self.manager.certsServiceToken(ctx)
 }
 
 // §13.15's routes as the certificate manager calls them on one generation's api: an order and its status read, under
@@ -623,22 +625,29 @@ func (self *Sidecar) TlsSignLabelReclaim(ctx context.Context, name string, incid
 	return component.manager.SignLabelReclaim(ctx, &DnsReclaimProof{Name: name, NetworkId: *networkId, IncidentId: incidentId})
 }
 
-// What ListenTls takes beyond the name: §9.5's weight and §5.4's decision.
+// What ListenTls takes beyond the name: §9.5's weight, §5.4's decision and the grant's lifetime asked.
 type TlsListenSettings struct {
 	// The registration's share, 1 to 1000. 0 takes 100 (§9.5).
 	Weight int
 	// The ApprovalDecision for the listen, when the caller holds one. Nil lets the gate find a grant or a recorded
 	// decision, or file the request and answer *ApprovalPendingError.
 	Decision *bridge.Signed
+	// How long the grant the listen asks lasts: the registration's SocketListenSettings.Expires, held to the requests
+	// rule's maxExpiry, a longer one refused before the gate with the maximum named, 0 taking the rule's
+	// expiresDefault (owner decision 687). Negative is refused before anything is ordered.
+	Expires time.Duration
 	// §13.7's limits on the endpoint. Nil takes DefaultTlsFrontSettings. Its target probe is off whatever it says,
 	// since the target is the listener's Accept.
 	Front *TlsFrontSettings
 }
 
-// A registration as an app listener runs on it: what the front accepts from, and its address. *SocketListener is one.
+// A registration as an app listener runs on it: what the front accepts from, its address, and when the grant it
+// registered under ends. *SocketListener is one.
 type tlsListenRegistration interface {
 	tlsFrontListener
 	Addr() net.Addr
+	// Zero for none it asked (SocketListener.GrantExpires).
+	GrantExpires() time.Time
 }
 
 // What an app listener runs on beyond the component: the Sidecar's parts (ListenTls), or a test's.
@@ -685,6 +694,17 @@ func (self *TlsComponent) listening() bool {
 	return 0 < len(self.listeners)
 }
 
+// The names its app listeners serve now, each listener's in turn, a name two serve given twice.
+func (self *TlsComponent) listenerServerNames() []string {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	names := []string{}
+	for listener := range self.listeners {
+		names = append(names, listener.serverNames...)
+	}
+	return names
+}
+
 // An app listener on address: the name checked, its server names from the network's own, the network's certificate
 // ensured (§13.10's step 3), then the registration through parts, then the front on it. Nothing is ordered for a name
 // refused here, and nothing registers without the certificate.
@@ -704,6 +724,9 @@ func (self *TlsComponent) listen(ctx context.Context, address string, settings *
 	if name == tlsSystemPublishName {
 		// §13.9: a receiver's system publish, which no listener takes
 		return nil, fmt.Errorf("%w: the system publish's", ErrTlsListenInvalid)
+	}
+	if settings.Expires < 0 {
+		return nil, fmt.Errorf("%w: an expiry is a time from now", ErrTlsListenInvalid)
 	}
 	names, err := self.names(ctx)
 	if err != nil {
@@ -725,6 +748,7 @@ func (self *TlsComponent) listen(ctx context.Context, address string, settings *
 	listenSettings := TlsFrontListenSettings(target, false)
 	listenSettings.Weight = settings.Weight
 	listenSettings.Decision = settings.Decision
+	listenSettings.Expires = settings.Expires
 	registration, err := parts.Register(ctx, address, listenSettings)
 	if err != nil {
 		return nil, err
@@ -813,6 +837,9 @@ func (self *Sidecar) ListenTls(ctx context.Context, address string, settings *Tl
 type TlsListener struct {
 	front        *TlsFront
 	registration tlsListenRegistration
+	// the names its front serves, as its target held them at the listen: what D-TRUST-9's zone watch watches while it
+	// serves (dnsWatchPublishedHosts)
+	serverNames []string
 	// each connection the front opens, waiting for an Accept: unbuffered, so the front's dial waits for one, at most
 	// its TargetDialTimeout, as a socket with no backlog would
 	accepted chan net.Conn
@@ -846,6 +873,9 @@ func newTlsListener(ctx context.Context, frontArgs *TlsFrontArgs, registration t
 		accepted:     make(chan net.Conn),
 		closed:       make(chan struct{}),
 		untrack:      untrack,
+	}
+	if frontArgs.Target != nil {
+		self.serverNames = append([]string{}, frontArgs.Target.ServerNames...)
 	}
 	settings := DefaultTlsFrontSettings()
 	if frontArgs.Settings != nil {
@@ -910,6 +940,12 @@ func (self *TlsListener) Accept() (net.Conn, error) {
 // See net.Listener: the registration's network and client, as ids (I-13).
 func (self *TlsListener) Addr() net.Addr {
 	return self.registration.Addr()
+}
+
+// When the grant its tls/ registration registered under ends, its registration's (SocketListener.GrantExpires): zero
+// where a standing grant passed the listen (QD-1419).
+func (self *TlsListener) GrantExpires() time.Time {
+	return self.registration.GrantExpires()
 }
 
 // Unlistens at once (§9.9) and ends every visitor's connection: the front's Close, which closes the registration. A

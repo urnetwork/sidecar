@@ -92,7 +92,7 @@ func requireGateTableCase(t *testing.T, table *gateTable, c gateTableCase, gates
 	}
 	for _, service := range []string{
 		sidecar.ServiceGateEvs, sidecar.ServiceGateGkm, sidecar.ServiceGateSockets, sidecar.ServiceGateTlsedge,
-		sidecar.ServiceGateMxedge, sidecar.ServiceGateSmtpedge, sidecar.ServiceGateDns, "storage",
+		sidecar.ServiceGateMxedge, sidecar.ServiceGateSmtpedge, sidecar.ServiceGateDns, sidecar.ServiceGateCompute, "storage",
 	} {
 		gate := gates.Service(service)
 		want, ok := c.Expect.Services[service]

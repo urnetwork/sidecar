@@ -54,6 +54,7 @@ type fakeSidecarYaml struct {
 		Mxedge            *fakeGateYaml   `yaml:"mxedge"`
 		Smtpedge          *fakeGateYaml   `yaml:"smtpedge"`
 		Dns               *fakeGateYaml   `yaml:"dns"`
+		Compute           *fakeGateYaml   `yaml:"compute"`
 		Push              *fakeSwitchYaml `yaml:"push"`
 		Wake              *fakeSwitchYaml `yaml:"wake"`
 		Bridge            *fakeSwitchYaml `yaml:"bridge"`
@@ -121,6 +122,7 @@ func parseFakeGates(text string) (*fakeGatesRead, error) {
 			sidecar.ServiceGateMxedge:   fakeServiceGate(y.Sidecar.Mxedge),
 			sidecar.ServiceGateSmtpedge: fakeServiceGate(y.Sidecar.Smtpedge),
 			sidecar.ServiceGateDns:      fakeServiceGate(y.Sidecar.Dns),
+			sidecar.ServiceGateCompute:  fakeServiceGate(y.Sidecar.Compute),
 		},
 		switches: map[string]bool{
 			sidecar.GateSwitchPush:            y.Sidecar.Push != nil && y.Sidecar.Push.Enabled,

@@ -421,7 +421,7 @@ func urTunWindowsSockaddrAddr(raw *windows.RawSockaddrInet) netip.Addr {
 	return netip.Addr{}
 }
 
-// The unicast address row of an IPv4 /32 on luid, initialized as IP Helper's defaults have it.
+// The unicast address row of a whole address on luid, initialized as IP Helper's defaults have it.
 func urTunWindowsAddressRow(luid uint64, address netip.Addr) (*windows.MibUnicastIpAddressRow, error) {
 	row := &windows.MibUnicastIpAddressRow{}
 	if err := urTunWindowsInitializeUnicastAddress.Find(); err != nil {
@@ -430,7 +430,8 @@ func urTunWindowsAddressRow(luid uint64, address netip.Addr) (*windows.MibUnicas
 	urTunWindowsInitializeUnicastAddress.Call(uintptr(unsafe.Pointer(row)))
 	row.InterfaceLuid = luid
 	urTunWindowsSetSockaddr((*windows.RawSockaddrInet)(unsafe.Pointer(&row.Address)), address)
-	row.OnLinkPrefixLength = 32
+	// a whole address of either family: an overlay /32, or the translator's own IPv6 /128
+	row.OnLinkPrefixLength = uint8(address.BitLen())
 	row.DadState = windows.IpDadStatePreferred
 	return row, nil
 }
@@ -1160,4 +1161,51 @@ func (self *urTunWindowsInterface) Close() error {
 	}()
 	<-self.eventsDone
 	return closeErr
+}
+
+var _ urTunTranslatorInterface = (*urTunWindowsInterface)(nil)
+
+// What the translator asks of IP Helper beside urTunWindowsIpHelper: the adapter's IPv6 MTU, as SetMtu sets IPv4's.
+type urTunWindowsIpv6Mtu interface {
+	SetIpv6Mtu(luid uint64, mtu int) error
+}
+
+var _ urTunWindowsIpv6Mtu = (*urTunWindowsIphlpapi)(nil)
+
+func (self *urTunWindowsIphlpapi) SetIpv6Mtu(luid uint64, mtu int) error {
+	row := &windows.MibIpInterfaceRow{Family: windows.AF_INET6, InterfaceLuid: luid}
+	if err := windows.GetIpInterfaceEntry(row); err != nil {
+		return err
+	}
+	row.NlMtu = uint32(mtu)
+	return urTunWindowsNetio(urTunWindowsSetIpInterfaceEntry, unsafe.Pointer(row))
+}
+
+// Puts the translator's own address on the adapter as a /128 and routes the instances' /96 on link through it
+// (urTunTranslatorInterface). The adapter's removal takes both off.
+func (self *urTunWindowsInterface) SetTranslator(own netip.Addr, instances netip.Prefix) error {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.closed {
+		return errUrTunClosed
+	}
+	if !own.Is6() || !instances.IsValid() || !instances.Addr().Is6() {
+		return errors.New("the translator's addresses are not IPv6")
+	}
+	if err := self.system.ipHelper.AddAddress(self.luid, own); err != nil && !errors.Is(err, windows.ERROR_OBJECT_ALREADY_EXISTS) {
+		return urTunWindowsError(err)
+	}
+	// IPv6's TCP takes its segment size from the adapter's IPv6 MTU, which the open set for IPv4 alone
+	mtuSetter, ok := self.system.ipHelper.(urTunWindowsIpv6Mtu)
+	if !ok {
+		return errors.New("IP Helper sets no IPv6 MTU here")
+	}
+	if err := mtuSetter.SetIpv6Mtu(self.luid, self.system.settings.Mtu); err != nil {
+		return urTunWindowsError(err)
+	}
+	err := self.system.ipHelper.AddRoute(self.luid, instances.Masked(), self.system.settings.RouteMetric)
+	if err != nil && !errors.Is(err, windows.ERROR_OBJECT_ALREADY_EXISTS) {
+		return urTunWindowsError(err)
+	}
+	return nil
 }

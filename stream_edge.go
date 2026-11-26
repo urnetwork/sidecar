@@ -71,13 +71,15 @@ func streamMessageType(messageType uint32) bool {
 	return protocol.MessageType_STREAM_OPEN <= protocol.MessageType(messageType) && protocol.MessageType(messageType) <= protocol.MessageType_STREAM_RESET
 }
 
-// Whether a type belongs only between sidecars of one network: Hello's exchange, HeadCheck's and SEARCH's.
+// Whether a type belongs only between sidecars of one network: Hello's exchange, HeadCheck's, SEARCH's and §17.7.1's
+// discovery watch (owner decision 778).
 func sidecarOnlyMessageType(messageType uint32) bool {
 	switch protocol.MessageType(messageType) {
 	case protocol.MessageType_HELLO, protocol.MessageType_HELLO_RESULT,
 		protocol.MessageType_HEAD_CHECK, protocol.MessageType_HEAD_CHECK_RESULT,
 		protocol.MessageType_HEAD_CHECK_PROOF_REQUEST, protocol.MessageType_HEAD_CHECK_PROOF,
-		protocol.MessageType_SEARCH, protocol.MessageType_SEARCH_RESULT:
+		protocol.MessageType_SEARCH, protocol.MessageType_SEARCH_RESULT,
+		protocol.MessageType_DNS_SD_WATCH, protocol.MessageType_DNS_SD_WATCH_RESULT:
 		return true
 	}
 	return false

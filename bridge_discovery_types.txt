@@ -1,0 +1,36 @@
+# §17.7.1's default list of DNS-SD service types (Q-BRIDGE-10; owner decision 778): what a ur daemon host gathers on
+# its links and publishes, before the ACL document's discovery block widens or trims it. One type a line, each
+# _<name>._tcp or _<name>._udp by RFC 6763 §7's rule; lines that are blank or start with # say nothing. Versioned in the
+# sidecar repo as §12.5's reserved list is, so a binary carries the list it was built with.
+
+# apple devices: a paired iPhone's or iPad's CoreDevice endpoint (iOS 17 and later), an Apple TV or Vision Pro pairing
+# by the code it shows, Wi-Fi sync and debugging before iOS 17, and a model
+_remotepairing._tcp
+_remotepairing-manual-pairing._tcp
+_apple-mobdev2._tcp
+_device-info._tcp
+
+# remote access
+_ssh._tcp
+_sftp-ssh._tcp
+_rfb._tcp
+_rdp._tcp
+
+# files
+_smb._tcp
+_afpovertcp._tcp
+_nfs._tcp
+_webdav._tcp
+_webdavs._tcp
+
+# print, scan
+_ipp._tcp
+_ipps._tcp
+_pdl-datastream._tcp
+_printer._tcp
+_uscan._tcp
+_uscans._tcp
+
+# web
+_http._tcp
+_https._tcp

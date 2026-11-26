@@ -604,7 +604,7 @@ func urServiceUrlsFromHostTable(settings *sidecar.SidecarSettings) error {
 }
 
 // Runs the daemon until ctx ends, Close, or an auto-spawned daemon's idle exit.
-func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) error {
+func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) (runErr error) {
 	autoSpawned, _ := options.Bool("--auto-spawned")
 	ephemeral, _ := options.Bool("--ephemeral")
 	log := newUrStderrLogger(cli.stderr)
@@ -678,6 +678,14 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) error {
 		}
 		return err
 	}
+	// §28.7's support log: this process's ring under <state>/support-log, which every Sidecar the daemon hosts writes
+	// through; its stop is recorded last, after every Sidecar has closed (cmd_support.go)
+	stopSupportLog, err := startUrSupportLog(daemon, stateDirectory, settings, ephemeral, autoSpawned, log)
+	if err != nil {
+		daemon.Close()
+		return err
+	}
+	defer func() { stopSupportLog(urSupportStopReason(ctx, runErr, autoSpawned)) }()
 	// §16.6's presence prompt: the host's authenticator, nil where it has none (presence.go)
 	daemon.SetPresenceProvider(urPlatformPresenceProvider(stateDirectory, settings.Ingest, log))
 	instance, err := sidecar.NewSidecarInstance(ctx, &sidecar.SidecarInstanceArgs{

@@ -25,7 +25,10 @@
 //   - a stream has a ref id and each of its versions a chain value C_v (§11.8), which a checkpoint's frontier names
 //     (RECORD.md section 10.1): the ref id is this fake's own digest of the repo and the writer, standing in for
 //     §11.6's keyed one, and C_v is EvsChainNext over this fake's statement digests;
-//   - RemoveStreamEntries takes entry files out of a stream as a committed BASE does (§11.8), leaving its versions.
+//   - RemoveStreamEntries takes entry files out of a stream as a committed BASE does (§11.8), leaving its versions;
+//   - a push's body files (DESIGN-COMPUTE §24.5's s/<n>) are created as its entry files are, creates only, and a read
+//     lists each version's by path alone, their bytes coming only from ReadBody, so a reader that never calls it
+//     never holds a body; BodyReadCount counts what ReadBody gave.
 //
 // It holds no format code: entries, slot rows, batches and notes are the caller's bytes, kept and returned as they
 // came, and nothing is sealed, tokenized or verified. A deposit's slot holds one key at index 0 with no bytes, which an
@@ -100,6 +103,8 @@ type FakeRecordStreams struct {
 	subscribers map[sidecar.Id]map[uint64]func(repoId sidecar.Id)
 	nextSubId   uint64
 	violations  []string
+	// ReadBody calls that gave a body, by the sidecar that asked
+	sidecarBodyReads map[sidecar.Id]int
 }
 
 // One repo's state.
@@ -165,6 +170,8 @@ type fakeRecordStream struct {
 	versions []*sidecar.RecordStreamVersion
 	refId    sidecar.Id
 	chain    [sha256.Size]byte
+	// each body file's bytes by version and path, which only ReadBody gives
+	versionPathBodies map[uint64]map[string][]byte
 }
 
 // A stream's ref id here: the first 16 bytes of a digest of the repo and the writer. evs's is §11.6's HMAC under
@@ -209,7 +216,16 @@ func NewFakeRecordStreams(clock Clock, barriers *BarrierDriver, settings *FakeRe
 		settings:    settings,
 		repos:       map[sidecar.Id]*fakeRecordRepo{},
 		subscribers: map[sidecar.Id]map[uint64]func(repoId sidecar.Id){},
+
+		sidecarBodyReads: map[sidecar.Id]int{},
 	}
+}
+
+// How many bodies ReadBody gave sidecarId: what a test that fetches no body holds at 0.
+func (self *FakeRecordStreams) BodyReadCount(sidecarId sidecar.Id) int {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.sidecarBodyReads[sidecarId]
 }
 
 // A fresh record-class repo, its refs empty and no scope granted.
@@ -310,9 +326,17 @@ func (self *FakeRecordStreams) RemoveStreamEntries(repoId sidecar.Id, writerSide
 	if repo == nil || repo.streams[writerSidecarId] == nil {
 		return
 	}
-	for _, version := range repo.streams[writerSidecarId].versions {
+	stream := repo.streams[writerSidecarId]
+	for _, version := range stream.versions {
 		version.Entries = slices.DeleteFunc(version.Entries, func(entry *sidecar.RecordStreamEntry) bool {
 			return slices.Contains(paths, entry.Path)
+		})
+		version.Bodies = slices.DeleteFunc(version.Bodies, func(body *sidecar.RecordStreamBodyFile) bool {
+			if slices.Contains(paths, body.Path) {
+				delete(stream.versionPathBodies[version.Version], body.Path)
+				return true
+			}
+			return false
 		})
 	}
 }
@@ -505,6 +529,9 @@ func (self *fakeRecordStreamsClient) Append(ctx context.Context, repoId sidecar.
 		for _, entry := range push.Entries {
 			parts = append(parts, []byte(entry.Path), entry.Entry)
 		}
+		for _, body := range push.Bodies {
+			parts = append(parts, []byte("body"), []byte(body.Path), body.Body)
+		}
 		statement := fakeRecordStatement(parts...)
 		if commit, err, ok := repo.retryAnswerWithLock(push.PushId, statement); ok {
 			return commit, err
@@ -533,17 +560,24 @@ func (self *fakeRecordStreamsClient) Append(ctx context.Context, repoId sidecar.
 		stream := repo.streams[self.sidecarId]
 		if stream == nil {
 			refId := FakeRecordStreamRefId(repoId, self.sidecarId)
-			stream = &fakeRecordStream{paths: map[string]bool{}, refId: refId, chain: sidecar.EvsChainStart(repoId, refId)}
+			stream = &fakeRecordStream{paths: map[string]bool{}, refId: refId, chain: sidecar.EvsChainStart(repoId, refId), versionPathBodies: map[uint64]map[string][]byte{}}
 		}
 		created := map[string]bool{}
+		createdPaths := []string{}
 		for _, entry := range push.Entries {
-			if entry.Path == "" || created[entry.Path] {
+			createdPaths = append(createdPaths, entry.Path)
+		}
+		for _, body := range push.Bodies {
+			createdPaths = append(createdPaths, body.Path)
+		}
+		for _, path := range createdPaths {
+			if path == "" || created[path] {
 				return nil, repo.refuseWithLock(push.PushId, statement, protocol.EvsRefusalCode_EVS_REFUSAL_INVALID)
 			}
-			created[entry.Path] = true
+			created[path] = true
 		}
-		for _, entry := range push.Entries {
-			if stream.paths[entry.Path] {
+		for _, path := range createdPaths {
+			if stream.paths[path] {
 				// creates only (§11.8's refs table), as evs's 5c answers a write of a path that stands
 				return nil, repo.refuseWithLock(push.PushId, statement, protocol.EvsRefusalCode_EVS_REFUSAL_PATH_CONFLICT)
 			}
@@ -564,6 +598,13 @@ func (self *fakeRecordStreamsClient) Append(ctx context.Context, repoId sidecar.
 			stream.paths[entry.Path] = true
 			version.Entries = append(version.Entries, &sidecar.RecordStreamEntry{Path: entry.Path, Entry: bytes.Clone(entry.Entry)})
 		}
+		pathBodies := map[string][]byte{}
+		for _, body := range push.Bodies {
+			stream.paths[body.Path] = true
+			version.Bodies = append(version.Bodies, &sidecar.RecordStreamBodyFile{Path: body.Path})
+			pathBodies[body.Path] = bytes.Clone(body.Body)
+		}
+		stream.versionPathBodies[version.Version] = pathBodies
 		stream.versions = append(stream.versions, version)
 		rows := map[uint32][]byte{}
 		for _, row := range push.SlotRows {
@@ -618,6 +659,9 @@ func (self *fakeRecordStreamsClient) ReadStream(ctx context.Context, repoId side
 			for _, entry := range version.Entries {
 				copied.Entries = append(copied.Entries, &sidecar.RecordStreamEntry{Path: entry.Path, Entry: bytes.Clone(entry.Entry)})
 			}
+			for _, body := range version.Bodies {
+				copied.Bodies = append(copied.Bodies, &sidecar.RecordStreamBodyFile{Path: body.Path})
+			}
 			versions = append(versions, copied)
 		}
 		return nil
@@ -626,6 +670,31 @@ func (self *fakeRecordStreamsClient) ReadStream(ctx context.Context, repoId side
 		return nil, err
 	}
 	return versions, nil
+}
+
+// The body file at path that version of the writer's stream created, NOT_FOUND for none.
+func (self *fakeRecordStreamsClient) ReadBody(ctx context.Context, repoId sidecar.Id, writerSidecarId sidecar.Id, version uint64, path string) ([]byte, error) {
+	var body []byte
+	err := self.read("read_body", repoId, func(repo *fakeRecordRepo, scope RecordStreamsScope) error {
+		if !scope.Read {
+			return fakeRecordReadRefusal(protocol.EvsRefusalCode_EVS_REFUSAL_SCOPE)
+		}
+		stream := repo.streams[writerSidecarId]
+		if stream == nil {
+			return fakeRecordReadRefusal(protocol.EvsRefusalCode_EVS_REFUSAL_NOT_FOUND)
+		}
+		held, ok := stream.versionPathBodies[version][path]
+		if !ok {
+			return fakeRecordReadRefusal(protocol.EvsRefusalCode_EVS_REFUSAL_NOT_FOUND)
+		}
+		body = bytes.Clone(held)
+		self.world.sidecarBodyReads[self.sidecarId] += 1
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return body, nil
 }
 
 func (self *fakeRecordStreamsClient) ReadSlot(ctx context.Context, repoId sidecar.Id, slotId sidecar.Id) (*sidecar.RecordSlot, error) {

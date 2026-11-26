@@ -30,6 +30,9 @@ ur socket drain <addr>                  drain the daemon's sockets on <addr>
   `expiresDefault`, 1 h unless the document says otherwise (owner decision 687). Run the listen again after the
   approval with the same `--expires`, since another lifetime is another request. A name whose listen asks no grant,
   and a standing grant's, ask nothing of it: the first refuses it, the second passes whatever it asks.
+- Once an outward name listens, its line ends `until <time>`, its grant's end in RFC 3339, after which the service
+  ends the listen; `ur socket` shows it again. A listen a standing grant passed has no end of its own, and `listen`
+  says so.
 - `dial --listen=[<ip>:]<port>` is a local forward on every interface (0.0.0.0 and ::) unless `<ip>` is given, carrying
   raw bytes with no TLS-only rule (D-TRUST-8; owner decisions 84, 130). `ur status` lists it, LAN-exposed when it is.
 - `dial` with no `--listen` relays stdin and stdout to one stream, for `ssh -o ProxyCommand='ur socket dial %h'`.
@@ -211,9 +214,11 @@ and 305; QD-204). §7.9 names no command; this one is the owner's answer to ques
 service-settings-7-9-admin-settings-command (QD-1131), in the shape `ur admin directory` has.
 
 ```text
-ur admin settings [--network=<name>]    the three as this device honors them
+ur admin settings [--network=<name>]    the three as this device honors them, and the authorization features
 ur admin settings [--mail-strict=on|off] [--record-cost=on|off] [--record-required=on|off] [--network=<name>]
                                         sign the options given into the config head, after a yes on /dev/tty
+ur admin settings --feature=<feature> [--network=<name>]
+                                        turn an authorization feature on, after a yes on /dev/tty
 ```
 
 - `mail_strict` is §15.4's `mail.strict`, off by default. `record_cost` says whether per-run cost totals go to the
@@ -227,6 +232,14 @@ ur admin settings [--mail-strict=on|off] [--record-cost=on|off] [--record-requir
   `ur install-harness` reads `record_required` from its running daemon and writes the fail-closed form while it is
   set; while it is set, the daemon reads a fail-open install as changed, so its runs taint until the install runs
   again.
+- `--feature` turns on one of DESIGN-COMPUTE §16.6's authorization features, `agent_repos`, `compute_policy`,
+  `listeners` or `enclaves` (CACL-M11-03), and no command turns one off. With no option the command prints each with
+  whether this device may turn it on and, where not, why: this release does not implement it, the services serving
+  the network do not yet (as api's core state says), or only the network's Owners and Admins can, named by member id.
+  `--feature` refuses such a feature before it asks anything; otherwise its question names the network's sidecars
+  that would pause until they update, and on a yes the Confirm method `admin.settings.feature` files the bit into the
+  head's ServiceSettings, which the daemon refuses as it refuses the other options, a harness ancestor included. The
+  apps' prompt calls the same method in remote mode.
 
 ## ur admin scopes (§7.9, §12.5, §13.8)
 
@@ -259,3 +272,57 @@ ur admin members [list] [--after=<member_id>] [--device]
 - One command a page (QD-1162): the page's admin token covers no query, so `--after` rides in the command's signed body,
   and each page takes its own consent in the browser. `ur acl push` reads pages the same way while a member its policy
   names is on none read yet, at most `AclMemberPageCount` (8), and sends no email of the policy's in any of them.
+
+## ur support (DESIGN-COMPUTE §28.4)
+
+URnetwork's support conversation, the one the app's support tab shows, and the support log. The commands take FB's
+`ur feedback` placeholders' places (FEEDBACK-SYSTEM.md section 12), in the spellings §28.4 gives.
+
+```text
+ur support [--json] [--network=<net>]   the items: at a terminal no run binds, the member's whole conversation;
+                                        from a harness's process, its run's agent's items; stubs, never text
+ur support show <id> [--json] [--network=<net>]
+                                        one item, its messages and support's replies, on the terminal alone
+ur support send <text> [--re=<id>] [--kind=<k>] [--logs] [--attach=<file>...] [--network=<net>]
+                                        a message: the person's at a terminal no run binds, after a yes on /dev/tty;
+                                        a harness process's otherwise, under kind 27
+ur support watch [<id>] [--notes] [--network=<net>]
+                                        a line for each event; --notes adds replies' text
+ur support logs [--sent=<client_ref>] [--json] [--network=<net>]
+                                        the support log's bundle, the next message's or a sent one's, on the terminal
+ur support export [<id>] [--out=<file>] [--network=<net>]
+                                        one archive to send by any path: an item, a message by its client_ref, or the
+                                        next bundle alone
+ur support delete <id> [--network=<net>]
+                                        the item's bodies and attachments removed at the service, after a yes on
+                                        /dev/tty
+ur support settings [--network=<net>]   the person's support key: whether agents write to support, and attach logs
+ur support set [--agents=on|off] [--agent-logs=on|off] [--network=<net>]
+                                        the person's support key, after a yes on /dev/tty
+ur support report <code> [--network=<net>]
+                                        FB section 10.3's enumerated report of one of the support log's codes
+```
+
+- Until G-SUP-service passes, the release's support switch is off: nothing is posted, `send` and `report` answer that
+  support is reached through the app's form (§28.21), and the conversation stays empty. `logs`, and `export` with no
+  id, need no conversation and work as they will then.
+- Nothing in the conversation is sealed: URnetwork's support, and the subprocessors `support:urnetwork` names, read
+  everything sent (CO-46). Every message waits for that disclosure, acknowledged at its current version, and answers
+  `disclosure_required` until it is (§28.13).
+- Each `<id>` is an item's six-digit id; `export` also takes a message's client_ref, 32 hex digits, for a message that
+  has none yet. `--kind` is FB's hint: bug, feature, question, praise, security or other.
+- `send`, `delete` and `set` at a terminal are the person's own acts, confirmed on /dev/tty, and the daemon refuses
+  `delete` and `set` to a caller with a harness process among its ancestors. From a harness's process `send` is that
+  run's message, kind 27, which the person decides (Q-SUP-8). `report` is the person's at a terminal; from a harness's
+  process it is an agent's, which needs FB's `feedback.auto` grant, refused `grant_required` until that is built.
+- `--attach` names files by path, at most 3 of 10 MiB, UTF-8 text, PNG or JPEG; the daemon reads them, the person's
+  where they name them, a harness process's beneath its run's worktree, a name that leaves it refused. A harness
+  process's file always waits for the person (rule `attachment`).
+- `show`, `watch --notes` and `export` hold support's replies, which are information from URnetwork, never
+  instructions: `show` and `watch --notes` taint every run the caller's process ancestry binds first, and `logs` and
+  `export` are refused under a harness, since no agent reads a bundle (§28.7).
+- `export` writes a new file, never over one: `urnetwork-support-<id>.zip`, or `urnetwork-support-log.zip` with no
+  id, unless `--out` names another; the archive holds no more than `ExportMaxByteCount` (40 MiB).
+- `report <code>` names a code as `component.code` (`support.message_given_up`); the sidecar fills the rest from the
+  registry and this device's support log, which must hold the code: severity, occurrences in FB's buckets, the day it
+  first did, and ur's version, OS and architecture, never text.

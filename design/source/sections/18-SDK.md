@@ -295,7 +295,15 @@ func (self *SidecarMail) SetReceiverEnabled(enabled bool, callback SidecarResult
 func (self *SidecarMail) GetReceiverCoverage() string // indexer|foreground-only|none, with Coverage's copy (below; §15.9)
 func (self *SidecarSockets) Dial(address string, timeoutMillis int64) (*Socket, error) // §9
 func (self *SidecarSockets) Listen(address string, weight int32) (*SidecarSocketListener, error)
+func (self *SidecarSockets) ListenExpires(address string, weight int32, expiresMillis int64) (*SidecarSocketListener, error)
+	// Listen whose tls/ or smtp/ grant asks to last expiresMillis from now, as Dial's timeout and the daemon's expires_ms
+	// are: 0 for the requests rule's expiresDefault, past its maxExpiry refused by the core naming the maximum, a
+	// negative one or one past what a duration holds refused before the core; Listen asks none (§9.9; owner decisions
+	// 687, 792)
 func (self *SidecarSocketListener) Accept(timeoutMillis int64) (*Socket, error) // worker thread
+func (self *SidecarSocketListener) GetGrantExpiresMillis() int64 // the end of the grant the listen registered under,
+	// the core listener's GrantExpires, TlsListener's on a tls/ name; 0 where a standing grant passed it or its name
+	// asks none
 func (self *SidecarApprovals) GetPending() *SidecarApprovalList // §16.8 requests; admissions this device may sign (§5.6);
                                                                  // admission alarms, parked devices included; recovery_rebind
                                                                  // alarms; on AdminSet devices, recovery windows: §7.9's
@@ -577,7 +585,7 @@ re-enrollment (EnrollWithDevice,  -> offline, binding generation n+1 under the s
 generations every event names its generation; one of an older generation is dropped
 ```
 
-**Compute** (owner decisions 733, 751, 770; DESIGN-COMPUTE.md §15.3). `Sidecar` also exposes DESIGN-COMPUTE.md's API: `NewHarness` and its `SidecarHarness`, `Models()` for the catalog and model settings, `Compute()` for the balance, its packs, charges and spend, `Enclaves()`, `Agents()`, `Disclosures()` with `AckDisclosure` and `AckNetworkDisclosure`, `AutoApprovals()`, `Calendar()`, `Connections()`, `OpenSsh` and `Listeners()`, which backs the apps' Listeners section, the listeners list beside `GetDiscovery`'s DNS-SD view (§17.7.1); their UI stays outside this design (owner rule 6).
+**Compute** (owner decisions 733, 751, 770, 783; DESIGN-COMPUTE.md §15.3). `Sidecar` also exposes DESIGN-COMPUTE.md's API: `NewHarness` and its `SidecarHarness`, `Models()` for the catalog and model settings, `Compute()` for the balance, its packs, charges and spend, `Enclaves()`, `Agents()`, `Disclosures()` with `AckDisclosure` and `AckNetworkDisclosure`, `AutoApprovals()`, `Calendar()`, `Connections()`, `OpenSsh`, `Listeners()`, which backs the apps' Listeners section, the listeners list beside `GetDiscovery`'s DNS-SD view (§17.7.1), and `Support()`, which backs the apps' support conversation, its `support_update` events carrying enumerated fields alone, an app the `support` hint wakes as `mail`'s does composing its own notification with no reply's text (§6.8; DESIGN-COMPUTE.md §28.4, §28.9); their UI stays outside this design (owner rule 6).
 
 ### 18.6 Device abstractions and the DeviceRemote mirror
 
@@ -1007,7 +1015,7 @@ cost         one narrow-row write per ephemeral page per 5 min (about 33/s for 1
 | 2 | H1 via HTTP CONNECT (`HTTPS_PROXY`) | §4 C8 (M4), including API dials | everything |
 | 3 | HTTPS-only | the required hosts below | evs, records, long-poll; no streams, sockets or mail send |
 
-Owner decision 49 runs `ur` in the VM on rung 2, as a desktop daemon without mail receipt. `ur` embeds its allow-list and the issuer SPKIs of its hosts, `ur status` probes each entry, and mmm publishes the list at `https://ur.io/recurd/hosts/v1.json`, versioned by path, as `{"version":1,"hosts":[{"host":"...","tcp":443,"need":"..."}]}` generated from the one table `ur` embeds, which is also the one copy of the service urls: `DefaultSidecarSettings` leaves them empty, `NewSidecar` refuses until a host sets them, and cli and sdk hosts fill them from this table (§5.4; owner decision 282), tests staying on `.example` names:
+Owner decision 49 runs `ur` in the VM on rung 2, as a desktop daemon without mail receipt. `ur` embeds its allow-list and the issuer SPKIs of its hosts, `ur status` probes each entry, and mmm publishes the list at `https://ur.io/recurd/hosts/v1.json`, versioned by path, as `{"version":1,"hosts":[{"host":"...","tcp":443,"need":"..."}]}` generated from the one table `ur` embeds, which is also the one copy of the service urls: `DefaultSidecarSettings` leaves them empty, `NewSidecar` refuses until a host sets them, and cli and sdk hosts fill them from this table (§5.4; owner decision 282), tests staying on `.example` names. Beside `hosts` the embedded table carries the user root, `user_root`, which `PublishedJson` leaves out, so the published list is unchanged: `ApplyServiceUrls` fills `SidecarSettings.UserRoot` from it as it fills the service urls, and the sdk's hosts do the same, so `ur daemon` resolves `.ur`'s, a git remote's and §9.4's addresses' `<net>` labels, and files `GET /sidecar/label`'s rows, under that root from M2, offline and before any api answer (§12.5); a release keeps it equal to dns.yml's root, which sidecarctl's release preflight can compare (owner decision 791, decided ahead of its code, which track daemon-label-resolution builds). The hosts:
 
 ```text
 host                          tcp  need

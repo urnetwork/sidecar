@@ -243,9 +243,14 @@ sealed_messages:
   TlsLinkToken: "a link audience's token, between a guest and the publishing device's front alone, in a URL and a cookie inside TLS, which tlsedge carries as records it cannot read (QD-134, X1)"
   TlsEdgeLogin: "a members-device login's statement, from a member's app or extension through the visitor's browser to the publishing device's front alone, posted inside TLS, which tlsedge carries as records it cannot read (§13.7, X1)"
   AgentCert: "an agent subkey's certificate, riding only inside the sealed provenance it vouches for, RECORD.md 5.3's AgentSignedBody and a push's sealed metadata, never a statement or record a server reads (QD-159, D-CORE-6)"
+  AttestationResult: "the device's own verdict, carried only in the record's model_call and enclave entries, each a sealed file in its writer's stream, and in the device's own events; no server writes or reads one (DESIGN-COMPUTE §5.8, §6.8, §11.12; ATTEST-M11-01)"
+  ComputePolicyTicketFile: "URnetwork's own signed freshness ticket, the same bytes for every device and naming none, which ur.io serves as a static file at compute/policy/v1/tickets/<day>.bin and only devices decode; the ticket host's release step reads only its own batch's times (DESIGN-COMPUTE §5.4; compute-plan-ticket-distribution, QD-1379; ATTEST-M12-01, ATTEST-M12-02)"
+  ComputePolicyTicket: "inside ComputePolicyTicketFile, URnetwork's own signed file naming no user, network or device (DESIGN-COMPUTE §5.4)"
+  ComputePolicyTicketBatch: "inside ComputePolicyTicket (DESIGN-COMPUTE §5.4)"
 
 sealed_files:
   protocol/directory.proto: "plaintext inside the directory's sealed files and entries (§16.11)"
+  protocol/dns.proto: "peer to peer over a Required session on a data-class contract, so only sizes and timing show (§12.9.1, §17.7.1; connect-1, connect-2)"
   protocol/evsindex.proto: "plaintext inside index files, which evs seals as any file (§11.14)"
   protocol/mail.proto: "only MailIngress and MailHint pass through a server, and the rest is sealed under §11 (§15.5, §15.7, §15.8)"
   protocol/record.proto: "each RecordEntry is a sealed file in its writer's stream (§16.8); the roots above are what a gate reads"
@@ -720,10 +725,36 @@ unset:
   CanonicalAction.restore_preview_id: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
   CanonicalAction.alias_group: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
   CanonicalAction.versioning: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
-  # Answered (QD-799): egress_change's mode, which no GrantActivate or gate carries, its kind taking no server path.
-  CanonicalAction.egress_mode: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
+  # Answered (QD-799): egress_change's mode, which no GrantActivate or gate carries, its kind taking no server path;
+  # CanonicalAction.egress_mode now maps in testdata/approval_compute/metadata_rows.yml, kind 19's create at the broker
+  # showing its mode (DESIGN-COMPUTE §16.3, compute-4).
   # Answered (QD-1060): egress_change's requirement of default egress, under exits alone, on no server path as its mode.
   CanonicalAction.require_default_egress: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
+  # DESIGN-COMPUTE.md's version 5 (CACL-M11-04): only kind 19's and 21's actions reach a server, the broker's, and every
+  # other server path refuses a version-5 action whole (§16.3; CheckCanonicalActionForServer), so these fields, which
+  # kinds 20 and 22 to 26 and kind 5's version 5 set, stay empty on whatever a server reads.
+  CanonicalAction.url: "DESIGN-COMPUTE §16.3: kind 23's, which reaches no server path"
+  CanonicalAction.tool: "DESIGN-COMPUTE §16.3: kind 24's, which reaches no server path"
+  CanonicalAction.send: "DESIGN-COMPUTE §16.3: kind 24's, which reaches no server path"
+  CanonicalAction.context: "DESIGN-COMPUTE §16.3: kind 24's, which reaches no server path"
+  CanonicalAction.taint_reasons: "DESIGN-COMPUTE §16.3: kinds 23, 24 and 26's, which reach no server path"
+  CanonicalAction.took_tainted: "DESIGN-COMPUTE §16.3: kind 5's at version 5, which reaches no server path (QD-799)"
+  CanonicalAction.calendar_label: "DESIGN-COMPUTE §23.9: kind 25's, which no URnetwork server sees"
+  CanonicalAction.calendar_host: "DESIGN-COMPUTE §23.9: kind 25's, which no URnetwork server sees"
+  CanonicalAction.calendar_audience: "DESIGN-COMPUTE §23.9: kind 25's, which no URnetwork server sees"
+  CanonicalAction.calendar_events: "DESIGN-COMPUTE §23.9: kind 25's, which no URnetwork server sees"
+  CanonicalAction.calendar_link: "DESIGN-COMPUTE §23.9: kind 25's, which no URnetwork server sees"
+  CanonicalAction.calendar_target: "DESIGN-COMPUTE §23.9: kind 25's, which no URnetwork server sees"
+  CanonicalAction.calendar_name: "DESIGN-COMPUTE §23.9: kind 25's, which no URnetwork server sees"
+  CanonicalAction.service_call: "DESIGN-COMPUTE §25.10: kind 26's, which no URnetwork server sees"
+  CanonicalAction.auto: "DESIGN-COMPUTE §27.9: kinds 23 to 26's, which reach no server path"
+  CanonicalAction.support: "DESIGN-COMPUTE §28.8: kind 27's, which reaches no server path"
+  EnclaveFields.name: "DESIGN-COMPUTE §16.3: empty on kind 19, the one kind whose enclave a server sees, its name riding sealed in field 38"
+  # A version-2 decision is kind 25's and a version-3 decision channel 4's, and neither reaches a server gate, since
+  # kinds 23 to 26 have none (DESIGN-COMPUTE §23.9, §27.9).
+  ApprovalDecision.selected: "DESIGN-COMPUTE §23.9: version 2's, kind 25's alone, which no server gate takes"
+  ApprovalDecision.auto: "DESIGN-COMPUTE §27.9: version 3's, channel 4's alone, which no server gate takes"
+  ApprovalDecision.auto_verdict: "DESIGN-COMPUTE §27.9: version 3's, channel 4's alone, which no server gate takes"
 
 open:
   EvsUploadReceipt.key_id: {row: evs-4, question: protos-services-metadata-rows.md, until: M2}
@@ -897,15 +928,18 @@ rows:
   ext-14: {planned: M9}
   ext-15: {planned: M9}
   # DESIGN-COMPUTE.md §14.6's rows (CARCH-M11-03), each until its area's first value: the ledger and broker at M12a,
-  # providers, gamma and disputes with M12, web search at M13b, enclaves, the tunnel and collateral at M14
-  compute-1: {planned: M12}
-  compute-2: {planned: M12}
+  # providers, gamma and disputes with M12, web search at M13b, enclaves, the tunnel and collateral at M14. The broker's
+  # key builders (computeservice/engine_redis.go, CSRV-M12-01) back compute-1 ({cmp_}, {cmpd_}, {cmpp_}), compute-2
+  # ({cmpk_}, QD-1367), compute-4 ({cmpe_}), compute-6 ({cmp_}:), compute-9 ({cmpc_}) and compute-10 ({cmpr_}), so those
+  # carry no planned milestone; {cmps}, {cmpa} and {cmpo} hold no underscore, which the static scan reads no tag by, and
+  # computeservice's TestComputeKeyFamiliesHaveRows holds them to compute-10 and compute-11 at run time
   compute-3: {planned: M12}
-  compute-4: {planned: M14}
   compute-5: {planned: M14}
-  compute-6: {planned: M12}
   compute-7: {planned: M12}
   compute-8: {planned: M12}
-  compute-9: {planned: M14}
-  compute-10: {planned: M13}
   compute-11: {planned: M13}
+  # DESIGN-COMPUTE.md §28.15's rows (owner decisions 783, 784): what FB's feedback service, URnetwork's own to build,
+  # holds of the sidecar's support client, each until M13b's support skill posts to it (DESIGN-COMPUTE §28.21)
+  support-1: {planned: M13}
+  support-2: {planned: M13}
+  support-3: {planned: M13}
