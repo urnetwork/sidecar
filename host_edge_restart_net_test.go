@@ -28,7 +28,8 @@
 // pool set Service only once its platform client was open, while the Net already delivered to it: a head that reached
 // it first was refused, which left the listener's sequence dropped until the restarted open had no answer at the edge's
 // 15 s DefaultCallTimeout, in about one run in 6,400, and, from connect ccf9e38a, which hears the sequence again once
-// the client's modes change, until the listener's next copy, one resend of about 0.6 s, in about one run in 1,400.
+// the client's modes change, until the pool set Service or the listener wrote its next copy: the client refused a
+// contract in 12 of 32,000 runs at load 49 to 98, and 3 of them waited one resend of about 0.6 s (2026-11-26).
 // TestEdgeClientPoolRestartedInPlaceTakesItsListenersContractAtOnce holds that window open.
 //
 // The edge's dispatcher reads the Net's clock, as the listener's does, and nothing here moves it: no deadline of a
@@ -67,9 +68,16 @@ type edgeRestartNetSettings struct {
 	// and none of 320 under the race detector, where the build before took it in 45, 86 and, earlier, 6 of 320
 	// (2026-11-24). In about one run in 6,400, with those fixes and without, the restarted open had no answer at the
 	// edge's DefaultCallTimeout, which connect-restart-latency-followups traced to the refused contract the file header
-	// describes. Each pool keeps the edge's own DefaultCallTimeout, 15 s, past this bound: an open hands connect what its
-	// own deadline leaves, which on a clock nothing moves is all of it, and connect holds the open's send that long, in
-	// real time, for the restarted client's session, so only this bound ends a broken run.
+	// describes. Since connect's restart-path changes of 2026-11-25 and the pool's providing Service before its client
+	// can receive, alternating with the build that set Service after the open (2026-11-26): over 19,200 runs at load 49
+	// to 77 it took 2.0 ms at the median and 0.13 s at the 99th percentile, past 0.5 s in none and refusing no contract,
+	// where that build refused one in 7 runs and took past 0.5 s, a resend, in 2; over 6,400 runs at load 68 to 75 with
+	// fewer at once, 13 ms at the 99th percentile, neither refusing; beside 28 CPU burners, 12,800 runs at load 78 to 98,
+	// 0.29 s at the 99th percentile and past 0.5 s in 12 runs, none of them a refusal and none traced, against 9 for that
+	// build, which refused one in 5; and none of 640 under the race detector refused one in either build. Each pool
+	// keeps the edge's own DefaultCallTimeout, 15 s, past this bound: an open hands connect what its own deadline leaves,
+	// which on a clock nothing moves is all of it, and connect holds the open's send that long, in real time, for the
+	// restarted client's session, so only this bound ends a broken run.
 	RecoveryTimeout time.Duration
 	// Each step before the restart.
 	StepTimeout time.Duration
