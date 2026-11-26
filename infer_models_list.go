@@ -1,4 +1,4 @@
-//go:build !ios_extension && !sidecar_http
+//go:build !ios_extension && !sidecar_http && !js
 
 // models_list (DESIGN-COMPUTE §7.5, §6.3; R-INFER-1, D-INFER-7; INFER-M11-09): the Harness tool an agent asks which
 // models it may use, its answer the router's own: every model of the catalog whose canonical names the router's Check
@@ -10,7 +10,8 @@
 // unacknowledged, never put to the person attached to the run (inferCheckWithoutAsking).
 //
 // It is a Harness tool only, on both profiles: §15.2 lists no MCP models_list, and registerMcpTools would serve it to
-// every external session (compute-plan-inference-small-readings, QD-1247). It reads nothing outside the device and
+// every external session (compute-plan-inference-small-readings, QD-1247). Like the files and grep tools, it is not on
+// the js leg, which holds none of the compute labels it gives. It reads nothing outside the device and
 // taints nothing: every name it gives is a canonical name the release manifest or the signed policy carries, since the
 // checks refuse any remote model the policy does not cover; a name that were not would be given only within §6.3's
 // grammar and InferSettings.NameMaxByteCount, between the untrusted-data markers. Safe for concurrent use.

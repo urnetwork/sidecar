@@ -107,18 +107,6 @@ func InferEngineDirectory(local string) string {
 // memory store are not.
 var ErrInferNoModelDirectory = errors.New("this sidecar keeps no files on a disk, so it pulls and loads no local model")
 
-// The instance's state directory on its disk, where the local half keeps its files.
-func (self *Sidecar) inferStateDirectory() (string, error) {
-	if self.instance == nil {
-		return "", ErrInferNoModelDirectory
-	}
-	backend, ok := self.instance.backend.(*osStoreBackend)
-	if !ok {
-		return "", ErrInferNoModelDirectory
-	}
-	return backend.directory, nil
-}
-
 // The name the local half's component registers under: the app's host engine and the pull over the state directory.
 const computeInferLocalComponentName = "infer_local"
 
