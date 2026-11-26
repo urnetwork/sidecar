@@ -72,6 +72,9 @@ type ComputeLedgerSettings struct {
 	ThresholdRetryIntervals []time.Duration
 	// The failures in a row after which threshold turns off and says so: 3.
 	ThresholdFailureMaxCount int
+	// The networks with threshold on that one compute_auto_renew run examines, by its cursor, before it continues where
+	// it stopped: 500. A reading: §14.5 names no figure.
+	AutoRenewBatchCount int
 
 	// §9.11's promotion codes: each lot at most $10; lapsing PromoLapse (30 days) after redemption; one code a
 	// network in PromoNetworkInterval (30 days); after PromoFailureDayMaxCount (5) failed codes in a UTC day, a
@@ -190,6 +193,11 @@ type ComputeLedgerSettings struct {
 	// LowBurnTime (24 h) of it.
 	BurnWindow  time.Duration
 	LowBurnTime time.Duration
+	// compute_suspend's accounts: one run examines at most SuspendBatchCount, by its cursor, before it continues where
+	// it stopped (500), and takes every account not active and every one whose update_time moved in the last
+	// SuspendLookback (10 minutes, past several missed runs of its minute). A reading: §14.5 names no figure.
+	SuspendBatchCount int
+	SuspendLookback   time.Duration
 
 	// §9.11's search cap: at most 200 searches a UTC day for a network until 7 days after its oldest unreversed paid
 	// lot, then 2,000; more only by URnetwork's review (`sidecarctl compute search-cap`).
@@ -285,6 +293,7 @@ func DefaultComputeLedgerSettings() *ComputeLedgerSettings {
 		ThresholdDayMaxCount:       3,
 		ThresholdRetryIntervals:    []time.Duration{1 * time.Hour, 6 * time.Hour},
 		ThresholdFailureMaxCount:   3,
+		AutoRenewBatchCount:        500,
 
 		PromoMaxNanoUsd:                usd(10),
 		PromoLapse:                     30 * day,
@@ -340,11 +349,13 @@ func DefaultComputeLedgerSettings() *ComputeLedgerSettings {
 		AbsorbedPageDayNanoUsd: usd(50),
 		DirectMismatchWindow:   30 * day,
 
-		FloorMaxNanoUsd:  usd(5),
-		FloorEnclaveTime: 1 * time.Hour,
-		GraceMaxAge:      1 * time.Hour,
-		BurnWindow:       24 * time.Hour,
-		LowBurnTime:      24 * time.Hour,
+		FloorMaxNanoUsd:   usd(5),
+		FloorEnclaveTime:  1 * time.Hour,
+		GraceMaxAge:       1 * time.Hour,
+		BurnWindow:        24 * time.Hour,
+		LowBurnTime:       24 * time.Hour,
+		SuspendBatchCount: 500,
+		SuspendLookback:   10 * time.Minute,
 
 		SearchCapNew:         200,
 		SearchCapEstablished: 2_000,

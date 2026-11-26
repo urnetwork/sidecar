@@ -37,7 +37,7 @@ var testComputeLedgerColumnClasses = map[string][]string{
 	"time": {
 		"update_time", "create_time", "expire_time", "reversed_time", "start_time", "end_time", "settle_time",
 		"first_charge_day", "day", "top_up_day", "top_up_month", "next_retry_time", "last_day", "redeem_time",
-		"first_purchase_day", "accept_time",
+		"first_purchase_day", "accept_time", "state_time",
 	},
 	// identifiers, enums, flags and versions
 	"code": {
@@ -73,6 +73,8 @@ type testComputeTable struct {
 var (
 	testCreateTablePattern = regexp.MustCompile(`(?is)^\s*CREATE TABLE (\w+) \((.*?)\)\s*(PARTITION BY RANGE \(\w+\))?\s*$`)
 	testConstraintPattern  = regexp.MustCompile(`(?i)^(PRIMARY KEY|UNIQUE|CONSTRAINT|FOREIGN KEY|CHECK)\b`)
+	// a column a later step adds to a table MG-C1 created, nullable, as BAL-M12-12's state_time
+	testAddColumnPattern = regexp.MustCompile(`(?is)^\s*ALTER TABLE (\w+) ADD COLUMN (\w+) \w+\s*$`)
 )
 
 // The tables MG-C1's steps create, each with its columns.
@@ -95,6 +97,23 @@ func testComputeLedgerTables(t *testing.T) []*testComputeTable {
 			t.Errorf("the step %s creates %s", migration.Id, table.name)
 		}
 		tables = append(tables, table)
+	}
+	// a column a later step adds joins its table, which an earlier step created
+	for _, migration := range ComputeLedgerMigrations() {
+		match := testAddColumnPattern.FindStringSubmatch(migration.Sql)
+		if match == nil {
+			continue
+		}
+		added := false
+		for _, table := range tables {
+			if table.name == match[1] {
+				table.columns = append(table.columns, match[2])
+				added = true
+			}
+		}
+		if !added {
+			t.Errorf("the step %s adds a column to %s, which no earlier step created", migration.Id, match[1])
+		}
 	}
 	return tables
 }

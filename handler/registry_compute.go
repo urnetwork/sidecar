@@ -13,9 +13,6 @@ package handler
 var computeApiRouteUnbuilt = []string{
 	// §9.13's balance, BAL-M12-15
 	"GET /compute/balance",
-	// §9.8's two modes, BAL-M12-11
-	"GET /compute/auto-renew",
-	"POST /compute/auto-renew",
 	// §9.10's and §9.13's reads, BAL-M12-15
 	"GET /compute/charges",
 	"GET /compute/statement",

@@ -5,7 +5,8 @@
 // What each table holds, and the row of §2.8's list each sits under (I-18; sidecartest's schema guard reads them):
 //
 //	compute_account           a network's settled balance, state, floor, first charge day and version (compute-3);
-//	                          with compute-plan-money-schema-gaps' indexer reserve and search-cap override (QD-1252)
+//	                          with compute-plan-money-schema-gaps' indexer reserve and search-cap override (QD-1252),
+//	                          and when it entered its state, which §9.9's grace age reads (BAL-M12-12; a later step)
 //	compute_lot               each credit and what is left of it, unique by (market, market_ref) so a replayed
 //	                          webhook credits once; a Play subscription's reference is its order id, never its
 //	                          purchase token; with a self-serve refund's amount (QD-1252) (compute-2)
@@ -452,6 +453,29 @@ func ComputeLedgerMigrations() []*operator.Migration {
 			Id: "compute_lot_lapse",
 			Sql: `
 				CREATE INDEX compute_lot_lapse ON compute_lot (expire_time) WHERE kind = 3 AND remaining_nano_usd > 0
+			`,
+		},
+		{
+			// §9.9's grace age (BAL-M12-12): when the account entered its state, which compute_suspend sets with each
+			// change it makes, so grace older than the settings' hour suspends; NULL where no change of it set one. A
+			// reading: §9.4's SQL omits it, and compute-3's row names the account and its state (§9.9)
+			Id: "compute_account_state_time",
+			Sql: `
+				ALTER TABLE compute_account ADD COLUMN state_time timestamptz
+			`,
+		},
+		{
+			// compute_suspend's cursor (BAL-M12-12): the accounts whose balance moved lately
+			Id: "compute_account_update",
+			Sql: `
+				CREATE INDEX compute_account_update ON compute_account (update_time)
+			`,
+		},
+		{
+			// compute_suspend's cursor: the accounts neither active nor closed, which it examines every run
+			Id: "compute_account_review",
+			Sql: `
+				CREATE INDEX compute_account_review ON compute_account (network_id) WHERE state <> 1 AND state <> 5
 			`,
 		},
 	}

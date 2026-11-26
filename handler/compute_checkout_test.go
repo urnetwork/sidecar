@@ -3,9 +3,10 @@ package handler
 // POST /compute/checkout through the frame (BAL-M12-08; DESIGN-COMPUTE §9.5, §9.10, §9.11, §14.3): registered;
 // refused to an agent's or MCP's token, a tagged sidecar, an enclave, a Delegation's device and a member without
 // compute:buy before the ledger or Stripe is asked; a body that is not the device's ComputeCheckoutArgs refused 400; a
-// pack §9.5 does not sell refused 400; the monthly plan and threshold's card answering not_built until auto-renew
-// registers them; a host without Stripe or a payer key refused 503; and sales closed until a service can spend credit,
-// with no session made. A checkout that opens runs on the private stack (server/computet3).
+// pack §9.5 does not sell refused 400; the monthly plan refused 503 on a host whose Stripe for auto-renew is not
+// registered, and threshold's card taken by auto-renew (BAL-M12-11), so its checkout meets the sales check as a pack's
+// does; a host without Stripe or a payer key refused 503; and sales closed until a service can spend credit, with no
+// session made. A checkout that opens runs on the private stack (server/computet3).
 
 import (
 	"context"
@@ -105,8 +106,9 @@ func TestComputeCheckoutClosedUntilSalesOpen(t *testing.T) {
 }
 
 // A body that is not the device's ComputeCheckoutArgs, a pack §9.5 does not sell, settings of a mode not turned on and
-// a monthly plan beside a pack are refused 400; the monthly plan and threshold's saved card answer not_built until
-// auto-renew registers them; none reaches Stripe.
+// a monthly plan beside a pack are refused 400; the monthly plan answers 503 where the host holds no Stripe for
+// auto-renew, and a pack with threshold on meets the sales check, auto-renew taking its card (BAL-M12-11); none
+// reaches Stripe.
 func TestComputeCheckoutRefusesBadRequestsAndUnbuiltModes(t *testing.T) {
 	stripe := &testCheckoutStripe{}
 	route := testCheckoutRoute(t, stripe)
@@ -127,12 +129,15 @@ func TestComputeCheckoutRefusesBadRequestsAndUnbuiltModes(t *testing.T) {
 			t.Errorf("%s: %d %s", body, answer.Status, code)
 		}
 	}
-	for _, body := range []string{
-		`{"auto_renew":"monthly","monthly_credits":25}`,
-		`{"pack_credits":25,"auto_renew":"threshold"}`,
+	for body, want := range map[string]struct {
+		status int
+		code   string
+	}{
+		`{"auto_renew":"monthly","monthly_credits":25}`: {http.StatusServiceUnavailable, ComputeApiRefusalUnavailable},
+		`{"pack_credits":25,"auto_renew":"threshold"}`:   {http.StatusConflict, string(controller.ComputeCheckoutRefusalSalesClosed)},
 	} {
 		answer := route.Serve(context.Background(), owner, nil, []byte(body))
-		if code, _ := testComputeApiCode(t, answer); answer.Status != http.StatusNotImplemented || code != ComputeApiRefusalNotBuilt {
+		if code, _ := testComputeApiCode(t, answer); answer.Status != want.status || code != want.code {
 			t.Errorf("%s: %d %s", body, answer.Status, code)
 		}
 	}

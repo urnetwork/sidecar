@@ -220,7 +220,6 @@ func ComputeJobDesign(settings *ComputeJobSettings) []*ComputeJob {
 // The design jobs whose areas have not registered their logic. An area removes its job in the change that registers
 // it.
 var computeJobUnbuilt = []string{
-	ComputeJobAutoRenew,
 	ComputeJobEnclaveMeter,
 	ComputeJobCanary,
 	ComputeJobGammaMint,
@@ -231,7 +230,6 @@ var computeJobUnbuilt = []string{
 	ComputeJobSearchPurge,
 	ComputeJobDirectSettle,
 	ComputeJobSearchOutcomes,
-	ComputeJobSuspend,
 }
 
 // The design jobs listed unbuilt, a copy.

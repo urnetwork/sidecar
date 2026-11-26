@@ -271,6 +271,8 @@ func ComputeCreditLot(env operator.Env, ctx context.Context, settings *model.Com
 	}
 	if answer.Credited {
 		answer.Projected = computeProjectionRefresh(env, ctx, settings, request.NetworkId, now, false)
+		// a balance lifted above zero returns the account to active or low at once (§9.9; BAL-M12-12)
+		computeStateReview(env, ctx, settings, request.NetworkId)
 	}
 	return answer, nil
 }
@@ -351,8 +353,10 @@ func ComputeReverseLot(env operator.Env, ctx context.Context, settings *model.Co
 	}
 	now := clock.Now()
 	var answer *ComputeReverseAnswer
+	stateBefore := model.ComputeAccountState(0)
 	err = db.Tx(ctx, func(tx operator.DbTx) error {
 		answer = &ComputeReverseAnswer{}
+		stateBefore = 0
 		// the network first, unlocked, so the fence is taken before any row lock, as a booking takes them
 		found, err := model.ComputeLotByMarketRefInTx(env, ctx, tx, request.Market, request.MarketRef, false)
 		if err != nil || found == nil {
@@ -369,9 +373,11 @@ func ComputeReverseLot(env operator.Env, ctx context.Context, settings *model.Co
 		if lot.ReversedTime != nil {
 			return nil
 		}
-		if _, err := model.ComputeAccountForUpdateInTx(env, ctx, tx, lot.NetworkId, now); err != nil {
+		before, err := model.ComputeAccountForUpdateInTx(env, ctx, tx, lot.NetworkId, now)
+		if err != nil {
 			return err
 		}
+		stateBefore = before.State
 		removed := lot.RemainingNanoUsd
 		owed := lot.AmountNanoUsd - lot.RemainingNanoUsd
 		if lot.LapsedNanoUsd != nil {
@@ -406,6 +412,10 @@ func ComputeReverseLot(env operator.Env, ctx context.Context, settings *model.Co
 		if err != nil {
 			return err
 		}
+		// a chargeback's suspension owes its notice as compute_suspend's changes do (BAL-M12-12)
+		if err := computeChargebackSuspendedInTx(env, ctx, tx, before, account); err != nil {
+			return err
+		}
 		sources, err := model.ComputeOverrunLotsInTx(env, ctx, tx, lot.NetworkId, nil)
 		if err != nil {
 			return err
@@ -425,6 +435,10 @@ func ComputeReverseLot(env operator.Env, ctx context.Context, settings *model.Co
 	}
 	if answer.Reversed {
 		answer.Projected = computeProjectionRefresh(env, ctx, settings, answer.Lot.NetworkId, now, true)
+		// a chargeback's suspension stops the enclaves and hints the devices, and the balance a reversal leaves moves
+		// the state at once (§9.9; BAL-M12-12)
+		computeStateEffects(env, ctx, answer.Lot.NetworkId, stateBefore, answer.Account.State)
+		computeStateReview(env, ctx, settings, answer.Lot.NetworkId)
 	}
 	return answer, nil
 }
