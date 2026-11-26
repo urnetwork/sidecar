@@ -1621,3 +1621,21 @@ The owner answered one more question the build raised, QD-1420, on 2026-11-25 wh
 - **Superseded options.** 320 grep hits, none on a changed line unread, none live.
 - **Text.** No bare placeholders or HTML tags; the one research-sheet id stands; 12,866 section references, with the one unresolved as before. `v7/words.json` was regenerated, and `v7/text_checks.json` regenerated unchanged.
 - **DESIGN-DEFER.md.** 106 entries and 172 pointers, unchanged: 796 defers nothing.
+
+## Validation after the fourteenth fold: the answers since the thirteenth fold, and what was built (2026-11-26)
+
+The design-records track dr22-late-fold (lane slot mail, wave f48m) brings the design up to what was decided or built after the thirteenth fold (sidecar 0d9b970d to e9287531): the owner's answers recorded since, QD-1421 to QD-1426, and the builds of owner decisions 789 and 790, which the twelfth and thirteenth folds stated ahead of their code. DESIGN-UI.md's changes to this design wait for the DESIGN-UI phase (owner, 2026-11-26: "The implementation needs to start working on DESIGN-UI.md after DESIGN-COMPUTE.md"), so none is folded here. It lands in pieces, each a commit of its own, recorded below as each lands.
+
+### What was built since the thirteenth fold
+
+- **The bridge's clock (789), built.** bridge-wall-clock-wake landed (sidecar 0d6e6227, 1522911f, ef1c7b2a; sdk b07f4eb7): §17.8's paragraph says what it built where it said decided ahead of its code, `ClockCheckInterval` 30 s in `DefaultBridgeSettings` and 0 in `MobileBridgeSettings`, which iOS's and Android's bridges take, the link manager's wait capped and checked too and a link's age counted on the wall clock, ur daemon's resume watch on logind and powrprof with the cap alone covering macOS, and the sdk's `DeviceLocal.CheckClock`, `urnet_device_local_check_clock` in the C ABI, the apps' calls to it coming with the app phase; owner decision 789's entry says it is built.
+- **The file clusters' floor and checks (790), built.** file-cluster-probes-and-floor landed (server ef7a76d86, 3520dbc18; sidecar f8d87bad): §11.15's fan-out paragraph drops its two statements ahead of the code, saying the floor took `DeadlineClockMargin`'s place and that the clusters choose a request's client by what it is, so a write stays capped whatever its ctx says; §19.4's evs row already stated the checks outside the cap as fact; owner decision 790's entry says it is built.
+- **The user root's release check (791), corrected.** §18.9's embedded table paragraph and owner decision 791's entry said sidecarctl's release preflight could compare the table's `user_root` with dns.yml's root; the check is `bringyourctl release-preflight`'s last (release-preflight-user-root, server c1d864d10), on a command that predates this build and so stays in bringyourctl under §4.5's operations commands row, and both now name it and say what it refuses.
+
+`build.sh` on this folder reproduces DESIGN.md (SHA-256 `df51443e994779450512ed79583e7342d0d972ad6d30cc020d6d20c95356a159`) and DESIGN-DEFER.md (SHA-256 `3af6b10c35e06eaa2230e6232dc953d77f4539fe4065623950425ebab41895a6`, unchanged), and the validation shows:
+
+- **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item and no §2.8 row, so no guard line.
+- **Owner decisions.** All 796 rows are present and cited; APPLY.md's section pairs hold. One open owner question, Q-REPO-6.
+- **Superseded options.** 320 grep hits, none on a changed line unread, none live.
+- **Text.** No bare placeholders or HTML tags; the one research-sheet id stands; 12,867 section references, with the one unresolved as before. `v7/words.json` was regenerated, and `v7/text_checks.json` regenerated unchanged.
+- **DESIGN-DEFER.md.** 106 entries and 172 pointers, unchanged.
