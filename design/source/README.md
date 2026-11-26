@@ -1695,3 +1695,22 @@ The owner answered two more questions the build raised on 2026-11-26, after the 
 - **Superseded options.** 320 grep hits, none on a changed line unread, none live.
 - **Text.** No bare placeholders or HTML tags; the one research-sheet id stands; 12,895 section references, with the one unresolved as before. `v7/words.json` was regenerated, and `v7/text_checks.json` regenerated unchanged.
 - **DESIGN-DEFER.md.** 106 entries and 172 pointers, unchanged.
+
+## Validation after the fifteenth fold: what was built since the fourteenth, and the support push topic (2026-11-26)
+
+The design-records track dr23-late-fold (lane slot ops, wave f47c) brings the design up to what was decided or built after the fourteenth fold (sidecar 8a0cc601 to 1f50e19e): owner decision 803, which that fold stated ahead of its code and sdk-sidecar-check-clock has built (sdk 2be48a93); three fix tracks that owner decisions' entries still named as building what they built on 2026-11-23; and the owner's answer recorded after it, QD-1431, with the support push topic that support-push-topic built beside it (sidecar 881b7eef, cb0b7302, 56fe3730; sdk 90d90d06). DESIGN-UI.md's changes to this design wait for the DESIGN-UI phase (owner, 2026-11-26: "The implementation needs to start working on DESIGN-UI.md after DESIGN-COMPUTE.md"), so none is folded here. It lands in pieces, each a commit of its own, recorded below as each lands.
+
+### What was built since the fourteenth fold
+
+- **An app's sidecar role's clock (803), built.** sdk-sidecar-check-clock landed (sdk 2be48a93): §17.8's paragraph and §13.17's v0 paragraph say it is built where they said decided ahead of its code, the call returning at once from any thread and doing nothing on the remote backend or once the `Sidecar` has closed, gomobile binding it as `checkClock()` and the C ABI's header and five language bindings carrying `urnet_sidecar_check_clock`; owner decision 803's entry says the same, and §18.5's sketch already gave the method.
+- **Fix tracks the entries still named (698, 707, 714).** Three fix tracks the sixth late fold named landed on 2026-11-23, the first of them recorded under owner decision 719 by the seventh, but these decisions' entries still said each would build its part: bridge-block-resign-carry (sidecar 4c5d5a1d, d34b2f8c, 29218456), the revocation flow's save and the re-sign of the record a network's readers hold (698); evs-subscribe-pin-wait-isolation (sidecar fe25ae65, b67b514e, 006b2ccd), a subscription's round holding only the ref whose statement waits, one waiter a subscriber (707), which §11.9's judged row now states; and dns-suspend-copy-rows (server 2b27fec01, 984213069), the suspensions, restores and challenges' expiry planning their copies (714), which §12.7's copy rows already state as every writer's. Each entry now says it is built.
+- **Each instance's engine and model files (QD-1430), built** by infer-m11-05 (sidecar b1d8c1b1, a7434126; build 97b1bbe, the entitlement): DESIGN-COMPUTE-AMENDMENTS.md's entry and lead say so, and nothing here changes.
+- **Still ahead of their code.** Owner decision 797's egress windows (fetch-m13-01, not started) keep their line, and 801's fix track clock-wait-at-sweep, which moves the other sites that wait for a time, has not started.
+
+`build.sh` on this folder reproduces DESIGN.md (SHA-256 `4f704af7e8c212667315c803707441e17ba90c7188076c2389727a2ce8a73b51`) and DESIGN-DEFER.md (SHA-256 `3af6b10c35e06eaa2230e6232dc953d77f4539fe4065623950425ebab41895a6`, unchanged), and the validation shows:
+
+- **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item and no §2.8 row, so no guard line.
+- **Owner decisions.** All 805 rows are present and cited; APPLY.md's section pairs hold. One open owner question, Q-REPO-6.
+- **Superseded options.** 320 grep hits, none live, and none on a line this piece changed; three on lines earlier folds changed have no reading carried to their new text, which the next piece gives them.
+- **Text.** No bare placeholders or HTML tags; the one research-sheet id stands; 12,895 section references, with the one unresolved as before. `v7/words.json` was regenerated, and `v7/text_checks.json` regenerated unchanged.
+- **DESIGN-DEFER.md.** 106 entries and 172 pointers, unchanged.
