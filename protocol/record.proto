@@ -56,6 +56,14 @@
 // a/<approval_id>, shaped as §16.11's DirectoryNotice (compute-plan-approval-notice-bytes, QD-1234). Each travels only
 // sealed, inside an entry or a vault file, so none adds a server-visible field (§24.11), and design_unfenced_test.go
 // writes what no fence does yet: body_apart, bodies_dropped, SeqRange and ApprovalNotice.
+//
+// DESIGN-COMPUTE.md §11.12's and §12.7's record formats (CTXH-M11-08; CONTRACTS C-26; compute-plan-enc-readings,
+// QD-1243, readings 2 and 3): EnclaveEntryBody, kind 57 enclave's body, one event of an enclave's life in its sponsor's
+// vault, naming no secret and no key; and the SSH session receipt, ReachReceipt kind 7 ssh with fields 12 to 16, the
+// login user, the session's open and close and the bytes each way, which a receipt coalesced per grant and peer cannot
+// hold. ENC-M14-08 and SSH-M14-02 write them with no format change of their own. Each travels only sealed inside an
+// entry, so neither adds a server-visible field, and design_unfenced_test.go writes both until a design-records fold
+// fences them.
 
 syntax = "proto3";
 package urnetwork.sidecar;
@@ -375,6 +383,12 @@ message ReachReceipt {                      // coalesced per (grant, peer) per 5
   repeated string relays = 10;              // host, IP and operator of each relay or edge in the path
   string server_name = 11;                  // the name the visitor asked for, the TLS SNI, which only the TLS
                                             // front's publish receipts set (§13.7; QD-850); never a relay
+  // kind 7 ssh alone, one receipt a session, never coalesced (DESIGN-COMPUTE §12.7; compute-plan-enc-readings (3)):
+  // the enclave's sidecar the owner, the client sidecar its one peer, and these
+  string ssh_user = 12;                     // the login user, agent or root (§12.5)
+  int64 opened_millis = 13; int64 closed_millis = 14;  // the session's open and close; 0 while open
+  uint64 client_byte_count = 15;            // bytes from the client to the enclave
+  uint64 server_byte_count = 16;            // bytes from the enclave to the client
 }
 message Coverage {                          // at run end, or after 10 min idle without SessionEnd
   bytes run_id = 1; string harness = 2; string version = 3; repeated string sources = 4;
@@ -760,6 +774,25 @@ message ApprovalNotice {
   int64 not_after_millis = 4;               // the request's own not_after_millis
   uint32 state = 5;                         // 1 pending, 2 decided; a cancel removes the notice
   uint32 kind = 6;                          // the request's CanonicalAction.kind, a SidecarActionKind
+}
+
+// DESIGN-COMPUTE.md §11.12: one event of an enclave's life (M14), kind 57 enclave, written into its sponsor's vault by
+// the device that runs the step (ENC-M14-08) or the enclave itself (compute-plan-enc-readings (2)). It names no
+// secret and no key: no provisioning secret, auth key, seed, token, link secret or private key ever enters it.
+message EnclaveEntryBody {                  // enclave (M14)
+  bytes enclave_id = 1;                     // 16 bytes
+  uint64 incarnation = 2;                   // the incarnation the event is of; 0 for an event of the enclave alone
+  uint32 event = 3;                         // 1 create, 2 running, 3 stop, 4 start, 5 move, 6 lost, 7 remove,
+                                            // 8 egress (§11.11's rows; §11.12's egress changes)
+  uint32 cause = 4;                         // 1 person, 2 run, 3 balance, 4 loss, 5 keeper, 6 age (§11.11); 0 none
+  bytes cause_run_id = 5;                   // cause 2: the run whose act it was, 16 bytes
+  bool cause_run_tainted = 6;               // cause 2: that run's taint at the act
+  bytes sidecar_id = 7;                     // the incarnation's sidecar, its admission's id
+  uint32 role = 8;                          // 1 agents, 2 indexer (§11.10)
+  string provider = 9;                      // the provider's code in the catalog, <= 64 B
+  AttestationResult attestation = 10;       // event 2: the incarnation's verified attestation (§5.8)
+  string egress = 11;                       // event 8: the egress mode now, <= 32 B (§11.8)
+  bytes approval_id = 12;                   // kind 19's or kind 22's approval behind a create or a removal
 }
 
 // RECORD.md section 13.1: run cost (M6).
