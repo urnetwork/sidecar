@@ -19,8 +19,8 @@
 //   - the sequence certificate's Ed25519 key, and the certificate itself on a fixed template whose serial comes from
 //     the seed: Ed25519 signs deterministically, so the certificate's bytes are the same at every start, and a
 //     contract's commitment to them still matches (EncryptionSettings.ProvideTlsCertificatePem and ...PrivateKeyPem);
-//   - the Service provide secret key, which the platform loads before the client can receive
-//     (SidecarPlatformClientArgs.ProvideSecretKeys), so a contract signed for the earlier process verifies from the
+//   - the Service provide secret key, which the platform loads, and provides Service under, before the client can
+//     receive (SidecarPlatformClientArgs.ApplyProvide), so a contract signed for the earlier process verifies from the
 //     first frame.
 //
 // The seed and the keys derived from it are secrets: they stay in the process, reach the test hooks' privacy harness
