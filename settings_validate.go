@@ -46,6 +46,10 @@ func (self *SidecarSettings) validate() error {
 	if !isSidecarInstanceName(self.Instance) {
 		return fmt.Errorf("%w: Instance is not [a-z0-9][a-z0-9-]{0,31}", errInvalidSettings)
 	}
+	// empty is a host that names no user root, which resolves no <net> by name
+	if self.UserRoot != "" && !isNetworkLabelRoot(self.UserRoot) {
+		return fmt.Errorf("%w: UserRoot is not a domain name of lowercase labels with no trailing dot", errInvalidSettings)
+	}
 	if self.Connect == nil {
 		return fmt.Errorf("%w: Connect is nil", errInvalidSettings)
 	}
@@ -85,6 +89,23 @@ func checkServiceUrl(name string, serviceUrl string, schemes ...string) error {
 		return fmt.Errorf("%w: %s is not an absolute url with no trailing slash, query or fragment", errInvalidSettings, name)
 	}
 	return nil
+}
+
+// Whether root is §12.4's user root as UserRoot names it, §18.9's host table carries it (QD-1407) and NetworkLabelRow
+// keeps it: a name of lowercase LDH labels, two or more, with no trailing dot. Here, on every leg, since validate holds
+// UserRoot to it on each, though only a host that resolves a <net> by name reads a root (dns_resolve.go,
+// daemon_labels.go, dns_label_refresh.go).
+func isNetworkLabelRoot(root string) bool {
+	labels := strings.Split(root, ".")
+	if len(labels) < 2 {
+		return false
+	}
+	for _, label := range labels {
+		if !isDnsLowerLdhLabel(label) {
+			return false
+		}
+	}
+	return true
 }
 
 // Walks a settings value, refusing a nil settings struct and a number that is not positive. name

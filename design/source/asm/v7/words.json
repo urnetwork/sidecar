@@ -2,20 +2,20 @@
  {
   "num": 1,
   "code": "CTX",
-  "words": 4537,
+  "words": 4686,
   "code_words": 52,
   "ceiling": 2200,
-  "over": 2337,
-  "over_pct": 106.2
+  "over": 2486,
+  "over_pct": 113.0
  },
  {
   "num": 2,
   "code": "TRUST",
-  "words": 10697,
-  "code_words": 24493,
+  "words": 11152,
+  "code_words": 24677,
   "ceiling": 3000,
-  "over": 7697,
-  "over_pct": 256.6
+  "over": 8152,
+  "over_pct": 271.7
  },
  {
   "num": 3,
@@ -29,20 +29,20 @@
  {
   "num": 4,
   "code": "REPO",
-  "words": 9842,
-  "code_words": 2314,
+  "words": 10063,
+  "code_words": 2367,
   "ceiling": 2800,
-  "over": 7042,
-  "over_pct": 251.5
+  "over": 7263,
+  "over_pct": 259.4
  },
  {
   "num": 5,
   "code": "CORE",
-  "words": 11234,
+  "words": 11246,
   "code_words": 8694,
   "ceiling": 3500,
-  "over": 7734,
-  "over_pct": 221.0
+  "over": 7746,
+  "over_pct": 221.3
  },
  {
   "num": 6,
@@ -56,11 +56,11 @@
  {
   "num": 7,
   "code": "TEAM",
-  "words": 15034,
-  "code_words": 15578,
+  "words": 15066,
+  "code_words": 15594,
   "ceiling": 3500,
-  "over": 11534,
-  "over_pct": 329.5
+  "over": 11566,
+  "over_pct": 330.5
  },
  {
   "num": 8,
@@ -137,11 +137,11 @@
  {
   "num": 16,
   "code": "MCP",
-  "words": 17033,
-  "code_words": 23665,
+  "words": 17100,
+  "code_words": 23800,
   "ceiling": 3500,
-  "over": 13533,
-  "over_pct": 386.7
+  "over": 13600,
+  "over_pct": 388.6
  },
  {
   "num": 17,
@@ -155,11 +155,11 @@
  {
   "num": 18,
   "code": "SDK",
-  "words": 10881,
-  "code_words": 11870,
+  "words": 11460,
+  "code_words": 12451,
   "ceiling": 3000,
-  "over": 7881,
-  "over_pct": 262.7
+  "over": 8460,
+  "over_pct": 282.0
  },
  {
   "num": 19,
@@ -200,10 +200,10 @@
  {
   "num": 23,
   "code": "PHASE",
-  "words": 7970,
+  "words": 8031,
   "code_words": 1185,
   "ceiling": 2500,
-  "over": 5470,
-  "over_pct": 218.8
+  "over": 5531,
+  "over_pct": 221.2
  }
 ]

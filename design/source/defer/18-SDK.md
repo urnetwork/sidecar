@@ -1,12 +1,12 @@
 ### sdk-extension-worker: The extension's own Worker
 Stage: Later
-- **Deferred:** The browser extension running the sidecar itself as a web worker, with its streams (owner decision 26; R-CTX-5, R-ARCH-4; §5.17, §18.4, §18.8, §18.17, §22.17, §23.4). §22's rows for it wait with it.
-- **Why:** Owner decision 26: HTTPS-only first, and connect streams follow C4. The extension's Worker also waits on §18.10's size spike and C17.
-- **Launch instead:** The extension uses a desktop `ur daemon` over native messaging, `ur native-host`, where one exists; without one it is alarms-only. ur.io pages use the read-only page Worker.
+- **Deferred:** The browser extension running the sidecar itself as a web worker, with its streams over §4.6's C4 and the platform's admission of the extensions' ids and scheme, and socket dials from a browser (owner decision 26; R-CTX-5, R-ARCH-4; §4.6, §5.17, §18.4, §18.8, §18.17, §22.17, §23.4). C4 itself comes forward to M13a for ur.io's page Worker alone (owner decision 794). §22's rows for it wait with it.
+- **Why:** Owner decision 26: HTTPS-only first, and connect streams follow C4, which owner decision 794 brings forward to M13a for ur.io's page Worker alone. The extension's Worker also waits on §18.10's size spike and C17.
+- **Launch instead:** The extension uses a desktop `ur daemon` over native messaging, `ur native-host`, where one exists; without one it is alarms-only. ur.io pages use the page Worker, read-only until M13a and a full member device from then (owner decision 794).
 - **Lost:** An extension with no desktop daemon beside it has no sidecar: no vault, no approvals of its own, and `PreviewRevokeDevice` and `RevokeDevice` answer `REVOKE_NOT_CAPABLE`.
 - **Dark in code:** On js, `NewSidecarLocal` answers unsupported and `NewSidecarRemote` runs over a host-supplied `ur native-host` port (sdk/sidecar.go, sdk/sidecar_types_js.go). `ur native-host` relays no call that §5.8 signs only on confirmation.
 - **Held:** Nothing: no task or track waits on it.
-- **To bring back:** C4, and C17 if the spike asks for it; a Worker main within `sidecar.wasm`'s size gate; the rule that the Worker accepts only its own extension pages' ports; and §22's extension rows.
+- **To bring back:** C4's admission of the extensions' ids and scheme, C4 being on connect's `sidecar` branch from M13a, and C17 if the spike asks for it; a Worker main within `sidecar.wasm`'s size gate; the rule that the Worker accepts only its own extension pages' ports; and §22's extension rows.
 
 ### sdk-firefox-session-mode: Firefox session mode
 Stage: Later

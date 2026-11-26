@@ -1,5 +1,6 @@
 {
   "version": 1,
+  "user_root": "ur.network",
   "hosts": [
     {
       "host": "api.bringyour.com",

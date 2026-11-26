@@ -1,22 +1,12 @@
-### repo-c4-browser-carrier: C4, the browser WebSocket carrier
-Stage: Later
-- **Deferred:** C4 of §4.6's connect changes: a `GOOS=js` WebSocket H1 carrier with in-band auth and an Origin allowlist (owner decisions 22 and 26; §18.8). With it wait browser streams, socket dials from a browser (§18.4), HeadCheck replies from `read_only` page Workers (§7.9, §18.8; QD-227) and the extension's own Worker.
-- **Why:** Owner decision 26 runs the browser HTTPS-only first, and connect streams follow C4. The page Worker needs no connect client for what it serves at RS1 and RS2.
-- **Launch instead:** The page Worker runs on the `sidecar_http` leg, HTTPS-only, over §6's long-poll (§18.8, §18.10). Where a desktop `ur daemon` exists, the extension uses it through `ur native-host`.
-- **Lost:** No stream or socket dial from a browser. A page Worker runs no HeadCheck, so a page's view is unwitnessed and shows no `witnessed_at` (§7.9's read_only row).
-- **Dark in code:** Nothing is built. `make check`'s X9 rule holds C4 as `later` and fails when a js carrier over a browser WebSocket appears in connect (sidecar/check/x9_test.go).
-- **Held:** Nothing: no task or track waits on it.
-- **To bring back:** C4 on connect's `sidecar` branch, templated on sdk/device_rpc_platform_js.go; the server admits `chrome-extension://` ids, the `moz-extension:` scheme and the key origin; the X9 row moves to a milestone. Then HeadCheck for read_only Workers and the extension's Worker follow.
-
 ### repo-c17-js-connect-build: C17, a js connect build without gVisor
 Stage: Later, decided after §18's spike
 - **Deferred:** C17 of §4.6: a `js` connect build without gVisor or the IP stack, for the extension's streaming Worker only (owner decision 22; Q-REPO-2's residual; Q-SDK-1; D-SDK-19).
-- **Why:** A connect-only js/wasm main imports 42 gVisor packages, which puts `sidecar.wasm`'s size goal out of reach. The page Worker no longer needs C17, since it links no connect client, so only the extension's streaming Worker would, and that Worker waits on C4.
-- **Launch instead:** The page Worker is built `-tags sidecar_http` and links no connect client, engine or IP stack (§18.10).
-- **Lost:** Nothing beyond what C4's entry lists.
+- **Why:** A connect-only js/wasm main imports 42 gVisor packages, which puts `sidecar.wasm`'s size goal out of reach. The page Worker needs no C17: until M13a it links no connect client, and from M13a ur.io's links the full one on the `sidecar_page` leg, since its tools' egress needs the IP stack C17 leaves out (owner decision 794), so only the extension's streaming Worker would, and that Worker is Later.
+- **Launch instead:** The page Worker is built `-tags sidecar_http` and links no connect client, engine or IP stack, and from M13a ur.io's is built `-tags sidecar_page` with the full connect client over C4 (§18.10).
+- **Lost:** Nothing beyond what the extension's Worker's entry lists.
 - **Dark in code:** Nothing is built. `make check`'s X9 rule fails when connect gains a gVisor-free js build that §4.6 has not decided (sidecar/check/x9_test.go).
 - **Held:** Nothing: no task or track waits on it.
-- **To bring back:** §18.10's size spike gives the figures; the owner decides C17 on them; the change then lands in connect with C4.
+- **To bring back:** §18.10's size spike gives the figures; the owner decides C17 on them; the change then lands in connect, where C4 is from M13a.
 
 ### repo-c7-logical-lanes: C7, caller lane keys and logical lanes
 Stage: Later

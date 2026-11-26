@@ -7,7 +7,7 @@
 | Path | What it is |
 |---|---|
 | `sections/01-CTX.md` … `sections/23-PHASE.md` | DESIGN.md §1-§23, one file per section. The build copies them verbatim, adding only links. |
-| `owner/DECISIONS.md` | The owner's record, entries 1-792. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
+| `owner/DECISIONS.md` | The owner's record, entries 1-795. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
 | `owner/APPLY.md` | The rules for applying the owner's decisions: precedence (§1), supersession, where two decisions disagree (§2), notation (§3), editing rules (§4), and the follow-up decisions 112-136 with the sections each binds (§6-§8). |
 | `CONVENTIONS.md` | The writing conventions every section follows: the owner directive (§0), the owner rules (§1), the section template (§2) and the X registry (§7), which DESIGN.md's X1-X20 table replaced. |
 | `OUTLINE.md` | The original outline: section codes, scope boundaries, and the word budgets that G0's density rule replaced on 2026-11-04. |
@@ -44,7 +44,7 @@ It needs only `python3`; it was built and checked with Python 3.13. The steps, a
 
 The data files are layered. Each `data_*N.py` loads its predecessor with `runpy` and patches it: `data_front10.py` loads `data_front9.py`, back to `data_front3.py`, and the registers, glossary and appendices go the same way. Change the top layer (the `*10` files), or add an `*11` layer that loads them. Comments in the scripts cite working files from the design sessions (the reconcilers' orders, `peer/`, `review/`, `snap/`), which were not imported; they are history.
 
-## Adding owner decision N (793 onward)
+## Adding owner decision N (796 onward)
 
 1. Add entry N to `owner/DECISIONS.md`: the question, the answer, its cost, the options not taken, and what raised it.
 2. In `asm/data_front10.py`, append `(N, "<what it settles>", "<one line>")` to `INDEX`, add `DATES[N]`, and raise the `assert` to `list(range(1, N + 1))`. Update `STATUS` and `DECISIONS_INTRO` where they name a range. `@@OD:k@@` writes a link to decision k.
@@ -1547,3 +1547,46 @@ The answers to the questions the build raised after the twelfth fold that are no
 - **Superseded options.** 320 grep hits, none on a changed line unread, none live.
 - **Text.** No bare placeholders or HTML tags; the one research-sheet id stands; 12,816 section references, with the one unresolved as before. `v7/words.json` was regenerated, and `v7/text_checks.json` regenerated with its one id's line moved.
 - **DESIGN-DEFER.md.** 107 entries and 175 pointers, unchanged: none of the three defers anything.
+
+### Owner decisions 793 to 795: CO-47 to CO-49, ur.io's local models, ur.io as the apps and model downloads
+
+On 2026-11-25 the owner added local models for ur.io's pages to DESIGN-COMPUTE.md, CO-47, then answered its owner questions one at a time, CO-48, and asked that model files download from the api in checked chunks, CO-49 (63bc7063, e85a3718, merged into sidecar as 3425c340). The fold enters them as owner decisions 793 to 795, after the build's answers, and carries what DESIGN-COMPUTE.md's Appendix D and Appendix H change in this design, the compute planner's CA-98 to CA-105 (.stack/plan/COMPUTE-AMENDMENTS.md), with the compute plan's answers that ride with them, QD-1409 to QD-1412:
+
+- **The owner's record (CA-98).** Entries 793 (CO-47), 794 (CO-48) and 795 (CO-49), each with its statement verbatim, the questions named by topic and never by DESIGN-COMPUTE.md's ids. Entries 22 and 26, whose C4 comes forward to M13a for ur.io's page Worker, 704, which no longer binds it, 737, beside whose enclaves the person's own devices answer attach from M14, and 776, two of whose answers change, take a bullet naming 794, and their index rows note it. What CO-48 withdrew from CO-47, the member's own devices serving the browser's model calls with their message ids, the read-only web profile, Hugging Face downloads in the browser and the change to §6.3's labels, enters nowhere.
+- **The key origin (CA-99).** §18.8's diagram, phasing bullet and key origin block: from M13a the key origin also serves the web engine's scripts, adapter and WASM builds and ONNX Runtime Web's under `/v1/engine/<version>/` in the signed sums, the loader pinning each WASM build's SHA-256; an engine row gives the keyless engine Worker, its own CSP, whose connect-src is the key origin and `https://api.bringyour.com` alone, and its Web Lock; the key origin's CSP names the broker's host and C4's beside §18.9's hosts for the page Worker's Harness and tools, as the planner's note on CA-99 asks (HARN-M13-04 builds it); and the storage row the `ur-models` bucket.
+- **The two findings (CA-100; QD-1411, QD-1412).** §18.8's storage row says Chromium never persists the framed key origin's storage, the frame still calling persist() and a browser device shown as one whose keys its browser may clear; its admission row gives the re-enrollment, the revocation from any member device and the k-of-n seat an evicted device keeps until revoked; a process row gives the same-site renderer finding, and the pages row the pages' own CSP with no third-party script. §2.8's EX7 widens from reading to acting as the member, §2.10 takes two rows, the served code with the member's authority and the renderer exploit, and §2.18 one, the eviction, as DESIGN-COMPUTE.md's Appendix I has them.
+- **The admission (CA-101).** §18.8's identity bullet, §16.6's `approval_capable` and its host table, §18.4's approvals row in its browser column, §7.9's read_only row and D-TEAM-24, D-SDK-6, I-16 and §16.11's console: from M13a ur.io's page Worker is a full member device, approval-capable and a config signer, counting toward k of n and writing and depositing where the apps do, approvals and admissions reaching it while a page is open, and owner decision 704 no longer binds it. Q-CTX-2 and Q-TRUST-4 take an "Amended by owner 2026-11-25" clause, `v10/qstatus_final.json` their cells and `data_registers10.py` their summaries and D-SDK-6's.
+- **C4 (CA-102).** §4.6's C4 row moves to M13a for ur.io's page Worker, the extension's Worker with the extensions' ids and socket dials from a browser staying Later, and §4.6's lead, Appendix E's (`data_appx10.py`, its guard with it) and Q-REPO-2 cite owner decision 794. DESIGN-DEFER.md's `repo-c4-browser-carrier` entry is removed, the carrier being brought back, and its pointers in §4.6, §4.18, §5.17, §18.17 and §23.4 go, §4.6's and §4.18's moving to `sdk-extension-worker`, which takes what stays Later. check's x9_test.go keeps C4's row `later` until HARN-M13-02, which builds the carrier and owns that row, moves it to M13a; its row check reads only §4.6's ids.
+- **C17 and the page Worker's leg (CA-103, CA-104; QD-1410).** §4.6's C17 row, §4.4's build tags, §4.7's legs and fails-on rows, §4.9's size gates, §18.10, D-SDK-19 and `repo-c17-js-connect-build`: from M13a ur.io's page Worker builds `GOOS=js -tags sidecar_page` with the full connect client, the server engines' hosts and whatever cannot run in a page `!sidecar_page`, its gate the spike's measured stripped size plus 10%; C17 stays the extension's streaming Worker's.
+- **The withdrawn row (CA-105).** No §6.11 row, fence, amendment or proto declaration for 0x1C01 to 0x1C04 exists, so nothing is folded.
+- **Model downloads (CO-49; QD-1409).** §2.8 takes compute-12, the api's mirror of the public model files and their chunk indexes, the list moving to v72, `make metadata` copying the block, with its `planned: M11` line in testdata/metadata/fields.yml in the same commit; the routes' per-address limit adds no Redis family.
+- **Scope and phasing.** §1.4 takes a row for a person on ur.io and maps 793 to 795 in its compute paragraph; §23's compute paragraph and §18.17 take M13a's ur.io and M14's own devices.
+
+`build.sh` on this folder reproduces DESIGN.md (SHA-256 `788dc5a6a2ea43d28851843fe0f612e97463f8f7b3a71ac8ec164f94cde89d54`) and DESIGN-DEFER.md (SHA-256 `3af6b10c35e06eaa2230e6232dc953d77f4539fe4065623950425ebab41895a6`), and the validation shows:
+
+- **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item, and DESIGN-COMPUTE.md's own ids in no section. §2.8 takes compute-12, whose guard line testdata/metadata/fields.yml takes in the same commit.
+- **Owner decisions.** All 795 rows are present and cited; APPLY.md's section pairs hold. `MAXD`, the two range checks and `LATE_DATES` take 795, each of 793 to 795 dated 2026-11-25. One open owner question, Q-REPO-6.
+- **Superseded options.** 320 grep hits, none on a changed line unread, none live.
+- **Text.** No bare placeholders or HTML tags; the one research-sheet id stands; 12,856 section references, with the one unresolved as before, those on lines naming DESIGN-COMPUTE.md counted as its. `v7/words.json` was regenerated, and `v7/text_checks.json` regenerated with its one id's line moved.
+- **DESIGN-DEFER.md.** 106 entries and 172 pointers: `repo-c4-browser-carrier` and its five pointers gone, two of them now `sdk-extension-worker`'s.
+- **The metadata list** is v72, 117 rows; check's `metadataListAdditions` stays empty.
+
+### The compute plan's answers on CO-47 to CO-49: DESIGN-COMPUTE-AMENDMENTS.md
+
+- **DESIGN-COMPUTE-AMENDMENTS.md** files QD-1408 to QD-1418, the compute planner's questions on CO-47 to CO-49, which the owner answered on 2026-11-25, one at a time, each with its recommendation, with the plan's own readings, which they are, each after the readings of the section it mainly amends and QD-1410 to QD-1412 with Appendix D's; the index takes them, with a row for Appendix I, and the lead and the readings' heading count 54 readings, 50 left there. What they change in this design it carries since the second piece: QD-1409's compute-12, QD-1410's page Worker leg and QD-1411's and QD-1412's answers to the two findings. QD-1408, QD-1413 and QD-1414 to QD-1418 amend DESIGN-COMPUTE.md alone. None takes a number, as QD-1388 to QD-1392 took none.
+- **Superseded where they stand.** QD-1317 (Q-HARN-3) and QD-1364 (Q-SSH-1), appendix answers CO-48 changes, each take a line saying so and what replaces them, for the owner's revision to fold: ur.io's page Worker runs the apps' Harness from M13a, and from M14 the person's own devices answer attach by `ur harness rpc` alone, a shell staying Later.
+
+DESIGN.md and DESIGN-DEFER.md are unchanged by this piece.
+
+### The session wire joins §16.8's fences
+
+- **§16.8's fences** take `RecordEntry.body_apart` (6), a session entry's sealed body filed apart from its header, and `Coverage.bodies_dropped` (8) with `SeqRange`, which record.proto declares for context history (CTXH-M11-01, sidecar bd0acc99), two of what the twelfth fold left for their code. The Compute's record primitives paragraph says what record.proto now declares for context history and what waits: kinds 54 `session_entry` and 55 `session_blob` with their bodies and class 8, which RECORD.md's sections 5 to 8 take with record_kind_test.go's `testRecordKindAdditions` and class additions in a fold of their own, since that test is not among this track's files, and kind 56 with its code; `ModelCallBody`'s field 15, `CallContext`, stays in DESIGN-COMPUTE.md's fence that extends RECORD.md section 12's.
+- **The lists.** protocol/design_unfenced_test.go's `testFenceAdditions` loses its two session lines and `testUnfencedFence` `SeqRange`, with the source constant only those lines read; `ApprovalNotice` stays there, since no fence writes owner decision 573's per-request notice yet.
+
+`build.sh` on this folder reproduces DESIGN.md (SHA-256 `09da5c714727454732c56df8810a11d1704cfa8608d150372d6308158f33f2d7`) and DESIGN-DEFER.md (SHA-256 `3af6b10c35e06eaa2230e6232dc953d77f4539fe4065623950425ebab41895a6`, unchanged), and the validation shows the second piece's counts: all 795 rows present and cited, 320 superseded-option hits none live, 12,859 section references with the one unresolved, and 106 DESIGN-DEFER.md entries with 172 pointers.
+
+### Owner decision 792 cited where it is built
+
+- **§9.9 and §18.5.** Their Go sketches wrapped "owner decisions 687, 792" across two lines, so the citation scan counted neither section for 792; each now keeps the citation on one line, and 792's index row names §9, §13 and §18.
+
+`build.sh` on this folder reproduces DESIGN.md (SHA-256 `d26ab2179b2881e9d13de66ae7a29b83cbbc1f8078e64b23ba9691a7b6274076`) and DESIGN-DEFER.md (SHA-256 `3af6b10c35e06eaa2230e6232dc953d77f4539fe4065623950425ebab41895a6`, unchanged), and the validation shows the counts above but 12,862 section references, with the one unresolved as before.
