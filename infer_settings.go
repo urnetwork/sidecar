@@ -94,6 +94,29 @@ type InferSettings struct {
 	// The bytes of a helper's stderr the daemon keeps for its log when the helper ends: 64 KiB. Non-positive keeps none.
 	EngineStderrMaxByteCount int
 
+	// §6.5's engine files on a desktop (INFER-M11-06's InferPull): the C library, its GPU plugins and Dawn, each whole
+	// from LiteRT-LM's release at the manifest's https url. How long one file's download may take: 30 minutes, an
+	// 85 MB library on a link under half a megabit a second. Past it the pull stops with download_unavailable.
+	EngineDownloadTimeout time.Duration
+	// The redirects one engine file's request may follow: 3, room for a release asset's redirect to its storage host.
+	// Each must be https, to the url's own host or one under EngineDownloadRedirectHostSuffixes.
+	EngineDownloadRedirectMaxCount int
+	// The hosts an engine file's request may be redirected to besides the url's own, each a domain matching itself and
+	// every name under it: GitHub's and its release assets' storage, as LiteRT-LM's release serves them on 2026-11-25.
+	EngineDownloadRedirectHostSuffixes []string
+
+	// §6.5's app host (INFER-M11-06's inferHostEngine). The models the app's engine holds loaded at once: 1, a phone's
+	// memory holding one model, so a second model's call unloads the first once it is idle.
+	HostLoadedModelMaxCount int
+
+	// §6.5's phones in the background (INFER-M11-06's InferRouter.Background). How long a call in flight may run on
+	// once an iOS app leaves the foreground, where the app names no grant of its own: 30 seconds, a background task's
+	// time. Past it the call is cancelled; a local call on the GPU is cancelled at once, since iOS gives a background
+	// app no GPU. Also the grant where the device is not known, the shorter of the two.
+	BackgroundIosGrant time.Duration
+	// The same on Android: 3 minutes, a short foreground service's time.
+	BackgroundAndroidGrant time.Duration
+
 	// §6.5's model downloads (CO-49): the chunk index's format (compute-plan-model-index-format, QD-1408), whose bounds
 	// are format limits both ends read, the release tooling and the api's mirror (CSRV-M11-01, CSRV-M11-02) as every
 	// device and the browser's engine Worker (INFER-M13-02) does. The chunk size InferModelIndexBuild writes an index
@@ -216,16 +239,22 @@ func DefaultInferSettings() *InferSettings {
 			"/dev/nvidia0", "/dev/nvidia1", "/dev/nvidia2", "/dev/nvidia3",
 			"/dev/null", "/dev/zero", "/dev/urandom",
 		},
-		EngineStderrMaxByteCount:   64 * 1024,
-		ModelChunkByteCount:        16 * 1024 * 1024,
-		ModelChunkMinByteCount:     1024 * 1024,
-		ModelChunkMaxByteCount:     64 * 1024 * 1024,
-		ModelIndexMaxByteCount:     1024 * 1024,
-		ModelChunkFetchConcurrency: 4,
-		ModelChunkRetryCount:       2,
-		ModelApiUnreachableCount:   3,
-		ModelIndexTimeout:          30 * time.Second,
-		ModelChunkTimeout:          5 * time.Minute,
+		EngineStderrMaxByteCount:           64 * 1024,
+		EngineDownloadTimeout:              30 * time.Minute,
+		EngineDownloadRedirectMaxCount:     3,
+		EngineDownloadRedirectHostSuffixes: []string{"github.com", "githubusercontent.com"},
+		HostLoadedModelMaxCount:            1,
+		BackgroundIosGrant:                 30 * time.Second,
+		BackgroundAndroidGrant:             3 * time.Minute,
+		ModelChunkByteCount:                16 * 1024 * 1024,
+		ModelChunkMinByteCount:             1024 * 1024,
+		ModelChunkMaxByteCount:             64 * 1024 * 1024,
+		ModelIndexMaxByteCount:             1024 * 1024,
+		ModelChunkFetchConcurrency:         4,
+		ModelChunkRetryCount:               2,
+		ModelApiUnreachableCount:           3,
+		ModelIndexTimeout:                  30 * time.Second,
+		ModelChunkTimeout:                  5 * time.Minute,
 		// a tenth
 		ModelFreeSpaceMarginFraction:    0.1,
 		ModelFetchRetryInterval:         2 * time.Second,

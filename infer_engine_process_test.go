@@ -76,7 +76,11 @@ func newTestInferEngineProcessWorld(t *testing.T, pulled bool) *testInferEngineP
 	}
 	library := write(engineDirectory, "liblitert-lm.bin", "engine library")
 	modelFile := write(modelDirectory, "test-model.litertlm", "model weights")
-	if !pulled {
+	// the model's whole file as its pull marks it, found by its SHA-256 (InferPull.WholePath)
+	files := &testInferModelFiles{paths: map[string]string{}}
+	if pulled {
+		files.paths[modelFile.Sha256] = filepath.Join(modelDirectory, modelFile.Name)
+	} else {
 		os.Remove(filepath.Join(modelDirectory, modelFile.Name))
 	}
 	model := testInferManifestModel("test-model", 1, 32*1024)
@@ -94,6 +98,7 @@ func newTestInferEngineProcessWorld(t *testing.T, pulled bool) *testInferEngineP
 		EngineDirectory: engineDirectory,
 		ModelDirectory:  modelDirectory,
 		StateDirectory:  stateDirectory,
+		Models:          files,
 		Manifest:        manifest,
 		Capabilities:    device,
 	})
