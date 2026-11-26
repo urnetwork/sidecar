@@ -92,11 +92,11 @@
  {
   "num": 11,
   "code": "EVS",
-  "words": 23822,
+  "words": 23807,
   "code_words": 56877,
   "ceiling": 5000,
-  "over": 18822,
-  "over_pct": 376.4
+  "over": 18807,
+  "over_pct": 376.1
  },
  {
   "num": 12,
@@ -146,20 +146,20 @@
  {
   "num": 17,
   "code": "BRIDGE",
-  "words": 15749,
+  "words": 15892,
   "code_words": 8417,
   "ceiling": 3800,
-  "over": 11949,
-  "over_pct": 314.4
+  "over": 12092,
+  "over_pct": 318.2
  },
  {
   "num": 18,
   "code": "SDK",
-  "words": 11461,
+  "words": 11499,
   "code_words": 12451,
   "ceiling": 3000,
-  "over": 8461,
-  "over_pct": 282.0
+  "over": 8499,
+  "over_pct": 283.3
  },
  {
   "num": 19,

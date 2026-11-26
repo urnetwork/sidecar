@@ -6,7 +6,7 @@
 // and a generation for Network, each its dispatcher's own; and on a platform that readies nothing, each opener gives
 // its client the keys and the mode once the client is open. On the Net,
 // TestEdgeClientPoolRestartedInPlaceTakesItsListenersContractAtOnce holds open the window a client provided that late
-// leaves.
+// leaves, and sidecartest's TestRestartedSidecarTakesItsPeersNetworkContractAtOnce holds a restarted daemon's.
 
 package sidecar
 
