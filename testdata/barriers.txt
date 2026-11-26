@@ -29,6 +29,8 @@ barrier api.send.before api_client.go
 barrier api.send.iat_retry api_client.go
 barrier api.set_by_jwt.after api_client.go
 barrier api.set_by_jwt.before api_client.go
+barrier approval.notice.after record_approval_notice.go
+barrier approval.notice.before record_approval_notice.go
 barrier attest_policy_store.commit.after attest_policy_store.go
 barrier attest_policy_store.commit.before attest_policy_store.go
 barrier attest_policy_store.seen.after attest_policy_store.go

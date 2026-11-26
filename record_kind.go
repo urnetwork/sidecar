@@ -3,9 +3,14 @@
 // RecordHeader and a ReachReceipt label. RECORD.md is the source, and record_kind_test.go holds this file to it.
 //
 // DESIGN-COMPUTE.md §24.5 adds kinds 54 session_entry and 55 session_blob to the raw capture block and class 8 bulk
-// (CTXH-M11-01), ahead of the design-records fold that writes them into RECORD.md (Appendix D; QD-1366): both are the
-// vault's alone, raw and never indexed or projected to the team record (I-20), and both file their bodies apart from
-// their headers, at s/<n> beside e/<n> (BodyApart). record_kind_test.go takes them through its additions lists.
+// (CTXH-M11-01), which RECORD.md now carries: both are the vault's alone, raw and never indexed or projected to the
+// team record (I-20), and both file their bodies apart from their headers, at s/<n> beside e/<n> (BodyApart).
+//
+// DESIGN-COMPUTE.md §11.12 and §12.7 add kind 57 enclave, class action, an enclave's life events, and ReachReceipt's
+// kind 7 ssh, one receipt an SSH session (CTXH-M11-08; compute-plan-enc-readings, QD-1243), ahead of the fold that writes
+// them into RECORD.md: record_kind_test.go takes them through its additions lists (QD-1366). Kind 57 is the number
+// after 56, auto_verdict (SAFE-M13-08), which stays 56 whichever lands first, and sits in the raw capture block's
+// numbers though its class is action, as 56's does (CONTRACTS C-26).
 //
 // A kind's number and name are permanent once released and never reused, and 0 is never written. 1 to 1,023 are the
 // registry's, in blocks by class (section 6.1); 1,024 and up are private use, shown generically, like any kind this
@@ -87,6 +92,9 @@ const (
 	// node
 	RecordKindSessionEntry RecordKind = 54
 	RecordKindSessionBlob  RecordKind = 55
+	// DESIGN-COMPUTE.md §11.12's (M14): one event of an enclave's life, in its sponsor's vault. 56 is auto_verdict's
+	// (SAFE-M13-08), held for it.
+	RecordKindEnclave RecordKind = 57
 
 	// 64 to 79: derived names, from M10, in search alone: a run card or D's run announcement, and D's worker and
 	// repo announcements.
@@ -160,6 +168,9 @@ const (
 	RecordReachKindRoute       RecordReachKind = 4
 	RecordReachKindSend        RecordReachKind = 5
 	RecordReachKindReceive     RecordReachKind = 6
+	// DESIGN-COMPUTE.md §12.7's: one SSH session into an enclave, never coalesced, with its user, its open and close and
+	// the bytes each way (ReachReceipt fields 12 to 16).
+	RecordReachKindSsh RecordReachKind = 7
 )
 
 // One row of section 6.3, the columns this file holds, with section 6.4's body.
@@ -250,6 +261,7 @@ var recordKindRows = map[RecordKind]recordKindRow{
 		name: "session_blob", class: RecordClassBulk, bodyApart: true,
 		body: func() proto.Message { return &protocol.SessionBlobBody{} },
 	},
+	RecordKindEnclave: {name: "enclave", class: RecordClassAction, body: func() proto.Message { return &protocol.EnclaveEntryBody{} }},
 
 	// Derived names hold no class: no header carries one.
 	RecordKindRun:    {name: "run"},
@@ -432,6 +444,7 @@ var recordReachKindNames = map[RecordReachKind]string{
 	RecordReachKindRoute:   "route",
 	RecordReachKindSend:    "send",
 	RecordReachKindReceive: "receive",
+	RecordReachKindSsh:     "ssh",
 }
 
 // Section 6.2's name, or "reach kind n" for a value it does not hold, 0 among them.

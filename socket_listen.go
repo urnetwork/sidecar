@@ -50,6 +50,14 @@
 // ticket's grant_expire_time_millis, and PolicyChanged re-derives each stream's grant (D-SOCK-14), resetting with
 // RST_REVOKED those it no longer allows, as the registrar's revoked answer resets every stream of the entry.
 //
+// The grant's end is a wall-clock time, this device's reading of the service's milliseconds at admission
+// (socketGrantEndTime), and the wait for it a runtime timer, which stops while the system sleeps, so a stream the
+// device slept past, or a step of its clock passed, would stay open for the timer's remaining awake time (§17.8's after
+// sleep or a clock step, owner decision 789's seam; QD-1422). SocketComponent.CheckClock arms each stream's wait again
+// from the clock's now, resetting with RST_REVOKED at once each whose end has passed; the daemon calls it when the host
+// resumes and at its desktop cap (core_clock_check.go). A new stream is never admitted past its end either way, since
+// its ticket's expiry is read on the clock at admission.
+//
 //   - Close unlistens at once: the registration leaves the set and each dispatcher drops the target, so a racing ticket
 //     answers retry. Accepted conns stay open; ones admitted but not yet taken are reset, as a socket's backlog is,
 //     and a pending AcceptSocket answers net.ErrClosed.
@@ -172,7 +180,9 @@ type socketListenerStream struct {
 	request  *socketAdmissionRequest
 	// the generation it was admitted on, whose sidecar its live check reads
 	generation *socketGeneration
-	// Set and removed under the listener's stateLock.
+	// when its ticket's grant ends on this device's clock, fixed at admission; zero for a ticket that names no end
+	grantEndTime time.Time
+	// stops the wait for grantEndTime. Set and removed under the listener's stateLock.
 	stopExpiry func() bool
 }
 
@@ -390,12 +400,18 @@ func (self *SocketListener) acceptStream(ctx context.Context, generation *socket
 		return &StreamRejectError{Code: verdict.code}
 	}
 
+	// the grant's end as this device reads it now, fixed before the stream is visible to a check of the clock
+	var grantEndTime time.Time
+	if grantExpireMillis := verdict.ticket.GetGrantExpireTimeMillis(); grantExpireMillis != 0 {
+		grantEndTime = socketGrantEndTime(self.component.registrar.admission(), grantExpireMillis)
+	}
 	tracked := &socketListenerStream{
-		listener:   self,
-		stream:     newStream(),
-		ticket:     verdict.ticket,
-		request:    request,
-		generation: generation,
+		listener:     self,
+		stream:       newStream(),
+		ticket:       verdict.ticket,
+		request:      request,
+		generation:   generation,
+		grantEndTime: grantEndTime,
 	}
 	// the count's check and its increment in one step, so two opens never pass max_streams between them
 	code := func() protocol.StreamRejectCode {
@@ -424,20 +440,8 @@ func (self *SocketListener) acceptStream(ctx context.Context, generation *socket
 		}
 	}
 	self.reportInflight()
-	if grantExpireMillis := verdict.ticket.GetGrantExpireTimeMillis(); grantExpireMillis != 0 {
-		admission := self.component.registrar.admission()
-		stop := self.clock.AfterFunc(socketGrantEndTime(admission, grantExpireMillis).Sub(self.clock.Now()), func() {
-			tracked.Reset(protocol.StreamResetCode_RST_REVOKED)
-		})
-		self.stateLock.Lock()
-		trackedNow := self.streams[tracked]
-		if trackedNow {
-			tracked.stopExpiry = stop
-		}
-		self.stateLock.Unlock()
-		if !trackedNow {
-			stop()
-		}
+	if !tracked.grantEndTime.IsZero() {
+		self.armGrantEnd(tracked)
 	}
 
 	localAddr := &SocketAddr{NetworkId: connect.Id(self.networkId), ClientId: connect.Id(generation.identity.ClientId)}
@@ -480,6 +484,79 @@ func (self *SocketListener) untrack(stream *socketListenerStream) {
 	}
 	if removed {
 		self.reportInflight()
+	}
+}
+
+// Arms stream's reset with RST_REVOKED at its grant's end, counted from the clock's now, in place of the wait armed
+// before, so a wait the device slept through is not left to run late (the file's comment); an end already passed
+// resets it at once. A stream no longer counted, or whose wait has fired and is resetting it, is not armed again. The
+// clock arms with no lock held, since it may call the reset at once.
+func (self *SocketListener) armGrantEnd(stream *socketListenerStream) {
+	previous, tracked := func() (func() bool, bool) {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		if !self.streams[stream] {
+			return nil, false
+		}
+		previous := stream.stopExpiry
+		stream.stopExpiry = nil
+		return previous, true
+	}()
+	if !tracked || (previous != nil && !previous()) {
+		return
+	}
+	stop := self.clock.AfterFunc(stream.grantEndTime.Sub(self.clock.Now()), func() {
+		stream.Reset(protocol.StreamResetCode_RST_REVOKED)
+	})
+	kept := func() bool {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		// another check armed one meanwhile, or the stream ended
+		if !self.streams[stream] || stream.stopExpiry != nil {
+			return false
+		}
+		stream.stopExpiry = stop
+		return true
+	}()
+	if !kept {
+		stop()
+	}
+}
+
+// Reads the clock again for each counted stream's grant end (the file's comment): armGrantEnd on every stream whose
+// ticket names one. Never waits on a stream: a reset the clock calls at once runs where the clock runs it.
+func (self *SocketListener) checkClock() {
+	streams := func() []*socketListenerStream {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		streams := []*socketListenerStream{}
+		for stream := range self.streams {
+			if !stream.grantEndTime.IsZero() {
+				streams = append(streams, stream)
+			}
+		}
+		return streams
+	}()
+	for _, stream := range streams {
+		self.armGrantEnd(stream)
+	}
+}
+
+// Reads the wall clock again after a sleep or a clock step (SidecarClockComponent; core_clock_check.go): each live
+// listener arms the wait for each of its streams' grant ends again from now, and resets with RST_REVOKED each whose end
+// has passed (socket_listen.go's comment). Safe from any goroutine; it takes only the listeners' locks and arms timers.
+func (self *SocketComponent) CheckClock() {
+	listeners := func() []*SocketListener {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		listeners := make([]*SocketListener, 0, len(self.listeners))
+		for listener := range self.listeners {
+			listeners = append(listeners, listener)
+		}
+		return listeners
+	}()
+	for _, listener := range listeners {
+		listener.checkClock()
 	}
 }
 

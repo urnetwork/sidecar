@@ -429,6 +429,12 @@ type urBridgeDaemonArgs struct {
 	// The platform's watch for the host's resume, at each of which every bridge reads the clock again (resume.go);
 	// nil watches nothing, and the bridges' capped waits cover the host.
 	ResumeWatch urResumeWatchFunction
+	// How often the core's checks the composition adds run where no wake reaches the daemon (resume.go): the bridges'
+	// own cap, device.BridgeSettings.ClockCheckInterval, the one interval on a desktop. Non-positive runs them only at
+	// a resume.
+	ClockCheckInterval time.Duration
+	// What the cap's waits read. Nil is real time.
+	Clock sidecar.Clock
 }
 
 // The daemon's bridges and the instance's one OS tun (the file's comment). Safe for concurrent use.
@@ -452,24 +458,39 @@ type urBridgeDaemon struct {
 	sharedDone chan struct{}
 	// closed when the resume watch has returned, or at once with none
 	resumeDone chan struct{}
+	// what the cap on the core's checks waits on, and closed when the cap has returned, or at once with none
+	clock        sidecar.Clock
+	clockCapDone chan struct{}
 
 	stateLock sync.Mutex
 	networks  map[sidecar.Id]*urBridgeNetwork
-	tun       *urTun
-	closed    bool
+	// the core's checks of its wall-clock ends, by the id addClockCheck gave each (resume.go)
+	coreClockChecks   map[uint64]func()
+	coreClockCheckSeq uint64
+	tun               *urTun
+	closed            bool
 	// what the last judgment found
 	sharedBlocks []urSharedBlock
 }
 
 // A daemon's bridges' args: the platform's half of ur tun where it runs, its watch for the host's resume where it has
-// one (resume.go), and no builder, since the daemon follows no network's config yet (the file's comment).
+// one and the cap its bridges take (resume.go), and no builder, since the daemon follows no network's config yet (the
+// file's comment).
 func urBridgeDaemonArgsOf(instance string, log sidecar.Logger) *urBridgeDaemonArgs {
 	settings := defaultUrTunSettings()
 	var system urTunSystem
 	if urTunPlatform != nil {
 		system = urTunPlatform(settings, log)
 	}
-	return &urBridgeDaemonArgs{Instance: instance, System: system, Settings: settings, Log: log, ResumeWatch: urResumeWatch}
+	return &urBridgeDaemonArgs{
+		Instance:    instance,
+		System:      system,
+		Settings:    settings,
+		Log:         log,
+		ResumeWatch: urResumeWatch,
+		// each network's bridge takes DefaultBridgeSettings (newUrBridgeWire), whose cap is the daemon's one interval
+		ClockCheckInterval: device.DefaultBridgeSettings().ClockCheckInterval,
+	}
 }
 
 // The daemon's bridges, living until ctx ends or close.
@@ -496,13 +517,25 @@ func newUrBridgeDaemon(ctx context.Context, args *urBridgeDaemonArgs) *urBridgeD
 		sharedWake: make(chan struct{}, 1),
 		sharedDone: make(chan struct{}),
 		resumeDone: make(chan struct{}),
+		clock:      args.Clock,
 		networks:   map[sidecar.Id]*urBridgeNetwork{},
+
+		clockCapDone:    make(chan struct{}),
+		coreClockChecks: map[uint64]func(){},
+	}
+	if self.clock == nil {
+		self.clock = sidecar.RealClock{}
 	}
 	go self.runSharedBlocks()
 	if args.ResumeWatch != nil {
 		go self.runResumeWatch(args.ResumeWatch)
 	} else {
 		close(self.resumeDone)
+	}
+	if 0 < args.ClockCheckInterval {
+		go self.runClockCap(args.ClockCheckInterval)
+	} else {
+		close(self.clockCapDone)
 	}
 	return self
 }
@@ -740,4 +773,5 @@ func (self *urBridgeDaemon) close() {
 	self.cancel()
 	<-self.sharedDone
 	<-self.resumeDone
+	<-self.clockCapDone
 }

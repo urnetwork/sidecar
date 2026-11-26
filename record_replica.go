@@ -53,6 +53,8 @@ func (self *SidecarRecord) bindMemberReplica(config *ConfigClient, evs *EvsClien
 		return open(ctx, logId)
 	})
 	evs.SetRecordReceipts(self.receipts)
+	// the approval notices on the vault's main ref (record_approval_notice.go; CTXH-M11-07)
+	self.ApprovalNotices().Bind(func(repoId Id) ApprovalNoticeVault { return NewApprovalNoticeEvsVault(evs.Repo(repoId)) })
 	self.Bind(streams, auth)
 	return nil
 }
