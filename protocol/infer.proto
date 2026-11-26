@@ -1,0 +1,81 @@
+// Inference's wire with the compute broker (DESIGN-COMPUTE §6.3, §6.6; INFER-M12-01): every compute/v1 body is
+// deterministic protobuf (compute-plan-infer-wire-format, QD-1246). The remote catalog is public: models, limits and
+// prices, no user data, kept per published version (compute_catalog_version, compute-7; compute-plan-catalog-versions,
+// QD-1237). It is unsigned and decides nothing about who reads a prompt (R1-14): a device joins it with the signed compute
+// policy, which alone gives a model's label, its provider's id for it and where a direct call goes (§5.4).
+
+syntax = "proto3";
+package urnetwork.sidecar;
+
+option go_package = "github.com/urnetwork/sidecar/protocol";
+
+// What serves a remote catalog model (§6.3's kind).
+enum InferCatalogModelKind {
+  INFER_CATALOG_MODEL_KIND_UNSPECIFIED = 0;
+  // Through the broker, sealed end to end to an instance the device verified (§6.6's TEE path).
+  INFER_CATALOG_MODEL_KIND_TEE = 1;
+  // From the device, under the broker's per-request btauth/1 signature (§6.6's direct path).
+  INFER_CATALOG_MODEL_KIND_DIRECT = 2;
+}
+
+// GET compute/v1/catalog's answer (§6.3): one published version of the remote catalog.
+message InferCatalogAnswer {
+  // A request names it, and is charged its prices (§9.6); the broker takes it while it is the current version, and
+  // for 24 hours after a newer one, else catalog_stale.
+  uint64 version = 1;
+  // When the version was published, in Unix milliseconds.
+  int64 published_ms = 2;
+  // The broker's clock when it answered, in Unix milliseconds (§6.6's nonces); zero in the stored version.
+  int64 broker_time_ms = 3;
+  repeated InferCatalogModel models = 4;
+  // ENC's shapes and SRCH's search ids, each its area's own message (computeCatalogRegisterSection).
+  repeated InferCatalogSection sections = 5;
+}
+
+// One remote model as the broker's adapters read it when the version was built.
+message InferCatalogModel {
+  // The provider's slug, and the model part of the model's canonical names (§6.3).
+  string provider = 1;
+  string model = 2;
+  InferCatalogModelKind kind = 3;
+  // The label the provider offers it under, the broker's reading: a device takes the policy's (§5.4).
+  string label = 4;
+  // The efforts it takes (§6.3), and the one an alias asking none runs at.
+  repeated string efforts = 5;
+  string default_effort = 6;
+  // Its context window and the most tokens one answer holds.
+  int64 context_window = 7;
+  int64 max_output = 8;
+  bool tools = 9;
+  bool structured_output = 10;
+  // text, image.
+  repeated string modalities = 11;
+  string license = 12;
+  // The provider's own id for the model, the broker's reading: a device takes the policy's (§5.4).
+  string provider_model_id = 13;
+  // The network's prices per million tokens, in nano-USD: the provider's price times the markup, rounded up (§9.6).
+  int64 input_nano_usd_per_million = 14;
+  int64 output_nano_usd_per_million = 15;
+  int64 cached_input_nano_usd_per_million = 16;
+  // A price that varies by request, listed at the most it charges (§6.3).
+  bool price_varies = 17;
+  // §4.5's "serving code measured: no".
+  bool serving_code_unmeasured = 18;
+  // A direct model's host, receiver hotkey and targets, as the broker's adapter would sign for them: a device holds
+  // each equal to its policy's, or lists the model unusable (§6.3). Empty for a TEE model.
+  string host = 19;
+  string receiver_hotkey = 20;
+  repeated InferCatalogTarget targets = 21;
+}
+
+// A method and path a direct model is called on.
+message InferCatalogTarget {
+  string method = 1;
+  string path = 2;
+}
+
+// One area's section of the catalog: its name, and its body, that area's own message.
+message InferCatalogSection {
+  string name = 1;
+  bytes body = 2;
+}

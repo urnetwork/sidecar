@@ -7,9 +7,8 @@
 //	             wait or alarm for a detail that does not open here as the route rows do
 //	check        AclEngine.Check's dial or route to a subject reads a document rule by its local detail as AllowInbound
 //	             and AllowRoute read it, at some port or address, as it reads an activated grant by its sealed detail:
-//	             a rule limiting ports only where this device holds them, at no client (question
-//	             acl-grant-port-consistency-check-client-ports), and a route rule only by its prefixes, its
-//	             autogroup:internet or the routes in force its destinations name
+//	             a rule limiting ports only where this device holds them, at no client (QD-1432), and a route rule
+//	             only by its prefixes, its autogroup:internet or the routes in force its destinations name
 //	active grant AclEngine.ActiveGrant covers a forward at the ports its own sealed detail names by a rule whose ports
 //	             take them, a document rule's local ones or an activated grant's sealed ones, so a forward asked again
 //	             passes as standing on its own grant, and BridgeFiler.ForwardRoute serves a forward the gate passed as
@@ -340,8 +339,8 @@ func (self *testPortConsistencyCheckWorld) install(t *testing.T) (*AclState, *Ac
 }
 
 // Check's dial to a client no binding names counts a rule limiting no ports and not one limiting ports, whose ports the
-// client's own device checks and which §8.10 reaches no legacy client by, the closed direction, as an activated grant's
-// detail names no port at a client. Before this change the rows alone allowed both.
+// client's own device checks and which §8.10 reaches no legacy client by, the closed direction QD-1432 keeps, as an
+// activated grant's detail names no port at a client. Before this change the rows alone allowed both.
 func TestAclEngineCheckDialsAClientOnlyByARuleLimitingNoPorts(t *testing.T) {
 	world := newTestPortConsistencyCheckWorld(t)
 	state, local := world.install(t)

@@ -222,7 +222,6 @@ func ComputeJobDesign(settings *ComputeJobSettings) []*ComputeJob {
 var computeJobUnbuilt = []string{
 	ComputeJobAutoRenew,
 	ComputeJobEnclaveMeter,
-	ComputeJobProviderPrices,
 	ComputeJobCanary,
 	ComputeJobGammaMint,
 	ComputeJobGammaSpend,

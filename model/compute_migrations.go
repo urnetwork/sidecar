@@ -33,6 +33,7 @@ const (
 const (
 	ComputeMigrationOwnerBal   = "BAL"
 	ComputeMigrationOwnerProv  = "PROV"
+	ComputeMigrationOwnerInfer = "INFER"
 	ComputeMigrationOwnerGamma = "GAMMA"
 	ComputeMigrationOwnerSrch  = "SRCH"
 	ComputeMigrationOwnerEnc   = "ENC"
@@ -41,7 +42,7 @@ const (
 // Each group's owners, in the order their parts apply.
 var computeMigrationGroupOwners = map[string][]string{
 	ComputeMigrationGroupC1: {ComputeMigrationOwnerBal},
-	ComputeMigrationGroupC2: {ComputeMigrationOwnerProv, ComputeMigrationOwnerGamma, ComputeMigrationOwnerSrch},
+	ComputeMigrationGroupC2: {ComputeMigrationOwnerProv, ComputeMigrationOwnerInfer, ComputeMigrationOwnerGamma, ComputeMigrationOwnerSrch},
 	ComputeMigrationGroupC3: {ComputeMigrationOwnerEnc},
 }
 

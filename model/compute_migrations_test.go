@@ -30,7 +30,8 @@ func TestComputeMigrationPartsRegisterOnce(t *testing.T) {
 	if part := ComputeMigrationPart(ComputeMigrationGroupC1, ComputeMigrationOwnerBal); len(part) != 0 {
 		t.Fatalf("BAL's unregistered part reads %v", part)
 	}
-	if owners := ComputeMigrationGroupOwners(ComputeMigrationGroupC2); len(owners) != 3 || owners[0] != ComputeMigrationOwnerProv || owners[2] != ComputeMigrationOwnerSrch {
+	if owners := ComputeMigrationGroupOwners(ComputeMigrationGroupC2); len(owners) != 4 || owners[0] != ComputeMigrationOwnerProv ||
+		owners[1] != ComputeMigrationOwnerInfer || owners[3] != ComputeMigrationOwnerSrch {
 		t.Fatalf("MG-C2's owners are %v", owners)
 	}
 

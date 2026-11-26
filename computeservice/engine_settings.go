@@ -46,6 +46,9 @@ type ComputeEngineSettings struct {
 	// and the registry's bounds. An engine whose providers' settings do not validate, the reference provider enabled
 	// in production among them, refuses to start (D-ENC-2, CO-21). nil: DefaultComputeProviderSettings.
 	Providers *ComputeProviderSettings
+	// The broker's settings (broker_settings.go): the catalog's version rule and price rule, and INFER's later routes'
+	// bounds. nil: DefaultComputeBrokerSettings.
+	Broker *ComputeBrokerSettings
 }
 
 // The defaults.
@@ -68,6 +71,7 @@ func DefaultComputeEngineSettings() *ComputeEngineSettings {
 		Revocation:              sidecar.DefaultRevocationSettings(),
 		AclGate:                 sidecar.DefaultAclGateSettings(),
 		Providers:               DefaultComputeProviderSettings(),
+		Broker:                  DefaultComputeBrokerSettings(),
 	}
 }
 
@@ -95,6 +99,11 @@ func (self *ComputeEngineSettings) Validate() error {
 		}
 		if maxByteCount <= 0 {
 			return fmt.Errorf("compute engine: the body bound of %s is not positive", route)
+		}
+	}
+	if self.Broker != nil {
+		if err := self.Broker.Validate(); err != nil {
+			return err
 		}
 	}
 	if self.Providers != nil {

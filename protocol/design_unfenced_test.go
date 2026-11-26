@@ -526,6 +526,28 @@ message AgentCert { bytes sidecar_id = 1; bytes agent_id = 2; bytes public_key =
 // numbered in the order written, as question support-push-topic-hint-bytes recommends (support-push-topic).
 message SupportHint { string product = 1; string entry = 2; uint32 seq = 3; }
 
+// sidecar/protocol/infer.proto
+// DESIGN-COMPUTE.md §6.3's remote catalog, its fields, sources and version rows written as field lists without numbers:
+// GET compute/v1/catalog's deterministic protobuf answer by compute-plan-infer-wire-format's answer (QD-1246), kept per
+// version by compute-plan-catalog-versions' (QD-1237), numbered in the order written (INFER-M12-01).
+enum InferCatalogModelKind {
+  INFER_CATALOG_MODEL_KIND_UNSPECIFIED = 0; INFER_CATALOG_MODEL_KIND_TEE = 1; INFER_CATALOG_MODEL_KIND_DIRECT = 2;
+}
+message InferCatalogAnswer {
+  uint64 version = 1; int64 published_ms = 2; int64 broker_time_ms = 3; repeated InferCatalogModel models = 4;
+  repeated InferCatalogSection sections = 5;
+}
+message InferCatalogModel {
+  string provider = 1; string model = 2; InferCatalogModelKind kind = 3; string label = 4; repeated string efforts = 5;
+  string default_effort = 6; int64 context_window = 7; int64 max_output = 8; bool tools = 9;
+  bool structured_output = 10; repeated string modalities = 11; string license = 12; string provider_model_id = 13;
+  int64 input_nano_usd_per_million = 14; int64 output_nano_usd_per_million = 15;
+  int64 cached_input_nano_usd_per_million = 16; bool price_varies = 17; bool serving_code_unmeasured = 18;
+  string host = 19; string receiver_hotkey = 20; repeated InferCatalogTarget targets = 21;
+}
+message InferCatalogTarget { string method = 1; string path = 2; }
+message InferCatalogSection { string name = 1; bytes body = 2; }
+
 // sidecar/protocol/mail.proto
 // MailAuthEvidence's comments, which name each result's fields in this order.
 message SpfResult { SpfVerdict result = 1; string domain = 2; bytes ip = 3; repeated string records = 4; }

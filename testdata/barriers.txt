@@ -124,6 +124,8 @@ barrier certs.revoke.after certsservice/revoke.go
 barrier certs.revoke.before certsservice/revoke.go
 barrier certs.run_order.before certsservice/run.go
 barrier certs.run_order.issued certsservice/run.go
+barrier compute.catalog.publish.after computeservice/broker_catalog.go
+barrier compute.catalog.publish.before computeservice/broker_catalog.go
 barrier compute.drain.end.after computeservice/engine.go
 barrier compute.drain.end.before computeservice/engine.go
 barrier compute.provider.status.after computeservice/provider_store.go
@@ -528,6 +530,8 @@ barrier identity.revoke.sign.before identity_revoke_device.go
 barrier identity.stale.recheck.after identity_act_stale.go
 barrier identity.stale.recheck.before identity_act_stale.go
 barrier infer.background.grant.end infer_background.go
+barrier infer.cache_write.after infer_cache_secret.go
+barrier infer.cache_write.before infer_cache_secret.go
 barrier infer.disclosure.ask.before infer_check_disclosure.go
 barrier infer.dispatch.before infer_router.go
 barrier infer.engine.confine.exec.before infer_engine_confine_linux.go
@@ -962,6 +966,7 @@ secret R_n keys_recovery_seal.go
 secret R_n keys_root.go
 secret R_n keys_rotate.go
 secret ReaderKey identity_enroll.go
+secret S_m infer_cache_secret.go
 secret U keys_rotate.go
 secret U keys_unlock.go
 secret W keys_unlock.go
@@ -981,6 +986,9 @@ secret by_client_jwt api_token_manager.go
 secret by_client_jwt daemon_pair.go
 secret by_client_jwt identity_pair.go
 secret by_jwt api_token_source.go
+secret cache_salt_direct infer_cache_salt.go
+secret cache_salt_tee infer_cache_salt.go
+secret cache_secret_own infer_cache_secret.go
 secret close api_routes_core.go
 secret commit_secret mls_treekem.go
 secret compute_payer_hash_key controller/compute_payer.go

@@ -172,6 +172,8 @@ type computeFixtureOptions struct {
 	log sidecar.Logger
 	// nil: the recording service log
 	serviceLog ComputeServiceLog
+	// the catalog's versions; nil reads compute_catalog_version, which a test engine has no database for
+	catalogStore computeCatalogVersionStore
 }
 
 // One engine and the world it reads, with one admitted member device in one loaded network whose gate is open and
@@ -267,6 +269,7 @@ func newComputeFixture(t testing.TB, options *computeFixtureOptions) *computeFix
 		Log:                 options.log,
 		testHandlers:        options.handlers,
 		testAdmissionChecks: options.admissionChecks,
+		testCatalogStore:    options.catalogStore,
 	}
 	if deps.testHandlers == nil {
 		// no test hands the registry over by accident: an empty map serves every route unbuilt

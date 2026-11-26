@@ -195,6 +195,76 @@ type InferSettings struct {
 	// are marked unavailable in that browser until its version or the engine's changes: 8. Non-positive marks none
 	// unavailable for its rate.
 	BrowserMinDecodeTokensPerSecond float64
+
+	// §6.6's member cache secret (INFER-M12-02; infer_cache_secret.go). How long a secret this device holds serves
+	// before cache.json is read again: 5 minutes. That read is the sync at which a device that holds the secret seals a
+	// copy to each newly listed device and answers asks, and at which the first device to see that one which held a
+	// copy left the readers draws a new secret, so a revocation's new secret reaches the member's devices within a sync
+	// of their next remote calls. Non-positive reads at every call.
+	CacheSecretSyncInterval time.Duration
+	// The most of the member's own secret repos one sync opens to find the one whose cache.json stands: 64, past the
+	// 16 connections, 8 calendar links and the ACME key's repo a member holds at most beside the cache's own. Repos
+	// past it, in id order, are not opened. Non-positive opens none, and the device salts with a secret of its own.
+	CacheSecretRepoScanMaxCount int
+	// The largest cache.json a read takes, in bytes: 1 MiB, about 600 devices' sealed copies. A larger one is read as
+	// no file of the format, which a device that may draw replaces. Non-positive takes none.
+	CacheFileMaxByteCount int
+	// The most copies, and the most asks, one cache.json holds: 512 each, past any member's devices and their agents'
+	// enclaves. A file past either is read as one larger than CacheFileMaxByteCount is.
+	CacheFileMaxEntryCount int
+	// How many times a sync whose write lost to another device's, the write being conditional on the version it read
+	// (EXACT_HEAD), reads cache.json again and decides again: 3. Past it the sync keeps what it read, and the next
+	// tries again. Negative counts as 0.
+	CacheSecretWriteRetryCount int
+	// How long an agents' enclave's remote call waits for a copy of the member's secret sealed to it, which a sponsor's
+	// device seals at its next sync after the enclave's ask: 2 minutes, past a sync's interval and a slow EVS round.
+	// Past it the call is refused, the secret pending. Non-positive does not wait.
+	CacheSecretEnclaveWaitTimeout time.Duration
+	// How often a waiting enclave reads cache.json again for its copy: 10 seconds. Non-positive reads again at once.
+	CacheSecretEnclaveWaitInterval time.Duration
+
+	// §14.2's compute service (INFER-M12-01; infer_compute_client.go). The broker's base url, https://compute.<root>
+	// with no path, which a host fills from §18.9's host table (SidecarHostList.ComputeUrl). Empty by default, as the
+	// service urls are: every remote model, enclave and web search is then unavailable, and local inference runs on.
+	// Any url but https is refused, so no token travels in the clear.
+	ComputeServiceUrl string
+	// How long one request to the broker may take, its answer read whole: 30 s. A stream's own calls set their own
+	// bound through their context. Non-positive leaves only the caller's context.
+	ComputeServiceRequestTimeout time.Duration
+	// How many more times a request is sent after a 503 or a connection that failed before any answer: 2. A refusal of
+	// any other kind is never sent again. Negative counts as 0.
+	ComputeServiceRetryCount int
+	// How long a retry waits where the broker gave no Retry-After: 1 s. Non-positive retries at once.
+	ComputeServiceRetryInterval time.Duration
+	// The longest Retry-After a retry waits out: 30 s, past which the caller's own retry decides. Non-positive retries at
+	// once.
+	ComputeServiceRetryAfterMaxDuration time.Duration
+	// The largest request body the client sends, in bytes: 32 MiB, the broker's bound on its largest route, POST
+	// compute/v1/infer, and the gateway's on a request (§8.7). A larger one is refused before anything is sent.
+	ComputeServiceRequestMaxByteCount int
+	// The largest answer the client reads where its caller names no bound, in bytes: 1 MiB. A longer one is refused
+	// whole, never cut.
+	ComputeServiceAnswerMaxByteCount int
+	// The longest code or reason word of a refusal the client takes, in bytes: 64, past the broker's longest
+	// (idempotency_key_required). A longer one, or one of other characters, reads as the status alone, so nothing a
+	// broker answers carries text into an error.
+	ComputeServiceRefusalWordMaxByteCount int
+
+	// §6.3's remote catalog (INFER-M12-01; infer_catalog_remote.go). The largest catalog answer the device reads, in
+	// bytes: 4 MiB, the broker's own bound on a published version (ComputeBrokerSettings.CatalogAnswerMaxByteCount), a
+	// format limit both ends read at one default. A longer one is refused, and the last good catalog kept.
+	RemoteCatalogMaxByteCount int
+	// How long a fetched catalog is listed before it is fetched again: 10 minutes, so a version the broker publishes
+	// reaches the picker within it, and a request naming an older one meets catalog_stale and fetches at once (§6.3).
+	// Non-positive fetches at every list.
+	RemoteCatalogMaxAge time.Duration
+	// How long a failed fetch is not tried again, the last good catalog listed meanwhile: 1 minute, so a broker that is
+	// down is not asked at every list. Non-positive tries again at once.
+	RemoteCatalogFailureRetryInterval time.Duration
+	// How long a list with no catalog kept yet waits for the first fetch: 5 s, so the picker's first list shows the
+	// remote models a reachable broker answers, while a call on a device that cannot reach it waits that long once and
+	// lists the local models, the fetch going on in the background. Non-positive waits for none.
+	RemoteCatalogFirstFetchWait time.Duration
 }
 
 // One of §6.5's defaults by memory: the local model a device of its classes gets with at least its memory.
@@ -256,17 +326,35 @@ func DefaultInferSettings() *InferSettings {
 		ModelIndexTimeout:                  30 * time.Second,
 		ModelChunkTimeout:                  5 * time.Minute,
 		// a tenth
-		ModelFreeSpaceMarginFraction:    0.1,
-		ModelFetchRetryInterval:         2 * time.Second,
-		ModelRetryAfterMaxDuration:      time.Minute,
-		ModelRateLimitedMaxCount:        10,
-		ModelHubFallback:                true,
-		ModelApiProbeInterval:           30 * time.Second,
-		ModelHubFailureMaxCount:         3,
-		ModelHubRedirectMaxCount:        3,
-		ModelHubRedirectHostSuffixes:    []string{"huggingface.co", "hf.co"},
-		BrowserLargeModelMemoryGiB:      16,
-		BrowserMinDecodeTokensPerSecond: 8,
+		ModelFreeSpaceMarginFraction:          0.1,
+		ModelFetchRetryInterval:               2 * time.Second,
+		ModelRetryAfterMaxDuration:            time.Minute,
+		ModelRateLimitedMaxCount:              10,
+		ModelHubFallback:                      true,
+		ModelApiProbeInterval:                 30 * time.Second,
+		ModelHubFailureMaxCount:               3,
+		ModelHubRedirectMaxCount:              3,
+		ModelHubRedirectHostSuffixes:          []string{"huggingface.co", "hf.co"},
+		BrowserLargeModelMemoryGiB:            16,
+		BrowserMinDecodeTokensPerSecond:       8,
+		CacheSecretSyncInterval:               5 * time.Minute,
+		CacheSecretRepoScanMaxCount:           64,
+		CacheFileMaxByteCount:                 1024 * 1024,
+		CacheFileMaxEntryCount:                512,
+		CacheSecretWriteRetryCount:            3,
+		CacheSecretEnclaveWaitTimeout:         2 * time.Minute,
+		CacheSecretEnclaveWaitInterval:        10 * time.Second,
+		ComputeServiceRequestTimeout:          30 * time.Second,
+		ComputeServiceRetryCount:              2,
+		ComputeServiceRetryInterval:           1 * time.Second,
+		ComputeServiceRetryAfterMaxDuration:   30 * time.Second,
+		ComputeServiceRequestMaxByteCount:     32 * 1024 * 1024,
+		ComputeServiceAnswerMaxByteCount:      1024 * 1024,
+		ComputeServiceRefusalWordMaxByteCount: 64,
+		RemoteCatalogMaxByteCount:             4 * 1024 * 1024,
+		RemoteCatalogMaxAge:                   10 * time.Minute,
+		RemoteCatalogFailureRetryInterval:     1 * time.Minute,
+		RemoteCatalogFirstFetchWait:           5 * time.Second,
 		LocalDefaults: []*InferLocalDefault{
 			{
 				Name:               "local-gemma-4-26b-a4b-off",

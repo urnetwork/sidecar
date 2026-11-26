@@ -88,7 +88,6 @@ func computeRouteDesign() []*ComputeRoute {
 // The design routes whose owners have not landed their handlers: every one, at CSRV-M12-01. An area removes its
 // routes in the change that registers them.
 var computeRouteUnbuilt = []string{
-	ComputeRouteCatalog,
 	ComputeRouteTunnel,
 	ComputeRouteInferPrepare,
 	ComputeRouteInfer,
