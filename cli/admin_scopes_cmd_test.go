@@ -3,12 +3,14 @@ package main
 // ur admin scopes (admin_scopes_cmd.go; QD-1163): add sends nothing with no terminal or on a no, and goes confirmed on a
 // yes carrying the label and its one owner; a binding naming both owners, neither or a member that is no member_id
 // refuses before anything is asked; with no word the verified base's scopes print; and add is a Confirm method, the
-// show not. Synthetic values only.
+// show not. The list names on stderr the ServiceSettings record holding the scopes where its signer no longer stands
+// (QD-1207), or that it could not say, its stdout the scopes' lines alone. Synthetic values only.
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"sync"
@@ -157,5 +159,89 @@ func TestUrAdminScopesAddIsConfirmOnly(t *testing.T) {
 	}
 	if methods := urAdminScopesMethods(&testUrDaemonTarget{}); len(methods) != 0 {
 		t.Error("a target with no network serves the scopes methods")
+	}
+}
+
+// The list names the carried ServiceSettings record on stderr, its signer, the signer's member, why it no longer stands
+// and who files another, while stdout is the scopes' lines alone; a list whose record could not be read says so on
+// stderr; and one whose record's signer stands adds nothing, with no scope bound as with one.
+func TestUrAdminScopesNamesTheCarriedRecordOnStderr(t *testing.T) {
+	settings, _ := testUrAdminCarried()
+	member := sidecar.NewId()
+	stand := &testUrAdminScopesStand{show: &urAdminScopesReply{Scopes: []*urAdminScope{{Label: "crew", MemberId: member.String()}}, Carried: settings}}
+	daemon := startTestUrDaemon(t, shortTestDirectory(t), func(daemon *sidecar.Daemon) {
+		for _, method := range stand.methods() {
+			if err := daemon.RegisterMethod(method); err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
+	cli, stdout, stderr := newTestUrCli(daemon.socketPath)
+	if code := cli.main(context.Background(), []string{"ur", "admin", "scopes"}); code != urExitOk {
+		t.Fatalf("exit %d", code)
+	}
+	if text := stdout.String(); text != "crew member "+member.String()+"\n" {
+		t.Errorf("stdout is not the scopes' lines alone:\n%s", text)
+	}
+	carriedLine := "ur admin scopes: the ServiceSettings record holding the scopes stands under a signer who no longer stands until " +
+		"another is filed: service_settings: signed by " + settings.SignerId.String() + " of member " + settings.MemberId.String() +
+		", revoked at position 42, its member no longer the network's; an Owner or Admin files another: ur admin settings with any option\n"
+	if text := stderr.String(); text != carriedLine {
+		t.Errorf("stderr reads\n%s\nwant\n%s", text, carriedLine)
+	}
+
+	for _, c := range []struct {
+		show   *urAdminScopesReply
+		stdout string
+		stderr string
+	}{
+		{
+			show:   &urAdminScopesReply{Scopes: []*urAdminScope{}, CarriedUnknown: true},
+			stdout: "no Team scope: the network's verified base binds none\n",
+			stderr: "ur admin scopes: whether the ServiceSettings record holding the scopes stands under a standing signer is not known " +
+				"here, since this device could not read the config head's records now\n",
+		},
+		{
+			show:   &urAdminScopesReply{Scopes: []*urAdminScope{{Label: "crew", MemberId: member.String()}}},
+			stdout: "crew member " + member.String() + "\n",
+		},
+		{
+			show:   &urAdminScopesReply{Scopes: []*urAdminScope{}},
+			stdout: "no Team scope: the network's verified base binds none\n",
+		},
+	} {
+		stdout.Reset()
+		stderr.Reset()
+		stand.stateLock.Lock()
+		stand.show = c.show
+		stand.stateLock.Unlock()
+		if code := cli.main(context.Background(), []string{"ur", "admin", "scopes", "list"}); code != urExitOk || stdout.String() != c.stdout || stderr.String() != c.stderr {
+			t.Errorf("%+v: exit %d, stdout\n%s\nstderr\n%s", c.show, code, stdout.String(), stderr.String())
+		}
+	}
+}
+
+// The shows' listing takes the ServiceSettings record alone: carried VersioningRules is ur admin versioning's, a
+// listing of none gives none, and one that fails gives not known.
+func TestUrAdminCarriedServiceSettingsTakesTheSettingsRecord(t *testing.T) {
+	settings, rules := testUrAdminCarried()
+	for _, c := range []struct {
+		lister  *testUrAdminCarriedLister
+		carried *sidecar.ConfigCarriedRecord
+		unknown bool
+	}{
+		{lister: &testUrAdminCarriedLister{records: []*sidecar.ConfigCarriedRecord{rules, settings}}, carried: settings},
+		{lister: &testUrAdminCarriedLister{records: []*sidecar.ConfigCarriedRecord{rules}}},
+		{lister: &testUrAdminCarriedLister{records: []*sidecar.ConfigCarriedRecord{}}},
+		{lister: &testUrAdminCarriedLister{records: []*sidecar.ConfigCarriedRecord{nil, settings}}, carried: settings},
+		{lister: &testUrAdminCarriedLister{err: errors.New("the head is not cached and evs does not answer")}, unknown: true},
+	} {
+		carried, unknown := urAdminCarriedServiceSettings(context.Background(), c.lister)
+		if carried != c.carried || unknown != c.unknown || c.lister.calls != 1 {
+			t.Errorf("%+v gave %+v, unknown %t, after %d calls", c.lister.records, carried, unknown, c.lister.calls)
+		}
+	}
+	if line := urAdminCarriedServiceSettingsLine("these settings", nil, false); line != "" {
+		t.Errorf("a standing signer's record reads %q", line)
 	}
 }
