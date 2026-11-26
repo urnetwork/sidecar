@@ -1,0 +1,37 @@
+{
+  "valid": [
+    "a",
+    "0",
+    "me",
+    "limiter-fix",
+    "build1",
+    "a-b-c",
+    "x--y",
+    "trailing-",
+    "abcdefghijklmnopqrstuvwxyz0123456789-abcdefghijk"
+  ],
+  "invalid": [
+    "",
+    "-leading",
+    "Upper",
+    "under_score",
+    "dot.name",
+    "space name",
+    "slash/name",
+    "üñí",
+    "abcdefghijklmnopqrstuvwxyz0123456789-abcdefghijkl"
+  ],
+  "derived": [
+    {"task": "Fix the rate limiter in api", "name": "fix-the-rate-limiter"},
+    {"task": "  review PR #42: flaky tests!", "name": "review-pr-42-flaky"},
+    {"task": "Ünïcode only — ☃", "name": "n-code-only"},
+    {"task": "", "name": "agent"},
+    {"task": "!!!", "name": "agent"},
+    {"task": "supercalifragilisticexpialidocious-and-then-some-more words", "name": "supercalifragilisticexpialidocious-and-then-some"}
+  ],
+  "suffixed": [
+    {"name": "limiter-fix", "suffix": 2, "want": "limiter-fix-2"},
+    {"name": "abcdefghijklmnopqrstuvwxyz0123456789-abcdefghijk", "suffix": 12, "want": "abcdefghijklmnopqrstuvwxyz0123456789-abcdefgh-12"},
+    {"name": "abcdefghijklmnopqrstuvwxyz0123456789-abcdefg-ijk", "suffix": 12, "want": "abcdefghijklmnopqrstuvwxyz0123456789-abcdefg-12"}
+  ]
+}
