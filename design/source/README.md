@@ -1685,9 +1685,10 @@ The owner answered two more questions the build raised on 2026-11-26, after the 
 | QD-1430 | none | Each instance's engine and model files live under one per-user parent, `<ur>/_local/<instance>/`, which the macOS `ur-engine` entitlement names once; a compute answer. |
 
 - **The Linux proxy's IPv6 answers (805), as built** (discovery-proxy-ipv6-mdns, sidecar 5aa5a01c): §17.7.1's as built paragraph says the proxy answers IPv6 mDNS from `<block>.0.53`'s address in the translator's /96, where it said the fix would answer from the link's IPv6 address, with what the track built beside it: both groups for announcements and goodbyes, each family's own split bound and no IPv6 answer with the translator off. Owner decision 778's index row notes it.
+- **Dial tests (804), built.** acl-engine-followups landed it while this piece ran (sidecar 9733c975): §8.8's sentence and owner decision 804's entry say it is built where they said decided ahead of its code.
 - **Asked of the compute document.** QD-1430, where each instance's engine and model files live so the macOS sandbox can name them, amends DESIGN-COMPUTE.md §6.5 alone, so it takes no number: DESIGN-COMPUTE-AMENDMENTS.md files it under its §6 as the build's, beside QD-1386 and QD-1401, its lead and index naming it, and infer-m11-05 builds it.
 
-`build.sh` on this folder reproduces DESIGN.md (SHA-256 `15393e8630096dbf90839b95c1f46394a65e5223726067e256673efd2df3c934`) and DESIGN-DEFER.md (SHA-256 `3af6b10c35e06eaa2230e6232dc953d77f4539fe4065623950425ebab41895a6`, unchanged), and the validation shows:
+`build.sh` on this folder reproduces DESIGN.md (SHA-256 `474cf22d8f415ec628017d3014de1edecf2171e582c4bb2730c89c9a475d2366`) and DESIGN-DEFER.md (SHA-256 `3af6b10c35e06eaa2230e6232dc953d77f4539fe4065623950425ebab41895a6`, unchanged), and the validation shows:
 
 - **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item and no §2.8 row, so no guard line.
 - **Owner decisions.** All 805 rows are present and cited; APPLY.md's section pairs hold. `MAXD`, the two range checks and `LATE_DATES` take 805, dated 2026-11-26. One open owner question, Q-REPO-6.
