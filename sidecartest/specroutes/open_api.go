@@ -23,9 +23,15 @@ type specServer struct {
 	Url string `yaml:"url"`
 }
 
-// The path items of bringyour.yml, from URNETWORK_CONNECT_OPENAPI_SPEC or else the connect checkout beside the
-// module's, and the file's path.
-func loadSpecPaths(t *testing.T) (map[string]map[string]yaml.Node, string) {
+// bringyour.yml as these checks read it: its top-level servers and its path items.
+type specDocument struct {
+	Servers []specServer
+	Paths   map[string]map[string]yaml.Node
+}
+
+// bringyour.yml, from URNETWORK_CONNECT_OPENAPI_SPEC or else the connect checkout beside the module's, and the file's
+// path.
+func loadSpec(t *testing.T) (*specDocument, string) {
 	t.Helper()
 	path := os.Getenv("URNETWORK_CONNECT_OPENAPI_SPEC")
 	if path == "" {
@@ -35,12 +41,17 @@ func loadSpecPaths(t *testing.T) (map[string]map[string]yaml.Node, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var spec struct {
-		Paths map[string]map[string]yaml.Node
-	}
-	if err := yaml.Unmarshal(body, &spec); err != nil {
+	spec := &specDocument{}
+	if err := yaml.Unmarshal(body, spec); err != nil {
 		t.Fatal(err)
 	}
+	return spec, path
+}
+
+// The path items of bringyour.yml, and the file's path.
+func loadSpecPaths(t *testing.T) (map[string]map[string]yaml.Node, string) {
+	t.Helper()
+	spec, path := loadSpec(t)
 	return spec.Paths, path
 }
 
@@ -113,16 +124,17 @@ func Check(t *testing.T, prefix string, mux *http.ServeMux, patterns []string) {
 	}
 }
 
-// Checks the operations bringyour.yml documents on host, under prefix, against a service that serves its whole route
-// table on a host of its own: only the paths whose own `servers:` entry names host count, so a path of that prefix
-// another host serves (api's /v1/seed.bin beside compute's /v1/) is not the service's. patterns is the service's whole
-// table, every route of which its mux serves whether its handler is built or not, so the two must match both ways:
-// each documented operation is one of patterns and the mux serves it, and each pattern is documented on host, and on
-// host alone. An operation's `x-status: planned` mark may stay while its handler lands, the spec leading the handlers,
-// since the mux answers every route of the table either way.
-func CheckHost(t *testing.T, host string, prefix string, mux *http.ServeMux, patterns []string) {
+// Checks the operations bringyour.yml documents under prefix on a host of their own against a service that serves its
+// whole route table there: the paths whose own `servers:` entry names none of the document's top-level servers, as
+// check-routes.sh reads another host's, so a path of that prefix api serves (its /v1/seed.bin beside compute's /v1/)
+// is not the service's, and every one of them must name the same one host. patterns is the service's whole table,
+// every route of which its mux serves whether its handler is built or not, so the two must match both ways: each
+// documented operation is one of patterns and the mux serves it, and each pattern is documented on that host. An
+// operation's `x-status: planned` mark may stay while its handler lands, the spec leading the handlers, since the mux
+// answers every route of the table either way.
+func CheckHost(t *testing.T, prefix string, mux *http.ServeMux, patterns []string) {
 	t.Helper()
-	paths, path := loadSpecPaths(t)
+	spec, path := loadSpec(t)
 	table := map[string]string{}
 	for _, pattern := range patterns {
 		if found := muxMatch(mux, pattern); found != pattern {
@@ -132,7 +144,8 @@ func CheckHost(t *testing.T, host string, prefix string, mux *http.ServeMux, pat
 	}
 
 	documented := map[string]bool{}
-	for specPath, item := range paths {
+	hosts := map[string]bool{}
+	for specPath, item := range spec.Paths {
 		if !strings.HasPrefix(specPath, prefix) {
 			continue
 		}
@@ -142,11 +155,17 @@ func CheckHost(t *testing.T, host string, prefix string, mux *http.ServeMux, pat
 				t.Fatal(err)
 			}
 		}
-		if !slices.Contains(servers, specServer{Url: host}) {
+		if len(servers) == 0 || slices.ContainsFunc(servers, func(server specServer) bool {
+			return slices.Contains(spec.Servers, server)
+		}) {
+			// api's
 			continue
 		}
 		if len(servers) != 1 {
-			t.Errorf("%s names %d servers, %s alone wanted", specPath, len(servers), host)
+			t.Errorf("%s names %d servers, one host wanted", specPath, len(servers))
+		}
+		for _, server := range servers {
+			hosts[server.Url] = true
 		}
 		for method := range item {
 			if !slices.Contains(operationMethods, method) {
@@ -155,20 +174,23 @@ func CheckHost(t *testing.T, host string, prefix string, mux *http.ServeMux, pat
 			pattern := strings.ToUpper(method) + " " + specPath
 			documented[normalizedPattern(pattern)] = true
 			if _, ok := table[normalizedPattern(pattern)]; !ok {
-				t.Errorf("%s is documented on %s and is no route of the table", pattern, host)
+				t.Errorf("%s is documented on the service's host and is no route of the table", pattern)
 				continue
 			}
 			if found := muxMatch(mux, pattern); normalizedPattern(found) != normalizedPattern(pattern) {
-				t.Errorf("%s is documented on %s and matches %q in the mux", pattern, host, found)
+				t.Errorf("%s is documented on the service's host and matches %q in the mux", pattern, found)
 			}
 		}
 	}
 	if len(documented) == 0 {
-		t.Fatalf("%s documents no %s operations on %s", path, prefix, host)
+		t.Fatalf("%s documents no %s operations on a host of their own", path, prefix)
+	}
+	if len(hosts) != 1 {
+		t.Errorf("%s's %s operations on hosts of their own name %d hosts, one wanted", path, prefix, len(hosts))
 	}
 	for normalized, pattern := range table {
 		if !documented[normalized] {
-			t.Errorf("%s is in the table and missing from %s on %s", pattern, path, host)
+			t.Errorf("%s is in the table and missing from %s on the service's host", pattern, path)
 		}
 	}
 }
