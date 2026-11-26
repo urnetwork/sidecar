@@ -3,8 +3,8 @@
 // EdgeClientPool (§6.10.1, §13.6; TLS-M5-11): the K connect clients an edge process runs in urnetwork-edge, which
 // tlsedge, mxedge and smtpedge share. Each is a platform client on the credential its host's ServiceClientSource
 // answers for its index: Required and relay-only (ApplySidecarClientSettings; I-3, D-TLS-4), reachable on id 21842
-// alone, advertising Service and nothing else, with a Subprotocol in SubprotocolRoleEdge, which runs no Hello and no
-// HeadCheck.
+// alone, advertising Service and nothing else from before it can receive, with a Subprotocol in SubprotocolRoleEdge,
+// which runs no Hello and no HeadCheck.
 //
 // The pool lists its clients for Find (Clients, ClientIds) and hands out the one a ticket names (Client), refusing
 // an id it does not hold. An edge is ready only while all K are connected (Ready, D-TLS-9), and the pool holds no
@@ -14,8 +14,11 @@
 //
 // A source that answers each client's identity seed (EdgeClientIdentitySource, host_edge_identity.go) gives the client
 // the connect identity it had in every earlier process of its slot: its client key, its sequence certificate and its
-// Service provide key, so a restart costs its listeners none of the contracts they hold to its id. A client keeps one
-// instance id for the process's life, across the jwts it is given (connect's Auth: one id per in-memory instance).
+// Service provide key, so a restart costs its listeners none of the contracts they hold to its id. The platform loads
+// that key and provides Service before the client can receive (SidecarPlatformClientArgs.ApplyProvide), so the first
+// copy of such a contract that reaches a restarted client verifies, rather than being refused for a mode the client
+// does not provide yet and verifying only at its listener's resend. A client keeps one instance id for the process's
+// life, across the jwts it is given (connect's Auth: one id per in-memory instance).
 
 package sidecar
 
@@ -254,8 +257,8 @@ func (self *EdgeClientPool) readIdentity(ctx context.Context, index int, clientI
 	return identity, nil
 }
 
-// One client: Required, relay-only, on id 21842 alone, providing Service, with its edge dispatcher, and the connect
-// identity its slot's earlier processes had where the source answers it.
+// One client: Required, relay-only, on id 21842 alone, providing Service from before it can receive, with its edge
+// dispatcher, and the connect identity its slot's earlier processes had where the source answers it.
 func (self *EdgeClientPool) openClient(index int, platform SidecarPlatform, strategy *connect.ClientStrategy, budget *SubprotocolBudget, inbound SubprotocolInboundFunction) (*edgePoolClient, error) {
 	credential, err := self.readCredential(self.ctx, index)
 	if err != nil {
@@ -300,7 +303,7 @@ func (self *EdgeClientPool) openClient(index int, platform SidecarPlatform, stra
 		default:
 		}
 	}
-	client.platform, err = platform.OpenClient(self.ctx, &SidecarPlatformClientArgs{
+	platformArgs := &SidecarPlatformClientArgs{
 		ClientId:                  credential.ClientId,
 		ClientSettings:            &clientSettings,
 		Auth:                      self.clientAuth(client, credential),
@@ -309,7 +312,11 @@ func (self *EdgeClientPool) openClient(index int, platform SidecarPlatform, stra
 		PlatformUrl:               credential.PlatformUrl,
 		PlatformTransportSettings: &transportSettings,
 		ProvideSecretKeys:         provideSecretKeys,
-	})
+		// Service and nothing else, the edge dispatcher's own: no edge provides Network, and none Public (§6.10.1).
+		// From before the client can receive, so a listener's first copy of a contract it holds to this id verifies.
+		ProvideModes: baseProvideModes(SubprotocolRoleEdge),
+	}
+	client.platform, err = platform.OpenClient(self.ctx, platformArgs)
 	if identity != nil {
 		// connect took its key from the seed as the client was built, as a generation's client does
 		// (sidecar_new_connect.go); only the derived seed is the pool's to clear, never a host's settings
@@ -318,14 +325,9 @@ func (self *EdgeClientPool) openClient(index int, platform SidecarPlatform, stra
 	if err != nil {
 		return nil, fmt.Errorf("%w: client %d did not open", ErrEdgeClientPool, index)
 	}
-	if provideSecretKeys != nil {
-		// a platform that loads no keys as it builds a client gets them here, still before Service is provided
-		client.platform.Client.ContractManager().LoadProvideSecretKeys(provideSecretKeys)
-	}
-	// Service and nothing else: no edge provides Network, and none Public (§6.10.1)
-	client.platform.Client.ContractManager().SetProvideModes(map[connectprotocol.ProvideMode]bool{
-		connectprotocol.ProvideMode_Service: true,
-	})
+	// a platform that did not ready the client as it built it gets the keys and Service here, the keys still before
+	// Service is provided: late, since a contract for Service that reached the client first was refused
+	applyProvideAfterOpen(client.platform.Client, platformArgs)
 	var reserveRange func(context.Context) (uint64, error)
 	if source, ok := self.source.(EdgeStreamIdRangeSource); ok {
 		reserveRange = func(ctx context.Context) (uint64, error) {
