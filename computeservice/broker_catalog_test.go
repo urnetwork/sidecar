@@ -49,7 +49,7 @@ func (self *fakeComputeCatalogStore) Publish(ctx context.Context, version *Compu
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	if version.Version != uint64(len(self.versions))+1 {
-		return errComputeCatalogRace
+		return ErrComputeCatalogRace
 	}
 	if _, err := computeCatalogAnswerBytes(version.Answer); err != nil {
 		return err

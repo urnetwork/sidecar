@@ -76,7 +76,7 @@ var computeCatalogEffortOrder = []sidecar.InferEffort{
 
 var (
 	// Another broker or job published the version this one was about to.
-	errComputeCatalogRace = errors.New("another publish took the catalog version")
+	ErrComputeCatalogRace = errors.New("another publish took the catalog version")
 	// A build the catalog's rules refuse: entries whose names collide, more models than the format takes, a version
 	// past its bound.
 	errComputeCatalogBuild = errors.New("catalog build refused")
@@ -117,26 +117,29 @@ func (self *ComputeCatalogVersion) Exposure(provider ComputeProviderId) *Compute
 type computeCatalogVersionStore interface {
 	// The newest count versions, newest first; none where none was published.
 	Newest(ctx context.Context, count int) ([]*ComputeCatalogVersion, error)
-	// Publishes version, whose number must be one past the newest: errComputeCatalogRace where another took it.
+	// Publishes version, whose number must be one past the newest: ErrComputeCatalogRace where another took it.
 	Publish(ctx context.Context, version *ComputeCatalogVersion) error
 	// Sets version's exposures as of at.
 	SetExposure(ctx context.Context, version uint64, exposures []*ComputeDirectExposure, at time.Time) error
 }
 
 // compute_catalog_version over a database, which must link MG-C2: on one without its table every call fails, never
-// answers.
-type computeCatalogDbStore struct {
+// answers. The job and the engine's cache read and write through it; server's private-stack test runs its SQL.
+type ComputeCatalogStore struct {
 	db       operator.Db
 	settings *ComputeBrokerSettings
 }
 
-// A store over db.
-func newComputeCatalogDbStore(db operator.Db, settings *ComputeBrokerSettings) *computeCatalogDbStore {
-	return &computeCatalogDbStore{db: db, settings: settings}
+// A store over db, its bounds from settings (nil: DefaultComputeBrokerSettings).
+func NewComputeCatalogStore(db operator.Db, settings *ComputeBrokerSettings) *ComputeCatalogStore {
+	if settings == nil {
+		settings = DefaultComputeBrokerSettings()
+	}
+	return &ComputeCatalogStore{db: db, settings: settings}
 }
 
 // See computeCatalogVersionStore.
-func (self *computeCatalogDbStore) Newest(ctx context.Context, count int) ([]*ComputeCatalogVersion, error) {
+func (self *ComputeCatalogStore) Newest(ctx context.Context, count int) ([]*ComputeCatalogVersion, error) {
 	if self.db == nil {
 		return nil, errors.New("compute catalog: no database")
 	}
@@ -208,7 +211,7 @@ func computeCatalogAnswerBytes(answer *protocol.InferCatalogAnswer) ([]byte, err
 }
 
 // See computeCatalogVersionStore: one insert, which the version's primary key holds to one publisher.
-func (self *computeCatalogDbStore) Publish(ctx context.Context, version *ComputeCatalogVersion) error {
+func (self *ComputeCatalogStore) Publish(ctx context.Context, version *ComputeCatalogVersion) error {
 	if self.db == nil {
 		return errors.New("compute catalog: no database")
 	}
@@ -235,14 +238,14 @@ func (self *computeCatalogDbStore) Publish(ctx context.Context, version *Compute
 			return err
 		}
 		if result.RowsAffected != 1 {
-			return errComputeCatalogRace
+			return ErrComputeCatalogRace
 		}
 		return nil
 	})
 }
 
 // See computeCatalogVersionStore.
-func (self *computeCatalogDbStore) SetExposure(ctx context.Context, version uint64, exposures []*ComputeDirectExposure, at time.Time) error {
+func (self *ComputeCatalogStore) SetExposure(ctx context.Context, version uint64, exposures []*ComputeDirectExposure, at time.Time) error {
 	if self.db == nil {
 		return errors.New("compute catalog: no database")
 	}
@@ -655,7 +658,7 @@ func (self *computeCatalogCache) store() (computeCatalogVersionStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newComputeCatalogDbStore(db, self.engine.brokerSettings()), nil
+	return NewComputeCatalogStore(db, self.engine.brokerSettings()), nil
 }
 
 // The newest two versions, read again past CatalogCacheMaxAge, or where the newest held is older than atLeast.
@@ -833,7 +836,7 @@ func NewComputeProviderPricesJob(args *ComputeProviderPricesJobArgs) (*ComputePr
 		if args.Db == nil {
 			return nil, errors.New("compute_provider_prices: a database")
 		}
-		self.store = newComputeCatalogDbStore(args.Db, settings)
+		self.store = NewComputeCatalogStore(args.Db, settings)
 	}
 	return self, nil
 }
