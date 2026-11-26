@@ -64,6 +64,10 @@ func TestComputeLedgerSettingsDefaults(t *testing.T) {
 		{name: "SettleInterval", got: settings.SettleInterval, want: 2 * time.Second},
 		{name: "SettleBatchRowCount", got: settings.SettleBatchRowCount, want: 500},
 		{name: "UnconfirmedHoldMaxAge", got: settings.UnconfirmedHoldMaxAge, want: 60 * time.Second},
+		// §9.7's and §14.6's minute, §9.6's hour of host egress, and the device's 96-byte label bound
+		{name: "OpMinuteGrain", got: settings.OpMinuteGrain, want: time.Minute},
+		{name: "EnclaveHostEgressInterval", got: settings.EnclaveHostEgressInterval, want: time.Hour},
+		{name: "CatalogIdMaxByteCount", got: settings.CatalogIdMaxByteCount, want: 96},
 		{name: "SettledUnbookedPageAge", got: settings.SettledUnbookedPageAge, want: 60 * time.Second},
 		{name: "TeeRecoverAfter", got: settings.TeeRecoverAfter, want: 10 * time.Minute},
 		{name: "OpReleaseAfter", got: settings.OpReleaseAfter, want: 24 * time.Hour},
@@ -138,5 +142,21 @@ func TestComputeLedgerSettingsDefaults(t *testing.T) {
 	settings.StripePackCredits[0] = 1
 	if DefaultComputeLedgerSettings().StripePackCredits[0] != 10 {
 		t.Error("the defaults share a slice between instances")
+	}
+}
+
+// The windows the ledger's calls lean on nest: an admission's row is written well inside the age past which its
+// unconfirmed hold is dropped, and a settlement's late script stops before the memo that guards a booked
+// operation expires.
+func TestComputeLedgerSettingsWindowsNest(t *testing.T) {
+	settings := DefaultComputeLedgerSettings()
+	if settings.UnconfirmedHoldMaxAge <= settings.OpRowWriteMaxTime {
+		t.Errorf("a row may take %v, past the unconfirmed hold's %v", settings.OpRowWriteMaxTime, settings.UnconfirmedHoldMaxAge)
+	}
+	if settings.ProjectionMemoTtl <= settings.SettleScriptWindow {
+		t.Errorf("a settle script may run %v late, past the memo's %v", settings.SettleScriptWindow, settings.ProjectionMemoTtl)
+	}
+	if settings.EnclaveHostEgressInterval%settings.EnclaveInterval != 0 || settings.EnclaveInterval%settings.OpMinuteGrain != 0 {
+		t.Error("the egress hour, the enclave interval and the minute do not nest")
 	}
 }
