@@ -327,7 +327,8 @@ func readSidecarGitRemote(configPath string, settings *SidecarProjectSettings) s
 	section := ""
 	first := ""
 	scanner := bufio.NewScanner(bytes.NewReader(content))
-	scanner.Buffer(make([]byte, 0, 4*1024), int(settings.GitConfigByteCount)+1)
+	// nil: the scanner grows its buffer as a line needs, to a whole config at most
+	scanner.Buffer(nil, int(settings.GitConfigByteCount)+1)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if strings.HasPrefix(line, "[") {

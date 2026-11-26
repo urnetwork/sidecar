@@ -53,6 +53,23 @@ const sidecarHostListVersion = 1
 // A list that does not hold to its format.
 var ErrSidecarHostList = errors.New("host list refused")
 
+// What the format holds a host's name to (QD-702): RFC 1035's bounds, so changing one is a format change, which no
+// list or reader makes alone.
+type SidecarHostListFormatSettings struct {
+	// The most bytes of a host's name in its dotted text form: RFC 1035's 253.
+	HostNameMaxByteCount int
+	// The most bytes of one label of it: RFC 1035 §2.3.4's 63.
+	HostLabelMaxByteCount int
+}
+
+// The format's values, the only source of their defaults. A fresh value each call.
+func DefaultSidecarHostListFormatSettings() *SidecarHostListFormatSettings {
+	return &SidecarHostListFormatSettings{
+		HostNameMaxByteCount:  253,
+		HostLabelMaxByteCount: 63,
+	}
+}
+
 // Which of SidecarSettings' urls a host is.
 type SidecarHostService string
 
@@ -177,7 +194,8 @@ func (self *SidecarHostList) clone() *SidecarHostList {
 	return clone
 }
 
-// The list data holds, refusing a field it does not know, a second value, and anything that breaks the format.
+// The list data holds, refusing a field it does not know, a second value, and anything that breaks the format, whose
+// own bounds (DefaultSidecarHostListFormatSettings) hold its host names.
 func ParseSidecarHostList(data []byte) (*SidecarHostList, error) {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
@@ -188,7 +206,7 @@ func ParseSidecarHostList(data []byte) (*SidecarHostList, error) {
 	if decoder.More() {
 		return nil, fmt.Errorf("%w: more than one value", ErrSidecarHostList)
 	}
-	if err := list.validate(); err != nil {
+	if err := list.validate(DefaultSidecarHostListFormatSettings()); err != nil {
 		return nil, err
 	}
 	return list, nil
@@ -209,9 +227,9 @@ func SidecarHostListV1() (*SidecarHostList, error) {
 }
 
 // The format's rules: version 1, a user root that is a domain name of lowercase labels where one is named, at least
-// one host, each a lowercase DNS name once, a port, words for its need, a known requirement, a service at most once
-// and only a known one, and issuer digests of 32 bytes.
-func (self *SidecarHostList) validate() error {
+// one host, each a lowercase DNS name within settings' bounds once, a port, words for its need, a known requirement, a
+// service at most once and only a known one, and issuer digests of 32 bytes.
+func (self *SidecarHostList) validate(settings *SidecarHostListFormatSettings) error {
 	refuse := func(format string, args ...any) error {
 		return fmt.Errorf("%w: %s", ErrSidecarHostList, fmt.Sprintf(format, args...))
 	}
@@ -228,7 +246,7 @@ func (self *SidecarHostList) validate() error {
 	services := map[SidecarHostService]bool{}
 	for i := range self.Hosts {
 		entry := &self.Hosts[i]
-		if !isSidecarHostName(entry.Host) {
+		if !isSidecarHostName(entry.Host, settings) {
 			return refuse("host %d is not a lowercase DNS name", i)
 		}
 		if hosts[entry.Host] {
@@ -268,9 +286,10 @@ func (self *SidecarHostList) validate() error {
 	return nil
 }
 
-// Whether name is a lowercase DNS name of two or more labels, each 1 to 63 of [a-z0-9-] with no dash at either end.
-func isSidecarHostName(name string) bool {
-	if len(name) == 0 || 253 < len(name) {
+// Whether name is a lowercase DNS name of two or more labels within settings' bounds, each label of [a-z0-9-] with no
+// dash at either end.
+func isSidecarHostName(name string, settings *SidecarHostListFormatSettings) bool {
+	if len(name) == 0 || settings.HostNameMaxByteCount < len(name) {
 		return false
 	}
 	labels := strings.Split(name, ".")
@@ -278,7 +297,7 @@ func isSidecarHostName(name string) bool {
 		return false
 	}
 	for _, label := range labels {
-		if len(label) == 0 || 63 < len(label) || label[0] == '-' || label[len(label)-1] == '-' {
+		if len(label) == 0 || settings.HostLabelMaxByteCount < len(label) || label[0] == '-' || label[len(label)-1] == '-' {
 			return false
 		}
 		for i := 0; i < len(label); i += 1 {

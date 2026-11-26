@@ -91,6 +91,23 @@ func checkServiceUrl(name string, serviceUrl string, schemes ...string) error {
 	return nil
 }
 
+// Whether root is §12.4's user root as UserRoot names it, §18.9's host table carries it (QD-1407) and NetworkLabelRow
+// keeps it: a name of lowercase LDH labels, two or more, with no trailing dot. Here, on every leg, since validate holds
+// UserRoot to it on each, though only a host that resolves a <net> by name reads a root (dns_resolve.go,
+// daemon_labels.go, dns_label_refresh.go).
+func isNetworkLabelRoot(root string) bool {
+	labels := strings.Split(root, ".")
+	if len(labels) < 2 {
+		return false
+	}
+	for _, label := range labels {
+		if !isDnsLowerLdhLabel(label) {
+			return false
+		}
+	}
+	return true
+}
+
 // Walks a settings value, refusing a nil settings struct and a number that is not positive. name
 // says where the walk is, for the error. zeroAllowed is the settings:"zero" tag of the field holding
 // value. Strings, bools and the logger are not numbers and stay out of it, and validateLeg reads

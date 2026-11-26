@@ -116,21 +116,6 @@ func isDnsLowerLdhLabel(label string) bool {
 	return isDnsLowerBytes(label, "-")
 }
 
-// Whether root is a user root as NetworkLabelRow keeps one and SidecarSettings.UserRoot names it: a name of lowercase
-// LDH labels, two or more, with no trailing dot. Here, on every leg, so settings validate it on each (§12.4).
-func isNetworkLabelRoot(root string) bool {
-	labels := strings.Split(root, ".")
-	if len(labels) < 2 {
-		return false
-	}
-	for _, label := range labels {
-		if !isDnsLowerLdhLabel(label) {
-			return false
-		}
-	}
-	return true
-}
-
 // Parses both lists. The files are this package's own, so a line that breaks the format is a build
 // mistake, which panics at init rather than serving a list that is not the one written.
 func mustParseDnsReservedList(reservedText string, brandText string) *dnsReservedList {
