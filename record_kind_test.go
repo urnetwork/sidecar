@@ -102,11 +102,17 @@ func TestRecordClassesMatchSectionEight(t *testing.T) {
 			t.Errorf("class %d reads %q here and %s in section 8", number, class, match[2])
 		}
 	}
-	if found != 7 {
-		t.Errorf("section 8 holds %d classes", found)
+	for _, addition := range testRecordClassAdditions {
+		class := RecordClass(addition.number)
+		if class.String() != addition.name || !class.Known() {
+			t.Errorf("class %d reads %q here, and %s is added (%s)", addition.number, class, addition.name, addition.source)
+		}
 	}
-	if RecordClass(0).Known() || RecordClass(8).Known() {
-		t.Error("a class section 8 does not hold reads as known")
+	if found != 7 {
+		t.Errorf("section 8 holds %d classes: a fold that writes one of testRecordClassAdditions drops its line", found)
+	}
+	if RecordClass(0).Known() || RecordClass(7+len(testRecordClassAdditions)+1).Known() {
+		t.Error("a class section 8 does not hold, and no addition names, reads as known")
 	}
 
 	// "an unknown kind takes class 2"
@@ -132,18 +138,65 @@ type testRecordEnumerationAddition struct {
 // comes to give fails until it leaves.
 var testRecordEnumerationAdditions = []testRecordEnumerationAddition{}
 
-// One kind DESIGN-COMPUTE.md adds to section 6.3 ahead of a design-records fold, with the section that writes it.
+// One kind DESIGN-COMPUTE.md adds to section 6.3 ahead of a design-records fold, with the section that writes it, and
+// where it gives the body, that body's message, which section 6.4 takes at the fold.
 type testRecordKindAddition struct {
 	number int
 	name   string
 	class  string
+	body   string
 	source string
 }
 
 // The kinds the compute extension adds to section 6.3's registry, which record_kind.go takes with their code while
 // RECORD.md waits for the fold (QD-1366, compute-plan-record-registry-fold). A line whose kind section 6.3 comes to
 // give fails until it leaves.
-var testRecordKindAdditions = []testRecordKindAddition{}
+var testRecordKindAdditions = []testRecordKindAddition{
+	{number: 54, name: "session_entry", class: "capture", body: "SessionEntryBody", source: testRecordSessionSource},
+	{number: 55, name: "session_blob", class: "bulk", body: "SessionBlobBody", source: testRecordSessionSource},
+}
+
+// One class DESIGN-COMPUTE.md adds to section 8 ahead of a design-records fold.
+type testRecordClassAddition struct {
+	number int
+	name   string
+	source string
+}
+
+// The classes the compute extension adds to section 8, which record_kind.go takes with their kinds while RECORD.md
+// waits for the fold (QD-1366). A fold that writes one into section 8's table drops its line here.
+var testRecordClassAdditions = []testRecordClassAddition{
+	{number: 8, name: "bulk", source: testRecordSessionSource},
+}
+
+// Where context history's kinds and class come from (Appendix D's RECORD.md 5.6, 6.3, 6.4 and 8 row).
+const testRecordSessionSource = "DESIGN-COMPUTE.md §24.5, §24.10 (CO-25; CTXH-M11-01)"
+
+// Each kind an addition gives a body takes that message here, and a body-apart kind is one §24.5 names.
+func TestRecordKindAdditionsTakeTheirBodies(t *testing.T) {
+	for _, addition := range testRecordKindAdditions {
+		kind := RecordKind(addition.number)
+		if addition.body == "" {
+			continue
+		}
+		message, ok := kind.NewBody()
+		if !ok {
+			t.Errorf("%s has no body here", addition.name)
+			continue
+		}
+		if got := string(proto.MessageName(message).Name()); got != addition.body {
+			t.Errorf("%s's body is %s here and %s in its addition (%s)", addition.name, got, addition.body, addition.source)
+		}
+	}
+	for _, kind := range RecordKinds() {
+		if kind.BodyApart() != (kind == RecordKindSessionEntry || kind == RecordKindSessionBlob) {
+			t.Errorf("kind %s files its body apart: %v", kind, kind.BodyApart())
+		}
+	}
+	if RecordKind(60000).BodyApart() {
+		t.Error("a kind this build does not know files its body apart")
+	}
+}
 
 // The value and name pairs of one of section 6.2's rows, cut before its parenthesis.
 func testRecordEnumerationRow(t *testing.T, doc *recordMd, key string) map[int]string {
@@ -278,7 +331,7 @@ func TestRecordKindNumbersKeepSectionSixOne(t *testing.T) {
 		t.Error("a kind outside 64 to 79 reads as derived")
 	}
 	// A block's unassigned numbers are kinds this build does not know, kept and shown generically.
-	for _, kind := range []RecordKind{11, 15, 31, 44, 54} {
+	for _, kind := range []RecordKind{11, 15, 31, 44, 60} {
 		if kind.Known() || kind.String() != "kind "+strconv.Itoa(int(kind)) {
 			t.Errorf("unassigned kind %d reads %q, known %v", kind, kind, kind.Known())
 		}
@@ -296,7 +349,8 @@ func TestRecordKindNumbersKeepSectionSixOne(t *testing.T) {
 		case kind <= 47:
 			inBlock = class == RecordClassAction || class == RecordClassAccounting || class == RecordClassLog
 		case kind <= 63:
-			inBlock = class == RecordClassCapture
+			// DESIGN-COMPUTE.md §24.5's session_blob is raw capture of class bulk
+			inBlock = class == RecordClassCapture || class == RecordClassBulk
 		}
 		if !inBlock {
 			t.Errorf("kind %d %s of class %s sits outside its block", kind, kind, class)

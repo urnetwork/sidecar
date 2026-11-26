@@ -25,12 +25,15 @@
 // listen no requests rule takes names no rule and no expiry, so no decision could activate a grant for it: a standing
 // grant alone passes it, and with none it is refused here (ErrSocketDenied), filing nothing. A use that came to
 // not_done refuses the listen, and an uncertain one answers unavailable, which the same listen asked again completes
-// under its key (AU4). The expiry asked moves with the clock, a rule's default as much as Expires from now, so each
-// listen's action is kept as its request was filed, by name, weight and the lifetime asked, until that expiry, and the
-// listen asked again presents the bytes a decision names (GrantActionKeeper, acl_grant_keep.go). A kept action whose
-// decision activated a grant that has since been revoked or ended is asked afresh, filing a new request: presented, its
-// spent decision would answer done for a grant that no longer stands (AU4), and the sockets service would refuse the
-// registration. The copy is in memory alone, so a request filed before a restart is filed again after it.
+// under its key (AU4). A listener the gate passed keeps when its grant ends: its action's expiry, where the grant is
+// the one a decision on that action activated, now or before, and none where a standing grant of the config's passed
+// it, whose end it did not ask; the daemon's reply carries it to ur socket listen. The expiry asked moves with the
+// clock, a rule's default as much as Expires from now, so each listen's action is kept as its request was filed, by
+// name, weight and the lifetime asked, until that expiry, and the listen asked again presents the bytes a decision
+// names (GrantActionKeeper, acl_grant_keep.go). A kept action whose decision activated a grant that has since been
+// revoked or ended is asked afresh, filing a new request: presented, its spent decision would answer done for a grant
+// that no longer stands (AU4), and the sockets service would refuse the registration. The copy is in memory alone, so
+// a request filed before a restart is filed again after it.
 //
 // smtp/ is a receiver's (§15.5; SOCK-M7-01): smtp/25/mx, or a Team scope's smtp/25/mx.<scope>, protocol smtp-starttls,
 // 16 streams unless the settings say otherwise. A receiver listens not serving, so its lease takes no ticket until §15
@@ -132,6 +135,9 @@ type SocketListener struct {
 	name      string
 	target    string
 	admission *socketAdmission
+	// when the grant a tls/ or smtp/ listen registered under ends (SocketComponent.listenGrantExpires), zero for none
+	// it asked; fixed at the listen
+	grantExpireTime time.Time
 	// the conns admitted and not yet taken, at most max_streams, which in flight bounds
 	accepted chan *SocketConn
 	// closed by Close
@@ -702,6 +708,14 @@ func (self *SocketListener) inflightCount() int {
 	return len(self.streams)
 }
 
+// When the grant this tls/ or smtp/ listen registered under ends, as its action asked it (owner decision 687): zero for
+// a name whose listen asks no grant, and for one a standing grant passed (SocketComponent.listenGrantExpires). The
+// service ends the registration once the grant ends, as it would at a revocation. The daemon's reply and the sdk's
+// GetGrantExpiresMillis read it (QD-1419).
+func (self *SocketListener) GrantExpires() time.Time {
+	return self.grantExpireTime
+}
+
 // Takes a listener out of the component's set.
 func (self *SocketComponent) removeListener(listener *SocketListener) {
 	self.stateLock.Lock()
@@ -843,36 +857,41 @@ func (self *SocketComponent) socketListenAction(ctx context.Context, generation 
 	return action, nil
 }
 
-// The refusal of a listen no grant covers, asked as ask from base: ErrSocketDenied, which says the expiry asked is past
-// the requests rule's maxExpiry, and what that is, where the rule that takes the listen with no expiry asked gives none
-// as long as ask's (MatchAclRequest's bound; owner decision 687), so the caller can ask a shorter one. A listen asking
-// no expiry, one no requests rule takes at all and one refused for any other reason get the bare refusal. Names no
-// socket (I-13).
+// The refusal of a listen no grant covers, asked as ask from base: ErrSocketDenied, beside an *AclGrantMaxExpiryError
+// that says the expiry asked is past the requests rule's maxExpiry, and what that is, where the rule that takes the
+// listen with no expiry asked gives none as long as ask's (MatchAclRequest's bound; owner decision 687), so the caller
+// can ask a shorter one. A listen asking no expiry, one no requests rule takes at all and one refused for any other
+// reason get the bare refusal. Names no socket (I-13).
 func socketListenDeniedError(ctx context.Context, grants *AclGrantFiler, base *protocol.CanonicalAction, ask *AclGrantRequest, now time.Time) error {
 	denied := &SocketCodeError{Err: ErrSocketDenied}
-	if ask.ExpiresMs == 0 {
+	maxExpiry, past := aclGrantPastMaxExpiry(ctx, grants, base, ask, now)
+	if !past {
 		return denied
 	}
-	atDefault := *ask
-	atDefault.ExpiresMs = 0
-	stored, err := grants.Action(ctx, base, &atDefault, now)
-	state := grants.engine.State()
-	if err != nil || state == nil {
-		return denied
+	return fmt.Errorf("%w: %w", denied, maxExpiry)
+}
+
+// When the grant a tls/ or smtp/ listen the gate passed registers under ends, as its action asked it (owner decision
+// 687): the grant its decision activated, at this use, which the outcome names, or at an earlier one
+// (AclGrantFiler.priorGrant), ends at the action's expiry. Zero where the gate passed it on a standing grant of the
+// config's, a document's rule or another action's grant, whose end this listen did not ask, and for an action that
+// names no requests rule.
+func (self *SocketComponent) listenGrantExpires(action *SidecarAction) time.Time {
+	stored, err := ParseStoredCanonicalAction(action.Canonical)
+	if err != nil || len(stored.Action.GetRuleId()) == 0 || stored.Action.GetExpiresMillis() <= 0 {
+		return time.Time{}
 	}
-	requests := state.Rows().GetRequests()
-	index := slices.IndexFunc(requests, func(rule *protocol.AclRequestRule) bool {
-		return slices.Equal(rule.GetRuleId(), stored.Action.GetRuleId())
-	})
-	if index < 0 {
-		return denied
+	if action.Outcome == nil || action.Outcome.State != ApprovalOutcomeDone || len(action.Outcome.EffectRef) == 0 {
+		// passed as standing: on the grant its own decision activated before, where that one stands
+		grants := self.listenGrantFiler()
+		if grants == nil {
+			return time.Time{}
+		}
+		if _, stands := grants.priorGrant(stored, action.Detail, action.RunId, action.AgentId, self.clock.Now()); !stands {
+			return time.Time{}
+		}
 	}
-	nowMs := now.UnixMilli()
-	_, maxMs := aclRequestGrantEnd(requests[index], 0, nowMs)
-	if ask.ExpiresMs <= nowMs+maxMs {
-		return denied
-	}
-	return fmt.Errorf("%w: the expiry asked is past the requests rule's maxExpiry, %v", denied, time.Duration(maxMs)*time.Millisecond)
+	return time.UnixMilli(stored.Action.GetExpiresMillis()).UTC()
 }
 
 // The listen kind's Lookup (§16.6's grant row), which the host's gate reconciles a reserved use by: the grant
@@ -1044,7 +1063,9 @@ func (self *SocketComponent) listenAs(ctx context.Context, address *SocketAddres
 		if err := socketSystemPublishListenable(generation, policy, args, self.clock.Now()); err != nil {
 			return nil, err
 		}
-	} else if socketNamespaceProvidesService(namespace) {
+	}
+	grantExpireTime := time.Time{}
+	if !systemPublish && socketNamespaceProvidesService(namespace) {
 		if generation == nil || generation.authorize == nil {
 			return nil, &SocketCodeError{Err: ErrSocketUnavailable}
 		}
@@ -1059,23 +1080,25 @@ func (self *SocketComponent) listenAs(ctx context.Context, address *SocketAddres
 		if err := socketListenOutcomeError(action.Outcome); err != nil {
 			return nil, err
 		}
+		grantExpireTime = self.listenGrantExpires(action)
 	}
 
 	listener := &SocketListener{
-		component:      self,
-		settings:       self.settings,
-		clock:          self.clock,
-		networkId:      self.networkId,
-		listenId:       NewId(),
-		namespace:      namespace,
-		name:           name,
-		target:         labels.Label + ":" + name,
-		accepted:       make(chan *SocketConn, args.MaxStreams),
-		closed:         make(chan struct{}),
-		serving:        !args.NotServing,
-		attachments:    map[uint64]*socketListenerAttachment{},
-		streams:        map[*socketListenerStream]bool{},
-		streamsChanged: make(chan struct{}),
+		component:       self,
+		settings:        self.settings,
+		clock:           self.clock,
+		networkId:       self.networkId,
+		listenId:        NewId(),
+		namespace:       namespace,
+		name:            name,
+		target:          labels.Label + ":" + name,
+		grantExpireTime: grantExpireTime,
+		accepted:        make(chan *SocketConn, args.MaxStreams),
+		closed:          make(chan struct{}),
+		serving:         !args.NotServing,
+		attachments:     map[uint64]*socketListenerAttachment{},
+		streams:         map[*socketListenerStream]bool{},
+		streamsChanged:  make(chan struct{}),
 	}
 	listener.admission = newSocketAdmission(self.settings, self.clock, self.networkId, listener.listenId, namespace, name, listener.nameTokens, args.MaxStreams)
 	args.ListenId = listener.listenId

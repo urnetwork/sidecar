@@ -16,6 +16,11 @@
 // redacting twice changes nothing. The restore point is never redacted (§16.7): restore needs exact bytes, and they
 // never leave the device.
 //
+// DESIGN-COMPUTE §24.9 (Q-CTXH-15, D-CTXH-11; CTXH-M11-03): record.redact.pii's hashing spares kinds 54 and 55, a
+// run's session history, which stays in the author's vault, owner-bound and never indexed, so a resumed or continued
+// run keeps the addresses the person typed and the attendees a calendar read returned; the secret rules still apply
+// to them (RedactKind). An export of their bodies hashes PII where the history leaves the member's devices.
+//
 // Safe for concurrent use.
 
 package sidecar
@@ -241,6 +246,24 @@ func (self *Redactor) state() ([]byte, bool) {
 func (self *Redactor) Redact(text []byte) ([]byte, []RedactMatch) {
 	key, pii := self.state()
 	defer clear(key)
+	return self.redactWith(key, text, pii)
+}
+
+// The kinds record.redact.pii's hashing spares (DESIGN-COMPUTE §24.9, Q-CTXH-15): a run's session entries and blobs.
+func RecordKindPiiExempt(kind RecordKind) bool {
+	return kind == RecordKindSessionEntry || kind == RecordKindSessionBlob
+}
+
+// Redact for text a body of kind holds: every secret replaced, and PII while it is hashed unless the kind is exempt
+// (RecordKindPiiExempt), so kinds 54 and 55 keep addresses and numbers as written.
+func (self *Redactor) RedactKind(kind RecordKind, text []byte) ([]byte, []RedactMatch) {
+	key, pii := self.state()
+	defer clear(key)
+	return self.redactWith(key, text, pii && !RecordKindPiiExempt(kind))
+}
+
+// Redact's marking under key, PII when pii.
+func (self *Redactor) redactWith(key []byte, text []byte, pii bool) ([]byte, []RedactMatch) {
 	matches, _ := findRedactMatches(text, pii)
 	return applyRedactMatches(text, matches, func(match RedactMatch) string {
 		mac := hmac.New(sha256.New, key)

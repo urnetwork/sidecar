@@ -70,7 +70,13 @@ func ComputeProjectionKey(networkId operator.Id) string {
 
 // A subject's budget counters, in its network's slot: {cmp_<network_id>}:b:<subject_id>.
 func ComputeBudgetKey(networkId operator.Id, subjectId operator.Id) string {
-	return ComputeProjectionKey(networkId) + ":b:" + hex.EncodeToString(subjectId[:])
+	return computeBudgetKeyOf(ComputeProjectionKey(networkId), subjectId)
+}
+
+// A subject's budget counters beside projectionKey, its network's projection: what a call's loop over its subjects
+// builds from the projection's key made once before it, so the lint sees one tag on every pass.
+func computeBudgetKeyOf(projectionKey string, subjectId operator.Id) string {
+	return projectionKey + ":b:" + hex.EncodeToString(subjectId[:])
 }
 
 // The network's unconfirmed holds by the Redis TIME each was taken: {cmp_<network_id>}:u.
@@ -197,17 +203,16 @@ func computeProjectionAmount(what string, amount int64) error {
 	return nil
 }
 
-// The subjects' counters' keys for network, each once, in order: what a call declares after the projection and the
-// unconfirmed set.
-func computeBudgetKeys(networkId operator.Id, subjectIds []operator.Id) []string {
-	keys := []string{}
+// subjectIds each once, in order: the subjects whose counters a call declares after the projection and the
+// unconfirmed set. Each call builds its keys from these in a loop of its own, which sidecartest/crossslot's lint reads.
+func computeSubjectsOnce(subjectIds []operator.Id) []operator.Id {
+	once := []operator.Id{}
 	for _, subjectId := range subjectIds {
-		key := ComputeBudgetKey(networkId, subjectId)
-		if !slices.Contains(keys, key) {
-			keys = append(keys, key)
+		if !slices.Contains(once, subjectId) {
+			once = append(once, subjectId)
 		}
 	}
-	return keys
+	return once
 }
 
 // A line's ARGV, subject, budget, period letter and cap, checked.
@@ -315,6 +320,8 @@ type ComputeHoldResult struct {
 	// The Redis TIME of the hold, the operation's start; for a refusal, when it was refused; zero for a repeat whose
 	// hold has settled.
 	Time time.Time
+	// For budget, the request's line that refused, so the refusal names its budget and period (§6.6); nil otherwise.
+	Line *ComputeBudgetLine
 }
 
 // Takes request's hold (see the file header). Only the TEE path is built; the others are refused with
@@ -340,8 +347,11 @@ func ComputeProjectionHold(env operator.Env, ctx context.Context, settings *Comp
 	if err != nil {
 		return nil, err
 	}
-	keys := append([]string{ComputeProjectionKey(request.NetworkId), computeUnconfirmedKey(request.NetworkId)},
-		computeBudgetKeys(request.NetworkId, subjectIds)...)
+	projectionKey := ComputeProjectionKey(request.NetworkId)
+	keys := []string{projectionKey, computeUnconfirmedKey(request.NetworkId)}
+	for _, subjectId := range computeSubjectsOnce(subjectIds) {
+		keys = append(keys, computeBudgetKeyOf(projectionKey, subjectId))
+	}
 	args := append([]string{
 		hex.EncodeToString(request.OpKey[:]),
 		strconv.Itoa(int(request.Kind)),
@@ -360,12 +370,16 @@ func ComputeProjectionHold(env operator.Env, ctx context.Context, settings *Comp
 	if err != nil {
 		return nil, err
 	}
-	if len(values) != 3 {
+	// three values, and a budget refusal's fourth, the line it refused on
+	if len(values) < 3 {
 		return nil, fmt.Errorf("%w: a hold answers 3 values", ErrComputeProjectionReply)
 	}
 	outcome := ComputeHoldOutcome(values[0])
 	if !slices.Contains([]ComputeHoldOutcome{ComputeHoldTaken, ComputeHoldHeld, ComputeHoldBalance, ComputeHoldBudget, ComputeHoldVoid, ComputeHoldDropped}, outcome) {
 		return nil, fmt.Errorf("%w: the hold outcome %q", ErrComputeProjectionReply, values[0])
+	}
+	if (outcome == ComputeHoldBudget && len(values) != 4) || (outcome != ComputeHoldBudget && len(values) != 3) {
+		return nil, fmt.Errorf("%w: a hold answering %s with %d values", ErrComputeProjectionReply, outcome, len(values))
 	}
 	retryMs, err1 := strconv.ParseInt(values[1], 10, 64)
 	timeMs, err2 := strconv.ParseInt(values[2], 10, 64)
@@ -375,6 +389,13 @@ func ComputeProjectionHold(env operator.Env, ctx context.Context, settings *Comp
 	result := &ComputeHoldResult{Outcome: outcome, RetryAfter: time.Duration(retryMs) * time.Millisecond}
 	if 0 < timeMs {
 		result.Time = time.UnixMilli(timeMs).UTC()
+	}
+	if outcome == ComputeHoldBudget {
+		index, err := strconv.Atoi(values[3])
+		if err != nil || index < 0 || len(request.Lines) <= index {
+			return nil, fmt.Errorf("%w: a budget refusal's line %q", ErrComputeProjectionReply, values[3])
+		}
+		result.Line = request.Lines[index]
 	}
 	return result, nil
 }
@@ -411,7 +432,11 @@ func ComputeProjectionConfirm(env operator.Env, ctx context.Context, settings *C
 	if err != nil {
 		return "", err
 	}
-	keys := append([]string{ComputeProjectionKey(networkId), computeUnconfirmedKey(networkId)}, computeBudgetKeys(networkId, subjectIds)...)
+	projectionKey := ComputeProjectionKey(networkId)
+	keys := []string{projectionKey, computeUnconfirmedKey(networkId)}
+	for _, subjectId := range computeSubjectsOnce(subjectIds) {
+		keys = append(keys, computeBudgetKeyOf(projectionKey, subjectId))
+	}
 	reply, err := redis.RunScript(ctx, computeProjectionConfirmScript, keys, []string{
 		hex.EncodeToString(opKey[:]),
 		computeMillis(settings.UnconfirmedHoldMaxAge),
@@ -470,8 +495,11 @@ func ComputeProjectionSettle(env operator.Env, ctx context.Context, settings *Co
 	if err != nil {
 		return "", err
 	}
-	keys := append([]string{ComputeProjectionKey(request.NetworkId), computeUnconfirmedKey(request.NetworkId)},
-		computeBudgetKeys(request.NetworkId, append(slices.Clone(request.SubjectIds), lineSubjectIds...))...)
+	projectionKey := ComputeProjectionKey(request.NetworkId)
+	keys := []string{projectionKey, computeUnconfirmedKey(request.NetworkId)}
+	for _, subjectId := range computeSubjectsOnce(append(slices.Clone(request.SubjectIds), lineSubjectIds...)) {
+		keys = append(keys, computeBudgetKeyOf(projectionKey, subjectId))
+	}
 	args := append([]string{
 		hex.EncodeToString(request.OpKey[:]),
 		strconv.Itoa(int(request.Kind)),
@@ -496,7 +524,11 @@ func ComputeProjectionVoid(env operator.Env, ctx context.Context, settings *Comp
 	if err != nil {
 		return "", err
 	}
-	keys := append([]string{ComputeProjectionKey(networkId), computeUnconfirmedKey(networkId)}, computeBudgetKeys(networkId, subjectIds)...)
+	projectionKey := ComputeProjectionKey(networkId)
+	keys := []string{projectionKey, computeUnconfirmedKey(networkId)}
+	for _, subjectId := range computeSubjectsOnce(subjectIds) {
+		keys = append(keys, computeBudgetKeyOf(projectionKey, subjectId))
+	}
 	reply, err := redis.RunScript(ctx, computeProjectionVoidScript, keys, []string{
 		hex.EncodeToString(opKey[:]),
 		computeMillis(settings.UnconfirmedHoldMaxAge),
@@ -592,8 +624,11 @@ func ComputeProjectionDrop(env operator.Env, ctx context.Context, settings *Comp
 		}
 		args = append(args, hex.EncodeToString(op.OpKey[:]), strconv.FormatInt(op.AmountNanoUsd, 10))
 	}
-	keys := append([]string{ComputeProjectionKey(request.NetworkId), computeUnconfirmedKey(request.NetworkId)},
-		computeBudgetKeys(request.NetworkId, request.SubjectIds)...)
+	projectionKey := ComputeProjectionKey(request.NetworkId)
+	keys := []string{projectionKey, computeUnconfirmedKey(request.NetworkId)}
+	for _, subjectId := range computeSubjectsOnce(request.SubjectIds) {
+		keys = append(keys, computeBudgetKeyOf(projectionKey, subjectId))
+	}
 	reply, err := redis.RunScript(ctx, computeProjectionDropScript, keys, args)
 	if err != nil {
 		return nil, err
@@ -727,7 +762,11 @@ func ComputeProjectionRebuild(env operator.Env, ctx context.Context, settings *C
 		}
 	}
 	slices.SortFunc(subjectIds, operator.Id.Cmp)
-	keys := append([]string{key, computeUnconfirmedKey(snapshot.NetworkId)}, computeBudgetKeys(snapshot.NetworkId, slices.Compact(subjectIds))...)
+	projectionKey := ComputeProjectionKey(snapshot.NetworkId)
+	keys := []string{projectionKey, computeUnconfirmedKey(snapshot.NetworkId)}
+	for _, subjectId := range slices.Compact(subjectIds) {
+		keys = append(keys, computeBudgetKeyOf(projectionKey, subjectId))
+	}
 	reply, err := redis.RunScript(ctx, computeProjectionRebuildScript, keys, args)
 	if err != nil {
 		return err

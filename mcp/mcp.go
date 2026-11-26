@@ -49,6 +49,9 @@ type McpErrorData struct {
 	Retryable bool `json:"retryable"`
 	// EVS_DROPPED's drop (§16.5's evs_read row), absent from every other error.
 	Drop *McpErrorDrop `json:"drop,omitempty"`
+	// The longest the requests rule lets a grant run, ms, beside the refusal of an expires past it (socket_listen's;
+	// owner decision 687), absent from every other error.
+	MaxExpiryMillis int64 `json:"max_expiry_millis,omitempty"`
 }
 
 // The drop that took a version: its id, its signer, a repo admin, and its window's end, ms; ids only (I-13).

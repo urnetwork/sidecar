@@ -58,6 +58,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
@@ -624,22 +625,29 @@ func (self *Sidecar) TlsSignLabelReclaim(ctx context.Context, name string, incid
 	return component.manager.SignLabelReclaim(ctx, &DnsReclaimProof{Name: name, NetworkId: *networkId, IncidentId: incidentId})
 }
 
-// What ListenTls takes beyond the name: §9.5's weight and §5.4's decision.
+// What ListenTls takes beyond the name: §9.5's weight, §5.4's decision and the grant's lifetime asked.
 type TlsListenSettings struct {
 	// The registration's share, 1 to 1000. 0 takes 100 (§9.5).
 	Weight int
 	// The ApprovalDecision for the listen, when the caller holds one. Nil lets the gate find a grant or a recorded
 	// decision, or file the request and answer *ApprovalPendingError.
 	Decision *bridge.Signed
+	// How long the grant the listen asks lasts: the registration's SocketListenSettings.Expires, held to the requests
+	// rule's maxExpiry, a longer one refused before the gate with the maximum named, 0 taking the rule's
+	// expiresDefault (owner decision 687). Negative is refused before anything is ordered.
+	Expires time.Duration
 	// §13.7's limits on the endpoint. Nil takes DefaultTlsFrontSettings. Its target probe is off whatever it says,
 	// since the target is the listener's Accept.
 	Front *TlsFrontSettings
 }
 
-// A registration as an app listener runs on it: what the front accepts from, and its address. *SocketListener is one.
+// A registration as an app listener runs on it: what the front accepts from, its address, and when the grant it
+// registered under ends. *SocketListener is one.
 type tlsListenRegistration interface {
 	tlsFrontListener
 	Addr() net.Addr
+	// Zero for none it asked (SocketListener.GrantExpires).
+	GrantExpires() time.Time
 }
 
 // What an app listener runs on beyond the component: the Sidecar's parts (ListenTls), or a test's.
@@ -717,6 +725,9 @@ func (self *TlsComponent) listen(ctx context.Context, address string, settings *
 		// §13.9: a receiver's system publish, which no listener takes
 		return nil, fmt.Errorf("%w: the system publish's", ErrTlsListenInvalid)
 	}
+	if settings.Expires < 0 {
+		return nil, fmt.Errorf("%w: an expiry is a time from now", ErrTlsListenInvalid)
+	}
 	names, err := self.names(ctx)
 	if err != nil {
 		return nil, err
@@ -737,6 +748,7 @@ func (self *TlsComponent) listen(ctx context.Context, address string, settings *
 	listenSettings := TlsFrontListenSettings(target, false)
 	listenSettings.Weight = settings.Weight
 	listenSettings.Decision = settings.Decision
+	listenSettings.Expires = settings.Expires
 	registration, err := parts.Register(ctx, address, listenSettings)
 	if err != nil {
 		return nil, err
@@ -928,6 +940,12 @@ func (self *TlsListener) Accept() (net.Conn, error) {
 // See net.Listener: the registration's network and client, as ids (I-13).
 func (self *TlsListener) Addr() net.Addr {
 	return self.registration.Addr()
+}
+
+// When the grant its tls/ registration registered under ends, its registration's (SocketListener.GrantExpires): zero
+// where a standing grant passed the listen (QD-1419).
+func (self *TlsListener) GrantExpires() time.Time {
+	return self.registration.GrantExpires()
 }
 
 // Unlistens at once (§9.9) and ends every visitor's connection: the front's Close, which closes the registration. A

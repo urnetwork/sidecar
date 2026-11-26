@@ -133,3 +133,63 @@ func TestRecordHeaderSignatureCoversAnUnknownField(t *testing.T) {
 		t.Errorf("a changed unknown field: %v", err)
 	}
 }
+
+// DESIGN-COMPUTE §24.5's body_apart (CTXH-M11-01): a session entry's RecordEntry carries its header with sealed_body
+// empty and body_apart set, its body apart at s/<n>. The leaf covers the signed header alone, so filing the body apart
+// changes no leaf, and a reader that knows no field 6 keeps it unknown and still verifies the header (format 1's row).
+func TestSessionEntryHeaderVerifiesWithItsBodyApart(t *testing.T) {
+	key := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x54}, ed25519.SeedSize))
+	publicKey := key.Public().(ed25519.PublicKey)
+	header := testRecordHeader()
+	header.Kind = 54
+	body, err := proto.MarshalOptions{Deterministic: true}.Marshal(header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	headerType := bridge.SignedType_SIGNED_RECORD_HEADER
+	signed := &bridge.Signed{
+		Body:      body,
+		Signature: ed25519.Sign(key, bridge.SignedBytes(testRecordPurpose, headerType, body)),
+		Type:      uint32(headerType),
+	}
+	apart, err := proto.Marshal(&RecordEntry{Header: signed, Version: 1, BodyApart: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	whole, err := proto.Marshal(&RecordEntry{Header: signed, SealedBody: []byte("sealed"), Version: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := &RecordEntry{}
+	if err := proto.Unmarshal(apart, read); err != nil {
+		t.Fatal(err)
+	}
+	if !read.GetBodyApart() || len(read.GetSealedBody()) != 0 {
+		t.Errorf("body_apart %v and a sealed body of %d bytes", read.GetBodyApart(), len(read.GetSealedBody()))
+	}
+	leafOf := func(stored []byte) [sha256.Size]byte {
+		entry := &RecordEntry{}
+		if err := proto.Unmarshal(stored, entry); err != nil {
+			t.Fatal(err)
+		}
+		if err := bridge.VerifySigned(entry.GetHeader(), testRecordPurpose, headerType, bridge.SignedKeyAlgEd25519, publicKey); err != nil {
+			t.Fatal(err)
+		}
+		return sha256.Sum256(append([]byte{0x00}, entry.GetHeader().GetBody()...))
+	}
+	if leafOf(apart) != leafOf(whole) {
+		t.Error("filing the body apart changed the entry's leaf")
+	}
+	// a reader before field 6: the field stays unknown beside a header that verifies
+	older := protowire.AppendTag(nil, 1, protowire.BytesType)
+	signedBytes, err := proto.Marshal(signed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	older = protowire.AppendBytes(older, signedBytes)
+	older = protowire.AppendVarint(protowire.AppendTag(older, 4, protowire.VarintType), 1)
+	older = protowire.AppendVarint(protowire.AppendTag(older, 6, protowire.VarintType), 1)
+	if !bytes.Equal(older, apart) {
+		t.Errorf("a body-apart entry is not fields 1, 4 and 6 in order: %x", apart)
+	}
+}

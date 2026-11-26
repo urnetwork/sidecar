@@ -354,9 +354,11 @@ func TestTlsForegroundComponentArgsRunNoCtWatch(t *testing.T) {
 	}
 }
 
-// A registration a test hands visitor streams to, with an address.
+// A registration a test hands visitor streams to, with an address and the grant end it registered under, zero for
+// none.
 type testTlsListenRegistration struct {
 	*tlsFrontTestListener
+	grantExpireTime time.Time
 }
 
 var _ tlsListenRegistration = (*testTlsListenRegistration)(nil)
@@ -364,6 +366,11 @@ var _ tlsListenRegistration = (*testTlsListenRegistration)(nil)
 // See tlsListenRegistration.
 func (self *testTlsListenRegistration) Addr() net.Addr {
 	return &SocketAddr{}
+}
+
+// See tlsListenRegistration.
+func (self *testTlsListenRegistration) GrantExpires() time.Time {
+	return self.grantExpireTime
 }
 
 // Whether the registration was closed.
@@ -661,6 +668,8 @@ type testTlsListenRegistrations struct {
 	// the registration handed out for each call
 	registrations []*testTlsListenRegistration
 	edgeNetworkId Id
+	// the grant end each registration comes to, zero for none
+	grantExpireTime time.Time
 }
 
 // See tlsListenParts.Register.
@@ -673,7 +682,7 @@ func (self *testTlsListenRegistrations) register(ctx context.Context, address st
 	if self.err != nil {
 		return nil, self.err
 	}
-	registration := &testTlsListenRegistration{tlsFrontTestListener: newTlsFrontTestListener(self.edgeNetworkId)}
+	registration := &testTlsListenRegistration{tlsFrontTestListener: newTlsFrontTestListener(self.edgeNetworkId), grantExpireTime: self.grantExpireTime}
 	self.registrations = append(self.registrations, registration)
 	return registration, nil
 }

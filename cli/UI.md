@@ -30,6 +30,9 @@ ur socket drain <addr>                  drain the daemon's sockets on <addr>
   `expiresDefault`, 1 h unless the document says otherwise (owner decision 687). Run the listen again after the
   approval with the same `--expires`, since another lifetime is another request. A name whose listen asks no grant,
   and a standing grant's, ask nothing of it: the first refuses it, the second passes whatever it asks.
+- Once an outward name listens, its line ends `until <time>`, its grant's end in RFC 3339, after which the service
+  ends the listen; `ur socket` shows it again. A listen a standing grant passed has no end of its own, and `listen`
+  says so.
 - `dial --listen=[<ip>:]<port>` is a local forward on every interface (0.0.0.0 and ::) unless `<ip>` is given, carrying
   raw bytes with no TLS-only rule (D-TRUST-8; owner decisions 84, 130). `ur status` lists it, LAN-exposed when it is.
 - `dial` with no `--listen` relays stdin and stdout to one stream, for `ssh -o ProxyCommand='ur socket dial %h'`.
