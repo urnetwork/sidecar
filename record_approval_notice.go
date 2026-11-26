@@ -780,6 +780,7 @@ type approvalNoticeBuffer struct {
 	data  []byte
 }
 
+// Keeps what fits under the limit and takes the rest unkept, so a read past the cap still completes.
 func (self *approvalNoticeBuffer) Write(data []byte) (int, error) {
 	room := self.limit + 1 - len(self.data)
 	if 0 < room {
@@ -788,6 +789,7 @@ func (self *approvalNoticeBuffer) Write(data []byte) (int, error) {
 	return len(data), nil
 }
 
+// The newest version of path on main, read fresh and verified, with its push's signer.
 func (self *ApprovalNoticeEvsVault) ReadNotice(ctx context.Context, path string, maxByteCount int) (*ApprovalNoticeFile, error) {
 	buffer := &approvalNoticeBuffer{limit: maxByteCount}
 	info, err := self.repo.ReadHead(ctx, &EvsReadArgs{Path: path, Fresh: true}, buffer)
@@ -800,6 +802,7 @@ func (self *ApprovalNoticeEvsVault) ReadNotice(ctx context.Context, path string,
 	return &ApprovalNoticeFile{Path: path, Version: info.Version, SignerSidecarId: info.SignerSidecarId, Content: buffer.data}, nil
 }
 
+// a/ listed fresh, each file named as a notice read, in path order.
 func (self *ApprovalNoticeEvsVault) ListNotices(ctx context.Context, maxCount int, maxByteCount int) ([]*ApprovalNoticeFile, error) {
 	listing, err := self.repo.List(ctx, &EvsReadArgs{Path: approvalNoticeDirectory, Fresh: true})
 	if errors.Is(err, ErrEvsPathAbsent) {
@@ -843,6 +846,7 @@ func (self *ApprovalNoticeEvsVault) versioning() string {
 	return EvsVersioningKeepSetting
 }
 
+// One push writing content at path, held to ifVersion.
 func (self *ApprovalNoticeEvsVault) PutNotice(ctx context.Context, path string, ifVersion uint64, content []byte) (uint64, error) {
 	result, err := self.repo.WritePaths(ctx, &EvsWritePathsArgs{Writes: []*EvsPathWrite{{
 		Path:      path,
@@ -856,6 +860,7 @@ func (self *ApprovalNoticeEvsVault) PutNotice(ctx context.Context, path string, 
 	return result.PathVersions[0], nil
 }
 
+// One push removing path, held to ifVersion.
 func (self *ApprovalNoticeEvsVault) RemoveNotice(ctx context.Context, path string, ifVersion uint64) error {
 	_, err := self.repo.WritePaths(ctx, &EvsWritePathsArgs{Writes: []*EvsPathWrite{{
 		Path:      path,
