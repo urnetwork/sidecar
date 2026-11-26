@@ -27,15 +27,22 @@
 // its own pin: a pin above the tip waits (ErrConfigPinAhead), one before what the log retains is unjudged and never
 // allowed (ErrConfigPinNotRetained), and one off the chain is invalid and a fork alarm (ErrConfigPinOffChain).
 //
-// A rule an activated grant gave has no local detail, its own fields being the GrantActivate's. AllowRoute and Check's
-// ip ranges read a surviving, unexpired activated route grant by its sealed detail (owner decisions 220 and 679;
-// QD-003, QD-1164): InstallWithGrants opens each one once, under the config keys its opener holds, and reads it by the
-// one reader the save's ip: tests and the bridge compile read it by (acl_grant_route.go's aclReadGrantRoute), so a
-// preview and acl_check answer what the compile serves: the detail's prefixes at its ports, none meaning every port, a
-// detail naming no prefix routing by its subjects, and a grant whose detail does not read here, or whose action seals
-// none, reaching nothing, the closed direction. The other checks read no grant's detail: a port-limited dial grant
-// opens no port in AllowInbound, the closed direction, its ports at a host being the compile's (grantPortRule).
-// In-daemon agents share their sidecar's grants (§5.5): the caller narrows, never widens. A client allows
+// A rule an activated grant gave has no local detail, its own fields being the GrantActivate's: a dial or route grant's
+// prefixes and ports ride its sealed detail (owner decisions 220 and 679; QD-003, QD-740, QD-1164). InstallWithGrants
+// opens each surviving activated route grant and port-limited dial grant once, under the config keys its opener holds,
+// and reads it by the readers the save's ip: tests and the bridge compile read it by (acl_grant_route.go's
+// aclReadGrantRoute and its dial counterpart, aclGrantDialPortsOf), so a preview, a dial and acl_check answer what the
+// compile serves:
+//
+//	route    AllowRoute and Check's ip ranges: the detail's prefixes at its ports, none meaning every port, and a
+//	         detail naming no prefix routing by its subjects
+//	dial     AllowInbound: the ports the detail names at this sidecar, as the host's dial rows serve them
+//	         (grantPortRule); a dial grant whose action seals none limits no ports, as its rows say
+//	subject  Check's dial or route to a sidecar: a dial grant only to a sidecar its detail names a port at, a route
+//	         grant only where its detail reads
+//
+// A grant whose detail does not read here, or a route grant whose action seals none, reaches nothing, the closed
+// direction. In-daemon agents share their sidecar's grants (§5.5): the caller narrows, never widens. A client allows
 // AclEngineSettings.ClockSkew against the gates' server time (§8.6).
 //
 // Safe for concurrent use. The root file carries no connect type; an install opens grants' details, where
@@ -118,41 +125,75 @@ type aclEngineInstall struct {
 	// by the state's rule index, an activated route grant's detail as aclReadGrantRoute reads it, nil for every other
 	// rule and for a grant whose detail gives nothing here
 	grantRoutes []*AclLocalRule
-	// the readings the next install may keep, by grant id: those no later opener can change (aclGrantRoute.kept)
-	grantReads map[string]aclGrantRoute
+	// by the state's rule index, a port-limited activated dial grant's reading, whose dial ports are empty where its
+	// detail gives nothing here; nil for every other rule, a dial grant whose action seals no detail among them
+	grantDials []*aclEngineGrantRead
+	// the readings the next install may keep, by grant id: those no later opener can change (aclEngineGrantRead.kept)
+	grantReads map[string]*aclEngineGrantRead
 	self       AclSubject
 }
 
-// Whether a grant's reading stands for every later install of a state holding the grant: its detail read, or its
-// action seals none. A grant id fixes its action's bytes (§8.8's grant_id), so neither changes; every other reading
-// is read again, since a later opener may hold the action or the key it lacked.
-func (self aclGrantRoute) kept() bool {
-	return self.unread == aclGrantRouteUnreadNone || self.unread == aclGrantRouteUnreadUnsealed
+// One activated grant as an install read it: its sealed detail opened once (aclOpenGrantDetail), then read as a route
+// and as dial ports by the readers every leg shares, so a grant allowing both is opened once. Never changed once read,
+// since later installs share it.
+type aclEngineGrantRead struct {
+	// why the detail gives nothing here, aclGrantRouteUnreadNone where it opened
+	opened aclGrantRouteUnread
+	route  aclGrantRoute
+	dial   aclGrantDialPorts
 }
 
-// Reads each activated route grant of the state through grants, keeping what previous read where it stands.
-func (self *aclEngineInstall) readGrantRoutes(previous *aclEngineInstall, grants AclGrantDetails) {
+// Reads one activated grant: grantId its rule's id, portsLimited its rule's ports_limited, grants the opener, nil
+// opening none.
+func aclEngineReadGrant(grantId []byte, portsLimited bool, grants AclGrantDetails) *aclEngineGrantRead {
+	detail, opened := aclOpenGrantDetail(grantId, portsLimited, grants)
+	read := &aclEngineGrantRead{opened: opened, route: aclGrantRoute{unread: opened}}
+	if detail != nil {
+		read.route.local, read.route.unread = aclGrantRouteOfDetail(detail)
+		read.dial = aclGrantDialPortsOf(detail)
+	}
+	return read
+}
+
+// Whether a grant's reading stands for every later install of a state holding the grant: its detail opened, or its
+// action seals none. A grant id fixes its action's bytes (§8.8's grant_id), so neither changes; every other reading
+// is read again, since a later opener may hold the action or the key it lacked.
+func (self *aclEngineGrantRead) kept() bool {
+	return self.opened == aclGrantRouteUnreadNone || self.opened == aclGrantRouteUnreadUnsealed
+}
+
+// Reads each activated route grant and port-limited dial grant of the state through grants, keeping what previous read
+// where it stands.
+func (self *aclEngineInstall) readGrants(previous *aclEngineInstall, grants AclGrantDetails) {
 	rules := self.state.rules
 	self.grantRoutes = make([]*AclLocalRule, len(rules))
-	self.grantReads = map[string]aclGrantRoute{}
+	self.grantDials = make([]*aclEngineGrantRead, len(rules))
+	self.grantReads = map[string]*aclEngineGrantRead{}
 	for i := range rules {
 		rule := &rules[i]
-		if len(rule.row.GetSourceRuleId()) == 0 || !rule.allows(protocol.AclAction_ACL_ACTION_ROUTE) {
+		routes := rule.allows(protocol.AclAction_ACL_ACTION_ROUTE)
+		dials := rule.allows(protocol.AclAction_ACL_ACTION_DIAL) && rule.portsLimited
+		if len(rule.row.GetSourceRuleId()) == 0 || !(routes || dials) {
 			continue
 		}
 		grantId := rule.row.GetRuleId()
-		route, found := self.grantReads[string(grantId)]
+		read, found := self.grantReads[string(grantId)]
 		if !found && previous != nil {
-			route, found = previous.grantReads[string(grantId)]
+			read, found = previous.grantReads[string(grantId)]
 		}
 		// a kept reading is the rule's own: a read detail beside ports_limited, an unsealed action beside none
-		if !found || (route.unread == aclGrantRouteUnreadUnsealed) == rule.portsLimited {
-			route = aclReadGrantRoute(grantId, rule.portsLimited, grants)
+		if !found || (read.opened == aclGrantRouteUnreadUnsealed) == rule.portsLimited {
+			read = aclEngineReadGrant(grantId, rule.portsLimited, grants)
 		}
-		if route.kept() {
-			self.grantReads[string(grantId)] = route
+		if read.kept() {
+			self.grantReads[string(grantId)] = read
 		}
-		self.grantRoutes[i] = route.local
+		if routes {
+			self.grantRoutes[i] = read.route.local
+		}
+		if dials {
+			self.grantDials[i] = read
+		}
 	}
 }
 
@@ -199,16 +240,17 @@ func NewAclEngine(sidecarId Id, states AclEngineStates, alarm func(alarm AclEngi
 
 // Swaps in a state and its local policy, refusing a lower pin or a second A_n at the installed n, which keeps the
 // installed pair and alarms (I-16). local may be nil: the rows' checks then stand alone, every port-limited rule
-// opening no port. It opens no activated grant's detail, so an activated route grant reaches nothing here unless an
-// earlier install read it: InstallWithGrants with no opener.
+// opening no port. It opens no activated grant's detail, so an activated route grant or port-limited dial grant
+// reaches nothing here unless an earlier install read it: InstallWithGrants with no opener.
 func (self *AclEngine) Install(state *AclState, local *AclLocalPolicy) error {
 	return self.InstallWithGrants(state, local, nil)
 }
 
 // Install, with the opener of the state's activated grants' sealed details, over the ConfigState whose acl part state
-// is (newAclStateGrantDetails): each activated route grant is read once here, never at a check, by the reader the
-// save's tests and the bridge compile read it by (aclReadGrantRoute), and AllowRoute and Check count it by its detail.
-// A reading that stands is kept for the next install of a state holding the same grant, so an install opens only the
+// is (newAclStateGrantDetails): each activated route grant and port-limited dial grant is read here, its detail opened
+// once for both, never at a check, by the readers the save's tests and the bridge compile read it by
+// (aclReadGrantRoute and its dial counterpart), and AllowRoute, AllowInbound and Check count it by its detail. A
+// reading that stands is kept for the next install of a state holding the same grant, so an install opens only the
 // grants it has not read; one whose action or key was missing is read again. grants nil opens none.
 func (self *AclEngine) InstallWithGrants(state *AclState, local *AclLocalPolicy, grants AclGrantDetails) error {
 	if state == nil || state.Pin() == nil {
@@ -220,7 +262,7 @@ func (self *AclEngine) InstallWithGrants(state *AclState, local *AclLocalPolicy,
 		next.localRules[i] = local.Rule(state.rules[i].row.GetRuleId())
 	}
 	// before the lock, which is never held across the opener's key reads
-	next.readGrantRoutes(self.installed.Load(), grants)
+	next.readGrants(self.installed.Load(), grants)
 	var alarm *AclEngineAlarm
 	err := func() error {
 		self.stateLock.Lock()
@@ -310,8 +352,10 @@ type AclInbound struct {
 }
 
 // Whether an inbound stream or dial is allowed (§6, §8.10): to the sidecar, a dial grant reaching it whose ports take
-// the port; to one of its sockets, a dial grant on the socket whose exact name or glob, from the same config head
-// takes the name. A token prefix alone cannot verify a private name.
+// the port, a document rule's from its local detail and a port-limited activated grant's from its sealed detail, the
+// ports it names at this sidecar (aclGrantDialPorts, as the host's dial rows serve them); to one of its sockets, a dial
+// grant on the socket whose exact name or glob, from the same config head takes the name. A token prefix alone cannot
+// verify a private name.
 func (self *AclEngine) AllowInbound(inbound *AclInbound, now time.Time) AclDecision {
 	installed := self.installed.Load()
 	if installed == nil || inbound == nil {
@@ -332,6 +376,9 @@ func (self *AclEngine) AllowInbound(inbound *AclInbound, now time.Time) AclDecis
 		})
 	}
 	return state.mayDial(inbound.Source, installed.self, nowMs, func(rule *aclRule) bool {
+		if read := installed.grantDials[rule.index]; read != nil {
+			return read.dial.takes(self.sidecarId, inbound.IpProtocol, inbound.Port)
+		}
 		return aclLocalPortsMatch(rule.portsLimited, installed.localRules[rule.index], inbound.IpProtocol, inbound.Port)
 	})
 }
@@ -447,7 +494,10 @@ type AclCheck struct {
 // socket dialed or listened on by name, a repo read, written, administered or deposited to, a dns host published, an
 // alias sent to or listened on; an ip range routed to through any via, by a rule's prefixes or, for a rule that names
 // none, by the subnet routes in force InstallRoutes last took (findRouteToPrefix), an activated route grant's being
-// its sealed detail's, as InstallWithGrants read it.
+// its sealed detail's, as InstallWithGrants read it. A dial or route to a subject reads a document rule by its rows,
+// any of its ports or prefixes standing, and an activated grant by its sealed detail as the rest of Check does: a
+// port-limited dial grant reaches only a sidecar its detail names a port at, and a route grant only where its detail
+// reads (routeLocal), so acl_check answers what the compile serves.
 func (self *AclEngine) Check(subject AclSubject, action protocol.AclAction, resource AclResource, now time.Time) AclCheck {
 	installed := self.installed.Load()
 	if installed == nil {
@@ -469,10 +519,16 @@ func (self *AclEngine) Check(subject AclSubject, action protocol.AclAction, reso
 			return AclCheck{Reason: AclReasonNoGrant}
 		}
 		if action == protocol.AclAction_ACL_ACTION_DIAL {
-			return answer(state.mayDial(subject, destination, nowMs, nil))
+			return answer(state.mayDial(subject, destination, nowMs, func(rule *aclRule) bool {
+				read := installed.grantDials[rule.index]
+				return read == nil || (destination.Kind == AclSubjectSidecar && read.dial.reaches(destination.Id))
+			}))
 		}
 		if action == protocol.AclAction_ACL_ACTION_ROUTE {
-			return answer(state.mayRoute(subject, netip.Addr{}, destination, nowMs, nil))
+			return answer(state.mayRoute(subject, netip.Addr{}, destination, nowMs, func(rule *aclRule) bool {
+				_, _, reaches := installed.routeLocal(rule)
+				return reaches
+			}))
 		}
 	case AclResourceSocket:
 		return answer(state.resourceDecision(subject, nowMs, action, func(rule *aclRule) bool {
