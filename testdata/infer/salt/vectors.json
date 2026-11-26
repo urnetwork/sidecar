@@ -1,0 +1,22 @@
+{
+  "comment": [
+    "DESIGN-COMPUTE §6.6's cache salts (INFER-M12-02): the line [ur:<32 hex>] of 16 bytes of HKDF-SHA256 with no salt,",
+    "the secret its input keying material. tee: info urnetwork-sidecar-v1/compute-cache-salt followed by the provider's",
+    "slug. direct: info urnetwork-sidecar-v1/compute-cache-salt-direct followed by the run's 16 id bytes. Computed with",
+    "RFC 5869 written out over HMAC-SHA256, apart from crypto/hkdf. The secrets are synthetic test values."
+  ],
+  "tee": [
+    {"secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", "provider": "chutes", "line": "[ur:d8bfc21982e9f2ebdc6bbd8c2081b7f3]"},
+    {"secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", "provider": "engy", "line": "[ur:34c4c729fce413264486bd0007e634cb]"},
+    {"secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", "provider": "saygm", "line": "[ur:80e49042d0f7b227f5e105e4dc7eaf8b]"},
+    {"secret": "f0e1d2c3b4a5968778695a4b3c2d1e0ff0e1d2c3b4a5968778695a4b3c2d1e0f", "provider": "chutes", "line": "[ur:463d2969c621b59282f7f90dcf342522]"},
+    {"secret": "f0e1d2c3b4a5968778695a4b3c2d1e0ff0e1d2c3b4a5968778695a4b3c2d1e0f", "provider": "engy", "line": "[ur:72541078256ce8d4a31571d829727edf]"},
+    {"secret": "f0e1d2c3b4a5968778695a4b3c2d1e0ff0e1d2c3b4a5968778695a4b3c2d1e0f", "provider": "saygm", "line": "[ur:5e5db805f0bfc7dfe14d87caf6ffa546]"}
+  ],
+  "direct": [
+    {"secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", "run_id": "0190a1b2c3d4e5f60718293a4b5c6d7e", "line": "[ur:bfd1e551c2989538b3d862d9afcddd75]"},
+    {"secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", "run_id": "0190a1b2c3d4e5f60718293a4b5c6d7f", "line": "[ur:46791ecadfb289a6aa492e80123aa2b7]"},
+    {"secret": "f0e1d2c3b4a5968778695a4b3c2d1e0ff0e1d2c3b4a5968778695a4b3c2d1e0f", "run_id": "0190a1b2c3d4e5f60718293a4b5c6d7e", "line": "[ur:0a896358b8f7256ae65c89e0e4e697ad]"},
+    {"secret": "f0e1d2c3b4a5968778695a4b3c2d1e0ff0e1d2c3b4a5968778695a4b3c2d1e0f", "run_id": "0190a1b2c3d4e5f60718293a4b5c6d7f", "line": "[ur:54f288df6ce796dcc0539940d694fd28]"}
+  ]
+}

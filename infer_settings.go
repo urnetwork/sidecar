@@ -195,6 +195,33 @@ type InferSettings struct {
 	// are marked unavailable in that browser until its version or the engine's changes: 8. Non-positive marks none
 	// unavailable for its rate.
 	BrowserMinDecodeTokensPerSecond float64
+
+	// §6.6's member cache secret (INFER-M12-02; infer_cache_secret.go). How long a secret this device holds serves
+	// before cache.json is read again: 5 minutes. That read is the sync at which a device that holds the secret seals a
+	// copy to each newly listed device and answers asks, and at which the first device to see that one which held a
+	// copy left the readers draws a new secret, so a revocation's new secret reaches the member's devices within a sync
+	// of their next remote calls. Non-positive reads at every call.
+	CacheSecretSyncInterval time.Duration
+	// The most of the member's own secret repos one sync opens to find the one whose cache.json stands: 64, past the
+	// 16 connections, 8 calendar links and the ACME key's repo a member holds at most beside the cache's own. Repos
+	// past it, in id order, are not opened. Non-positive opens none, and the device salts with a secret of its own.
+	CacheSecretRepoScanMaxCount int
+	// The largest cache.json a read takes, in bytes: 1 MiB, about 600 devices' sealed copies. A larger one is read as
+	// no file of the format, which a device that may draw replaces. Non-positive takes none.
+	CacheFileMaxByteCount int
+	// The most copies, and the most asks, one cache.json holds: 512 each, past any member's devices and their agents'
+	// enclaves. A file past either is read as one larger than CacheFileMaxByteCount is.
+	CacheFileMaxEntryCount int
+	// How many times a sync whose write lost to another device's, the write being conditional on the version it read
+	// (EXACT_HEAD), reads cache.json again and decides again: 3. Past it the sync keeps what it read, and the next
+	// tries again. Negative counts as 0.
+	CacheSecretWriteRetryCount int
+	// How long an agents' enclave's remote call waits for a copy of the member's secret sealed to it, which a sponsor's
+	// device seals at its next sync after the enclave's ask: 2 minutes, past a sync's interval and a slow EVS round.
+	// Past it the call is refused, the secret pending. Non-positive does not wait.
+	CacheSecretEnclaveWaitTimeout time.Duration
+	// How often a waiting enclave reads cache.json again for its copy: 10 seconds. Non-positive reads again at once.
+	CacheSecretEnclaveWaitInterval time.Duration
 }
 
 // One of §6.5's defaults by memory: the local model a device of its classes gets with at least its memory.
@@ -267,6 +294,13 @@ func DefaultInferSettings() *InferSettings {
 		ModelHubRedirectHostSuffixes:    []string{"huggingface.co", "hf.co"},
 		BrowserLargeModelMemoryGiB:      16,
 		BrowserMinDecodeTokensPerSecond: 8,
+		CacheSecretSyncInterval:         5 * time.Minute,
+		CacheSecretRepoScanMaxCount:     64,
+		CacheFileMaxByteCount:           1024 * 1024,
+		CacheFileMaxEntryCount:          512,
+		CacheSecretWriteRetryCount:      3,
+		CacheSecretEnclaveWaitTimeout:   2 * time.Minute,
+		CacheSecretEnclaveWaitInterval:  10 * time.Second,
 		LocalDefaults: []*InferLocalDefault{
 			{
 				Name:               "local-gemma-4-26b-a4b-off",
