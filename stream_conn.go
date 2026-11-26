@@ -18,11 +18,12 @@
 //   - Deadlines are net.Conn's: absolute, on the dispatcher's clock, os.ErrDeadlineExceeded once passed,
 //     and the stream survives them, so clearing one lets I/O go on. A Write that has handed its frames
 //     to connect sends them whatever its deadline, since a byte sent cannot be taken back.
-//   - A deadline's wait is set on that clock when the deadline is, as net.Pipe's is, and wakes every call
-//     waiting when it fires. A call reads its deadline against the clock as it begins and at each wake,
-//     in the locked scope that subscribes it to the stream's changes, so a deadline passed before the
-//     call, or one whose wait fired before the call began waiting, ends it at once, and a wait firing
-//     between the call's check and its wait still wakes it.
+//   - A deadline's wait is set on that clock when the deadline is, as net.Pipe's is, for the deadline's
+//     time itself where the clock can (clock_at.go), and wakes every call waiting when it fires. A call
+//     reads its deadline against the clock as it begins and at each wake, in the locked scope that
+//     subscribes it to the stream's changes, so a deadline passed before the call, or one whose wait
+//     fired before the call began waiting, ends it at once, and a wait firing between the call's check
+//     and its wait still wakes it.
 //
 // Safe for concurrent use, as net.Conn is. Writes are serialized, so two never interleave their bytes.
 
@@ -112,7 +113,7 @@ type SubprotocolStream struct {
 	ticket   []byte
 	// the send option every frame rides: an acceptor's the open's lane, an opener's none
 	opts []any
-	// what this stream's barriers carry: its peer's id and its own, both opaque (I-13)
+	// what this stream's barriers carry: its peer's id and its own, a pair of opaque ids (I-13)
 	barrierKey string
 	// serializes writes, so StreamData goes in offset order and StreamClose after the last of it
 	writeLock sync.Mutex
@@ -154,7 +155,7 @@ func newSubprotocolStream(subprotocol *Subprotocol, peer *streamPeer, streamId u
 		peerId:      peer.peerId,
 		streamId:    streamId,
 		edge:        peer.edge,
-		barrierKey:  fmt.Sprintf("%s/%d", peer.peerId, streamId),
+		barrierKey:  fmt.Sprintf("%s:%d", peer.peerId, streamId),
 		state:       state,
 		changed:     make(chan struct{}),
 	}
@@ -552,17 +553,18 @@ func (self *SubprotocolStream) SetWriteDeadline(t time.Time) error {
 // passed deadline ends one at once and a cleared one lets it wait on. A stream that has ended or closed gets
 // no wait, since no call of it waits.
 //
-// The wait is timed off the clock and then set, with no lock held, since a clock may call back on the
-// setting goroutine. Another goroutine moving the clock between the two sets the wait late, past t, so once
-// it is set the deadline is read against the clock again: a clock that reached t meanwhile wakes the calls
-// now, as the wait would have. A move that stops short of t leaves the wait late by that move, since a Clock
-// sets a wait by a timeout and not by a time; only a set running beside another goroutine's move of a fake
-// clock meets it.
+// The wait is set for t itself (clockAfterFuncAt), with no lock held, since a clock may call back on the
+// setting goroutine. A clock that sets waits for a time, sidecartest's FakeClock among them, sets it under
+// its own lock, so no move of the clock sets it late. Another clock takes the timeout to t from a reading
+// of it, and a move by another goroutine between the reading and the setting sets the wait late, past t,
+// so once it is set the deadline is read against the clock again: a clock that reached t meanwhile wakes
+// the calls now, as the wait would have. Only a move there that stops short of t still leaves the wait late
+// by that move, on such a clock alone.
 func (self *SubprotocolStream) setDeadline(deadline *streamDeadline, t time.Time) {
 	clock := self.subprotocol.clock
 	var setCount uint64
 	var previousStop func() bool
-	var timeout time.Duration
+	needsWait := false
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
@@ -571,19 +573,17 @@ func (self *SubprotocolStream) setDeadline(deadline *streamDeadline, t time.Time
 		setCount = deadline.setCount
 		previousStop = deadline.stop
 		deadline.stop = nil
-		if !t.IsZero() && !self.endedWithLock() {
-			timeout = t.Sub(clock.Now())
-		}
+		needsWait = !t.IsZero() && !self.endedWithLock() && !self.expiredWithLock(t)
 		self.notifyWithLock()
 	}()
 	if previousStop != nil {
 		previousStop()
 	}
-	if timeout <= 0 {
+	if !needsWait {
 		// no deadline, one already passed, which each call's own check sees, or a stream no call waits on
 		return
 	}
-	stop := clock.AfterFunc(timeout, func() {
+	stop := clockAfterFuncAt(clock, t, func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		if deadline.setCount == setCount {
@@ -599,7 +599,8 @@ func (self *SubprotocolStream) setDeadline(deadline *streamDeadline, t time.Time
 		}
 		deadline.stop = stop
 		if self.expiredWithLock(t) {
-			// the clock reached t while the wait was set, which set it late
+			// the clock reached t while the wait was set: a wait timed from a reading is then late, and a
+			// wait for t has fired already, which this repeats
 			self.notifyWithLock()
 		}
 		return true

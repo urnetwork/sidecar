@@ -12,6 +12,7 @@ package sidecar
 import (
 	"errors"
 	"os"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -109,5 +110,32 @@ func TestStreamWriteDeadlinePassedWhileItsWaitIsSet(t *testing.T) {
 	release()
 	if result := testAwait(t, written, "the write past its deadline"); result.n != 0 || !errors.Is(result.err, os.ErrDeadlineExceeded) {
 		t.Fatalf("the write past its deadline: %d B, %v", result.n, result.err)
+	}
+}
+
+// On a clock that sets waits for a time, as sidecartest's FakeClock does, a deadline's wait is set for the deadline
+// itself and none by a timeout, so no move of the clock beside the set makes it late (QD-1425); a cleared deadline,
+// or one already passed, sets none. The stream here is bare: nothing but its deadlines runs.
+func TestStreamDeadlineSetsItsWaitForItsTime(t *testing.T) {
+	clock := newTestClockAt()
+	stream := &SubprotocolStream{
+		subprotocol: &Subprotocol{clock: clock},
+		state:       &streamState{phase: streamPhaseOpen},
+		changed:     make(chan struct{}),
+	}
+	read := clock.Now().Add(time.Second)
+	write := clock.Now().Add(2 * time.Second)
+	for _, err := range []error{
+		stream.SetReadDeadline(read),
+		stream.SetWriteDeadline(write),
+		stream.SetReadDeadline(time.Time{}),
+		stream.SetWriteDeadline(clock.Now()),
+	} {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if times, timeoutCount := clock.asked(); !slices.EqualFunc(times, []time.Time{read, write}, time.Time.Equal) || timeoutCount != 0 {
+		t.Fatalf("waits for a time set for %v, %d set by a timeout", times, timeoutCount)
 	}
 }
