@@ -918,11 +918,19 @@ func (self *AdmissionNet) SaveHeadIfAny(edit func(head *sidecar.ConfigHead) (*si
 }
 
 // The head's ServiceSettings set to settings, signed by the writer's device (an Owner's or Admin's, §7.9's
-// ServiceSettings row), with its base: rows carry self_admit from that base on.
+// ServiceSettings row), with its base: rows carry self_admit from that base on. The authorization features the head
+// already turns on are kept, as every writer keeps them (DESIGN-COMPUTE §16.6: bits only accumulate), so settings that
+// name none clear none.
 func (self *AdmissionNet) SetServiceSettings(settings *protocol.ServiceSettings) *bridge.AuthPin {
 	self.t.Helper()
-	signed := self.Sign(self.writerDevice, bridge.SignedType_SIGNED_SERVICE_SETTINGS, settings)
 	return self.SaveHead(func(head *sidecar.ConfigHead) (*sidecar.ConfigHead, error) {
+		current, _, err := head.ServiceSettings()
+		if err != nil {
+			return nil, err
+		}
+		kept := proto.Clone(settings).(*protocol.ServiceSettings)
+		kept.AuthFeatures |= current.GetAuthFeatures()
+		signed := self.Sign(self.writerDevice, bridge.SignedType_SIGNED_SERVICE_SETTINGS, kept)
 		return head.WithFile(sidecar.ConfigHeadServiceSettingsPath, signed)
 	})
 }

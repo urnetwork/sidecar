@@ -105,6 +105,8 @@ func testCarriedPublish(world *testWriterWorld, label string, publish func(ctx c
 // which took them unjudged. The desktop then files fresh settings under its own signature, and only the rules stay
 // listed; then fresh rules, and nothing does.
 func TestCarriedRecordsListARevokedSignersRecordsUntilAnAdminFilesAnother(t *testing.T) {
+	// its ServiceSettings records are the test's own, so the network holds no feature a fresh record would clear
+	sidecar.WithAuthFeaturesImplementedForTest(t, 0, nil)
 	world := newTestWriterWorld(t)
 	world.started()
 	ownerClient := world.client()
@@ -195,6 +197,8 @@ func TestCarriedRecordsListARevokedSignersRecordsUntilAnAdminFilesAnother(t *tes
 // a Member, both are listed. Its member's removal revokes the laptop, and both are listed as revoked with the member
 // gone. The owner then files both records afresh and nothing stays listed.
 func TestCarriedRecordsNameTheSignersRoleOnceItsMemberIsDemotedOrRemoved(t *testing.T) {
+	// its ServiceSettings records are the test's own, so the network holds no feature a fresh record would clear
+	sidecar.WithAuthFeaturesImplementedForTest(t, 0, nil)
 	world := newTestWriterWorld(t)
 	world.started()
 	adminMemberId := testWriterId("admin member")
@@ -275,6 +279,8 @@ func TestCarriedRecordsNameTheSignersRoleOnceItsMemberIsDemotedOrRemoved(t *test
 // revokes the first device for compromise from the laptop's admission on, so the cascade parks the laptop, which the
 // first device admitted there: both records are listed as parked at the revocation.
 func TestCarriedRecordsNameAParkedSigner(t *testing.T) {
+	// its ServiceSettings records are the test's own, so the network holds no feature a fresh record would clear
+	sidecar.WithAuthFeaturesImplementedForTest(t, 0, nil)
 	world := newTestWriterWorld(t)
 	world.started()
 	desktop := testWriterDeviceOf("owner desktop", world.owner.memberId)
@@ -314,6 +320,8 @@ func TestCarriedRecordsNameAParkedSigner(t *testing.T) {
 // state's settings, one holding rules the state does not, and none at all are refused, ErrConfigCarriedHead; the
 // state's own head lists nothing while its signer stands. A rows-only reader, which opens no head, knows no record.
 func TestCarriedRecordsRefuseAHeadTheStateDoesNotStandOn(t *testing.T) {
+	// its ServiceSettings records are the test's own, so the network holds no feature a fresh record would clear
+	sidecar.WithAuthFeaturesImplementedForTest(t, 0, nil)
 	world := newTestWriterWorld(t)
 	world.started()
 	ownerClient := world.client()

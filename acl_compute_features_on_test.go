@@ -237,6 +237,8 @@ func TestAdminSettingsFeatureRefused(t *testing.T) {
 	memberId, _ := world.net.consentedMember("plain member")
 	memberSidecar, _ := testServiceSettingsSidecar(t, world, "plain member laptop", memberId)
 	ownerSidecar, _ := testServiceSettingsSidecar(t, world, "owner laptop", world.net.ownerMemberId)
+	// a release implementing none, whatever this build's owners registered
+	WithAuthFeaturesImplementedForTest(t, 0, nil)
 	if _, err := ownerSidecar.TurnOnAuthFeature(ctx, confirmed(AuthFeatureAgentRepos)); !errors.Is(err, ErrAuthFeatureUnsupported) {
 		t.Fatalf("a release implementing none: %v", err)
 	}

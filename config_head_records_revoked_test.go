@@ -515,6 +515,8 @@ func newTestRevokedSignerNet(t *testing.T, settings *protocol.ServiceSettings, r
 // every base. And the desktop then files both records again under its own signature, new records judged where they
 // land, which every reader takes in their place.
 func TestEveryReaderTakesTheBasesAfterTheRecordsSignerIsRevoked(t *testing.T) {
+	// its ServiceSettings records are the test's own, so the network holds no feature a fresh record would clear
+	sidecar.WithAuthFeaturesImplementedForTest(t, 0, nil)
 	net := newTestRevokedSignerNet(t, testRevokedSignerSettings(), testRevokedSignerRules())
 	world := net.world
 
@@ -585,6 +587,8 @@ func TestEveryReaderTakesTheBasesAfterTheRecordsSignerIsRevoked(t *testing.T) {
 // by a writer standing on that device's follower, it takes as well, as do api and a gate; a device that starts at that
 // base takes it in turn, and both take the base after it.
 func TestAReaderThatStartsAtTheBaseTakesItAndTheNext(t *testing.T) {
+	// its ServiceSettings records are the test's own, so the network holds no feature a fresh record would clear
+	sidecar.WithAuthFeaturesImplementedForTest(t, 0, nil)
 	net := newTestRevokedSignerNet(t, testRevokedSignerSettings(), testRevokedSignerRules())
 	world := net.world
 	gateState := net.gate.caughtUp()
@@ -634,6 +638,8 @@ func TestAReaderThatStartsAtTheBaseTakesItAndTheNext(t *testing.T) {
 // Owner's or Admin's device, the VersioningRules' as an Owner's, Admin's or Network admin's, each at the base whose head
 // first held it and never again while heads carry it; api and a gate take the base.
 func TestEachCarriedRecordAloneIsKeptAtTheNextBase(t *testing.T) {
+	// its ServiceSettings records are the test's own, so the network holds no feature a fresh record would clear
+	sidecar.WithAuthFeaturesImplementedForTest(t, 0, nil)
 	for _, c := range []struct {
 		name     string
 		settings *protocol.ServiceSettings
@@ -654,6 +660,8 @@ func TestEachCarriedRecordAloneIsKeptAtTheNextBase(t *testing.T) {
 // once the desktop revoked it, which the desktop's writer saves. api and a gate take the base; the device that followed
 // the revocation, the desktop's own follower and a new device from the genesis each fork at it.
 func TestARecordTheRevokedDeviceFilesAfterItsRevocationForks(t *testing.T) {
+	// its ServiceSettings records are the test's own, so the network holds no feature a fresh record would clear
+	sidecar.WithAuthFeaturesImplementedForTest(t, 0, nil)
 	for _, c := range []struct {
 		name     string
 		settings *protocol.ServiceSettings
@@ -691,6 +699,8 @@ func TestARecordTheRevokedDeviceFilesAfterItsRevocationForks(t *testing.T) {
 // next head puts back once it has revoked the first device. Every reader judges the record there and forks, so no
 // record returns under a signer who no longer stands; api and a gate take the base.
 func TestARecordPutBackAfterAHeadRemovedItForksOnceItsSignerIsRevoked(t *testing.T) {
+	// its ServiceSettings records are the test's own, so the network holds no feature a fresh record would clear
+	sidecar.WithAuthFeaturesImplementedForTest(t, 0, nil)
 	world := newTestWriterWorld(t)
 	world.started()
 	ownerClient := world.client()
@@ -743,6 +753,8 @@ func TestARecordPutBackAfterAHeadRemovedItForksOnceItsSignerIsRevoked(t *testing
 // A new record the demoted Admin's device files after the demotion is judged where it lands and forks every reader, as
 // before.
 func TestTheBaseAfterTheRecordsSignerLosesItsRoleIsTaken(t *testing.T) {
+	// its ServiceSettings records are the test's own, so the network holds no feature a fresh record would clear
+	sidecar.WithAuthFeaturesImplementedForTest(t, 0, nil)
 	world := newTestWriterWorld(t)
 	world.started()
 	adminMemberId := testWriterId("admin member")

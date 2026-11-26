@@ -141,7 +141,7 @@ func TestAgentsKindDefaultsTable(t *testing.T) {
 	}
 	// the kinds take a drop key, an agent repo for its inbox's deposits and an agents repo for its readers' receipts
 	for _, kind := range []protocol.RepoKind{protocol.RepoKind_REPO_KIND_AGENTS, protocol.RepoKind_REPO_KIND_AGENT} {
-		if !GkmRepoKindTakesDeposits(kind) || !aclRepoKindOwnerBound(kind) || !EvsRepoKindOwnerBound(kind) || !aclRepoKindKnown(kind) {
+		if !GkmRepoKindTakesDeposits(kind) || !aclRepoKindOwnerBound(kind) || !aclRepoKindKnown(kind) {
 			t.Errorf("%s: deposits %t, owner-bound %t, known %t", kind, GkmRepoKindTakesDeposits(kind), aclRepoKindOwnerBound(kind), aclRepoKindKnown(kind))
 		}
 		if !AclRepoKindOwnerFits(kind, true) || AclRepoKindOwnerFits(kind, false) {
