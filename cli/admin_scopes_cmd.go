@@ -12,6 +12,11 @@
 // name or published host, a label bound already and an owner holding one, before it signs anything. Reassignment is not
 // offered: it waits for a consented-member transition rule (DESIGN-DEFER.md). The daemon refuses a caller with a
 // harness process among its ancestors, by the pid it read off the socket, and no MCP tool reaches any of it.
+//
+// list also names, on stderr so stdout stays the scopes' lines, the ServiceSettings record holding the scopes where its
+// signer no longer stands as an Owner's or Admin's device (D-TEAM-26; owner decision 699; QD-1207;
+// admin_carried_cmd.go): the bindings stand under that signer, as every reader holds them, until an Owner or Admin
+// files another record; a device that could not read the head's records now says so.
 
 package main
 
@@ -62,6 +67,11 @@ type urAdminScope struct {
 
 type urAdminScopesReply struct {
 	Scopes []*urAdminScope `json:"scopes"`
+	// The show's: the ServiceSettings record holding the scopes, where its signer no longer stands (QD-1207); nil while
+	// its signer stands.
+	Carried *sidecar.ConfigCarriedRecord `json:"carried,omitempty"`
+	// The daemon could not read the head's records now, so Carried says nothing.
+	CarriedUnknown bool `json:"carried_unknown,omitempty"`
 }
 
 // A scope as the methods answer it.
@@ -109,6 +119,7 @@ func urAdminScopesMethods(target urDaemonTarget) []*sidecar.DaemonMethod {
 				for _, scope := range scopes {
 					reply.Scopes = append(reply.Scopes, urAdminScopeOf(scope))
 				}
+				reply.Carried, reply.CarriedUnknown = urAdminCarriedServiceSettings(ctx, call.Sidecar)
 				return reply, nil
 			},
 		},
@@ -160,6 +171,10 @@ func runUrAdminScopes(ctx context.Context, cli *urCli, options docopt.Opts) erro
 		}
 		for _, scope := range reply.Scopes {
 			cli.printf("%s\n", urAdminScopeLine(scope))
+		}
+		// on stderr, so stdout stays the scopes' lines
+		if line := urAdminCarriedServiceSettingsLine("the scopes", reply.Carried, reply.CarriedUnknown); line != "" {
+			fmt.Fprintf(cli.stderr, "ur admin scopes: %s\n", line)
 		}
 		return nil
 	}
