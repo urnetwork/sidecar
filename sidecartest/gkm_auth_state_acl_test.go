@@ -11,6 +11,9 @@
 //	            pins, a forwarding Delegation's key and reach, late holders and dropped holders
 //	reconciler  a hint ({acl_<networkId>}v's INCR) while the load it starts is held open wakes nothing and the old
 //	            state still reads; once the load installs, the reconciler's pass reads the new state, never the old
+//	owed        tip-check's interleaving at sidecar ed6b9300, forced: a hint's second key event lands after its load
+//	            took its due, so one more load is owed, and the log moves before that load reads; the reconciler is
+//	            told the moved state once, as that load installs it, and nothing while it is held
 //	deleted     a repo's RepoDelete leaves its standing admin gkm's admin scope alone (QD-880): r and rw are refused
 //	            to everyone, so a token held to either passes no route, and with repo/ deleted the admin's own write
 //	            is refused by gkm's repo/ recheck; a RepoRestore brings the scopes back
@@ -20,7 +23,8 @@
 //	            once repo/ shows deleted; a live repo's admin and writer pass them as before
 //
 // No sleeps: each load is awaited by the cache's OnLoad, a load is held open in its source, and the clock is the
-// Net's.
+// Net's. The world's cleanup closes its cache and waits for every loader (AclGateCache.CloseAndWait), so no load
+// reports on a test that has completed; a load the test's end cancels fails nothing.
 
 package sidecartest
 
@@ -49,8 +53,11 @@ import (
 
 // The gate's source, whose reads of the log a test holds open.
 type gkmAclStateSource struct {
-	inner     sidecar.AclGateSource
-	stateLock sync.Mutex
+	inner sidecar.AclGateSource
+	// held shared by a read of the log from its look at hold to its answer, and whole by setting or clearing a hold,
+	// so once holdLoads returns no read that passed it is still reading, and a log moved after that is read only by a
+	// load the hold lets through
+	readLock sync.RWMutex
 	// while set, each Entries call reports on started and waits on it
 	hold    chan struct{}
 	started chan struct{}
@@ -64,33 +71,37 @@ func (self *gkmAclStateSource) Rows(ctx context.Context, networkId sidecar.Id, r
 	return self.inner.Rows(ctx, networkId, rowsSha256)
 }
 
+// A held read reads once its own hold ends, whatever hold is set since: a test holds the next load from before it lets
+// the one held go.
 func (self *gkmAclStateSource) Entries(ctx context.Context, networkId sidecar.Id, after *bridge.AuthPin) ([][]byte, error) {
-	hold := func() chan struct{} {
-		self.stateLock.Lock()
-		defer self.stateLock.Unlock()
-		return self.hold
-	}()
-	if hold != nil {
+	self.readLock.RLock()
+	if hold := self.hold; hold != nil {
+		self.readLock.RUnlock()
 		self.started <- struct{}{}
 		select {
 		case <-hold:
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
+		self.readLock.RLock()
 	}
+	defer self.readLock.RUnlock()
 	return self.inner.Entries(ctx, networkId, after)
 }
 
-// Holds every load from now on open; the returned call lets them through.
+// Holds every load from now on open, once no read already past the hold is still reading; the returned call lets the
+// loads it holds through, and clears the hold unless a newer one replaced it.
 func (self *gkmAclStateSource) holdLoads() (release func()) {
 	hold := make(chan struct{})
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
+	self.readLock.Lock()
+	defer self.readLock.Unlock()
 	self.hold = hold
 	return func() {
-		self.stateLock.Lock()
-		defer self.stateLock.Unlock()
-		self.hold = nil
+		self.readLock.Lock()
+		defer self.readLock.Unlock()
+		if self.hold == hold {
+			self.hold = nil
+		}
 		close(hold)
 	}
 }
@@ -152,16 +163,22 @@ func newGkmAclStateWorld(t *testing.T) *gkmAclStateWorld {
 	gateSettings.PollInterval = 0
 	gateSettings.FailureBackoff = 0
 	gateSettings.OnLoad = func(networkId sidecar.Id, pin *bridge.AuthPin, err error) {
-		if err != nil {
+		// the test's end cancels the cache's loads, which fails nothing; the cleanup below waits for every loader, so
+		// none reports once the test has completed
+		if err != nil && t.Context().Err() == nil {
 			t.Errorf("the gate's load: %v", err)
 		}
-		world.loads <- pin
+		select {
+		case world.loads <- pin:
+		case <-t.Context().Done():
+		}
 	}
 	world.source = &gkmAclStateSource{
 		inner:   sidecar.NewAclGateDirectSource(net.Host().Redis, net.Host().Blobs, gateSettings),
 		started: make(chan struct{}, 256),
 	}
 	world.cache = sidecar.NewAclGateCache(admission.Context(), world.source, net.Clock(), gateSettings)
+	t.Cleanup(world.cache.CloseAndWait)
 	world.state = gkmservice.NewAclGkmAuthState(world.cache, world.revocations, net.Clock())
 	legacy := gkmservice.DefaultGkmServiceSettings()
 	legacy.DraftMls = true
@@ -171,6 +188,17 @@ func newGkmAclStateWorld(t *testing.T) *gkmAclStateWorld {
 	}
 	t.Cleanup(world.engine.Close)
 	return world
+}
+
+// A test that ends with its world's load held in the source, as tip-check's failed run at sidecar ed6b9300 did: the end
+// cancels the load, which fails nothing, and the world's cleanup waits for the loader, whose OnLoad then runs before
+// the test completes. That run panicked instead ("Fail in goroutine after TestGkmReconcilerStateIsToldOnceTheGateInstalls
+// has completed"), the cancelled load's t.Errorf coming from a loader nothing waited for.
+func TestGkmAclStateWorldEndsWithALoadHeld(t *testing.T) {
+	world := newGkmAclStateWorld(t)
+	world.source.holdLoads()
+	world.cache.Changed(world.admission.NetworkId())
+	gkmAclStateAwait(t, "held load", world.source.started)
 }
 
 // Fails the test after a real-time bound that only a broken cache or reconciler reaches.
@@ -637,14 +665,13 @@ func TestGkmReconcilerStateIsToldOnceTheGateInstalls(t *testing.T) {
 		t.Fatalf("the owner's standing: %s, %t, %t, %v", standingNetworkId, revoked, known, err)
 	}
 
-	// the log moves and the hint comes, while the load it starts is held open
-	memberId, phone := admission.ConsentedMember("gkm reconciler")
-	_ = memberId
-	moved := admission.Tip()
-	for len(world.source.started) != 0 {
-		<-world.source.started
-	}
+	// the log moves and the hint comes, while the load it starts is held open. The hold is taken before the log moves:
+	// the first hint may still owe a load, for its EXPIRE event (FakeRedis publishes INCR and then EXPIRE NX on the
+	// key's first increment), and that load has either read the log before it moved, so it installs and tells nothing,
+	// or is held here as the load the hint's trigger then waits behind
 	release := world.source.holdLoads()
+	_, phone := admission.ConsentedMember("gkm reconciler")
+	moved := admission.Tip()
 	world.hint()
 	gkmAclStateAwait(t, "held load", world.source.started)
 	select {
@@ -700,6 +727,117 @@ func TestGkmReconcilerStateIsToldOnceTheGateInstalls(t *testing.T) {
 	select {
 	case pin := <-recorder.reads:
 		t.Errorf("a read no change asked for, at %d", pin.GetVersion())
+	default:
+	}
+}
+
+// What a reconciler state's watch was told, and the position the gate's state held as it was told.
+type gkmAclStateTold struct {
+	change    *gkmservice.GkmStateChange
+	installed *bridge.AuthPin
+}
+
+// The interleaving tip-check caught at sidecar ed6b9300, forced. The first hint's load is held at its read while the
+// hint's second key event lands after that load took its due, so the cache owes one more load. That owed load is held
+// too, and the log moves before it reads. The reconciler is told the first install at the old tip, nothing while the
+// owed load is held, and then the moved state once, with its signer, as the owed load installs it, the gate's state
+// holding the told position at the tell. A hold taken before the log moves is what keeps an owed load from telling
+// the moved state before a later hint's load installs it.
+func TestGkmReconcilerStateIsToldAnOwedLoadOnlyOnceItInstalls(t *testing.T) {
+	world := newGkmAclStateWorld(t)
+	admission := world.admission
+	owner := admission.Owner()
+	networkId := admission.NetworkId()
+	ctx := t.Context()
+	stopWatch, err := world.cache.Watch(world.net.Host().Redis)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stopWatch()
+	state := gkmservice.NewAclGkmReconcilerState(world.cache)
+	changes := make(chan gkmAclStateTold, 64)
+	stopChanges, err := state.Watch(func(change *gkmservice.GkmStateChange) {
+		told := gkmAclStateTold{change: change}
+		if change != nil {
+			if snapshot, status := world.cache.State(change.NetworkId); status == sidecar.AclGateLoaded {
+				told.installed = snapshot.Pin
+			}
+		}
+		changes <- told
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stopChanges()
+	if told := gkmAclStateAwait(t, "first change", changes); told.change != nil {
+		t.Fatalf("the watch's first change: %+v", told.change)
+	}
+	recorder := &gkmAclStateRecorder{inner: state, reads: make(chan *bridge.AuthPin, 64)}
+	reconciler, err := gkmservice.NewGkmReconciler(ctx, world.net.Host(), nil, &gkmservice.GkmReconcilerDeps{State: recorder})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reconciler.Close()
+
+	// the first hint: its load is held at its read, with the log as it stands
+	old := admission.Tip()
+	first := world.source.holdLoads()
+	world.hint()
+	gkmAclStateAwait(t, "the first load's read", world.source.started)
+	// the hint's second key event after that load took its due: the subscriber delivers both of the hint's events,
+	// the second after the load's due when its goroutine runs late, which this call stands in for
+	if err := world.net.Fakes().Redis.AwaitKeyEvents(ctx); err != nil {
+		t.Fatal(err)
+	}
+	world.cache.Changed(networkId)
+	// the owed load is held from before the first lets go, so it reads only once the log has moved
+	owed := world.source.holdLoads()
+	first()
+	told := gkmAclStateAwait(t, "the first install's change", changes)
+	if told.change == nil || told.change.NetworkId != networkId || !proto.Equal(told.installed, old) {
+		t.Fatalf("the first install's change: %+v at %d, the tip %d", told.change, told.installed.GetVersion(), old.GetVersion())
+	}
+	if pin := gkmAclStateAwait(t, "reconciler read", recorder.reads); !proto.Equal(pin, old) {
+		t.Fatalf("the reconciler read %d, the tip is %d", pin.GetVersion(), old.GetVersion())
+	}
+	gkmAclStateAwait(t, "the owed load's read", world.source.started)
+
+	// the log moves while the owed load is held: nothing is told, nothing read, and the moved state is not the gate's
+	_, phone := admission.ConsentedMember("gkm owed load")
+	moved := admission.Tip()
+	select {
+	case told := <-changes:
+		t.Fatalf("a change while the owed load is held: %+v", told.change)
+	case pin := <-recorder.reads:
+		t.Fatalf("the reconciler read %d while the owed load is held", pin.GetVersion())
+	default:
+	}
+	if held, err := state.State(ctx, networkId); err != nil || !proto.Equal(held.View.Pin(), old) {
+		t.Fatalf("the state while the owed load is held: %v", err)
+	}
+	if _, _, known, _ := state.SidecarStanding(ctx, phone.SidecarId); known {
+		t.Fatal("a sidecar's standing known before its admission installed")
+	}
+
+	// the owed load reads the moved log: told once, with its signer, as its install holds the moved position
+	owed()
+	told = gkmAclStateAwait(t, "the owed install's change", changes)
+	if told.change == nil || told.change.NetworkId != networkId || told.change.SignerId == nil || *told.change.SignerId != owner.SidecarId ||
+		!proto.Equal(told.installed, moved) {
+		t.Fatalf("the owed install's change: %+v at %d, the tip %d", told.change, told.installed.GetVersion(), moved.GetVersion())
+	}
+	if pin := gkmAclStateAwait(t, "reconciler read", recorder.reads); !proto.Equal(pin, moved) {
+		t.Fatalf("the reconciler read %d after the owed install, the tip is %d", pin.GetVersion(), moved.GetVersion())
+	}
+	if standingNetworkId, revoked, known, err := state.SidecarStanding(ctx, phone.SidecarId); err != nil || !known || revoked || standingNetworkId != networkId {
+		t.Fatalf("the admitted device's standing: %s, %t, %t, %v", standingNetworkId, revoked, known, err)
+	}
+
+	// nothing more was owed: with every loader returned, no change is pending
+	world.cache.CloseAndWait()
+	select {
+	case told := <-changes:
+		t.Errorf("a change no load owed: %+v", told.change)
 	default:
 	}
 }
