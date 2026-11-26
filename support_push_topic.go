@@ -98,6 +98,7 @@ type supportHintComponent struct {
 // The component's name, a seal class of its own beside the client's support store.
 const supportHintComponentName = "support-hint"
 
+// The component's name, which no other component takes.
 func (self *supportHintComponent) Name() string {
 	return supportHintComponentName
 }

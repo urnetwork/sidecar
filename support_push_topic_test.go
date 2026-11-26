@@ -393,6 +393,28 @@ func TestSupportWakeReadsTheConversationNow(t *testing.T) {
 	}
 }
 
+// A client closed while its woken pass reads answers the wake unavailable, never the cut read's outcome, which an app
+// would take for a read that found nothing.
+func TestSupportWakeAnswersUnavailableWhenTheClientClosesMidRead(t *testing.T) {
+	world := newTestSupportLoopWorld(t, false)
+	world.awaitPasses(t, 1)
+	world.transport.holdNext.Store(true)
+	woke := make(chan error, 1)
+	go func() { woke <- world.client.Wake(t.Context()) }()
+	testAwait(t, world.transport.held, "the woken pass's read")
+	closed := make(chan struct{})
+	go func() {
+		world.client.Close()
+		close(closed)
+	}()
+	<-world.client.ctx.Done()
+	world.transport.release <- struct{}{}
+	if err := testAwait(t, woke, "Wake's answer"); !errors.Is(err, ErrSupportUnavailable) {
+		t.Fatalf("a wake the close cut: %v", err)
+	}
+	testAwait(t, closed, "the close")
+}
+
 // Support's replies and moves raise a notification of enumerated fields; the person's and their agents' messages, from
 // any device, and everything else raise none.
 func TestSupportNotificationKeepsSupportsRepliesAndMovesAlone(t *testing.T) {

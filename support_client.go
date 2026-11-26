@@ -988,6 +988,10 @@ func (self *SupportClient) Wake(ctx context.Context) error {
 	for {
 		passes, changed := self.passes.Get()
 		if target <= passes.ended {
+			if self.ctx.Err() != nil {
+				// the pass ended with the client's close, which read nothing
+				return ErrSupportUnavailable
+			}
 			self.stateLock.Lock()
 			defer self.stateLock.Unlock()
 			return self.lastPassErr
