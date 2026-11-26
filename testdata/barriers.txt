@@ -526,6 +526,12 @@ barrier identity.stale.recheck.before identity_act_stale.go
 barrier infer.disclosure.ask.before infer_check_disclosure.go
 barrier infer.dispatch.before infer_router.go
 barrier infer.terminal.before infer_router.go
+barrier infer_download.chunk.marked infer_download.go
+barrier infer_download.chunk.synced infer_download.go
+barrier infer_download.index.kept infer_download_state.go
+barrier infer_download.whole.marked infer_download_state.go
+barrier infer_download.whole.renamed infer_download_state.go
+barrier infer_download.whole.returned infer_download_state.go
 barrier infer_engine.conversation.open.before infer_engine_helper.go
 barrier infer_engine.generate.answered infer_engine_helper.go
 barrier keys.change_pass.after keys_unlock.go
