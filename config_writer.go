@@ -791,11 +791,12 @@ func configSignRecord(sign ConfigSignFunction, signedType bridge.SignedType, bod
 }
 
 // The fold loop: a fold due now waits its random delay, which another base cancels, then publishes; a pending head
-// past its timeout gets its base; otherwise the loop waits for an entry, a base or CheckInterval.
+// past its timeout gets its base; otherwise the loop waits for an entry, a base, CheckInterval or the time age makes a
+// fold due, whichever comes first, that time waited for itself (QD-1425).
 func (self *ConfigWriter) run() {
 	for {
-		wait := self.settings.CheckInterval
-		if due, untilDue := self.foldDue(); due {
+		var foldAt time.Time
+		if due, dueAt := self.foldDue(); due {
 			delay := time.Duration(self.random() * float64(self.settings.FoldDelayMax))
 			select {
 			case <-self.ctx.Done():
@@ -809,18 +810,22 @@ func (self *ConfigWriter) run() {
 				self.publishWithTimeout(true)
 			}
 			continue
-		} else if 0 < untilDue && untilDue < wait {
-			wait = untilDue
+		} else {
+			foldAt = dueAt
 		}
 		if self.pendingDue() {
 			self.publishWithTimeout(false)
 			continue
 		}
+		waitAt := self.clock.Now().Add(self.settings.CheckInterval)
+		if !foldAt.IsZero() && foldAt.Before(waitAt) {
+			waitAt = foldAt
+		}
 		select {
 		case <-self.ctx.Done():
 			return
 		case <-self.entryLanded:
-		case <-self.clock.After(wait):
+		case <-ClockAfterAt(self.clock, waitAt):
 		}
 	}
 }
@@ -835,12 +840,12 @@ func (self *ConfigWriter) publishWithTimeout(fold bool) {
 }
 
 // Whether a fold is due at the client's state (§7.9's fold row): the oldest statement or tick past the newest base's
-// folded_through is FoldEntryCount positions behind the tip, or FoldAge old by this device's clock. Not due, how long
-// until age makes it due, zero for never.
-func (self *ConfigWriter) foldDue() (bool, time.Duration) {
+// folded_through is FoldEntryCount positions behind the tip, or FoldAge old by this device's clock. Not due, the time
+// age makes it due, zero for never.
+func (self *ConfigWriter) foldDue() (bool, time.Time) {
 	state := self.args.Client.State()
 	if state == nil || state.Base() == nil || CheckConfigHeadWriter(state, self.args.SidecarId) != nil {
-		return false, 0
+		return false, time.Time{}
 	}
 	foldedThrough := state.Base().GetFoldedThrough()
 	oldestN, oldestTimeMs := uint64(0), int64(0)
@@ -860,16 +865,16 @@ func (self *ConfigWriter) foldDue() (bool, time.Duration) {
 		}
 	}()
 	if oldestN == 0 {
-		return false, 0
+		return false, time.Time{}
 	}
 	if uint64(max(self.settings.FoldEntryCount, 1)) <= state.n-oldestN+1 {
-		return true, 0
+		return true, time.Time{}
 	}
-	age := self.clock.Now().Sub(time.UnixMilli(oldestTimeMs))
-	if self.settings.FoldAge <= age {
-		return true, 0
+	dueAt := time.UnixMilli(oldestTimeMs).Add(self.settings.FoldAge)
+	if !self.clock.Now().Before(dueAt) {
+		return true, time.Time{}
 	}
-	return false, self.settings.FoldAge - age
+	return false, dueAt
 }
 
 // Whether a head the store holds with no base naming it has waited past PendingHeadTimeout (§7.9's state row).

@@ -662,8 +662,8 @@ func (self *socketShares) adopt(share *socketShare) {
 		defer self.stateLock.Unlock()
 		self.tokenShares[share.token] = share
 	}()
-	expiresIn := time.UnixMilli(share.state.share.ExpireMillis).Sub(self.clock.Now())
-	stop := self.clock.AfterFunc(expiresIn, share.end)
+	// for the expiry itself (QD-1425), with no lock held, since an expiry already passed ends the share here
+	stop := ClockAfterFuncAt(self.clock, time.UnixMilli(share.state.share.ExpireMillis), share.end)
 	func() {
 		share.stateLock.Lock()
 		defer share.stateLock.Unlock()
@@ -689,7 +689,7 @@ func (self *socketShare) checkClock() {
 	// the Share row's, read before the share went live and never written again, so the check waits on no Reserve's
 	// fsync; armed with no lock held, since the clock may call the end at once
 	expiresAt := time.UnixMilli(self.state.share.ExpireMillis)
-	stop := self.shares.clock.AfterFunc(expiresAt.Sub(self.shares.clock.Now()), self.end)
+	stop := ClockAfterFuncAt(self.shares.clock, expiresAt, self.end)
 	kept := func() bool {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()

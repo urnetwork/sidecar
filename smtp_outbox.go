@@ -446,17 +446,19 @@ func (self *SmtpOutboxRunner) Run(ctx context.Context, wake <-chan struct{}) {
 		if _, err := self.RunOnce(ctx); err != nil && ctx.Err() == nil {
 			self.log.Warningf("[smtp]outbox pass: %v\n", err)
 		}
-		wait := self.settings.OutboxPollInterval
+		// the next pass at OutboxPollInterval from now, or at a hold's end where that is sooner: a wait for the earlier
+		// time itself (QD-1425)
+		passAt := self.clock.Now().Add(self.settings.OutboxPollInterval)
 		if self.args.Hold != nil {
-			if held, until := self.args.Hold.Held(); held {
-				wait = min(wait, max(until.Sub(self.clock.Now()), 0))
+			if held, until := self.args.Hold.Held(); held && until.Before(passAt) {
+				passAt = until
 			}
 		}
 		select {
 		case <-ctx.Done():
 			return
 		case <-wake:
-		case <-self.clock.After(wait):
+		case <-ClockAfterAt(self.clock, passAt):
 		}
 	}
 }

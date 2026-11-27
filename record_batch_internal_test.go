@@ -86,8 +86,8 @@ func TestRecordWriterBacksOffALogItCannotReach(t *testing.T) {
 	if err := writer.pump(t.Context(), false); err == nil {
 		t.Fatal("a log with no right took the batch")
 	}
-	timeout, ok := writer.nextWake()
-	if !ok || timeout < settings.PushCoalesce {
+	wakeAt, ok := writer.nextWake()
+	if timeout := wakeAt.Sub(clock.now); !ok || timeout < settings.PushCoalesce {
 		t.Fatalf("the next wake is %v away (%t): the loop would spin", timeout, ok)
 	}
 }

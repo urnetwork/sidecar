@@ -307,11 +307,11 @@ func (self *daemonBridgeForward) checkClock() {
 	self.armExpiry(expiresAt)
 }
 
-// Arms the forward's close at expiresAt from the clock's now. The clock arms with no lock held, since it may call the
-// close at once; the wait is kept unless the forward closed, another wait was armed meanwhile or the expiry moved, and
-// is stopped then.
+// Arms the forward's close at expiresAt, set for that time itself (QD-1425). The clock arms with no lock held, since
+// it may call the close at once; the wait is kept unless the forward closed, another wait was armed meanwhile or the
+// expiry moved, and is stopped then.
 func (self *daemonBridgeForward) armExpiry(expiresAt time.Time) {
-	stop := self.bridges.clock.AfterFunc(expiresAt.Sub(self.bridges.clock.Now()), func() {
+	stop := ClockAfterFuncAt(self.bridges.clock, expiresAt, func() {
 		self.close(ErrDaemonBridgeGrantEnded)
 	})
 	kept := func() bool {

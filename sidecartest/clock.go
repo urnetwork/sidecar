@@ -109,12 +109,16 @@ func (self *FakeClock) AfterFunc(timeout time.Duration, function func()) (stop f
 	return func() bool { return self.removeTimer(timer) }
 }
 
-// See sidecar.ClockAt: set for at under the clock's lock, firing at once when the clock has reached at.
+// See sidecar.ClockAt: set for at under the clock's lock, firing at once when the clock has reached at. at is read in
+// the clock's location, as a timer After sets is, so PendingTimers reads alike for both and an Advance that stops at
+// the timer leaves the clock in its own location, whatever location the caller's time was built in (time.UnixMilli's
+// local one, say).
 func (self *FakeClock) AfterAt(at time.Time) <-chan time.Time {
 	fired := make(chan time.Time, 1)
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
+		at = at.In(self.now.Location())
 		if !self.now.Before(at) {
 			fired <- self.now
 			return
@@ -127,12 +131,13 @@ func (self *FakeClock) AfterAt(at time.Time) <-chan time.Time {
 }
 
 // See sidecar.ClockAt: set for at under the clock's lock, calling function at once, on this goroutine with
-// no lock held, when the clock has reached at.
+// no lock held, when the clock has reached at. at is read in the clock's location, as AfterAt reads it.
 func (self *FakeClock) AfterFuncAt(at time.Time, function func()) (stop func() bool) {
 	var timer *clockTimer
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
+		at = at.In(self.now.Location())
 		if !self.now.Before(at) {
 			return
 		}

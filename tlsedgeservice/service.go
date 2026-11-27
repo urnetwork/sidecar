@@ -248,8 +248,13 @@ func (self *TlsEdgeService) runVisitorKeys() {
 			result, _ := self.visitorKeys.Refresh(callCtx, self.host.Redis, self.settings.VisitorKeyTtl)
 			self.metrics.visitorKeyRefreshes.Add(1, result)
 		}()
-		// armed before the pass is counted, as runNames does
-		next := self.clock.After(min(self.settings.VisitorKeyRefreshInterval, self.visitorKeys.untilNextDay()))
+		// armed before the pass is counted, as runNames does, for the earlier time itself (QD-1425)
+		now := self.clock.Now()
+		refreshAt := now.Add(self.settings.VisitorKeyRefreshInterval)
+		if dayStart := self.visitorKeys.nextDayStart(now); dayStart.Before(refreshAt) {
+			refreshAt = dayStart
+		}
+		next := sidecar.ClockAfterAt(self.clock, refreshAt)
 		self.visitorKeyRefreshCount.Update(func(count uint64) uint64 { return count + 1 })
 		select {
 		case <-self.ctx.Done():
@@ -401,7 +406,9 @@ func (self *TlsEdgeService) runKills() {
 				failedNetworkIds = append(failedNetworkIds, networkId)
 			}
 		}
-		wait := nextReload.Sub(self.clock.Now())
+		// the next reload, or a failed read's retry KillRetryDelay on where that is sooner: a wait for the earlier
+		// time itself (QD-1425)
+		wakeAt := nextReload
 		if 0 < len(failedNetworkIds) {
 			func() {
 				self.stateLock.Lock()
@@ -410,10 +417,12 @@ func (self *TlsEdgeService) runKills() {
 					self.killPendingNetworkIds[networkId] = true
 				}
 			}()
-			wait = min(wait, self.settings.KillRetryDelay)
+			if retryAt := self.clock.Now().Add(self.settings.KillRetryDelay); retryAt.Before(wakeAt) {
+				wakeAt = retryAt
+			}
 		}
 		// armed before the reload is counted, as runNames does
-		next := self.clock.After(wait)
+		next := sidecar.ClockAfterAt(self.clock, wakeAt)
 		if reloaded {
 			self.killLoadCount.Update(func(count uint64) uint64 { return count + 1 })
 		}

@@ -590,7 +590,8 @@ func (self *writeBudgetAccount) armShedWithLock(now time.Time) {
 		self.shedStop()
 	}
 	self.shedAt = at
-	self.shedStop = self.client.clock.AfterFunc(at.Sub(now), func() {
+	// for the time itself (QD-1425), and never on this goroutine, which holds the lock the check takes
+	self.shedStop = sidecar.ClockAfterFuncAtAsync(self.client.clock, at, func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		if !self.shedAt.Equal(at) {

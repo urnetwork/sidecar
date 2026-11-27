@@ -125,12 +125,13 @@ func (self *Subprotocol) EnsureHello(ctx context.Context, clientId Id) error {
 
 // What OpenStream goes through before it sends to clientId (D-PROTO-13). See EnsureHello.
 func (self *Subprotocol) ensurePeerVerified(ctx context.Context, clientId connect.Id) error {
-	return self.ensurePeerVerifiedWithin(ctx, clientId, self.settings.DefaultCallTimeout)
+	return self.ensurePeerVerifiedWithin(ctx, clientId, self.clock.Now().Add(self.settings.DefaultCallTimeout))
 }
 
-// What Call goes through before it sends to clientId: a Hello, if one has to run, waits at most timeout
-// on this side's clock and never past DefaultCallTimeout or ctx. A second caller joins the first's Hello.
-func (self *Subprotocol) ensurePeerVerifiedWithin(ctx context.Context, clientId connect.Id, timeout time.Duration) error {
+// What Call goes through before it sends to clientId: a Hello, if one has to run, waits until deadline at most on this
+// side's clock, a wait for that time itself (QD-1425), and never past DefaultCallTimeout or ctx. A second caller joins
+// the first's Hello.
+func (self *Subprotocol) ensurePeerVerifiedWithin(ctx context.Context, clientId connect.Id, deadline time.Time) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -145,7 +146,7 @@ func (self *Subprotocol) ensurePeerVerifiedWithin(ctx context.Context, clientId 
 		return nil
 	}
 	if owner {
-		return self.runHelloFlight(ctx, clientId, flight, min(timeout, self.settings.DefaultCallTimeout))
+		return self.runHelloFlight(ctx, clientId, flight, earlierTime(deadline, self.clock.Now().Add(self.settings.DefaultCallTimeout)))
 	}
 	select {
 	case <-flight.done:
@@ -175,22 +176,24 @@ func (self *Subprotocol) takeHelloFlight(clientId connect.Id) (flight *helloFlig
 	return flight, true
 }
 
-// Runs the Hello of a flight takeHelloFlight gave its caller to own, waiting at most timeout, then ends the flight
-// for every caller that joined it.
-func (self *Subprotocol) runHelloFlight(ctx context.Context, clientId connect.Id, flight *helloFlight, timeout time.Duration) error {
+// Runs the Hello of a flight takeHelloFlight gave its caller to own, waiting until deadline at most, then ends the
+// flight for every caller that joined it.
+func (self *Subprotocol) runHelloFlight(ctx context.Context, clientId connect.Id, flight *helloFlight, deadline time.Time) error {
 	defer func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		delete(self.helloFlights, clientId)
 		close(flight.done)
 	}()
-	flight.err = self.runHello(ctx, clientId, timeout)
+	flight.err = self.runHello(ctx, clientId, deadline)
 	return flight.err
 }
 
-// Sends one Hello and checks its answer, waiting at most timeout, and opens the gate on a HelloResult
-// that verifies. Every failure leaves the gate closed.
-func (self *Subprotocol) runHello(ctx context.Context, clientId connect.Id, timeout time.Duration) error {
+// Sends one Hello and checks its answer, waiting until deadline at most, and opens the gate on a HelloResult that
+// verifies. Every failure leaves the gate closed. The Hello's timeout_ms and its send take what is left of the wait as
+// it starts; the wait for the answer is set for deadline itself (QD-1425).
+func (self *Subprotocol) runHello(ctx context.Context, clientId connect.Id, deadline time.Time) error {
+	timeout := deadline.Sub(self.clock.Now())
 	if timeout <= 0 {
 		return &SubprotocolError{Code: protocol.ErrorCode_ERR_DEADLINE_EXCEEDED}
 	}
@@ -223,7 +226,7 @@ func (self *Subprotocol) runHello(ctx context.Context, clientId connect.Id, time
 		return sendFailure(err, requestId)
 	}
 
-	response, err := self.awaitPending(ctx, pending, timeout, requestId)
+	response, err := self.awaitPending(ctx, pending, deadline, requestId)
 	if err != nil {
 		return err
 	}
@@ -271,7 +274,7 @@ func (self *Subprotocol) helloAnsweredUnasked(peerId connect.Id) {
 	self.handlers.Add(1)
 	go func() {
 		defer self.handlers.Done()
-		if err := self.runHelloFlight(self.ctx, peerId, flight, self.settings.DefaultCallTimeout); err != nil && self.log.V(1).Enabled() {
+		if err := self.runHelloFlight(self.ctx, peerId, flight, self.clock.Now().Add(self.settings.DefaultCallTimeout)); err != nil && self.log.V(1).Enabled() {
 			self.log.Infof("[subprotocol]fresh Hello to %s on its unasked HelloResult: %s\n", peerId, err)
 		}
 	}()

@@ -650,7 +650,9 @@ func (self *GkmReconciler) run() {
 		if earliest, ok := self.earliestWake(); ok && earliest.Before(wakeAt) {
 			wakeAt = earliest
 		}
-		timeout := self.clock.After(max(0, wakeAt.Sub(self.clock.Now())))
+		// for the wake's time itself (QD-1425), so a test that moves the clock once the pass is counted, before this
+		// arms, cannot leave the wait late
+		timeout := sidecar.ClockAfterAt(self.clock, wakeAt)
 		self.idle.Set(true)
 		select {
 		case <-self.ctx.Done():

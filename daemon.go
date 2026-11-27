@@ -343,10 +343,11 @@ func (self *Daemon) idle() {
 	}
 	for {
 		_, changed := self.activity.Get()
-		wait, idle := self.idleWait()
-		if idle && wait <= 0 {
+		// the idle exit's time, waited for itself (QD-1425)
+		idleAt, idle := self.idleAt()
+		if idle && !self.clock.Now().Before(idleAt) {
 			if self.busy() {
-				wait = timeout
+				idleAt = self.clock.Now().Add(timeout)
 			} else {
 				self.log.Infof("[daemon]idle for %s, exiting", timeout)
 				self.Close()
@@ -365,7 +366,7 @@ func (self *Daemon) idle() {
 		case <-self.ctx.Done():
 			return
 		case <-changed:
-		case <-self.clock.After(wait):
+		case <-ClockAfterAt(self.clock, idleAt):
 		}
 	}
 }

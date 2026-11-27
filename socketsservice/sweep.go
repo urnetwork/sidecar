@@ -400,11 +400,15 @@ func (self *SocketsService) runSweeps() {
 	defer self.workers.Done()
 	slots := make(chan struct{}, self.settings.SweepConcurrency)
 	for {
-		wait := time.Duration(0)
+		// the next due network's time, the take's reading plus its wait, zero for none queued
+		var dueTime time.Time
 		for {
-			networkId, ok, due := self.sweeps.take(self.clock.Now())
+			now := self.clock.Now()
+			networkId, ok, due := self.sweeps.take(now)
 			if !ok {
-				wait = due
+				if 0 < due {
+					dueTime = now.Add(due)
+				}
 				break
 			}
 			select {
@@ -421,8 +425,9 @@ func (self *SocketsService) runSweeps() {
 			}()
 		}
 		var timer <-chan time.Time
-		if 0 < wait {
-			timer = self.clock.After(wait)
+		if !dueTime.IsZero() {
+			// for that time itself (QD-1425)
+			timer = sidecar.ClockAfterAt(self.clock, dueTime)
 		}
 		select {
 		case <-self.ctx.Done():

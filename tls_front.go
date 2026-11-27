@@ -670,7 +670,7 @@ func (self *TlsFront) runUpdates() {
 		case retry:
 			at = self.clock.After(self.settings.TargetProbeMinInterval)
 		case !next.IsZero():
-			at = self.clock.After(next.Sub(now))
+			at = ClockAfterAt(self.clock, next)
 		}
 		select {
 		case <-self.ctx.Done():

@@ -342,6 +342,17 @@ func (self *MxEdgeService) boundedContext(timeout time.Duration) (context.Contex
 	}
 }
 
+// A context bounded by deadline on the engine's clock, a wait set for that time itself (QD-1425), and the call that
+// ends it.
+func (self *MxEdgeService) boundedContextUntil(deadline time.Time) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(self.ctx)
+	stop := sidecar.ClockAfterFuncAt(self.clock, deadline, cancel)
+	return ctx, func() {
+		stop()
+		cancel()
+	}
+}
+
 // The sender's address and port as the host's PROXY listener reported them, unmapped.
 func mxSenderAddrPort(addr net.Addr) netip.AddrPort {
 	if tcpAddr, ok := addr.(*net.TCPAddr); ok {
@@ -464,8 +475,8 @@ func (self *MxEdgeService) routeNetwork(session *mxSession, hello *MxClientHello
 		self.closeRouterHandshake(session, MxTlsAlertInternalError)
 		return mxSessionResultSetupFailed, 0
 	}
-	dial := func(timeout time.Duration) (MxEdgeStream, uint64, error) {
-		dialCtx, done := self.boundedContext(timeout)
+	dial := func(deadline time.Time) (MxEdgeStream, uint64, error) {
+		dialCtx, done := self.boundedContextUntil(deadline)
 		defer done()
 		stream, grantExpireTimeMillis, err := router.dialer.Dial(dialCtx, &MxEdgeDialRequest{
 			NetworkId:    networkId,
@@ -481,7 +492,7 @@ func (self *MxEdgeService) routeNetwork(session *mxSession, hello *MxClientHello
 		}
 		return stream, grantExpireTimeMillis, err
 	}
-	stream, grantExpireTimeMillis, err := dial(self.settings.AcceptSetupTimeout)
+	stream, grantExpireTimeMillis, err := dial(self.clock.Now().Add(self.settings.AcceptSetupTimeout))
 	if err != nil {
 		// §15.6's step 5: a miss waits for a woken receiver, when the hold is on
 		stream, grantExpireTimeMillis, err = self.holdForReceiver(route, err, dial)

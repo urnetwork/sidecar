@@ -809,7 +809,7 @@ func (self *EvsGitReceiver) runQueue(ctx context.Context) error {
 		next := self.queueRound(ctx)
 		var timer <-chan time.Time
 		if !next.IsZero() {
-			timer = self.clock.After(next.Sub(self.clock.Now()))
+			timer = ClockAfterAt(self.clock, next)
 		}
 		select {
 		case <-ctx.Done():

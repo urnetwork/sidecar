@@ -33,7 +33,7 @@ type testEnvelopeClockWait struct {
 	ordinal int
 }
 
-// A subprotocolClock a test moves, safe for concurrent use. Advance moves the time and fires no wait
+// A Clock a test moves, safe for concurrent use. Advance moves the time and fires no wait
 // unless the clock was made to fire them, which only a test of run asks for: run drops a group only once
 // a wait fires, so on any other clock it drops nothing, and the one sweep is the expire a test calls.
 // awaitWaitCount is how a test learns that a goroutine has reached its next wait, with no sleep, and
@@ -846,7 +846,7 @@ func TestDeadlineFollowsTheLastChunk(t *testing.T) {
 	reassembly.offerPending(t, testPeerA, envelopes[1])
 	reassembly.clock.Advance(timeout - time.Nanosecond)
 	reassembly.reassembler.expire()
-	if due := reassembly.reassembler.untilNextDeadline(); due != time.Nanosecond {
+	if due := reassembly.reassembler.nextDeadline().Sub(reassembly.clock.Now()); due != time.Nanosecond {
 		t.Fatalf("due in %v", due)
 	}
 	if held := reassembly.heldByteCount(); held == 0 {
@@ -869,7 +869,7 @@ func TestRunSleepsToTheEarliestDeadline(t *testing.T) {
 		reassembly.offerPending(t, Id{0x30, byte(peer)}, testFirstChunk(t, 1, 5000))
 		reassembly.clock.Advance(time.Second)
 	}
-	if due := reassembly.reassembler.untilNextDeadline(); due != timeout-8*time.Second {
+	if due := reassembly.reassembler.nextDeadline().Sub(reassembly.clock.Now()); due != timeout-8*time.Second {
 		t.Errorf("due in %v", due)
 	}
 }

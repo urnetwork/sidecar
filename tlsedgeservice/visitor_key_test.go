@@ -252,7 +252,7 @@ func TestTlsVisitorKeysFleetKeyIsForItsDay(t *testing.T) {
 	keys.Refresh(context.Background(), redis, ttl)
 	visitor := netip.MustParseAddr("192.0.2.77")
 	yesterday := keys.AffinityKey(visitor)
-	if until := keys.untilNextDay(); until != 12*time.Hour {
+	if until := keys.nextDayStart(clock.Now()).Sub(clock.Now()); until != 12*time.Hour {
 		t.Fatalf("%v until the next day", until)
 	}
 	clock.Advance(12 * time.Hour)

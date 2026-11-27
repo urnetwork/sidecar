@@ -634,26 +634,28 @@ func (self *OrphanGc) pace(ctx context.Context, clusterId string) error {
 	interval := time.Second / time.Duration(self.settings.DeleteRate)
 	for {
 		now := self.clock.Now()
-		wait := time.Duration(0)
+		// the cluster's next delete time, zero when one may go now
+		var nextDelete time.Time
 		func() {
 			self.stateLock.Lock()
 			defer self.stateLock.Unlock()
 			next := self.clusterNextDeleteTimes[clusterId]
 			if now.Before(next) {
-				wait = next.Sub(now)
+				nextDelete = next
 				return
 			}
 			self.clusterNextDeleteTimes[clusterId] = now.Add(interval)
 		}()
-		if wait == 0 {
+		if nextDelete.IsZero() {
 			return nil
 		}
 		if self.deps.wait != nil {
-			self.deps.wait(wait)
+			self.deps.wait(nextDelete.Sub(now))
 			continue
 		}
+		// for that time itself (QD-1425)
 		select {
-		case <-self.clock.After(wait):
+		case <-sidecar.ClockAfterAt(self.clock, nextDelete):
 		case <-ctx.Done():
 			return ctx.Err()
 		}

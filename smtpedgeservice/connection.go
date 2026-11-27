@@ -202,10 +202,11 @@ func (self *smtpEdgeConnection) watch() {
 		if renewAt.Before(wake) {
 			wake = renewAt
 		}
+		// for the wake's time itself (QD-1425)
 		select {
 		case <-self.done:
 			return
-		case <-clock.After(wake.Sub(clock.Now())):
+		case <-sidecar.ClockAfterAt(clock, wake):
 		}
 		now := clock.Now()
 		if !now.Before(renewAt) {

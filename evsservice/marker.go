@@ -53,7 +53,7 @@ func (self *foldRun) waitOverMarker(read *EvsEntryRead) (bool, error) {
 		return false, fmt.Errorf("%w: a collection window covers the marker", ErrEvsFoldDeferred)
 	}
 	select {
-	case <-self.folder.clock.After(writableAt.Sub(now)):
+	case <-sidecar.ClockAfterAt(self.folder.clock, writableAt):
 	case <-self.ctx.Done():
 		return false, self.ctx.Err()
 	}
