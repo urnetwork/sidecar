@@ -467,19 +467,22 @@ func parseSafetyCharsmap(blob []byte) (*safetyCharsmap, error) {
 	return &safetyCharsmap{units: units, replacements: rest[trieByteCount:]}, nil
 }
 
-// darts-clone's unit fields.
+// Whether a darts-clone unit's node ends a key, its value at its base.
 func safetyDartsHasLeaf(unit uint32) bool {
 	return (unit>>8)&1 == 1
 }
 
+// A value unit's value, its low 31 bits.
 func safetyDartsValue(unit uint32) uint32 {
 	return unit & (1<<31 - 1)
 }
 
+// A unit's label: its low byte, and its high bit, which a value unit sets so no byte matches it.
 func safetyDartsLabel(unit uint32) uint32 {
 	return unit & (1<<31 | 0xFF)
 }
 
+// The offset a unit gives its children's base, in its high bits, shifted 8 more where its bit 9 says so.
 func safetyDartsOffset(unit uint32) uint32 {
 	return (unit >> 10) << ((unit & (1 << 9)) >> 6)
 }
