@@ -406,6 +406,21 @@ func (self *webSearchSidecarPolicy) Line(ctx context.Context) (*WebSearchPolicyL
 	return line, nil
 }
 
+// See WebSearchOffered: the newest policy current and carrying a search line that reads, and a freshness ticket held
+// current, read from what the device holds; nothing remote is asked.
+func (self *webSearchSidecarPolicy) Offered() bool {
+	gate, err := self.sidecar.ComputePolicyGate()
+	if err != nil {
+		return false
+	}
+	policy, err := gate.PolicyCurrent()
+	if err != nil || len(policy.Search) == 0 || gate.Ticket() == nil {
+		return false
+	}
+	_, err = ParseWebSearchPolicyLine(policy.Search, self.settings)
+	return err == nil
+}
+
 // The remote catalog's version, which INFER keeps inside its router.
 type webSearchCatalogVersions interface {
 	Version(ctx context.Context) (uint64, error)
