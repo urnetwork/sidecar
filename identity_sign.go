@@ -93,6 +93,10 @@ func sidecarIdentitySignedPurpose(signedType bridge.SignedType) (string, bool) {
 	case bridge.SignedType_SIGNED_ATTACH_ORIGIN:
 		// HarnessAttachOriginPurpose, which harness_origin.go holds off this file's legs (DESIGN-COMPUTE §7.10, §12.5)
 		return "attach-origin", true
+	case bridge.SignedType_SIGNED_DISCLOSURE_ACK:
+		// ComputeDisclosureAckPurpose, which disclosure_network.go holds off this file's legs (DESIGN-COMPUTE §2.8): an
+		// Owner's or Admin's acknowledgment of a disclosure for the network
+		return "disclosure-ack", true
 	case bridge.SignedType_SIGNED_DIRECTORY_CARD, bridge.SignedType_SIGNED_DIRECTORY_REPO:
 		return "directory", true
 

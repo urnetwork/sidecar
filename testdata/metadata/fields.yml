@@ -251,6 +251,7 @@ sealed_messages:
   ComputePolicyTicketBatch: "inside ComputePolicyTicket (DESIGN-COMPUTE §5.4)"
 
 sealed_files:
+  protocol/compute_disclosure.proto: "a statement inside the ACL document's compute block, or a network's block-alone record, in the config head, which evs seals as any file of the config repo; it stays out of the projection and its rows (DESIGN-COMPUTE §2.8, §16.4, Q-CTRUST-2; CTRUST-M12-02)"
   protocol/directory.proto: "plaintext inside the directory's sealed files and entries (§16.11)"
   protocol/dns.proto: "peer to peer over a Required session on a data-class contract, so only sizes and timing show (§12.9.1, §17.7.1; connect-1, connect-2)"
   protocol/evsindex.proto: "plaintext inside index files, which evs seals as any file (§11.14)"

@@ -24,6 +24,14 @@ message ComputePolicyTicket {
   int64 not_after_ms = 5;
 }
 message ComputePolicyTicketFile { bytes ticket = 1; bytes signature = 2; }
+// sidecar/protocol/compute_disclosure.proto
+// DESIGN-COMPUTE.md §2.8's network acknowledgment, which the design gives as a field list without numbers: numbered in
+// the order written, then the signing device and the AuthPin it signed at, the plan's proposal for "when it signed"
+// (CTRUST-M12-02).
+message DisclosureAck {
+  bytes network_id = 1; string disclosure_id = 2; uint32 version = 3; string locale = 4; uint32 revision = 5;
+  bytes member_id = 6; bytes sidecar_id = 7; AuthPin auth_pin = 8;
+}
 // sidecar/protocol/harness.proto
 // DESIGN-COMPUTE.md §7.10's and §12.5's attach origin, which the design gives as a field list without numbers: numbered
 // in the order written (HARN-M14-01), the device target HARN-M14-11 gives it joining after them.
@@ -596,6 +604,43 @@ message InferCatalogModel {
 }
 message InferCatalogTarget { string method = 1; string path = 2; }
 message InferCatalogSection { string name = 1; bytes body = 2; }
+
+// sidecar/protocol/websearch.proto
+// DESIGN-COMPUTE.md §21.5's, §21.8's and §6.3's search messages that it names without fields: the broker's answer to
+// an authorize, the device's daily outcomes, the search signer's API, which the broker alone calls, and the catalog's
+// search section, numbered in the order written (SRCH-M13-01). §21.5's four fenced messages are its own fence's.
+message ComputeSearchAuthorizeResponse { bytes sealed_authorization = 1; }
+message ComputeSearchOutcomesRequest { SearchOutcomes outcomes = 1; }
+enum SearchSignRefusal {
+  SEARCH_SIGN_REFUSAL_UNSPECIFIED = 0; SEARCH_SIGN_REFUSAL_PAYEE_REFUSED = 1; SEARCH_SIGN_REFUSAL_NONCE_REUSED = 2;
+  SEARCH_SIGN_REFUSAL_RATE_LIMITED = 3; SEARCH_SIGN_REFUSAL_UNSETTLED_CAP = 4; SEARCH_SIGN_REFUSAL_DAY_CAP = 5;
+  SEARCH_SIGN_REFUSAL_CEILING = 6; SEARCH_SIGN_REFUSAL_LISTS_STALE = 7; SEARCH_SIGN_REFUSAL_STOPPED = 8;
+  SEARCH_SIGN_REFUSAL_SEAL_INVALID = 9;
+}
+message SearchSignRequest { bytes ticket = 1; uint64 amount = 2; int64 minute_s = 3; bytes sealed_payee = 4; }
+message SearchSignResponse { bytes sealed_authorization = 1; SearchSignRefusal refusal = 2; bytes payee = 3; }
+enum SearchSignerReportKind {
+  SEARCH_SIGNER_REPORT_KIND_UNSPECIFIED = 0; SEARCH_SIGNER_REPORT_KIND_SETTLED = 1; SEARCH_SIGNER_REPORT_KIND_LAPSED = 2;
+  SEARCH_SIGNER_REPORT_KIND_OUT_OF_BAND = 3;
+}
+message SearchSignerReport {
+  bytes ticket = 1; SearchSignerReportKind kind = 2; int64 minute_s = 3; bytes payee = 4; bytes transaction = 5;
+}
+message SearchSignerReports { repeated SearchSignerReport reports = 1; }
+enum SearchReportAnswer {
+  SEARCH_REPORT_ANSWER_UNSPECIFIED = 0; SEARCH_REPORT_ANSWER_CHARGED = 1; SEARCH_REPORT_ANSWER_RELEASED = 2;
+  SEARCH_REPORT_ANSWER_UNKNOWN = 3;
+}
+message SearchSignerAnswer { bytes ticket = 1; SearchReportAnswer answer = 2; }
+message SearchSignerAnswers { repeated SearchSignerAnswer answers = 1; }
+message SearchSignerDayRequest { int64 day_s = 1; }
+message SearchSignerDay {
+  int64 day_s = 1; uint64 issued_count = 2; uint64 issued_value = 3; uint64 settled_count = 4; uint64 settled_value = 5;
+  uint64 attributed_count = 6; uint64 attributed_value = 7; uint64 unattributed_count = 8;
+  uint64 unattributed_value = 9;
+}
+message WebSearchCatalogSection { repeated WebSearchCatalogEntry entries = 1; }
+message WebSearchCatalogEntry { string engine = 1; string mode = 2; int64 nano_usd_per_search = 3; }
 
 // sidecar/protocol/mail.proto
 // MailAuthEvidence's comments, which name each result's fields in this order.
