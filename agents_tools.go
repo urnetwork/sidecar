@@ -585,9 +585,9 @@ func agentToolRefs(refs []*AgentToolRef) ([]*AgentMessageRef, error) {
 	return parsed, nil
 }
 
-// The repo thread lives in, among the member's: the caller's inbox, the agents repo, and each card's agent repo,
-// at most ThreadRepoSearchCount; ErrAgentThreadAbsent where none holds it.
-func (self *AgentsTools) threadRepo(ctx context.Context, client *AgentsClient, caller AgentName, thread AgentThreadId) (Id, *AgentThreadRead, error) {
+// The repo thread lives in, among the member's: the caller's inbox ("" for the person, who has none to look in first),
+// the agents repo, and each card's agent repo, at most ThreadRepoSearchCount; ErrAgentThreadAbsent where none holds it.
+func agentsThreadRepo(ctx context.Context, client *AgentsClient, caller AgentName, thread AgentThreadId) (Id, *AgentThreadRead, error) {
 	place, err := client.placeWithRepo()
 	if err != nil {
 		return Id{}, nil, err
@@ -642,12 +642,15 @@ func agentsPersonName(ctx context.Context, client *AgentsClient) AgentName {
 // Who a reply in thread answers, where it names no to, by the replied message's verified provenance, the person's
 // answered to the member's me (§20.7's to row): in a thread to all, the message that opened it, whose sender every
 // reply goes back to (§20.8's third question), unless the caller opened it; else the newest message another sender
-// wrote. ErrAgentSendRecipient where that sender cannot be verified.
-func agentsReplyRecipient(ctx context.Context, client *AgentsClient, caller AgentName, thread *AgentThreadRead, toAll bool) (AgentName, error) {
+// wrote. The caller is the agent caller, or with person the member's person, whose own words it never answers.
+// ErrAgentSendRecipient where that sender cannot be verified.
+func agentsReplyRecipient(ctx context.Context, client *AgentsClient, caller AgentName, person bool, thread *AgentThreadRead, toAll bool) (AgentName, error) {
 	senderOf := func(message *AgentMessageRead) (AgentName, bool, error) {
 		trust := message.Trust
 		switch {
 		case trust.Sender.Name == caller && caller != "":
+			return "", false, nil
+		case trust.Class == AgentMessageTrustPerson && person:
 			return "", false, nil
 		case trust.Class == AgentMessageTrustPerson:
 			return agentsPersonName(ctx, client), true, nil
@@ -752,7 +755,7 @@ func (self *AgentsTools) Send(ctx context.Context, caller *AgentsToolCaller, arg
 		if err != nil {
 			return nil, fmt.Errorf("%w: the thread", ErrAgentToolArguments)
 		}
-		repoId, read, err := self.threadRepo(ctx, client, from, thread)
+		repoId, read, err := agentsThreadRepo(ctx, client, from, thread)
 		if err != nil {
 			return nil, err
 		}
@@ -761,7 +764,7 @@ func (self *AgentsTools) Send(ctx context.Context, caller *AgentsToolCaller, arg
 			return nil, fmt.Errorf("%w: to \"*\" continues a thread to every agent", ErrAgentToolArguments)
 		}
 		if args.To == "" {
-			if send.To, err = agentsReplyRecipient(ctx, client, from, read, repoId == place.agentsRepoId); err != nil {
+			if send.To, err = agentsReplyRecipient(ctx, client, from, false, read, repoId == place.agentsRepoId); err != nil {
 				return nil, err
 			}
 		}
@@ -883,13 +886,13 @@ func (self *AgentsTools) Close(ctx context.Context, caller *AgentsToolCaller, ar
 	if err != nil {
 		return nil, err
 	}
-	repoId, read, err := self.threadRepo(ctx, client, from, thread)
+	repoId, read, err := agentsThreadRepo(ctx, client, from, thread)
 	if err != nil {
 		return nil, err
 	}
 	closeArgs := &AgentCloseArgs{From: from, Thread: thread, RepoId: repoId, RunId: caller.RunId, ToolCall: caller.ToolCallId, Tainted: caller.tainted()}
 	if repoId != place.agentsRepoId {
-		if closeArgs.To, err = agentsReplyRecipient(ctx, client, from, read, false); err != nil {
+		if closeArgs.To, err = agentsReplyRecipient(ctx, client, from, false, read, false); err != nil {
 			return nil, err
 		}
 	}
@@ -931,6 +934,8 @@ type AgentInboxMessage struct {
 	Support *AgentMessageSupport `json:"support,omitempty"`
 	// Taking it taints the run that reads it.
 	Taints bool `json:"taints"`
+	// Its subject and body were withheld from a caller that may feed a model (the person's inbox off a terminal).
+	Withheld bool `json:"withheld,omitempty"`
 }
 
 // agent_inbox's answer.
@@ -1088,7 +1093,7 @@ func (self *AgentsTools) Inbox(ctx context.Context, caller *AgentsToolCaller, ar
 		if err != nil {
 			return nil, fmt.Errorf("%w: the thread", ErrAgentToolArguments)
 		}
-		_, read, err := self.threadRepo(ctx, client, name, thread)
+		_, read, err := agentsThreadRepo(ctx, client, name, thread)
 		if err != nil {
 			return nil, err
 		}
@@ -1305,14 +1310,17 @@ func newHarnessAgentsTool(harness *Harness, spec *AgentToolSpec) (HarnessTool, e
 	return &harnessAgentsTool{spec: spec, tools: skill.tools, skill: skill}, nil
 }
 
+// The tool's name (§20.10).
 func (self *harnessAgentsTool) Name() string {
 	return self.spec.Name
 }
 
+// The text the model reads, fixed by the build.
 func (self *harnessAgentsTool) Description() string {
 	return self.spec.Description
 }
 
+// The JSON schema of the arguments.
 func (self *harnessAgentsTool) Schema() []byte {
 	return self.spec.Schema
 }
@@ -1325,6 +1333,7 @@ func (self *harnessAgentsTool) Mode() string {
 	return HarnessToolSequential
 }
 
+// §20.10's tier: R or W, kind 24's sends refused at the call until they are filed.
 func (self *harnessAgentsTool) Tier() string {
 	return self.spec.Tier
 }
