@@ -6,7 +6,8 @@
 //
 // testdata/disclosure/disclosures.json is the fixture disclosures line. Its English texts are DESIGN-COMPUTE.md's
 // version 1, each fence's wrapped lines joined with a space, the enclave form filled with each provider's <inside> line
-// and the connect form with each service's <revocation> line; its one translation is a test translation. With
+// and the connect form with each service's <revocation> line, connect:custom's <service> worded generically (QD-1440);
+// its one translation is a test translation. With
 // SIDECAR_REGENERATE_DISCLOSURE_FIXTURE=1, TestComputeDisclosureTextsVersion1 writes the English texts again from the
 // design, keeping each entry's version, grace, instant and translations.
 
@@ -221,9 +222,9 @@ func testDisclosureFilled(text *testDisclosureDesignText, replacements map[strin
 }
 
 // Version 1 of each id the fixture carries, from DESIGN-COMPUTE.md: §2.8's four inference texts and the enclave form
-// filled for each provider, §21.6's search, §25.12's connect form for Google and Microsoft, §26.6's listeners, §27.11's
-// automatic approvals and §28.13's support with the fixture's retention. connect:custom's form names <service>, which
-// a person's own definition supplies, so the fixture carries none (question ctrust-m11-01-connect-custom-text).
+// filled for each provider, §21.6's search, §25.12's connect form for Google and Microsoft, and for connect:custom with
+// <service> worded generically (QD-1440, question ctrust-m11-01-connect-custom-text), §26.6's listeners, §27.11's
+// automatic approvals and §28.13's support with the fixture's retention.
 func testDisclosureDesignVersion1(t *testing.T) map[string]*testDisclosureDesignText {
 	t.Helper()
 	data, err := os.ReadFile("DESIGN-COMPUTE.md")
@@ -285,6 +286,29 @@ func testDisclosureDesignVersion1(t *testing.T) map[string]*testDisclosureDesign
 			"<service>": name, "<revocation>": testDisclosureCapital(revocation),
 		})
 	}
+	// connect:custom names no service: <service> worded generically, as QD-1440 answers with its examples, "your account
+	// at a service you added yourself" and "that service", an item's first word raised to a capital, and its own
+	// <revocation> line
+	custom := ""
+	for name, revocation := range fills["<revocation>"] {
+		if strings.HasPrefix(name, "connect:custom") {
+			custom = revocation
+		}
+	}
+	if custom == "" {
+		t.Fatal("§25.12 holds no <revocation> line for connect:custom")
+	}
+	generic := testDisclosureFilled(connect, map[string]string{
+		"your <service> account": "your account at a service you added yourself", "<revocation>": testDisclosureCapital(custom),
+	})
+	for i, item := range generic.exposed {
+		generic.exposed[i] = testDisclosureCapital(strings.ReplaceAll(item, "<service>", "that service"))
+	}
+	for i, item := range generic.private {
+		generic.private[i] = testDisclosureCapital(strings.ReplaceAll(item, "<service>", "that service"))
+	}
+	generic.summary = strings.ReplaceAll(generic.summary, "<service>", "that service")
+	version1["connect:custom"] = generic
 
 	for heading, id := range map[string]string{"### 26.6 ": "listeners:publish", "### 27.11 ": "approvals:auto", "### 28.13 ": "support:urnetwork"} {
 		found := false
@@ -372,7 +396,7 @@ func testDisclosureRegenerateFixture(t *testing.T, version1 map[string]*testDisc
 	order := []string{
 		"inference:local", "inference:chutes", "inference:engy", "inference:saygm",
 		"enclave:hippius", "enclave:lium", "enclave:cathedral",
-		"search:parallel", "connect:google", "connect:microsoft",
+		"search:parallel", "connect:google", "connect:microsoft", "connect:custom",
 		"listeners:publish", "approvals:auto", "support:urnetwork",
 	}
 	regenerated := []*ComputePolicyDisclosure{}

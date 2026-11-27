@@ -78,6 +78,15 @@ type ComputeDisclosureView struct {
 	Exposed []string `json:"exposed"`
 	// "Private", in order.
 	Private []string `json:"private"`
+
+	// The acknowledgment (CTRUST-M12-01), filled by Sidecar.ComputeDisclosures: whose acknowledgments cover this
+	// sidecar, person or network, empty where they could not be read; the version they hold, 0 for none; whether a use
+	// may go ahead now, through the previous version's grace included, which an id that asks nothing always may; and
+	// whether its lines are marked changed until the person opens the text.
+	Scope        ComputeDisclosureScope `json:"scope,omitempty"`
+	Acknowledged uint32                 `json:"acknowledged"`
+	Covered      bool                   `json:"covered"`
+	Changed      bool                   `json:"changed"`
 }
 
 // disclosure in the person's locale, every string from the policy made printable.

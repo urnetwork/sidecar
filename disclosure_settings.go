@@ -32,12 +32,17 @@ type ComputeDisclosureSettings struct {
 	// made on another of the member's devices lands in a waiting run within a sync and a read; only the store's key
 	// ends a wait, never an answer to the request. Non-positive reads again only when told.
 	AwaitRecheckInterval time.Duration
+	// How long a read of the member's harness config may take for a caller that passes no context, the support
+	// client's disclosure state: 30 s, a reading, a vault read over a slow link. Past it the read fails, and the caller
+	// refuses.
+	SourceReadTimeout time.Duration
 	// The most ids whose "changed" mark state the sidecar's own store keeps (§2.8's new version row): 256, a reading,
 	// some twenty times §2.8's ids. Past it, the ids the newest verified policy no longer carries go first, then the
-	// oldest; a forgotten id's lines show changed until opened again, the closed reading.
+	// least recently touched; a forgotten id is listed anew, so its lines show changed only where the person
+	// acknowledged an older version.
 	MarksMaxCount int
 	// The largest marks file the store reads back, in bytes: 64 KiB, room for MarksMaxCount ids with their versions.
-	// A larger one reads as no marks, so every changed line shows changed.
+	// A larger one reads as no marks, and each id is listed anew.
 	MarksMaxByteCount int
 }
 
@@ -47,6 +52,7 @@ func DefaultComputeDisclosureSettings() *ComputeDisclosureSettings {
 		IdSlugMaxByteCount:   63,
 		LocaleMaxByteCount:   35,
 		AwaitRecheckInterval: 15 * time.Second,
+		SourceReadTimeout:    30 * time.Second,
 		MarksMaxCount:        256,
 		MarksMaxByteCount:    64 * 1024,
 	}

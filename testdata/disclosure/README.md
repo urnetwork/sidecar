@@ -11,11 +11,14 @@ reads disclosure texts only from the newest compute policy it verified (§5.4), 
   line, without the line's closing period, since it fills the middle of a sentence; `search:parallel` (§21.6), whose
   summary is the one-line summary §21.6's To the UI row gives; `connect:google` and `connect:microsoft`, §25.12's form
   filled with the service's name and its `<revocation>` line, its first letter raised to a capital since it opens a
-  list item; `listeners:publish` (§26.6), `approvals:auto` (§27.11) and `support:urnetwork` (§28.13).
+  list item, and `connect:custom` (below); `listeners:publish` (§26.6), `approvals:auto` (§27.11) and
+  `support:urnetwork` (§28.13).
 - `support:urnetwork`'s `<retention>` holds a test value, `30 days`, not the words of any agreement: a policy's text
   takes them from the policy's support line, which the agreement with the triage model's provider sets (§28.13).
-- `connect:custom` is not here: its form names `<service>`, which a person's own definition supplies (question
-  `ctrust-m11-01-connect-custom-text`).
+- `connect:custom` is §25.12's form with `<service>` worded generically, as the owner's answer to question
+  `ctrust-m11-01-connect-custom-text` gives it (QD-1440): "your <service> account" reads "your account at a service you
+  added yourself" and every other `<service>` "that service", a list item's first letter raised to a capital, with its
+  own `<revocation>` line. The signed policy's text is its authors' wording, reviewed as any text is.
 - `inference:local` carries one test translation, German (`de`), for the locale tests alone. No second person read
   it against the English, as a translation in a signed policy must be (§2.8).
 - Each entry is version 1, revision 0, a grace of 14 days from 2026-12-01T00:00:00Z.

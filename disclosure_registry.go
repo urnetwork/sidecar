@@ -523,11 +523,16 @@ func init() {
 	registerComputeComponent(computeDisclosureComponentName, newComputeDisclosureComponent, nil)
 }
 
-// The disclosures' parts on one Sidecar: the registry over attestation's store, read at use.
+// The disclosures' parts on one Sidecar: the registry over attestation's store, the person's acknowledgments over the
+// member's harness config, the changed marks in the sidecar's own store and the check (disclosure_check.go), each
+// reading its sources at use.
 type computeDisclosureComponent struct {
 	sidecar  *Sidecar
 	settings *ComputeDisclosureSettings
 	registry *ComputeDisclosureRegistry
+	acks     *ComputeDisclosureAcks
+	marks    *computeDisclosureMarks
+	check    *ComputeDisclosureCheck
 }
 
 // The component over sidecar's settings and log, reading nothing of the network or another component as it builds.
@@ -544,7 +549,18 @@ func newComputeDisclosureComponent(sidecar *Sidecar) (*computeDisclosureComponen
 	if err != nil {
 		return nil, err
 	}
-	return &computeDisclosureComponent{sidecar: sidecar, settings: settings, registry: registry}, nil
+	acks, marks, check, err := newComputeDisclosureParts(sidecar, registry, settings)
+	if err != nil {
+		return nil, err
+	}
+	return &computeDisclosureComponent{
+		sidecar:  sidecar,
+		settings: settings,
+		registry: registry,
+		acks:     acks,
+		marks:    marks,
+		check:    check,
+	}, nil
 }
 
 // The newest verified policy of a Sidecar's attestation store, read at each call: nil where the store is not there,
@@ -587,7 +603,11 @@ func (self *Sidecar) ComputeDisclosures(ctx context.Context, locale string) (*Co
 	return component.list(ctx, locale)
 }
 
-// The list the component answers: the registry's.
+// The list the component answers: the registry's, with each view's acknowledgment and mark (disclosure_check.go).
 func (self *computeDisclosureComponent) list(ctx context.Context, locale string) (*ComputeDisclosureList, error) {
-	return self.registry.List(locale)
+	list, err := self.registry.List(locale)
+	if err != nil {
+		return nil, err
+	}
+	return self.withAcks(ctx, list), nil
 }

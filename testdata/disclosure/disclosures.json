@@ -292,6 +292,33 @@
     ]
   },
   {
+    "id": "connect:custom",
+    "version": 1,
+    "revision": 0,
+    "grace_days": 14,
+    "since_ms": 1796083200000,
+    "locales": [
+      {
+        "locale": "en",
+        "summary": "Your agents use your account at a service you added yourself through a connection only your own devices hold; that service sees what they do there.",
+        "exposed": [
+          "That service sees your account, URnetwork's app, everything your agents read and write there, and the address of the exit they use, or your own if you choose direct; at sign-in, your own address and browser.",
+          "Your agents act there as you: once you connect it, an agent that has read nothing someone else wrote reads, writes and sends there without asking you, so a mistaken agent can send what you did not mean.",
+          "What your agents read there goes to the model you chose, as its label says. What they read from Google, and what they make of it, goes only to models on your devices and to providers whose written terms bar training on it, keeping it past the request and letting people read it, and never to a harness that calls its own provider.",
+          "The connection's tokens, to anyone using one of your devices unlocked, and to a lost device until you replace the connection; for Google, a device holds only its own kind's token.",
+          "URnetwork's storage holds the connection encrypted, and sees when it is written: for Microsoft, at each refresh, and for a service you added yourself, at each refresh too.",
+          "No one at URnetwork reviewed it; Disconnect revokes at it where it offers revocation, and once an agent has read anything someone else wrote, every call that changes anything waits for you."
+        ],
+        "private": [
+          "Your sign-in happens in your own browser and returns to this device; no URnetwork server sees it, a code or a token.",
+          "No agent sees a token: sidecar adds it to each call, and no record or log holds it.",
+          "No one else in your network opens the tokens, an admin or your Team's audit reader included, and when you leave it your devices revoke them at that service where it allows that.",
+          "Once an agent has read anything someone else wrote, its writes wait for an automatic check on this device, which can be wrong, or for you (approvals:auto), and anything it would send waits for you."
+        ]
+      }
+    ]
+  },
+  {
     "id": "listeners:publish",
     "version": 1,
     "revision": 0,
