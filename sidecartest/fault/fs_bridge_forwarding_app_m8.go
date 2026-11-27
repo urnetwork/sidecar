@@ -272,6 +272,9 @@ func FwdAppWithinTargets(net *Net) *Schedule {
 			if fsAppStateLists(world, forwarding) {
 				return errors.New("the state lists the new forwarding Delegation before a compile")
 			}
+			// the Forwarder wants the compile from a reading taken before the posture took the grant, at heard since
+			// nothing moved the clock after it, so one move reaches the compile's due time however late the Forwarder's
+			// goroutine runs after the posture shows the pin (sidecar.Forwarder's wantCompileAt)
 			fsAppAdvanceTo(world, heard.Add(defaults.CompileDelay))
 			world.host.WaitAdopted(forwarding.At)
 			if took := clock.Now().Sub(heard); 5*time.Second < took {
