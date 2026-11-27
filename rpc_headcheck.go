@@ -426,7 +426,7 @@ func (self *headCheckTransport) runActs(ctx context.Context, acts []headCheckAct
 				// is fixed by the time the caller moves on
 				fetch := act
 				halfway := fetch.deadline.Add(-self.settings.HeadCheckFetchTimeout / 2)
-				halfwayFire := self.clock.After(halfway.Sub(self.clock.Now()))
+				halfwayFire := ClockAfterAt(self.clock, halfway)
 				self.goWorker(func() {
 					self.followFetch(fetch, halfwayFire)
 				})
@@ -475,9 +475,9 @@ func (self *headCheckTransport) followFetch(act headCheckAct, halfwayFire <-chan
 	if headCheckRelate(self.sources.Auth, self.sources.Auth.Pin(), act.pin) != headCheckRelationAhead {
 		return
 	}
-	if wait := act.deadline.Sub(self.clock.Now()); 0 < wait {
+	if self.clock.Now().Before(act.deadline) {
 		select {
-		case <-self.clock.After(wait):
+		case <-ClockAfterAt(self.clock, act.deadline):
 		case <-self.ctx.Done():
 			return
 		}

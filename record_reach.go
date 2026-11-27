@@ -612,8 +612,8 @@ func (self *RecordReach) schedule() {
 		stop()
 	}
 	if 0 < dueMillis {
-		timeout := time.Duration(dueMillis-self.clock.Now().UnixMilli()) * time.Millisecond
-		armed := self.clock.AfterFunc(timeout, func() { self.flushDue(dueMillis) })
+		// for the due time itself (QD-1425), with no lock held, since a time already reached flushes here
+		armed := ClockAfterFuncAt(self.clock, time.UnixMilli(dueMillis), func() { self.flushDue(dueMillis) })
 		func() {
 			self.stateLock.Lock()
 			defer self.stateLock.Unlock()

@@ -1519,7 +1519,7 @@ func (self *socketRegistrar) run() {
 
 		stop := func() bool { return false }
 		if !wakeAt.IsZero() {
-			stop = self.clock.AfterFunc(wakeAt.Sub(now), self.wake)
+			stop = ClockAfterFuncAt(self.clock, wakeAt, self.wake)
 		}
 		self.waitCount.Update(func(count uint64) uint64 {
 			return count + 1

@@ -697,18 +697,7 @@ message ApprovalNotice {
   bytes approval_id = 1; bytes requester_sidecar_id = 2; uint64 entry_seq = 3; int64 not_after_millis = 4;
   uint32 state = 5; uint32 kind = 6;
 }
-// DESIGN-COMPUTE.md §11.12's enclave entries, kind 57, to which the design gives no record kind or bytes:
-// compute-plan-enc-readings' answer (QD-1243), reading 2, numbered in the order written (CTXH-M11-08).
-message EnclaveEntryBody {
-  bytes enclave_id = 1; uint64 incarnation = 2; uint32 event = 3; uint32 cause = 4; bytes cause_run_id = 5;
-  bool cause_run_tainted = 6; bytes sidecar_id = 7; uint32 role = 8; string provider = 9;
-  AttestationResult attestation = 10; string egress = 11; bytes approval_id = 12;
-}
 `
-
-// Where §12.7's SSH session receipt's fields come from: compute-plan-enc-readings' answer (QD-1243), reading 3, which
-// takes them into ReachReceipt, whose fence §16.8 writes, numbered after its last (CTXH-M11-08).
-const testEnclaveSshSource = "compute-plan-enc-readings (QD-1243)"
 
 // Fields the owner's answers add to messages the design fences, ahead of design-records' fold, each with the question
 // that holds its answer. Each joins the fence it extends, so both directions stay exact, and one the design comes to
@@ -718,18 +707,6 @@ var testFenceAdditions = []struct {
 	field    testFenceField
 	question string
 }{
-	// DESIGN-COMPUTE.md §12.7's per-session receipt, kind 7 ssh's (CTXH-M11-08)
-	{message: "ReachReceipt", field: testFenceField{name: "ssh_user", number: 12, typeName: "string"}, question: testEnclaveSshSource},
-	{message: "ReachReceipt", field: testFenceField{name: "opened_millis", number: 13, typeName: "int64"}, question: testEnclaveSshSource},
-	{message: "ReachReceipt", field: testFenceField{name: "closed_millis", number: 14, typeName: "int64"}, question: testEnclaveSshSource},
-	{message: "ReachReceipt", field: testFenceField{name: "client_byte_count", number: 15, typeName: "uint64"}, question: testEnclaveSshSource},
-	{message: "ReachReceipt", field: testFenceField{name: "server_byte_count", number: 16, typeName: "uint64"}, question: testEnclaveSshSource},
-	// DESIGN-COMPUTE.md §16.5's deposit into agent repos as a rule naming every repo of the kind, evs:kind:agent
-	// (SKILL-M11-01)
-	{message: "AclTarget", field: testFenceField{name: "repo_kind", number: 14, typeName: "RepoKind"}, question: "skill-m11-01-agent-deposit-rule-target (QD-1433)"},
-	// DESIGN-COMPUTE.md §20.4's and §20.7's agent repo label, keyed (SKILL-M11-01)
-	{message: "RepoCreate", field: testFenceField{name: "label_mac", number: 5, typeName: "bytes"}, question: "skill-m11-01-repo-create-label-form (QD-1434)"},
-	{message: "AclRepo", field: testFenceField{name: "label_mac", number: 15, typeName: "bytes"}, question: "skill-m11-01-repo-create-label-form (QD-1434)"},
 }
 
 // Numbers an owner's answer reserves in a message the design fences, ahead of design-records' fold, each with the

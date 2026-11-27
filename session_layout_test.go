@@ -222,8 +222,8 @@ func TestSessionEntriesRideCallPushes(t *testing.T) {
 	if pushes := session.streams.taken(); len(pushes) != 0 {
 		t.Fatalf("session entries made %d pushes of their own", len(pushes))
 	}
-	if wake, ok := session.writer.nextWake(); !ok || wake != 60*time.Second-settings.PushCoalesce {
-		t.Errorf("the loop wakes in %v (%v), not at the ride interval", wake, ok)
+	if wakeAt, ok := session.writer.nextWake(); !ok || wakeAt.Sub(session.clock.now) != 60*time.Second-settings.PushCoalesce {
+		t.Errorf("the loop wakes in %v (%v), not at the ride interval", wakeAt.Sub(session.clock.now), ok)
 	}
 	session.append(RecordKindModelCall, &protocol.ModelCallBody{Model: "local-gemma-3n-e4b-low"})
 	session.pump()

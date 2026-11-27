@@ -21,14 +21,6 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 )
 
-// What reassembly reads time from: the two methods of Clock it uses, so a test holds every wait on a
-// clock it moves. The Subprotocol passes its own Clock, SubprotocolEnv.Clock or real time.
-type subprotocolClock interface {
-	Now() time.Time
-	// Fires once the clock reaches now plus timeout.
-	After(timeout time.Duration) <-chan time.Time
-}
-
 // Names one body from one source: (source, request_id, RESPONSE), the source being the map above this
 // key, so a request and the response that echoes its id never share a group.
 type reassemblyGroupKey struct {
@@ -94,8 +86,10 @@ type reassembler struct {
 	cancel   context.CancelFunc
 	settings *SidecarProtocolSettings
 	budget   *SubprotocolBudget
-	clock    subprotocolClock
-	log      Logger
+	// what reassembly reads time from, so a test holds every wait on a clock it moves: the Subprotocol's own Clock,
+	// SubprotocolEnv.Clock or real time
+	clock Clock
+	log   Logger
 	// closes when run has ended and let go of everything
 	runDone chan struct{}
 
@@ -113,7 +107,7 @@ func newReassembler(
 	ctx context.Context,
 	settings *SidecarProtocolSettings,
 	budget *SubprotocolBudget,
-	clock subprotocolClock,
+	clock Clock,
 	log Logger,
 ) *reassembler {
 	if log == nil {
@@ -155,7 +149,7 @@ func (self *reassembler) run() {
 		select {
 		case <-self.ctx.Done():
 			return
-		case <-self.clock.After(self.untilNextDeadline()):
+		case <-ClockAfterAt(self.clock, self.nextDeadline()):
 		}
 		self.expire()
 	}
@@ -183,10 +177,8 @@ func (self *reassembler) dropAll() {
 	self.budget.releaseReassembly(freedByteCount)
 }
 
-// How long from now until the earliest deadline, which is due when this is not positive, and 0 when no
-// group is held.
-func (self *reassembler) untilNextDeadline() time.Duration {
-	now := self.clock.Now()
+// The earliest deadline, which run waits for itself (QD-1425); zero, which has passed, when no group is held.
+func (self *reassembler) nextDeadline() time.Time {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	var nextDeadline time.Time
@@ -197,10 +189,7 @@ func (self *reassembler) untilNextDeadline() time.Duration {
 			}
 		}
 	}
-	if nextDeadline.IsZero() {
-		return 0
-	}
-	return nextDeadline.Sub(now)
+	return nextDeadline
 }
 
 // Drops every group past its deadline.

@@ -1,10 +1,11 @@
 // The router's splice (MAIL-M7-19): each of §15.4's bounds on a fake clock, the half-closes and resets,
 // the lease's byte count, a drain's reset, and MailIngress at its bound. On router_test.go's harness.
 //
-// The fake clock arms a wait at its own now, and run arms its slow and session waits each from a reading
-// of its own, so a move between a reading and the arming it feeds leaves that wait a whole move late. The
-// helper waits for every wait run arms before a byte can move, and a forced interleaving holds run between
-// a reading and its arming (QD-1120).
+// run once armed its slow and session waits each by a timeout from a reading of its own, and the fake clock armed a
+// wait at its own now, so a move between a reading and the arming it fed left that wait a whole move late (QD-1120).
+// It now sets each for its bound itself (QD-1425), so a forced interleaving that holds run at its slow wait's arm
+// while the clock moves to the bound finds the splice ending there; the helper still waits for every wait run arms
+// before a byte can move.
 
 package mxedgeservice_test
 
@@ -127,10 +128,10 @@ func TestSpliceEndsWhenSlow(t *testing.T) {
 	router.expectSpliceEnd(client, receiver, "slow", protocol.StreamResetCode_RST_PEER_TIMEOUT)
 }
 
-// The router's clock, holding mxSplice.run's first reading of it: the one run arms its slow wait from,
-// taken once it has armed its idle wait. Held, the reading is taken and not yet handed back, until release
-// closes or the test ends, and held closes once it is. Every other reading, run's later ones and every
-// other caller's, and every wait go straight to the fake clock. Safe for concurrent use.
+// The router's clock, holding mxSplice.run's first wait for a time: its slow wait's arm, set once it has armed its
+// idle wait. Held, the arm is asked and not yet set, until release closes or the test ends, and held closes once it
+// is. Every other wait, run's later ones and every other caller's, and every reading go straight to the fake clock,
+// whose waits for a time this clock sets as its own (sidecar.ClockAt). Safe for concurrent use.
 type testSpliceHeldClock struct {
 	sidecar.Clock
 	// run's name as a stack frame gives it
@@ -142,28 +143,44 @@ type testSpliceHeldClock struct {
 	holding atomic.Bool
 }
 
-// The fake clock's reading, run's first handed back only once release closes or the test ends.
-func (self *testSpliceHeldClock) Now() time.Time {
-	now := self.Clock.Now()
-	if self.holding.Load() {
-		return now
+var _ sidecar.ClockAt = (*testSpliceHeldClock)(nil)
+
+// The fake clock's wait for at, run's first set only once release closes or the test ends.
+func (self *testSpliceHeldClock) AfterAt(at time.Time) <-chan time.Time {
+	if !self.holding.Load() && self.calledFromRun() && self.holding.CompareAndSwap(false, true) {
+		close(self.held)
+		select {
+		case <-self.release:
+		case <-self.ended:
+		}
 	}
-	// past Callers' frame and this method's, the reader's, inlined frames counted
-	callers := make([]uintptr, 4)
-	reader, _ := runtime.CallersFrames(callers[:runtime.Callers(2, callers)]).Next()
-	if reader.Function != self.runFunction || !self.holding.CompareAndSwap(false, true) {
-		return now
-	}
-	close(self.held)
-	select {
-	case <-self.release:
-	case <-self.ended:
-	}
-	return now
+	return self.Clock.(sidecar.ClockAt).AfterAt(at)
 }
 
-// Waits until run's reading is held, and fails unless run had armed its idle wait and not its slow wait by
-// then, or if run arms its slow wait with no reading held, as it would were this clock not to find run's.
+// The fake clock's call at at.
+func (self *testSpliceHeldClock) AfterFuncAt(at time.Time, function func()) (stop func() bool) {
+	return self.Clock.(sidecar.ClockAt).AfterFuncAt(at, function)
+}
+
+// Whether AfterAt's caller is run, by way of sidecar.ClockAfterAt: the first frames past Callers', this method's and
+// AfterAt's, inlined frames counted.
+func (self *testSpliceHeldClock) calledFromRun() bool {
+	callers := make([]uintptr, 8)
+	frames := runtime.CallersFrames(callers[:runtime.Callers(3, callers)])
+	for range 3 {
+		frame, more := frames.Next()
+		if frame.Function == self.runFunction {
+			return true
+		}
+		if !more {
+			break
+		}
+	}
+	return false
+}
+
+// Waits until run's slow wait's arm is held, and fails unless run had armed its idle wait and not its slow wait by
+// then, or if run arms its slow wait with no arm held, as it would were this clock not to find run's.
 func (self *testSpliceHeldClock) awaitHeld(router *testRouter, start time.Time) {
 	router.t.Helper()
 	idleAt := start.Add(router.settings.SpliceIdleTimeout)
@@ -176,20 +193,20 @@ func (self *testSpliceHeldClock) awaitHeld(router *testRouter, start time.Time) 
 		case <-self.held:
 			// run arms nothing while it is held
 			if pending := router.clock.PendingTimers(); !armed(pending, idleAt) || armed(pending, slowAt) {
-				router.t.Fatalf("run's reading was held with %v pending, not after its idle wait and before its slow one", pending)
+				router.t.Fatalf("run's slow arm was held with %v pending, not after its idle wait and before its slow one", pending)
 			}
 			return
 		default:
 		}
 		pending, added := router.clock.WatchTimers()
 		if armed(pending, slowAt) {
-			router.t.Fatal("run armed its slow wait with no reading held")
+			router.t.Fatal("run armed its slow wait with no arm held")
 		}
 		select {
 		case <-self.held:
 		case <-added:
 		case <-router.ctx.Done():
-			router.t.Fatal("run's reading was never held")
+			router.t.Fatal("run's slow arm was never held")
 		}
 	}
 }
@@ -221,13 +238,11 @@ func newTestHeldSpliceRouter(t *testing.T) (*testRouter, *testSpliceHeldClock) {
 	return router, clock
 }
 
-// QD-1120's race, forced: run takes the reading it arms its slow wait from after arming its idle wait, and
-// the fake clock arms a wait at its own now. Held between the reading and the arming, a move to the slow
-// bound, as TestSpliceEndsWhenSlow made when the helper waited for the idle wait alone, comes first: run
-// arms the slow wait from the reading before the move, a whole bound past the bound, and its session wait
-// from a reading after it, at its bound. At the slow bound the splice is still live, where that test waited
-// for its end, and it ends slow only at the late wait.
-func TestSpliceSlowBoundMovedBeforeItsTimerComesLate(t *testing.T) {
+// QD-1120's race, forced, as QD-1425 leaves it: held at its slow wait's arm, after arming its idle wait, while a move
+// to the slow bound comes first, as TestSpliceEndsWhenSlow made when the helper waited for the idle wait alone, run
+// sets the slow wait for the bound itself, reached, so the splice ends slow there with no further move. Armed by a
+// timeout from a reading before the move, as it once was, the wait stood a whole bound past the bound.
+func TestSpliceSlowBoundMovedBeforeItsTimerStillEndsAtTheBound(t *testing.T) {
 	router, clock := newTestHeldSpliceRouter(t)
 	client, receiver := router.dialFrom(testSender, testRouteSni)
 	start := router.clock.Now()
@@ -237,20 +252,15 @@ func TestSpliceSlowBoundMovedBeforeItsTimerComesLate(t *testing.T) {
 	slowAt := start.Add(router.settings.SpliceSlowTimeout)
 	router.clock.AdvanceTo(slowAt)
 	close(clock.release)
-	lateAt := slowAt.Add(router.settings.SpliceSlowTimeout)
-	router.awaitTimerAt(lateAt)
-	router.awaitTimerAt(start.Add(router.settings.SpliceSessionTimeout))
-	if router.service.SpliceCount() != 1 {
-		t.Fatal("the splice ended at the slow bound with its slow wait armed a bound late")
-	}
-	router.clock.AdvanceTo(lateAt)
 	router.expectSpliceEnd(client, receiver, "slow", protocol.StreamResetCode_RST_PEER_TIMEOUT)
+	if pending := router.clock.PendingTimers(); slices.ContainsFunc(pending, slowAt.Add(router.settings.SpliceSlowTimeout).Equal) {
+		t.Fatalf("a slow wait stands a bound late, at %v", pending)
+	}
 }
 
-// The wait that closes it: held there, the helper looks for the slow wait, finds it not armed and waits,
-// moving nothing, and only then does run go on. run arms its slow and session waits at their bounds from
-// the reading it held, which the clock still reads, and the move to the slow bound straight after the
-// helper ends the splice slow there.
+// The helper's wait, which QD-1120 added: held at run's slow arm, the helper looks for the slow wait, finds it not
+// armed and waits, moving nothing, and only then does run go on. run sets its slow and session waits at their
+// bounds, and the move to the slow bound straight after the helper ends the splice slow there.
 func TestSpliceSlowBoundMoveWaitsForItsTimer(t *testing.T) {
 	router, clock := newTestHeldSpliceRouter(t)
 	looked := false
@@ -263,7 +273,7 @@ func TestSpliceSlowBoundMoveWaitsForItsTimer(t *testing.T) {
 		close(clock.release)
 	})
 	if !looked {
-		t.Fatal("the helper never found the slow wait unarmed: it did not wait for it, or run's reading was not held")
+		t.Fatal("the helper never found the slow wait unarmed: it did not wait for it, or run's slow arm was not held")
 	}
 	router.clock.AdvanceTo(start.Add(router.settings.SpliceSlowTimeout))
 	router.expectSpliceEnd(client, receiver, "slow", protocol.StreamResetCode_RST_PEER_TIMEOUT)

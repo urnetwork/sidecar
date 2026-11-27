@@ -556,10 +556,10 @@ func (self *BridgeComponent) catchUp(ctx context.Context) error {
 			_, err := self.args.Config.WaitFor(waitCtx, lagging)
 			reached <- err
 		}()
-		timeout := self.settings.CatchUpAlarmTimeout - self.clock.Now().Sub(waitStart)
 		var alarmAfter <-chan time.Time
 		if !alarmed {
-			alarmAfter = self.clock.After(max(0, timeout))
+			// for the alarm's time itself, so a move of the clock as the wait is set cannot leave it late (QD-1425)
+			alarmAfter = ClockAfterAt(self.clock, waitStart.Add(self.settings.CatchUpAlarmTimeout))
 		}
 		select {
 		case err := <-reached:
@@ -677,7 +677,7 @@ func (self *BridgeComponent) run() {
 				self.compileNow()
 				continue
 			}
-			compileAt = self.clock.After(due.Sub(now))
+			compileAt = ClockAfterAt(self.clock, due)
 		}
 		select {
 		case <-self.ctx.Done():

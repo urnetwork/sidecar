@@ -257,14 +257,15 @@ func (self *dnsSoaPoller) request(root string) {
 		if state.reading || state.scheduled {
 			return
 		}
-		due := state.readTime.Add(dnsSeconds(self.settings.Api.SoaReadIntervalSeconds)).Sub(self.clock.Now())
-		if state.readTime.IsZero() || due <= 0 {
+		dueTime := state.readTime.Add(dnsSeconds(self.settings.Api.SoaReadIntervalSeconds))
+		if state.readTime.IsZero() || !self.clock.Now().Before(dueTime) {
 			state.reading = true
 			startNow = true
 			return
 		}
 		state.scheduled = true
-		self.clock.AfterFunc(due, func() {
+		// for the due time itself (QD-1425), and never on this goroutine, which holds the lock the read takes
+		sidecar.ClockAfterFuncAtAsync(self.clock, dueTime, func() {
 			func() {
 				self.stateLock.Lock()
 				defer self.stateLock.Unlock()

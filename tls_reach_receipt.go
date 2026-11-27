@@ -327,7 +327,7 @@ func (self *tlsReachReceipts) run() {
 		}()
 		var timeout <-chan time.Time
 		if !armedTime.IsZero() {
-			timeout = self.clock.After(armedTime.Sub(self.clock.Now()))
+			timeout = ClockAfterAt(self.clock, armedTime)
 		}
 		select {
 		case <-self.ctx.Done():

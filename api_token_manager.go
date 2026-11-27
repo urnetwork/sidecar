@@ -165,14 +165,16 @@ func (self *sidecarTokenManager) closeAndWait() {
 	<-self.done
 }
 
-// How long until byJwt's scheduled refresh, keeping a token's schedule while it stays the same token.
-func (self *sidecarTokenManager) scheduledRefreshTimeout(byJwt string) time.Duration {
+// How long until byJwt's scheduled refresh, keeping a token's schedule while it stays the same token, and the time it
+// falls due, the clock's reading the timeout runs from plus it, which run waits for itself (QD-1425).
+func (self *sidecarTokenManager) scheduledRefreshTimeout(byJwt string) (time.Duration, time.Time) {
 	now := self.args.Clock.Now()
 	if byJwt != self.scheduledByJwt {
 		self.scheduledByJwt = byJwt
 		self.scheduledRefreshTime = sidecarJwtRefreshTime(byJwt, now, sidecarJwtRefreshDraw(byJwt), self.args.Settings)
 	}
-	return sidecarJwtRefreshTimeout(self.scheduledRefreshTime, self.lastRefreshAttemptTime, now, self.args.Settings)
+	timeout := sidecarJwtRefreshTimeout(self.scheduledRefreshTime, self.lastRefreshAttemptTime, now, self.args.Settings)
+	return timeout, now.Add(timeout)
 }
 
 // The schedule's loop: waits for the token's point or a request, refreshes, and on a failure retries after the
@@ -198,8 +200,9 @@ func (self *sidecarTokenManager) run() {
 			}
 		}
 		timeout := time.Duration(0)
+		var refreshAt time.Time
 		if requestCount == self.handledRequests {
-			timeout = self.scheduledRefreshTimeout(byJwt)
+			timeout, refreshAt = self.scheduledRefreshTimeout(byJwt)
 		}
 		if 0 < timeout {
 			if self.args.Log.V(1).Enabled() {
@@ -210,7 +213,7 @@ func (self *sidecarTokenManager) run() {
 				return
 			case <-notify:
 				continue
-			case <-self.args.Clock.After(timeout):
+			case <-ClockAfterAt(self.args.Clock, refreshAt):
 			}
 		} else {
 			select {

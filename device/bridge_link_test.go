@@ -209,14 +209,18 @@ func (self *linkTest) await(what string, done func() bool) {
 	}
 }
 
-// A fake clock that holds the manager's run where it arms its timer. run sets the timer as a duration from its own
-// read of the clock, so a move between that read and the arm leaves the timer late by the move, and a wake just before
-// a move, a build's end or a link's first packet, sends run there: under load a test moved the clock while run was
-// between the two, and the timer it awaited never fired. A test that moves the clock only while run is held at the arm
-// it times the move by, and lets it go after, never lands there: every wake waits behind the held run, and the timer
-// counts from the clock run read, as with no move between, firing at once when the move passed it.
+// A fake clock that holds the manager's run where it arms its timer. run once set the timer as a duration from its own
+// read of the clock, so a move between that read and the arm left the timer late by the move, and a wake just before a
+// move, a build's end or a link's first packet, sent run there: under load a test moved the clock while run was
+// between the two, and the timer it awaited never fired. run now sets the timer for its time itself (AfterFuncAt,
+// QD-1425), so a move while it is held at the arm leaves the timer at that time, firing at once when the move reached
+// it, as TestBridgeLinkTimerFiresForAMoveBetweenItsReadAndItsArm shows; the other tests still move the clock only while
+// run is held at the arm it times the move by, so every wake waits behind the held run.
 type linkTestHeldClock struct {
 	*sidecartest.FakeClock
+	// whether an AfterFunc held at its arm sets its timer by the timeout it was given once released, as a clock another
+	// goroutine moved while its caller was between its read and its arm would, rather than for the time it named
+	racing bool
 
 	stateLock sync.Mutex
 	// the holds no arm has reached yet, in the order set
@@ -255,27 +259,43 @@ func (self *linkTestHold) release() {
 	})
 }
 
+// The first hold not yet reached that names at, taken out of the holds; nil for none.
+func (self *linkTestHeldClock) takeHold(at time.Time) *linkTestHold {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	for i, hold := range self.holds {
+		if hold.at.Equal(at) {
+			self.holds = slices.Delete(self.holds, i, i+1)
+			return hold
+		}
+	}
+	return nil
+}
+
 // sidecartest.FakeClock's AfterFunc, held where a hold names its time. The time is read as the call enters, before it
-// waits, so a move while it is held leaves the timer at that time.
+// waits, so a move while it is held leaves the timer at that time, unless racing.
 func (self *linkTestHeldClock) AfterFunc(timeout time.Duration, function func()) (stop func() bool) {
 	at := self.FakeClock.Now().Add(timeout)
-	hold := func() *linkTestHold {
-		self.stateLock.Lock()
-		defer self.stateLock.Unlock()
-		for i, hold := range self.holds {
-			if hold.at.Equal(at) {
-				self.holds = slices.Delete(self.holds, i, i+1)
-				return hold
-			}
-		}
-		return nil
-	}()
+	hold := self.takeHold(at)
 	if hold == nil {
 		return self.FakeClock.AfterFunc(timeout, function)
 	}
 	close(hold.held)
 	<-hold.released
+	if self.racing {
+		return self.FakeClock.AfterFunc(timeout, function)
+	}
 	return self.FakeClock.AfterFunc(at.Sub(self.FakeClock.Now()), function)
+}
+
+// sidecartest.FakeClock's AfterFuncAt, run's arm, held where a hold names its time; the timer is set for that time
+// once released, whatever the clock did while it was held.
+func (self *linkTestHeldClock) AfterFuncAt(at time.Time, function func()) (stop func() bool) {
+	if hold := self.takeHold(at); hold != nil {
+		close(hold.held)
+		<-hold.released
+	}
+	return self.FakeClock.AfterFuncAt(at, function)
 }
 
 // Waits until run is held at the hold's arm; the context is the guard that fails a test it never reaches.

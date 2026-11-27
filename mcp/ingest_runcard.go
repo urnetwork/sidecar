@@ -151,12 +151,13 @@ func (self *Ingest) noteCardSourceWithLock(run *ingestRun, kind sidecar.RecordKi
 		// a moved due is armed, or its tick waits for this lock
 		return
 	}
-	delay := time.UnixMilli(run.cardDueMillis).Add(self.record.CardInterval).Sub(now)
-	if delay <= 0 {
+	dueAt := time.UnixMilli(run.cardDueMillis).Add(self.record.CardInterval)
+	if !now.Before(dueAt) {
 		self.dueCardWithLock(run, RunCardDueMoved, now)
 		return
 	}
-	run.cardStop = self.clock.AfterFunc(delay, func() {
+	// for the due time itself (QD-1425), and never on this goroutine, which holds the run's lock the tick takes
+	run.cardStop = sidecar.ClockAfterFuncAtAsync(self.clock, dueAt, func() {
 		self.cardTick(run)
 	})
 }

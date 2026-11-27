@@ -1061,11 +1061,12 @@ func (self *gkmRekeyPacer) take(ctx context.Context) error {
 	if self.nextAt.Before(now.Add(-self.tolerance)) {
 		self.nextAt = now.Add(-self.tolerance)
 	}
-	if wait := self.nextAt.Sub(now); 0 < wait {
+	if now.Before(self.nextAt) {
+		// for the turn's time itself (QD-1425)
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-self.clock.After(wait):
+		case <-ClockAfterAt(self.clock, self.nextAt):
 		}
 	}
 	self.nextAt = self.nextAt.Add(self.step)

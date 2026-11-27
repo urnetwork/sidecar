@@ -20,6 +20,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/urnetwork/sidecar"
 )
 
 // Why the world's context ended when its row made no progress for RowTimeout: the context's cause.
@@ -47,7 +49,7 @@ type admissionWatchdog struct {
 func newAdmissionWatchdog(parent context.Context, clock Clock, timeout time.Duration) (context.Context, *admissionWatchdog) {
 	ctx, cancel := context.WithCancelCause(parent)
 	self := &admissionWatchdog{clock: clock, timeout: timeout, cancel: cancel, start: clock.Now()}
-	self.arm(timeout)
+	self.arm(self.start.Add(timeout))
 	return ctx, self
 }
 
@@ -62,8 +64,8 @@ func (self *admissionWatchdog) progressed() {
 	}
 }
 
-// Sets the next check wait from now on the clock, unless the watchdog has ended.
-func (self *admissionWatchdog) arm(wait time.Duration) {
+// Sets the next check for at on the clock, a wait for that time itself (QD-1425), unless the watchdog has ended.
+func (self *admissionWatchdog) arm(at time.Time) {
 	ended := func() bool {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
@@ -72,8 +74,8 @@ func (self *admissionWatchdog) arm(wait time.Duration) {
 	if ended {
 		return
 	}
-	// outside the lock: a FakeClock calls a check that is due at once before AfterFunc returns
-	stopCheck := self.clock.AfterFunc(wait, self.check)
+	// outside the lock: a FakeClock calls a check that is due at once before the wait is set
+	stopCheck := sidecar.ClockAfterFuncAt(self.clock, at, self.check)
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	if self.ended {
@@ -88,12 +90,12 @@ func (self *admissionWatchdog) arm(wait time.Duration) {
 func (self *admissionWatchdog) check() {
 	// now before the newest progress, so a note made after now is never read as older than it
 	now := int64(self.clock.Now().Sub(self.start))
-	remaining := self.progress.Load() + int64(self.timeout) - now
-	if remaining <= 0 {
+	due := self.progress.Load() + int64(self.timeout)
+	if due <= now {
 		self.cancel(fmt.Errorf("%w for %s", ErrAdmissionRowStalled, self.timeout))
 		return
 	}
-	self.arm(time.Duration(remaining))
+	self.arm(self.start.Add(time.Duration(due)))
 }
 
 // Stops the checks and ends the context, as the world's Close does. Safe to call again.

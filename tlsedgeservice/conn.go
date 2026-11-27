@@ -308,8 +308,9 @@ func (self *tlsEdgeConnection) serve() string {
 		self.end(tlsStreamEndQuota, protocol.StreamResetCode_RST_QUOTA)
 	}
 	if expireTimeMillis := grantExpireTimeMillis.Load(); 0 < expireTimeMillis {
-		// streams end at the grant's expiry (§13.5)
-		stop := service.clock.AfterFunc(time.UnixMilli(int64(expireTimeMillis)).Sub(now), func() {
+		// streams end at the grant's expiry (§13.5), a time waited for itself (QD-1425), with no lock held, since an
+		// expiry already passed ends the stream here
+		stop := sidecar.ClockAfterFuncAt(service.clock, time.UnixMilli(int64(expireTimeMillis)), func() {
 			self.end(tlsStreamEndExpired, protocol.StreamResetCode_RST_REVOKED)
 		})
 		defer stop()

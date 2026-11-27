@@ -333,8 +333,7 @@ func (self *TlsVisitorKeys) Refresh(ctx context.Context, redis sidecar.Redis, tt
 	return tlsVisitorKeyResultRead, nil
 }
 
-// How long from now until the next UTC date begins, when the fleet's key must be read again.
-func (self *TlsVisitorKeys) untilNextDay() time.Duration {
-	now := self.clock.Now()
-	return tlsUtcDayStart(tlsUtcDay(now) + 1).Sub(now)
+// When the next UTC date begins, after now, and the fleet's key must be read again.
+func (self *TlsVisitorKeys) nextDayStart(now time.Time) time.Time {
+	return tlsUtcDayStart(tlsUtcDay(now) + 1)
 }

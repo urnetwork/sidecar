@@ -198,8 +198,8 @@ func (self *mxWakeHolds) hint(route *MailRoute) {
 	}()
 }
 
-// One Find and open within timeout, as step 6 makes it.
-type mxRouterDial func(timeout time.Duration) (MxEdgeStream, uint64, error)
+// One Find and open by deadline on the engine's clock, as step 6 makes it.
+type mxRouterDial func(deadline time.Time) (MxEdgeStream, uint64, error)
 
 // Whether err is a miss the hold waits out: no listener, or sockets unavailable.
 func mxWakeHoldMiss(err error) bool {
@@ -226,13 +226,18 @@ func (self *MxEdgeService) holdForReceiver(route *MailRoute, missErr error, dial
 	deadline := self.clock.Now().Add(self.settings.WakeHoldTimeout)
 	lastErr := missErr
 	for {
-		left := deadline.Sub(self.clock.Now())
-		if left <= 0 {
+		now := self.clock.Now()
+		if !now.Before(deadline) {
 			self.metrics.wakeHolds.Add(1, mxWakeHoldResultExpired)
 			return nil, 0, lastErr
 		}
+		// the next find at WakeHoldFindInterval, cut at the hold's deadline, a time waited for itself (QD-1425)
+		findTime := now.Add(self.settings.WakeHoldFindInterval)
+		if deadline.Before(findTime) {
+			findTime = deadline
+		}
 		select {
-		case <-self.clock.After(min(self.settings.WakeHoldFindInterval, left)):
+		case <-sidecar.ClockAfterAt(self.clock, findTime):
 		case <-holds.draining:
 			self.metrics.wakeHolds.Add(1, mxWakeHoldResultEnded)
 			return nil, 0, lastErr
@@ -240,12 +245,17 @@ func (self *MxEdgeService) holdForReceiver(route *MailRoute, missErr error, dial
 			self.metrics.wakeHolds.Add(1, mxWakeHoldResultEnded)
 			return nil, 0, lastErr
 		}
-		left = deadline.Sub(self.clock.Now())
-		if left <= 0 {
+		now = self.clock.Now()
+		if !now.Before(deadline) {
 			self.metrics.wakeHolds.Add(1, mxWakeHoldResultExpired)
 			return nil, 0, lastErr
 		}
-		stream, grantExpireTimeMillis, err := dial(min(self.settings.AcceptSetupTimeout, left))
+		// AcceptSetupTimeout's open, cut at the hold's deadline
+		openDeadline := now.Add(self.settings.AcceptSetupTimeout)
+		if deadline.Before(openDeadline) {
+			openDeadline = deadline
+		}
+		stream, grantExpireTimeMillis, err := dial(openDeadline)
 		if err == nil {
 			self.metrics.wakeHolds.Add(1, mxWakeHoldResultTaken)
 			return stream, grantExpireTimeMillis, nil

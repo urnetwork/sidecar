@@ -414,16 +414,17 @@ func (self *Purger) Certain(commit *PurgeCommit) {
 func (self *Purger) run() {
 	defer close(self.done)
 	for {
-		item, wait, changed, stop := self.next()
+		item, wakeAt, changed, stop := self.next()
 		if stop {
 			return
 		}
 		if item == nil {
+			// for the wake's time itself (QD-1425)
 			select {
 			case <-self.ctx.Done():
 				return
 			case <-changed:
-			case <-self.clock.After(wait):
+			case <-sidecar.ClockAfterAt(self.clock, wakeAt):
 			}
 			continue
 		}
@@ -431,28 +432,29 @@ func (self *Purger) run() {
 	}
 }
 
-// The front item once due, else how long until it is and a channel that closes on the next change. stop once the
-// purge ends, or is draining with nothing queued.
-func (self *Purger) next() (item *purgeItem, wait time.Duration, changed chan struct{}, stop bool) {
+// The front item once due, else when it is and a channel that closes on the next change. stop once the purge ends,
+// or is draining with nothing queued.
+func (self *Purger) next() (item *purgeItem, wakeAt time.Time, changed chan struct{}, stop bool) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	if self.ctx.Err() != nil {
-		return nil, 0, nil, true
+		return nil, time.Time{}, nil, true
 	}
+	now := self.clock.Now()
 	if len(self.queue) == 0 {
 		if self.draining {
-			return nil, 0, nil, true
+			return nil, time.Time{}, nil, true
 		}
 		// nothing queued: wait for a change, the hour standing in for forever
-		return nil, time.Hour, self.changed, false
+		return nil, now.Add(time.Hour), self.changed, false
 	}
 	front := self.queue[0]
 	due := front.certainTime.Add(self.settings.Allowance)
-	if now := self.clock.Now(); now.Before(due) {
-		return nil, due.Sub(now), self.changed, false
+	if now.Before(due) {
+		return nil, due, self.changed, false
 	}
 	self.queue = self.queue[1:]
-	return front, 0, nil, false
+	return front, time.Time{}, nil, false
 }
 
 // One item's candidates in turn, and its ids out of the queue's count however it ended.
@@ -656,28 +658,30 @@ const (
 func (self *Purger) pace() error {
 	interval := time.Second / time.Duration(self.settings.DeleteRate)
 	for {
-		wait := time.Duration(0)
+		// the next DELETE's time, zero when one may issue now
+		var now, nextDelete time.Time
 		func() {
 			self.stateLock.Lock()
 			defer self.stateLock.Unlock()
-			now := self.clock.Now()
+			now = self.clock.Now()
 			if next := self.lastDelete.Add(interval); now.Before(next) {
-				wait = next.Sub(now)
+				nextDelete = next
 			} else {
 				self.lastDelete = now
 			}
 		}()
-		if wait == 0 {
+		if nextDelete.IsZero() {
 			return nil
 		}
 		if self.deps.wait != nil {
-			self.deps.wait(wait)
+			self.deps.wait(nextDelete.Sub(now))
 			continue
 		}
+		// for that time itself (QD-1425)
 		select {
 		case <-self.ctx.Done():
 			return self.ctx.Err()
-		case <-self.clock.After(wait):
+		case <-sidecar.ClockAfterAt(self.clock, nextDelete):
 		}
 	}
 }

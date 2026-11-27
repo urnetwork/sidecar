@@ -258,7 +258,18 @@ type dnsFeedPark struct {
 func (self *dnsFeedRoot) wait(timeout time.Duration) bool {
 	timer := self.loop.clock.After(timeout)
 	// the clock is read after the timer is set, so a move in between leaves until no earlier than it
-	self.park.Set(dnsFeedPark{parked: true, until: self.loop.clock.Now().Add(timeout)})
+	return self.parkUntil(timer, self.loop.clock.Now().Add(timeout))
+}
+
+// Waits on the clock until at, the wait set for that time itself (QD-1425), so a move of the clock as it is set cannot
+// leave it past at. False once the loop has ended.
+func (self *dnsFeedRoot) waitUntil(at time.Time) bool {
+	return self.parkUntil(sidecar.ClockAfterAt(self.loop.clock, at), at)
+}
+
+// Parks on timer, which fires at until, reading parked meanwhile. False once the loop has ended.
+func (self *dnsFeedRoot) parkUntil(timer <-chan time.Time, until time.Time) bool {
+	self.park.Set(dnsFeedPark{parked: true, until: until})
 	defer self.park.Set(dnsFeedPark{})
 	testHookBarrier("dnsservice.feed_wait", "")
 	select {
@@ -323,9 +334,10 @@ func (self *dnsFeedRoot) run() {
 			succeeded = self.apply(answer.Rows)
 		default:
 			metrics.feedPolls.Add(1, dnsFeedPollEmpty)
-			// a block that answers at once with nothing cannot make the loop spin
-			if elapsed := self.loop.clock.Now().Sub(pollStart); elapsed < dnsSeconds(self.loop.settings.Feed.EmptyPollSeconds) {
-				if !self.wait(dnsSeconds(self.loop.settings.Feed.EmptyPollSeconds) - elapsed) {
+			// a block that answers at once with nothing cannot make the loop spin: the next poll goes no sooner than
+			// EmptyPollSeconds after this one began
+			if nextPoll := pollStart.Add(dnsSeconds(self.loop.settings.Feed.EmptyPollSeconds)); self.loop.clock.Now().Before(nextPoll) {
+				if !self.waitUntil(nextPoll) {
 					return
 				}
 			}

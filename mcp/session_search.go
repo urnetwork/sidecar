@@ -141,7 +141,7 @@ func (self *mcpSessionSearch) admit(ctx context.Context, wait time.Duration, new
 	}
 	if newSearch {
 		for {
-			ok, next := self.takeToken()
+			ok, tokenAt := self.takeToken()
 			if ok {
 				break
 			}
@@ -149,7 +149,8 @@ func (self *mcpSessionSearch) admit(ctx context.Context, wait time.Duration, new
 				return nil, errMcpSearchBusy
 			}
 			came := make(chan struct{})
-			stopToken := self.clock.AfterFunc(next, func() { close(came) })
+			// for the time the token comes itself (QD-1425)
+			stopToken := sidecar.ClockAfterFuncAt(self.clock, tokenAt, func() { close(came) })
 			waited()
 			select {
 			case <-waitCtx.Done():
@@ -199,22 +200,22 @@ func (self *mcpSessionSearch) isEnded() bool {
 	return self.ended
 }
 
-// Takes one of the rate's tokens, or answers how long until one comes.
-func (self *mcpSessionSearch) takeToken() (bool, time.Duration) {
+// Takes one of the rate's tokens, or answers when one comes.
+func (self *mcpSessionSearch) takeToken() (bool, time.Time) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	rate := self.settings.SessionSearchRate
 	if rate.Count <= 0 || rate.Interval <= 0 {
 		// no rate admits nothing
-		return false, rate.Interval
+		return false, self.clock.Now().Add(rate.Interval)
 	}
 	perToken := rate.Interval / time.Duration(rate.Count)
-	self.refillWithLock()
+	now := self.refillWithLock()
 	if 1 <= self.tokens {
 		self.tokens -= 1
-		return true, 0
+		return true, time.Time{}
 	}
-	return false, max(time.Duration((1-self.tokens)*float64(perToken)), time.Nanosecond)
+	return false, now.Add(max(time.Duration((1-self.tokens)*float64(perToken)), time.Nanosecond))
 }
 
 // Gives back a token taken for a search that never ran.
@@ -225,14 +226,15 @@ func (self *mcpSessionSearch) giveToken() {
 	self.tokens = min(self.tokens+1, float64(self.settings.SessionSearchRate.Burst))
 }
 
-// Adds what the rate gave since the last refill, up to its burst.
-func (self *mcpSessionSearch) refillWithLock() {
+// Adds what the rate gave since the last refill, up to its burst, and answers the reading of the clock it refilled at.
+func (self *mcpSessionSearch) refillWithLock() time.Time {
 	rate := self.settings.SessionSearchRate
 	now := self.clock.Now()
 	if elapsed := now.Sub(self.refilledTime); 0 < elapsed && 0 < rate.Interval {
 		self.tokens = min(float64(rate.Burst), self.tokens+float64(rate.Count)*float64(elapsed)/float64(rate.Interval))
 		self.refilledTime = now
 	}
+	return now
 }
 
 // Searches running now.

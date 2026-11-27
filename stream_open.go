@@ -83,12 +83,12 @@ func (self *Subprotocol) OpenStream(ctx context.Context, clientId Id, request *S
 	openOnce := func() (*SubprotocolStream, time.Time, error) {
 		var helloTime time.Time
 		if !edge {
-			if err := self.ensurePeerVerifiedWithin(ctx, peerId, deadline.Sub(self.clock.Now())); err != nil {
+			if err := self.ensurePeerVerifiedWithin(ctx, peerId, deadline); err != nil {
 				return nil, helloTime, openFailure(err)
 			}
 			helloTime, _ = self.sessionTime(peerId)
 		}
-		openCtx, cancelOpen := self.clockContext(ctx, deadline.Sub(self.clock.Now()))
+		openCtx, cancelOpen := self.clockContextAt(ctx, deadline)
 		stopOnClose := context.AfterFunc(self.ctx, cancelOpen)
 		stream, err := self.startStreamOpen(openCtx, peerId, edge, request, deadline)
 		stopOnClose()
@@ -137,7 +137,7 @@ func (self *Subprotocol) OpenStream(ctx context.Context, clientId Id, request *S
 					return nil, helloTime, &SubprotocolError{Code: protocol.ErrorCode_ERR_DEADLINE_EXCEEDED}
 				}
 				return nil, helloTime, &SubprotocolError{Code: protocol.ErrorCode_ERR_CANCELLED}
-			case <-self.clock.After(deadline.Sub(self.clock.Now())):
+			case <-ClockAfterAt(self.clock, deadline):
 				stream.resetLocal(protocol.StreamResetCode_RST_CANCELLED)
 				return nil, helloTime, &SubprotocolError{Code: protocol.ErrorCode_ERR_DEADLINE_EXCEEDED}
 			case <-self.ctx.Done():

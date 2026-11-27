@@ -514,11 +514,11 @@ func (self *copyRun) pace() error {
 		self.windowCount = 0
 	}
 	if rate <= self.windowCount {
-		wait := self.windowStart.Add(time.Second).Sub(now)
+		// the next window's start, waited for itself (QD-1425)
 		select {
 		case <-self.ctx.Done():
 			return self.ctx.Err()
-		case <-self.clock.After(wait):
+		case <-sidecar.ClockAfterAt(self.clock, self.windowStart.Add(time.Second)):
 		}
 		self.windowStart = self.clock.Now()
 		self.windowCount = 0

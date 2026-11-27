@@ -286,7 +286,8 @@ func (self *sidecarGeneration) runCoreSync() {
 				self.core.answer.Store(&sidecarCoreAnswer{revision: request.revision, fetched: start, core: core})
 				backoff = 0
 				testHookBarrier("sidecar.core_sync.accepted", self.networkId.String())
-				retry = clock.After(max(0, interval-clock.Now().Sub(start)))
+				// the refetch is due interval after this one started, a wait for that time itself (QD-1425)
+				retry = ClockAfterAt(clock, start.Add(interval))
 			} else {
 				self.core.answer.Store(nil)
 				if backoff == 0 {
