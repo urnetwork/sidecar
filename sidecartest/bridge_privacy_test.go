@@ -66,8 +66,9 @@ func bridgePrivacyOpen(t *testing.T, world *sidecartest.BridgeNet, host *sidecar
 	if answer, err := window.ExchangeUdp(netip.AddrPortFrom(host.Address, host.Upstream.UdpPort()), payload, waitTimeout); err != nil || !bytes.Equal(answer, payload) {
 		t.Fatalf("the datagram: %v", err)
 	}
-	if err := window.SendEcho(host.Address, 1); err != nil || !window.WaitEchoReply(1, waitTimeout) {
-		t.Fatalf("the echo: %v", err)
+	// sent again while it waits, since its path may lose it (WaitEchoAnswered)
+	if err := window.SendEcho(host.Address, 1); err != nil || !window.WaitEchoAnswered(host.Address, 1, waitTimeout) {
+		t.Fatalf("the echo: %v, sent again %d times", err, window.EchoResendCount())
 	}
 }
 

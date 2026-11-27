@@ -1,0 +1,28 @@
+request 22222222-2222-2222-2222-222222222222: tainted_send. Send a command with agent_prompt into enclave builder (label AP, egress 2 (exits)), from a run tainted by mail. The action, as this daemon built it:
+  body_sha256: 4e6307d9f94d241e4751511eed524a5240f3acfdfbe33f3d005dea01923c5fc1
+  subject: 56565656565656565656565656565656
+  egress_mode: 2 (exits)
+  enclave.enclave_id: 51515151515151515151515151515151
+  enclave.name: builder
+  enclave.shape: cpu-2
+  enclave.provider: hippius
+  enclave.label: AP
+  enclave.price_per_hour: $0.12 (120000000 nano-USD)
+  enclave.incarnation: 2
+  tool: agent_prompt
+  send.target_agent: reviewer
+  send.target_agent_id: 52525252525252525252525252525252
+  send.mode: 1 (prompt)
+  send.cwd: /work
+  send.refs[0].repo_id: 53535353535353535353535353535353
+  send.refs[0].path: notes/plan.md
+  send.refs[0].version: 7
+  taint_reasons: mail
+  auto.basis: 1 (taint)
+  auto.rules: 1, 9
+  send.text, the whole of what is sent, untrusted text, each line after a bar:
+    | check the build
+asked by sidecar 55555555-5555-5555-5555-555555555555, run 77777777-7777-7777-7777-777777777777, agent 88888888-8888-8888-8888-888888888888
+expires 2025-11-06T00:00:00Z
+untrusted text the agent wrote, which is not the action:
+  summary: point www at the new host

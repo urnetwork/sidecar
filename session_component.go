@@ -142,6 +142,15 @@ func (self *sidecarSession) buildWithLock() error {
 				}
 				return max(len(state.MemberIds()), 1), nil
 			},
+			// the compute block's history.member_share (CACL-M12-03), auto where the device has read no head yet, as
+			// before the block was read
+			MemberShare: func(ctx context.Context) (*SessionMemberShare, error) {
+				view, err := sidecar.ComputePolicy()
+				if err != nil {
+					return nil, nil
+				}
+				return view.MemberShare(), nil
+			},
 		},
 	})
 	if err != nil {

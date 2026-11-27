@@ -10,8 +10,10 @@
 //	        its provider among the network's providers, `*` for every one; its name matching one of allow's globs
 //
 // A glob is never read as a label (R1-56: SayGM's -tee names are labeled none), so TEE-only is tee_only or the floor,
-// never a glob. The network's two come from its compute block (CACL-M12-03's ComputePolicyView), and until a network
-// has one, or a build reads one, they are CO-18's defaults, none and `*` (Q-CACL-3's (a)). A refusal names its rule,
+// never a glob. The network's two come from its compute block through ComputePolicyView.NetworkModels (CACL-M12-03),
+// which the router reads at each check through its compute block source, and where a network has no block, or its
+// block leaves them out, they are CO-18's defaults, none and `*` (Q-CACL-3's (a)); a device that has not read its head
+// refuses every remote model rather than reading the defaults (ErrComputePolicyUnread). A refusal names its rule,
 // floor, provider, tee_only or allow, for the router's error. A key that does not read refuses every model under rule
 // allow, the closed reading. An enclave enforces its sponsor's key, read from the vault as their other devices read
 // it (ENC's).
