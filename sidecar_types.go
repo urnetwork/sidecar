@@ -113,6 +113,10 @@ type Sidecar struct {
 	// DESIGN-COMPUTE §3.3's components, constructed as the Sidecar starts and closed as its run loop ends
 	// (compute_sidecar.go). Held as any, as search is: the forwarding and page Worker legs run no compute.
 	compute atomic.Value
+	// The compute credentials each area registers for this Sidecar's secret matcher (DESIGN-COMPUTE §2.5,
+	// compute_custody.go), made on the first registration. Held as any, as search is: the forwarding leg holds no
+	// matcher.
+	computeCustody atomic.Value
 
 	stateLock sync.Mutex
 	lifecycle sidecarLifecycle
