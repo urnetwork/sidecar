@@ -37,6 +37,25 @@ type fakeMcpNetwork struct {
 	// each agent label's registered id, as a Sidecar's keychain.ur keeps them, so a restart keeps them too
 	// (session_test.go's ResolveAgentId)
 	labelAgentIds map[string]sidecar.Id
+	// the runs the network's gateway recorded calls in (DESIGN-COMPUTE §24.8), as Sidecar.SessionGatewayRecorded reads
+	gatewayRunIds map[sidecar.Id]bool
+}
+
+// Whether the network's gateway recorded a call in the run.
+func (self *fakeMcpNetwork) SessionGatewayRecorded(runId sidecar.Id) bool {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.gatewayRunIds[runId]
+}
+
+// Notes that the network's gateway recorded a call in the run.
+func (self *fakeMcpNetwork) setGatewayRecorded(runId sidecar.Id) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.gatewayRunIds == nil {
+		self.gatewayRunIds = map[sidecar.Id]bool{}
+	}
+	self.gatewayRunIds[runId] = true
 }
 
 // A restart: a run store over the same files with nothing in memory.
