@@ -759,6 +759,9 @@ func (self *Forwarder) run() {
 			}
 			wake = earlierTime(wake, self.sinkAlarmAt)
 		}
+		// select takes any of its ready cases at random, and every case but the end's goes back to the loop's top,
+		// which reads the hint and checks the context before it steps; a request is handed only while the loop lives,
+		// since onRun selects on the same end
 		select {
 		case <-self.ctx.Done():
 			return
@@ -767,7 +770,9 @@ func (self *Forwarder) run() {
 		case <-hintChanged:
 		case <-self.clockCheck:
 			// the next turn reads the clock again and arms the wait anew from it
-		case <-self.clock.After(wake.Sub(now)):
+		case <-ClockAfterAt(self.clock, wake):
+			// set for wake itself (QD-1425), so a move of the clock between the reading and the wait cannot leave it
+			// late
 		}
 	}
 }
