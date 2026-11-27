@@ -1,0 +1,17 @@
+# DESIGN-COMPUTE.md §14.3's POST compute/v1/budget/raise (BAL-M12-16): the broker decodes ComputeBudgetRaiseRequest,
+# the approved decisions of a kind-21 compute_budget_raise and the version-5 action they hash, and builds
+# ComputeBudgetRaiseAnswer, the use it keeps in compute_budget_raise with the raise it made, both under compute-6 (each
+# raise kind 21 approved, with its approval id and use, and budget amounts by subject id). The decisions and the action
+# are the bytes record.proto's ApprovalDecision and CanonicalAction roots already map, the action's sealed detail
+# unread (field 38, testdata/approval_compute's lines).
+
+ComputeBudgetRaiseRequest.decisions: {number: 1, type: repeated bytes, row: compute-6, sees: "each raise kind 21 approved, with its approval id and use"}
+ComputeBudgetRaiseRequest.action: {number: 2, type: bytes, row: compute-6, sees: "each raise kind 21 approved"}
+
+ComputeBudgetRaiseAnswer.approval_id: {number: 1, type: bytes, row: compute-6, sees: "with its approval id and use"}
+ComputeBudgetRaiseAnswer.use_index: {number: 2, type: uint32, row: compute-6, sees: "with its approval id and use"}
+ComputeBudgetRaiseAnswer.subject_id: {number: 3, type: bytes, row: compute-6, sees: "budget amounts by subject id"}
+ComputeBudgetRaiseAnswer.period: {number: 4, type: uint32, row: compute-6, sees: "each raise kind 21 approved"}
+ComputeBudgetRaiseAnswer.amount: {number: 5, type: uint64, row: compute-6, sees: "budget amounts by subject id"}
+ComputeBudgetRaiseAnswer.expire_ms: {number: 6, type: int64, row: compute-6, sees: "each raise kind 21 approved"}
+ComputeBudgetRaiseAnswer.device_only: {number: 7, type: bool, row: compute-6, sees: "each raise kind 21 approved"}

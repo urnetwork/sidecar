@@ -188,13 +188,22 @@ func newComputeServiceClient(args *computeServiceClientArgs) (*ComputeServiceCli
 // GET path, its answer decoded into answer, at most maxByteCount bytes (ComputeServiceAnswerMaxByteCount where
 // non-positive). See the file header for the rest.
 func (self *ComputeServiceClient) Get(ctx context.Context, path string, answer proto.Message, maxByteCount int) error {
-	return self.call(ctx, http.MethodGet, path, nil, answer, maxByteCount)
+	return self.call(ctx, http.MethodGet, path, nil, nil, answer, maxByteCount)
 }
 
 // POST path with request, its answer decoded into answer, nil for one with no body, at most maxByteCount bytes
 // (ComputeServiceAnswerMaxByteCount where non-positive).
 func (self *ComputeServiceClient) Post(ctx context.Context, path string, request proto.Message, answer proto.Message, maxByteCount int) error {
-	return self.call(ctx, http.MethodPost, path, request, answer, maxByteCount)
+	return self.call(ctx, http.MethodPost, path, nil, request, answer, maxByteCount)
+}
+
+// Post under Idempotency-Key: idempotencyKey, which a route taking one requires (§14.3; the effect key of an approved
+// decision): every retry and renewal of the call carries the same key. BAL-M12-16's kind 21 posts this way.
+func (self *ComputeServiceClient) PostIdempotent(ctx context.Context, path string, idempotencyKey string, request proto.Message, answer proto.Message, maxByteCount int) error {
+	if idempotencyKey == "" {
+		return fmt.Errorf("%w: POST %s: no Idempotency-Key", ErrComputeServiceRequest, path)
+	}
+	return self.call(ctx, http.MethodPost, path, http.Header{"Idempotency-Key": []string{idempotencyKey}}, request, answer, maxByteCount)
 }
 
 // The broker's clock now, as the answers so far read it, and whether any answer gave it: false before the first.
@@ -204,8 +213,8 @@ func (self *ComputeServiceClient) BrokerNow() (time.Time, bool) {
 	return self.clock.Now().Add(self.brokerOffset), self.brokerOffsetKnown
 }
 
-// One call, its retries and its token's renewal.
-func (self *ComputeServiceClient) call(ctx context.Context, method string, path string, request proto.Message, answer proto.Message, maxByteCount int) error {
+// One call, its retries and its token's renewal, each attempt carrying header beside the client's own, nil for none.
+func (self *ComputeServiceClient) call(ctx context.Context, method string, path string, header http.Header, request proto.Message, answer proto.Message, maxByteCount int) error {
 	route := method + " " + path
 	if self.base == nil {
 		return ErrComputeServiceUnconfigured
@@ -231,7 +240,7 @@ func (self *ComputeServiceClient) call(ctx context.Context, method string, path 
 	target.Path = path
 	renewed := false
 	for attempt := 0; ; attempt += 1 {
-		status, answerBody, header, err := self.send(ctx, method, target.String(), body, maxByteCount)
+		status, answerBody, answerHeader, err := self.send(ctx, method, target.String(), header, body, maxByteCount)
 		if err != nil {
 			if attempt < self.settings.ComputeServiceRetryCount && ctx.Err() == nil && !errors.Is(err, ErrComputeServiceAnswer) &&
 				!errors.Is(err, errComputeServiceCredentials) {
@@ -251,7 +260,7 @@ func (self *ComputeServiceClient) call(ctx context.Context, method string, path 
 			}
 			return nil
 		}
-		refusal := self.refusal(route, status, header, answerBody)
+		refusal := self.refusal(route, status, answerHeader, answerBody)
 		switch {
 		case status == http.StatusUnauthorized && !renewed:
 			// the token no longer authenticates there: once more under a new one
@@ -271,8 +280,9 @@ func (self *ComputeServiceClient) call(ctx context.Context, method string, path 
 // A credential the client could not get: never asked again within the call.
 var errComputeServiceCredentials = errors.New("compute service credentials")
 
-// One request: its status, its body within maxByteCount, and its headers, or why none came back.
-func (self *ComputeServiceClient) send(ctx context.Context, method string, target string, body []byte, maxByteCount int) (int, []byte, http.Header, error) {
+// One request with header beside the client's own: its status, its body within maxByteCount, and its headers, or why
+// none came back.
+func (self *ComputeServiceClient) send(ctx context.Context, method string, target string, header http.Header, body []byte, maxByteCount int) (int, []byte, http.Header, error) {
 	accessToken, err := self.credentials.token(ctx)
 	if err != nil {
 		return 0, nil, nil, fmt.Errorf("%w: %w", errComputeServiceCredentials, err)
@@ -293,6 +303,11 @@ func (self *ComputeServiceClient) send(ctx context.Context, method string, targe
 	httpRequest, err := http.NewRequestWithContext(ctx, method, target, reader)
 	if err != nil {
 		return 0, nil, nil, err
+	}
+	for name, values := range header {
+		for _, value := range values {
+			httpRequest.Header.Add(name, value)
+		}
 	}
 	httpRequest.Header.Set("Authorization", "Bearer "+accessToken)
 	httpRequest.Header.Set(computeServiceDpopHeader, proof)

@@ -1,0 +1,31 @@
+// The compute balance's wire with the broker (DESIGN-COMPUTE §9, §14.3, §16.3; BAL-M12-16): every compute/v1 body is
+// deterministic protobuf (compute-plan-infer-wire-format, QD-1246). BAL holds this file (CONTRACTS C-36: the design's
+// §6.6 and §21.5 messages live in infer.proto and websearch.proto), and the design gives these bodies no fence, so
+// they are BAL-M12-16's reading, numbered in the order written.
+
+syntax = "proto3";
+package urnetwork.sidecar;
+
+option go_package = "github.com/urnetwork/sidecar/protocol";
+
+// POST compute/v1/budget/raise's request (§14.3, §16.3's kind 21), under Idempotency-Key: <effect_key>: the approved
+// decisions and the version-5 compute_budget_raise action they hash, each as stored, so the broker's gate verifies
+// every decision over its bytes as received (DESIGN §16.6) and reads nothing of the action's sealed detail (field 38).
+message ComputeBudgetRaiseRequest {
+  repeated bytes decisions = 1;            // each ApprovalDecision's Signed as stored: one, or a rule's k
+  bytes action = 2;                        // the stored CanonicalAction of kind 21 at version 5
+}
+
+// Its answer, the broker's stored result for the effect key, which a repeat under the key answers again (§16.3's
+// lookup): the use the raise took and what it raised.
+message ComputeBudgetRaiseAnswer {
+  bytes approval_id = 1;
+  uint32 use_index = 2;
+  bytes subject_id = 3;                    // whose budgets rose: an agent, or the requesting sidecar's own; empty where
+                                           // only the device applies the raise
+  uint32 period = 4;                       // BudgetFields.period: 1 day, 2 month, 3 run
+  uint64 amount = 5;                       // the raised cap, nano-USD
+  int64 expire_ms = 6;                     // when the broker forgets the raise: its period's end, or its decision's
+                                           // expiry where that is later
+  bool device_only = 7;                    // a run's raise, or a gateway grant's: no broker budget rose
+}
