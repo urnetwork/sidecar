@@ -62,6 +62,7 @@ var testProtoFiles = []string{
 	"protocol/support.proto",
 	"protocol/tls.proto",
 	"protocol/types.proto",
+	"protocol/websearch.proto",
 	"protocol/bridge/auth.proto",
 	"protocol/bridge/bridge.proto",
 	"protocol/bridge/signed.proto",

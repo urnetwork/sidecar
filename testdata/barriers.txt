@@ -1135,3 +1135,4 @@ secret tls_visitor_record tlsedgeservice/visitor_key.go
 secret vault_password mail_vault.go
 secret vault_totp_secret mail_totp.go
 secret vault_totp_secret mail_vault.go
+secret websearch_answer_key websearch_seal.go

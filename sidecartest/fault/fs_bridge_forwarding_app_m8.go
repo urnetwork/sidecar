@@ -189,6 +189,20 @@ func fsAppAdvanceTo(world *fsBridgeWorld, at time.Time) {
 	world.host.Hint()
 }
 
+// Hints the host until its Forwarder has stored the log through n, failing past WaitTimeout: a store's tip moves no
+// monitor of the role's.
+func fsAppWaitStored(world *fsBridgeWorld, n uint64) error {
+	deadline := time.Now().Add(world.world.Settings().WaitTimeout)
+	for world.host.Forwarder().Status().Tip.GetVersion() < n {
+		if time.Now().After(deadline) {
+			return fmt.Errorf("the Forwarder stored no log through %d: %+v", n, world.host.Forwarder().Status())
+		}
+		world.host.Hint()
+		<-time.After(world.world.Settings().PollInterval)
+	}
+	return nil
+}
+
 // The state the role enforces: its pin, 0 for none.
 func fsAppStatePin(world *fsBridgeWorld) uint64 {
 	return world.host.State().GetAuth().GetVersion()
@@ -272,6 +286,9 @@ func FwdAppWithinTargets(net *Net) *Schedule {
 			if fsAppStateLists(world, forwarding) {
 				return errors.New("the state lists the new forwarding Delegation before a compile")
 			}
+			// the Forwarder wants the compile from a reading taken before the posture took the grant, at heard since
+			// nothing moved the clock after it, so one move reaches the compile's due time however late the Forwarder's
+			// goroutine runs after the posture shows the pin (sidecar.Forwarder's wantCompileAt)
 			fsAppAdvanceTo(world, heard.Add(defaults.CompileDelay))
 			world.host.WaitAdopted(forwarding.At)
 			if took := clock.Now().Sub(heard); 5*time.Second < took {
@@ -502,9 +519,15 @@ func fsAppBelowThePin(world *fsBridgeWorld, lagging *sidecartest.BridgeNetLaggin
 	if err != nil {
 		return fmt.Errorf("the revoked key while api withholds the revocation: %w", err)
 	}
-	// api catches up, and the retry compiles at the tip
+	// api catches up, the Forwarder follows it there, and then the retry compiles at the tip. A retry compiles what the
+	// store holds, and the clock's move fires the retry's wait as it moves, before the hint after it reaches the loop:
+	// moved before the follow, the retry compiled the store below the pin again and waited twice as long, a time the
+	// clock never reached
 	tip := world.world.Admission().Tip().GetVersion()
 	lagging.SetThrough(tip)
+	if err := fsAppWaitStored(world, tip); err != nil {
+		return err
+	}
 	fsAppAdvanceTo(world, world.world.Net().Clock().Now().Add(sidecar.DefaultForwarderSettings(sidecar.ForwarderHostApple).CompileRetryInterval))
 	world.host.WaitAdopted(tip)
 	if fsAppStateLists(world, forwarding) {
