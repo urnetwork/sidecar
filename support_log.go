@@ -22,7 +22,7 @@
 // A deferred ring (SupportLogArgs.Deferred) creates nothing on disk until Start: it reads a key and segments that are
 // there, holds what Event takes within its bound, and writes none of it until then, so an app's sidecar writes nothing
 // into its state directory while its key store is locked or failed, as the key store's rule asks; one closed before
-// Start writes nothing at all.
+// Start writes nothing at all, and a Start that a Close overtakes refuses before it touches the disk.
 //
 // A SupportLog is safe for concurrent use, and a nil *SupportLog takes every Event and writes nothing.
 
@@ -303,7 +303,7 @@ type SupportLog struct {
 	runDone     chan struct{}
 	closeOnce   sync.Once
 
-	// Held across a flush and a bundle's read, never while stateLock is held.
+	// Held across a flush, a bundle's read and Start's file work. Taken before stateLock, never while it is held.
 	fileLock sync.Mutex
 	// guarded by fileLock: the ring's segments, oldest first, and the newest one's open file
 	segments    []*supportLogSegment
@@ -397,7 +397,9 @@ func OpenSupportLog(args *SupportLogArgs) (*SupportLog, error) {
 
 // Starts writing to disk: creates the ring's directory, writes its key where it was drawn, prunes, records that the
 // ring opened, and from then on flushes the held events, which keep their times. What OpenSupportLog does at once
-// for a ring that is not deferred. A no-op on a nil log and a started one; an error on a closed one.
+// for a ring that is not deferred. A no-op on a nil log and a started one; an error on a closed one. It reads closed
+// again under fileLock, so a Start that Close overtook does no file work, and one whose file work began first holds
+// fileLock through it, which the writer's last flush waits for: what the ring held is on disk when Close returns.
 func (self *SupportLog) Start() error {
 	if self == nil {
 		return nil
@@ -406,16 +408,24 @@ func (self *SupportLog) Start() error {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		return self.closed
-	}()
-	if closed {
-		return errors.New("support log: closed")
 	}
+	if closed() {
+		return errSupportLogClosed
+	}
+	testHookBarrier("support_log.start.before", "")
 	segmentCount, byteCount, err := func() (int, int64, error) {
 		self.fileLock.Lock()
 		defer self.fileLock.Unlock()
+		// stateLock inside fileLock, as flushWithFileLock takes it: a Close begun since the read above refuses here
+		if closed() {
+			return 0, 0, errSupportLogClosed
+		}
 		if self.started {
 			return 0, 0, errSupportLogStarted
 		}
+		// with fileLock held, which stalls the writer, a bundle and Close's last step but never Event: a Close begun
+		// from here waits for this Start's file work
+		testHookBarrier("support_log.start.after", "")
 		if err := os.MkdirAll(self.directory, 0o700); err != nil {
 			return 0, 0, fmt.Errorf("support log: %w", err)
 		}
@@ -450,6 +460,9 @@ func (self *SupportLog) Start() error {
 
 // Start's answer to itself for a ring started already.
 var errSupportLogStarted = errors.New("support log: started")
+
+// Start's answer on a closed ring, and on one whose Close began before Start held fileLock.
+var errSupportLogClosed = errors.New("support log: closed")
 
 // The ring's key: the one on disk, saved; else one drawn, which a ring that is not deferred saves at once and a
 // deferred one at Start.

@@ -929,6 +929,8 @@ barrier stream.write_wait.after stream_conn.go
 barrier stream.write_wait.before stream_conn.go
 barrier support_client.wake.after support_client.go
 barrier support_client.wake.before support_client.go
+barrier support_log.start.after support_log.go
+barrier support_log.start.before support_log.go
 barrier team_directory.file.after config_directory.go
 barrier team_directory.file.before config_directory.go
 barrier tls.cert_close tls_cert_manager.go
