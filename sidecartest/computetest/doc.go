@@ -42,6 +42,13 @@
 //     tables' stand-ins the guard reads (compute_abuse_hold, compute_catalog_version, the region lookup);
 //     broker_testhooks.go plants a test's handlers and the stand-ins through computeservice's sidecar_testhooks seam,
 //     which the untagged build refuses (ErrBrokerPlantUnlinked).
+//   - stores.go, FakeStores: the three markets compute credit is bought in (§9.5), each an HTTP fake on loopback that
+//     BAL's server code talks to: stores_stripe.go's FakeStripe (Customers, Checkout Sessions, PaymentIntents on and
+//     off session, card fingerprints, Refunds, disputes, webhook events signed under a test endpoint secret),
+//     stores_apple.go's FakeAppStore (the Server API's lookups and history, Server Notifications V2, every object a JWS
+//     under a test root chain with Apple's policy extensions) and stores_play.go's FakePlay (the Android Publisher
+//     API's purchases, subscriptionsv2, voided purchases and order refunds, RTDN pushes under an id token its tokeninfo
+//     answers); each market's notifications wait until the test delivers them, once, twice, out of order or never.
 //
 // Its rules, as sidecartest's:
 //
