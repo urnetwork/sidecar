@@ -213,11 +213,14 @@ func (self *FakeParallelStall) Release() {
 	})
 }
 
-// One scripted step.
+// One scripted step. A request takes the first queued step its point in the flow allows: a rate_limited step as it
+// arrives; a payee_aged_out step once its payment names an offer still cached; every other step once its payment has
+// verified, before it settles. So a payment refused first leaves the step to the request that pays.
 type FakeParallelStep struct {
 	// Empty serves.
 	Outcome FakeParallelOutcome
-	// The step waits for a request carrying a payment, letting unpaid ones pass by; otherwise any request takes it.
+	// A rate_limited step waits for a request carrying a payment, letting unpaid ones pass by; otherwise any request
+	// takes it. Every other step waits for a paid request always.
 	PaidOnly bool
 	// rate_limited: Retry-After, whole seconds; 0 sends 1 s.
 	RetryAfter time.Duration
@@ -503,10 +506,14 @@ func (self *FakeParallel) challenge(w http.ResponseWriter, offer *FakeParallelOf
 	w.Write(body)
 }
 
-// The step a request takes: the first in the queue it may take, or nil to serve.
-func (self *FakeParallel) takeStepWithLock(paid bool) *FakeParallelStep {
+// The first queued step of one of outcomes a request may take (an empty outcome serves), taken; or nil.
+func (self *FakeParallel) takeStepWithLock(paid bool, outcomes ...FakeParallelOutcome) *FakeParallelStep {
 	for i, step := range self.steps {
-		if step.PaidOnly && !paid {
+		outcome := step.Outcome
+		if outcome == "" {
+			outcome = FakeParallelServe
+		}
+		if !slices.Contains(outcomes, outcome) || (step.PaidOnly && !paid) {
 			continue
 		}
 		self.steps = slices.Delete(self.steps, i, i+1)
@@ -765,9 +772,9 @@ func (self *FakeParallel) serveHttp(w http.ResponseWriter, r *http.Request) {
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
-		step = self.takeStepWithLock(paymentValue != "")
-		if step != nil && step.Outcome == FakeParallelRateLimited {
-			limited, retryAfter = true, step.RetryAfter
+		if rateStep := self.takeStepWithLock(paymentValue != "", FakeParallelRateLimited); rateStep != nil {
+			step = rateStep
+			limited, retryAfter = true, rateStep.RetryAfter
 			return
 		}
 		if over, wait := self.rateLimitedWithLock(client); over {
@@ -788,12 +795,16 @@ func (self *FakeParallel) serveHttp(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		payment = decoded
-		if step != nil && step.Outcome == FakeParallelPayeeAgedOut {
-			if payTo, err := ParseFakeEvmAddress(payment.Accepted.PayTo); err == nil {
-				delete(self.payees, payTo)
+		offer, reason, lost := self.verifyOfferWithLock(payload, payment)
+		if reason == "" {
+			if agedStep := self.takeStepWithLock(true, FakeParallelPayeeAgedOut); agedStep != nil {
+				step = agedStep
+				if payTo, err := ParseFakeEvmAddress(payment.Accepted.PayTo); err == nil {
+					delete(self.payees, payTo)
+				}
+				reason, lost = FakeX402PayeeNotCached, true
 			}
 		}
-		offer, reason, lost := self.verifyOfferWithLock(payload, payment)
 		if reason != "" {
 			refusal, payeeLost = reason, lost
 			if !lost || self.settings.PayeeLostStatus == http.StatusPaymentRequired {
@@ -805,12 +816,15 @@ func (self *FakeParallel) serveHttp(w http.ResponseWriter, r *http.Request) {
 	}()
 	if verifiedOffer != nil {
 		// the authorization's checks read the chain, with no lock of the gateway's held
-		if reason := self.verifyAuthorization(verifiedOffer, payment); reason != "" {
+		reason := self.verifyAuthorization(verifiedOffer, payment)
+		self.stateLock.Lock()
+		if reason != "" {
 			refusal = reason
-			self.stateLock.Lock()
 			challengeOffer = self.offerWithLock()
-			self.stateLock.Unlock()
+		} else {
+			step = self.takeStepWithLock(true, FakeParallelServe, FakeParallelUpstreamFailure, FakeParallelLostAnswer, FakeParallelStalled)
 		}
+		self.stateLock.Unlock()
 	}
 	request.Payment = payment
 	if step != nil && step.Outcome != "" {

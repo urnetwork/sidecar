@@ -373,3 +373,30 @@ func TestFakeParallelLimitsAndPayees(t *testing.T) {
 		t.Fatalf("unreadable JSON answered %d", status)
 	}
 }
+
+func TestFakeParallelStepWaitsForAVerifiedPayment(t *testing.T) {
+	world := newTestParallel(t, nil)
+	world.parallel.Script(&FakeParallelStep{Outcome: FakeParallelUpstreamFailure})
+	// the unpaid request and a refused payment leave the scripted failure where it was
+	offer := world.offer(t)
+	auth, _ := world.authorize(t, offer, world.payer, "refused first")
+	stranger := NewFakeEvmKey("computetest", "test stranger")
+	refused := FakeParallelPaymentHeader(offer, auth, stranger.SignTransferWithAuthorization(world.base.UsdcDomain(), auth))
+	if status, _, body := world.search(t, testParallelBody, map[string]string{"PAYMENT-SIGNATURE": refused}); status != http.StatusPaymentRequired ||
+		testParallelChallengeError(t, body) != FakeX402InvalidSignature {
+		t.Fatalf("a refused payment answered %d %s", status, body)
+	}
+	// the payment that verifies meets it: settled, then the upstream fails
+	offer = world.offer(t)
+	auth, signature := world.authorize(t, offer, world.payer, "verified second")
+	if status, _, _ := world.search(t, testParallelBody, map[string]string{"PAYMENT-SIGNATURE": FakeParallelPaymentHeader(offer, auth, signature)}); status != http.StatusBadGateway ||
+		!world.base.AuthorizationUsed(auth.From, auth.Nonce) {
+		t.Fatalf("the verified payment answered %d", status)
+	}
+	// and the script is spent: the next paid search is served
+	offer = world.offer(t)
+	auth, signature = world.authorize(t, offer, world.payer, "served third")
+	if status, _, _ := world.search(t, testParallelBody, map[string]string{"PAYMENT-SIGNATURE": FakeParallelPaymentHeader(offer, auth, signature)}); status != http.StatusOK {
+		t.Fatalf("the next paid search answered %d", status)
+	}
+}
