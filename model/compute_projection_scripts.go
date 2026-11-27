@@ -14,7 +14,9 @@
 //	         taken, so a script finds those past UnconfirmedHoldMaxAge without reading every hold
 //	KEYS[3…] {cmp_<network_id>}:b:<subject_id>, a hash per subject: r:<budget>:<period> its confirmed holds'
 //	         reservations and c:<budget>:<period> its charges, per budget and UTC period (d:YYYYMMDD, m:YYYYMM),
-//	         today's and yesterday's, this month's and the last, kept BudgetCounterTtl past the last write
+//	         and k:<period> the cap a kind-21 raise lifted every budget of the subject to for that period
+//	         (BAL-M12-16), today's and yesterday's, this month's and the last, kept BudgetCounterTtl past the last
+//	         write
 //
 // A hold field is state|kind|amount|reserve|time_ms|line count|subject|budget|period…: state u while unconfirmed,
 // c once its operation row committed. An unconfirmed hold's reservations sit in the projection's own ur: fields,
@@ -178,7 +180,7 @@ end
 local function cmp_prune(ki, now)
 	local periods = cmp_periods(now)
 	for _, field in ipairs(redis.call('HKEYS', KEYS[ki])) do
-		local period = string.match(field, '^[rc]:[%w_]+:(.+)$')
+		local period = string.match(field, '^[rc]:[%w_]+:(.+)$') or string.match(field, '^k:(.+)$')
 		if period ~= periods.d and period ~= periods.pd and period ~= periods.m and period ~= periods.pm then
 			redis.call('HDEL', KEYS[ki], field)
 		end
@@ -284,10 +286,16 @@ local function cmp_check_budgets(lines, reserve, periods)
 		local charged = cmp_get(ki, 'c:' .. line.budget .. ':' .. period)
 		local reserved = cmp_get(ki, 'r:' .. line.budget .. ':' .. period) +
 			cmp_get(1, 'ur:' .. line.subject .. ':' .. line.budget .. ':' .. period)
-		if line.cap < charged + reserve then
+		-- a kind-21 raise lifts every budget of its subject for the period, never lowering one (BAL-M12-16)
+		local cap = line.cap
+		local raised = cmp_get(ki, 'k:' .. period)
+		if cap < raised then
+			cap = raised
+		end
+		if cap < charged + reserve then
 			return 'budget', i - 1
 		end
-		if line.cap < charged + reserved + reserve then
+		if cap < charged + reserved + reserve then
 			held = true
 		end
 	end
@@ -628,7 +636,8 @@ return {'dropped', cmp_str(dropped), applied}
 	// ARGV: version, settled, promo, floor, state, accrued, counter ttl ms, the hold count, then per hold its key,
 	// kind, amount, reserve, time ms and line count, then per line its subject, budget and period letter; the charge
 	// count, then per charge its key, kind and amount; the counter count, then per counter its subject, budget,
-	// period (d:YYYYMMDD or m:YYYYMM) and charged amount.
+	// period (d:YYYYMMDD or m:YYYYMM) and charged amount; the raise count, then per raise in force its subject, period
+	// and raised cap (BAL-M12-16).
 	// Reply: {rebuilt}.
 	computeProjectionRebuildScript = &operator.RedisScript{
 		Name: "compute-projection-rebuild",
@@ -688,6 +697,21 @@ for _ = 1, count do
 	redis.call('HSET', KEYS[1], 's:' .. ARGV[at], '1')
 	at = at + 4
 end
+count = cmp_int(ARGV[at], 'the raise count')
+at = at + 1
+for _ = 1, count do
+	local period = ARGV[at + 1]
+	if not string.match(period, '^[dm]:%d+$') then
+		return error('compute: a raise period is d:YYYYMMDD or m:YYYYMM')
+	end
+	local raised = cmp_int(ARGV[at + 2], 'a raised cap')
+	local ki = cmp_budget_index(ARGV[at])
+	if cmp_get(ki, 'k:' .. period) < raised then
+		redis.call('HSET', KEYS[ki], 'k:' .. period, cmp_str(raised))
+	end
+	redis.call('HSET', KEYS[1], 's:' .. ARGV[at], '1')
+	at = at + 3
+end
 for i = 3, #KEYS do
 	if redis.call('EXISTS', KEYS[i]) == 1 then
 		redis.call('PEXPIRE', KEYS[i], ttl)
@@ -705,6 +729,42 @@ return {'rebuilt'}
 		Source: `
 redis.call('HSET', KEYS[1], 'rebuild', '1')
 return {'marked'}
+`,
+	}
+
+	// A kind-21 raise's cap into its subject's counters (BAL-M12-16): k:<period>, every budget of the subject for that
+	// UTC day or month capped at the larger of its line's own and this, never lowering a cap the field holds; a raise of
+	// a period past this one and the last writes nothing, as the prune would drop it. A marked projection takes it too,
+	// since the raise's row committed before this ran and the rebuild that clears the mark reads it under the network's
+	// fence; an absent one takes it from that rebuild.
+	//
+	// KEYS: the projection, the unconfirmed set (unread), the subject's counters.
+	// ARGV: subject, period (d:YYYYMMDD or m:YYYYMM), raised cap, counter ttl ms.
+	// Reply: {outcome}: raised (a repeat too, and a cap the field already held), absent (no projection).
+	computeProjectionRaiseScript = &operator.RedisScript{
+		Name: "compute-projection-raise",
+		Source: computeHoldPrelude + `
+local now = cmp_now()
+if not cmp_present() then
+	return {'absent'}
+end
+local period = ARGV[2]
+if not string.match(period, '^[dm]:%d+$') then
+	return error('compute: a raise period is d:YYYYMMDD or m:YYYYMM')
+end
+local raised = cmp_int(ARGV[3], 'the raised cap')
+local ttl = cmp_int(ARGV[4], 'the counter ttl')
+local ki = cmp_budget_index(ARGV[1])
+local periods = cmp_periods(now)
+if period ~= periods.d and period ~= periods.pd and period ~= periods.m and period ~= periods.pm then
+	return {'raised'}
+end
+if cmp_get(ki, 'k:' .. period) < raised then
+	redis.call('HSET', KEYS[ki], 'k:' .. period, cmp_str(raised))
+end
+redis.call('HSET', KEYS[1], 's:' .. ARGV[1], '1')
+cmp_touch(ki, now, ttl)
+return {'raised'}
 `,
 	}
 

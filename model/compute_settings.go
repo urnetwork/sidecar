@@ -262,6 +262,11 @@ type ComputeLedgerSettings struct {
 	// reading: §16.4 names no figure.
 	ProjectionHoldMaxLineCount int
 
+	// The most decisions one POST compute/v1/budget/raise presents (§16.3's kind 21): 16, past any requests rule's k,
+	// so a body of many tiny decisions makes the gate verify no more than that many signatures. A reading: §16.6
+	// names no figure.
+	BudgetRaiseDecisionMaxCount int
+
 	// §9.13's spend view: today so far and the 6 UTC days before it.
 	SpendDayCount int
 	// §14.3's charges route: 100 rows a page, the device's ChargesPageRowCount.
@@ -400,6 +405,8 @@ func DefaultComputeLedgerSettings() *ComputeLedgerSettings {
 
 		ProjectionBudgetNameMaxByteCount: 24,
 		ProjectionHoldMaxLineCount:       32,
+
+		BudgetRaiseDecisionMaxCount: 16,
 
 		SpendDayCount:       7,
 		ChargesPageRowCount: 100,

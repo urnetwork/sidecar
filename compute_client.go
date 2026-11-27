@@ -498,25 +498,51 @@ func registerComputeBudgetRaiseEffect(effect func(client *ComputeClient, action 
 // broker; a retry after the decision spends it. Refused before anything is filed while BAL-M12-16's effect is not in
 // this build (ErrComputeBudgetRaiseUnavailable).
 func (self *ComputeClient) RaiseBudget(ctx context.Context, args *ComputeBudgetRaiseArgs) (*ComputeBudgetRaiseResult, error) {
+	stored, effect, err := self.BudgetRaiseAction(ctx, args)
+	if err != nil {
+		return nil, err
+	}
+	action, err := NewSidecarAction(stored, SidecarRiskNormal, SidecarRiskNormal, args.RunId, args.RunAgentId)
+	if err != nil {
+		return nil, err
+	}
+	action.Summary = args.Summary
+	action.Effect = effect
+	err = self.host.Authorize(ctx, action, nil)
+	var pending *ApprovalPendingError
+	if errors.As(err, &pending) {
+		approvalId := pending.ApprovalId
+		return &ComputeBudgetRaiseResult{Outcome: ComputeBudgetRaisePending, ApprovalId: &approvalId}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &ComputeBudgetRaiseResult{Outcome: ComputeBudgetRaiseDone}, nil
+}
+
+// Kind 21's action for args, built and sealed as RaiseBudget files it, and its effect, which a caller hands its own
+// gate: the Harness's compute_budget_raise tool and its failure choice's "raise the budget" (BAL-M12-20) through the
+// run's Authorize. Refused as RaiseBudget refuses, ErrComputeBudgetRaiseUnavailable while no effect is in this build.
+func (self *ComputeClient) BudgetRaiseAction(ctx context.Context, args *ComputeBudgetRaiseArgs) (*StoredCanonicalAction, SidecarEffect, error) {
 	if self.isClosed() {
-		return nil, ErrComputeClientClosed
+		return nil, nil, ErrComputeClientClosed
 	}
 	if args == nil {
-		return nil, fmt.Errorf("%w: no raise", ErrComputeBudgetRaiseInvalid)
+		return nil, nil, fmt.Errorf("%w: no raise", ErrComputeBudgetRaiseInvalid)
 	}
 	period, ok := computeBudgetPeriods[args.Period]
 	if !ok {
-		return nil, fmt.Errorf("%w: a period is day, month or run", ErrComputeBudgetRaiseInvalid)
+		return nil, nil, fmt.Errorf("%w: a period is day, month or run", ErrComputeBudgetRaiseInvalid)
 	}
 	if (args.AgentId == nil) == (args.GrantId == nil) {
-		return nil, fmt.Errorf("%w: a raise names an agent or a gateway grant, one of them", ErrComputeBudgetRaiseInvalid)
+		return nil, nil, fmt.Errorf("%w: a raise names an agent or a gateway grant, one of them", ErrComputeBudgetRaiseInvalid)
 	}
 	if args.CurrentNanoUsd < 0 || args.AmountNanoUsd <= args.CurrentNanoUsd {
-		return nil, fmt.Errorf("%w: the new amount is above the current one", ErrComputeBudgetRaiseInvalid)
+		return nil, nil, fmt.Errorf("%w: the new amount is above the current one", ErrComputeBudgetRaiseInvalid)
 	}
 	effectSource := computeBudgetRaiseEffectSource
 	if effectSource == nil {
-		return nil, ErrComputeBudgetRaiseUnavailable
+		return nil, nil, ErrComputeBudgetRaiseUnavailable
 	}
 	budget := &protocol.BudgetFields{
 		Period:  period,
@@ -536,27 +562,13 @@ func (self *ComputeClient) RaiseBudget(ctx context.Context, args *ComputeBudgetR
 	}
 	stored, err := self.host.SealActionDetail5(ctx, clear, detail)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	action, err := NewSidecarAction(stored, SidecarRiskNormal, SidecarRiskNormal, args.RunId, args.RunAgentId)
-	if err != nil {
-		return nil, err
+	effect := effectSource(self, stored)
+	if effect == nil {
+		return nil, nil, ErrComputeBudgetRaiseUnavailable
 	}
-	action.Summary = args.Summary
-	action.Effect = effectSource(self, stored)
-	if action.Effect == nil {
-		return nil, ErrComputeBudgetRaiseUnavailable
-	}
-	err = self.host.Authorize(ctx, action, nil)
-	var pending *ApprovalPendingError
-	if errors.As(err, &pending) {
-		approvalId := pending.ApprovalId
-		return &ComputeBudgetRaiseResult{Outcome: ComputeBudgetRaisePending, ApprovalId: &approvalId}, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &ComputeBudgetRaiseResult{Outcome: ComputeBudgetRaiseDone}, nil
+	return stored, effect, nil
 }
 
 // A hold the broker refused for the balance (insufficient_quota's balance, 402 COMPUTE_BALANCE): asks a read of the

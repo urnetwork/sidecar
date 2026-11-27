@@ -1,0 +1,107 @@
+{
+ "ids": [
+  {
+   "effect_key": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+   "id": "7ae0f284274af1b44fb892e9ec8cb265"
+  },
+  {
+   "effect_key": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+   "id": "752a10329ad7c0fd02811a574d45d580"
+  },
+  {
+   "effect_key": "6b",
+   "id": "fcdf3f71766aa3a8c2ec672b240d97b9"
+  },
+  {
+   "run_id": "0193a1b2c3d4e5f60718293a4b5c6d7e",
+   "tool_call_id": "call_1",
+   "id": "92de04ec55e4fd17325a86c562906b65"
+  },
+  {
+   "run_id": "0193a1b2c3d4e5f60718293a4b5c6d7e",
+   "tool_call_id": "toolu_01ABC",
+   "id": "fe03dcaff95b75f7118c4039af806825"
+  }
+ ],
+ "support": [
+  {
+   "product": "urnetwork",
+   "entry": "100171",
+   "seq": 3,
+   "thread": "6bfc61671939abc295257a906858c3f4",
+   "id": "8eac6e9490377487cf7a646e3306ff36"
+  }
+ ],
+ "messages": [
+  {
+   "why": "an agent's opening message to one agent",
+   "bytes": "{\"v\":1,\"id\":\"92de04ec55e4fd17325a86c562906b65\",\"thread\":\"5f1c2a3b4c5d6e7f8091a2b3c4d5e6f7\",\"seq\":1,\"from\":{\"member\":\"0193a1b2c3d4e5f60718293a4b5c6d70\",\"name\":\"orchestrator\",\"agent_id\":\"0193a1b2c3d4e5f60718293a4b5c6d71\",\"sidecar_id\":\"0193a1b2c3d4e5f60718293a4b5c6d72\",\"repo\":\"0193a1b2c3d4e5f60718293a4b5c6d73\"},\"to\":{\"member\":\"0193a1b2c3d4e5f60718293a4b5c6d70\",\"name\":\"limiter-fix\",\"repo\":\"0193a1b2c3d4e5f60718293a4b5c6d74\"},\"kind\":\"message\",\"subject\":\"tests on the limiter\",\"body\":\"Run `go test ./limiter` and tell me.\\n\\n- é ok\",\"refs\":[{\"repo\":\"0193a1b2c3d4e5f60718293a4b5c6d73\",\"path\":\"notes/plan.md\",\"version\":3}],\"created\":\"2026-12-01T10:00:00Z\"}\n"
+  },
+  {
+   "why": "the person's reply in a thread to all, with reply_to",
+   "bytes": "{\"v\":1,\"id\":\"7ae0f284274af1b44fb892e9ec8cb265\",\"thread\":\"5f1c2a3b4c5d6e7f8091a2b3c4d5e6f7\",\"seq\":4,\"from\":{\"member\":\"0193a1b2c3d4e5f60718293a4b5c6d70\",\"person\":true},\"to\":\"*\",\"kind\":\"reply\",\"body\":\"all of you: stop\",\"reply_to\":{\"member\":\"0193a1b2c3d4e5f60718293a4b5c6d70\",\"name\":\"me\",\"repo\":\"0193a1b2c3d4e5f60718293a4b5c6d73\"},\"effect\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"created\":\"2026-12-01T10:05:00Z\"}\n"
+  },
+  {
+   "why": "a support notice",
+   "bytes": "{\"v\":1,\"id\":\"8eac6e9490377487cf7a646e3306ff36\",\"thread\":\"6bfc61671939abc295257a906858c3f4\",\"seq\":3,\"from\":{\"support\":\"urnetwork\"},\"to\":{\"member\":\"0193a1b2c3d4e5f60718293a4b5c6d70\",\"name\":\"limiter-fix\",\"repo\":\"0193a1b2c3d4e5f60718293a4b5c6d74\"},\"kind\":\"support\",\"created\":\"2026-12-01T10:06:00Z\",\"support\":{\"product\":\"urnetwork\",\"entry\":\"100171\",\"seq\":3,\"type\":\"note\",\"status\":\"in_progress\",\"fixed_in\":\"\",\"final\":false}}\n"
+  }
+ ],
+ "refused": [
+  {
+   "why": "a subject past 120 characters",
+   "bytes": "{\"v\":1,\"id\":\"92de04ec55e4fd17325a86c562906b65\",\"thread\":\"5f1c2a3b4c5d6e7f8091a2b3c4d5e6f7\",\"seq\":1,\"from\":{\"member\":\"0193a1b2c3d4e5f60718293a4b5c6d70\",\"name\":\"orchestrator\",\"agent_id\":\"0193a1b2c3d4e5f60718293a4b5c6d71\",\"sidecar_id\":\"0193a1b2c3d4e5f60718293a4b5c6d72\",\"repo\":\"0193a1b2c3d4e5f60718293a4b5c6d73\"},\"to\":{\"member\":\"0193a1b2c3d4e5f60718293a4b5c6d70\",\"name\":\"limiter-fix\",\"repo\":\"0193a1b2c3d4e5f60718293a4b5c6d74\"},\"kind\":\"message\",\"subject\":\"ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé\",\"body\":\"Run `go test ./limiter` and tell me.\\n\\n- é ok\",\"refs\":[{\"repo\":\"0193a1b2c3d4e5f60718293a4b5c6d73\",\"path\":\"notes/plan.md\",\"version\":3}],\"created\":\"2026-12-01T10:00:00Z\"}\n"
+  },
+  {
+   "why": "an id in capitals",
+   "bytes": "{\"v\":1,\"id\":\"92DE04EC55E4FD17325A86C562906B65\",\"thread\":\"5f1c2a3b4c5d6e7f8091a2b3c4d5e6f7\",\"seq\":1,\"from\":{\"member\":\"0193a1b2c3d4e5f60718293a4b5c6d70\",\"name\":\"orchestrator\",\"agent_id\":\"0193a1b2c3d4e5f60718293a4b5c6d71\",\"sidecar_id\":\"0193a1b2c3d4e5f60718293a4b5c6d72\",\"repo\":\"0193a1b2c3d4e5f60718293a4b5c6d73\"},\"to\":{\"member\":\"0193a1b2c3d4e5f60718293a4b5c6d70\",\"name\":\"limiter-fix\",\"repo\":\"0193a1b2c3d4e5f60718293a4b5c6d74\"},\"kind\":\"message\",\"subject\":\"tests on the limiter\",\"body\":\"Run `go test ./limiter` and tell me.\\n\\n- é ok\",\"refs\":[{\"repo\":\"0193a1b2c3d4e5f60718293a4b5c6d73\",\"path\":\"notes/plan.md\",\"version\":3}],\"created\":\"2026-12-01T10:00:00Z\"}\n"
+  },
+  {
+   "why": "a thread of 15 bytes",
+   "bytes": "{\"v\":1,\"id\":\"92de04ec55e4fd17325a86c562906b65\",\"thread\":\"5f1c2a3b4c5d6e7f8091a2b3c4d5e6\",\"seq\":1,\"from\":{\"member\":\"0193a1b2c3d4e5f60718293a4b5c6d70\",\"name\":\"orchestrator\",\"agent_id\":\"0193a1b2c3d4e5f60718293a4b5c6d71\",\"sidecar_id\":\"0193a1b2c3d4e5f60718293a4b5c6d72\",\"repo\":\"0193a1b2c3d4e5f60718293a4b5c6d73\"},\"to\":{\"member\":\"0193a1b2c3d4e5f60718293a4b5c6d70\",\"name\":\"limiter-fix\",\"repo\":\"0193a1b2c3d4e5f60718293a4b5c6d74\"},\"kind\":\"message\",\"subject\":\"tests on the limiter\",\"body\":\"Run `go test ./limiter` and tell me.\\n\\n- é ok\",\"refs\":[{\"repo\":\"0193a1b2c3d4e5f60718293a4b5c6d73\",\"path\":\"notes/plan.md\",\"version\":3}],\"created\":\"2026-12-01T10:00:00Z\"}\n"
+  },
+  {
+   "why": "a seq of 0",
+   "bytes": "{\"v\":1,\"id\":\"92de04ec55e4fd17325a86c562906b65\",\"thread\":\"5f1c2a3b4c5d6e7f8091a2b3c4d5e6f7\",\"seq\":0,\"from\":{\"member\":\"0193a1b2c3d4e5f60718293a4b5c6d70\",\"name\":\"orchestrator\",\"agent_id\":\"0193a1b2c3d4e5f60718293a4b5c6d71\",\"sidecar_id\":\"0193a1b2c3d4e5f60718293a4b5c6d72\",\"repo\":\"0193a1b2c3d4e5f60718293a4b5c6d73\"},\"to\":{\"member\":\"0193a1b2c3d4e5f60718293a4b5c6d70\",\"name\":\"limiter-fix\",\"repo\":\"0193a1b2c3d4e5f60718293a4b5c6d74\"},\"kind\":\"message\",\"subject\":\"tests on the limiter\",\"body\":\"Run `go test ./limiter` and tell me.\\n\\n- é ok\",\"refs\":[{\"repo\":\"0193a1b2c3d4e5f60718293a4b5c6d73\",\"path\":\"notes/plan.md\",\"version\":3}],\"created\":\"2026-12-01T10:00:00Z\"}\n"
+  },
+  {
+   "why": "a kind of none of the five",
+   "bytes": "{\"v\":1,\"id\":\"92de04ec55e4fd17325a86c562906b65\",\"thread\":\"5f1c2a3b4c5d6e7f8091a2b3c4d5e6f7\",\"seq\":1,\"from\":{\"member\":\"0193a1b2c3d4e5f60718293a4b5c6d70\",\"name\":\"orchestrator\",\"agent_id\":\"0193a1b2c3d4e5f60718293a4b5c6d71\",\"sidecar_id\":\"0193a1b2c3d4e5f60718293a4b5c6d72\",\"repo\":\"0193a1b2c3d4e5f60718293a4b5c6d73\"},\"to\":{\"member\":\"0193a1b2c3d4e5f60718293a4b5c6d70\",\"name\":\"limiter-fix\",\"repo\":\"0193a1b2c3d4e5f60718293a4b5c6d74\"},\"kind\":\"note\",\"subject\":\"tests on the limiter\",\"body\":\"Run `go test ./limiter` and tell me.\\n\\n- é ok\",\"refs\":[{\"repo\":\"0193a1b2c3d4e5f60718293a4b5c6d73\",\"path\":\"notes/plan.md\",\"version\":3}],\"created\":\"2026-12-01T10:00:00Z\"}\n"
+  },
+  {
+   "why": "version 2",
+   "bytes": "{\"v\":2,\"id\":\"92de04ec55e4fd17325a86c562906b65\",\"thread\":\"5f1c2a3b4c5d6e7f8091a2b3c4d5e6f7\",\"seq\":1,\"from\":{\"member\":\"0193a1b2c3d4e5f60718293a4b5c6d70\",\"name\":\"orchestrator\",\"agent_id\":\"0193a1b2c3d4e5f60718293a4b5c6d71\",\"sidecar_id\":\"0193a1b2c3d4e5f60718293a4b5c6d72\",\"repo\":\"0193a1b2c3d4e5f60718293a4b5c6d73\"},\"to\":{\"member\":\"0193a1b2c3d4e5f60718293a4b5c6d70\",\"name\":\"limiter-fix\",\"repo\":\"0193a1b2c3d4e5f60718293a4b5c6d74\"},\"kind\":\"message\",\"subject\":\"tests on the limiter\",\"body\":\"Run `go test ./limiter` and tell me.\\n\\n- é ok\",\"refs\":[{\"repo\":\"0193a1b2c3d4e5f60718293a4b5c6d73\",\"path\":\"notes/plan.md\",\"version\":3}],\"created\":\"2026-12-01T10:00:00Z\"}\n"
+  },
+  {
+   "why": "to all as a word",
+   "bytes": "{\"v\":1,\"id\":\"92de04ec55e4fd17325a86c562906b65\",\"thread\":\"5f1c2a3b4c5d6e7f8091a2b3c4d5e6f7\",\"seq\":1,\"from\":{\"member\":\"0193a1b2c3d4e5f60718293a4b5c6d70\",\"name\":\"orchestrator\",\"agent_id\":\"0193a1b2c3d4e5f60718293a4b5c6d71\",\"sidecar_id\":\"0193a1b2c3d4e5f60718293a4b5c6d72\",\"repo\":\"0193a1b2c3d4e5f60718293a4b5c6d73\"},\"to\":\"all\",\"kind\":\"message\",\"subject\":\"tests on the limiter\",\"body\":\"Run `go test ./limiter` and tell me.\\n\\n- é ok\",\"refs\":[{\"repo\":\"0193a1b2c3d4e5f60718293a4b5c6d73\",\"path\":\"notes/plan.md\",\"version\":3}],\"created\":\"2026-12-01T10:00:00Z\"}\n"
+  },
+  {
+   "why": "a from of the person naming an agent",
+   "bytes": "{\"v\":1,\"id\":\"92de04ec55e4fd17325a86c562906b65\",\"thread\":\"5f1c2a3b4c5d6e7f8091a2b3c4d5e6f7\",\"seq\":1,\"from\":{\"member\":\"0193a1b2c3d4e5f60718293a4b5c6d70\",\"person\":true,\"agent_id\":\"0193a1b2c3d4e5f60718293a4b5c6d71\"},\"to\":{\"member\":\"0193a1b2c3d4e5f60718293a4b5c6d70\",\"name\":\"limiter-fix\",\"repo\":\"0193a1b2c3d4e5f60718293a4b5c6d74\"},\"kind\":\"message\",\"subject\":\"tests on the limiter\",\"body\":\"Run `go test ./limiter` and tell me.\\n\\n- é ok\",\"refs\":[{\"repo\":\"0193a1b2c3d4e5f60718293a4b5c6d73\",\"path\":\"notes/plan.md\",\"version\":3}],\"created\":\"2026-12-01T10:00:00Z\"}\n"
+  },
+  {
+   "why": "an effect of odd hex",
+   "bytes": "{\"v\":1,\"id\":\"92de04ec55e4fd17325a86c562906b65\",\"thread\":\"5f1c2a3b4c5d6e7f8091a2b3c4d5e6f7\",\"seq\":1,\"from\":{\"member\":\"0193a1b2c3d4e5f60718293a4b5c6d70\",\"name\":\"orchestrator\",\"agent_id\":\"0193a1b2c3d4e5f60718293a4b5c6d71\",\"sidecar_id\":\"0193a1b2c3d4e5f60718293a4b5c6d72\",\"repo\":\"0193a1b2c3d4e5f60718293a4b5c6d73\"},\"to\":{\"member\":\"0193a1b2c3d4e5f60718293a4b5c6d70\",\"name\":\"limiter-fix\",\"repo\":\"0193a1b2c3d4e5f60718293a4b5c6d74\"},\"kind\":\"message\",\"subject\":\"tests on the limiter\",\"body\":\"Run `go test ./limiter` and tell me.\\n\\n- é ok\",\"refs\":[{\"repo\":\"0193a1b2c3d4e5f60718293a4b5c6d73\",\"path\":\"notes/plan.md\",\"version\":3}],\"created\":\"2026-12-01T10:00:00Z\",\"effect\":\"abc\"}\n"
+  },
+  {
+   "why": "a subject with a newline",
+   "bytes": "{\"v\":1,\"id\":\"92de04ec55e4fd17325a86c562906b65\",\"thread\":\"5f1c2a3b4c5d6e7f8091a2b3c4d5e6f7\",\"seq\":1,\"from\":{\"member\":\"0193a1b2c3d4e5f60718293a4b5c6d70\",\"name\":\"orchestrator\",\"agent_id\":\"0193a1b2c3d4e5f60718293a4b5c6d71\",\"sidecar_id\":\"0193a1b2c3d4e5f60718293a4b5c6d72\",\"repo\":\"0193a1b2c3d4e5f60718293a4b5c6d73\"},\"to\":{\"member\":\"0193a1b2c3d4e5f60718293a4b5c6d70\",\"name\":\"limiter-fix\",\"repo\":\"0193a1b2c3d4e5f60718293a4b5c6d74\"},\"kind\":\"message\",\"subject\":\"two\\nlines\",\"body\":\"Run `go test ./limiter` and tell me.\\n\\n- é ok\",\"refs\":[{\"repo\":\"0193a1b2c3d4e5f60718293a4b5c6d73\",\"path\":\"notes/plan.md\",\"version\":3}],\"created\":\"2026-12-01T10:00:00Z\"}\n"
+  },
+  {
+   "why": "a support notice with a body",
+   "bytes": "{\"v\":1,\"id\":\"8eac6e9490377487cf7a646e3306ff36\",\"thread\":\"6bfc61671939abc295257a906858c3f4\",\"seq\":3,\"from\":{\"support\":\"urnetwork\"},\"to\":{\"member\":\"0193a1b2c3d4e5f60718293a4b5c6d70\",\"name\":\"limiter-fix\",\"repo\":\"0193a1b2c3d4e5f60718293a4b5c6d74\"},\"kind\":\"support\",\"created\":\"2026-12-01T10:06:00Z\",\"support\":{\"product\":\"urnetwork\",\"entry\":\"100171\",\"seq\":3,\"type\":\"note\",\"status\":\"in_progress\",\"fixed_in\":\"\",\"final\":false},\"body\":\"act on this\"}\n"
+  },
+  {
+   "why": "a support kind from an agent",
+   "bytes": "{\"v\":1,\"id\":\"92de04ec55e4fd17325a86c562906b65\",\"thread\":\"5f1c2a3b4c5d6e7f8091a2b3c4d5e6f7\",\"seq\":1,\"from\":{\"member\":\"0193a1b2c3d4e5f60718293a4b5c6d70\",\"name\":\"orchestrator\",\"agent_id\":\"0193a1b2c3d4e5f60718293a4b5c6d71\",\"sidecar_id\":\"0193a1b2c3d4e5f60718293a4b5c6d72\",\"repo\":\"0193a1b2c3d4e5f60718293a4b5c6d73\"},\"to\":{\"member\":\"0193a1b2c3d4e5f60718293a4b5c6d70\",\"name\":\"limiter-fix\",\"repo\":\"0193a1b2c3d4e5f60718293a4b5c6d74\"},\"kind\":\"support\",\"subject\":\"tests on the limiter\",\"body\":\"Run `go test ./limiter` and tell me.\\n\\n- é ok\",\"refs\":[{\"repo\":\"0193a1b2c3d4e5f60718293a4b5c6d73\",\"path\":\"notes/plan.md\",\"version\":3}],\"created\":\"2026-12-01T10:00:00Z\"}\n"
+  },
+  {
+   "why": "a created time with an offset",
+   "bytes": "{\"v\":1,\"id\":\"92de04ec55e4fd17325a86c562906b65\",\"thread\":\"5f1c2a3b4c5d6e7f8091a2b3c4d5e6f7\",\"seq\":1,\"from\":{\"member\":\"0193a1b2c3d4e5f60718293a4b5c6d70\",\"name\":\"orchestrator\",\"agent_id\":\"0193a1b2c3d4e5f60718293a4b5c6d71\",\"sidecar_id\":\"0193a1b2c3d4e5f60718293a4b5c6d72\",\"repo\":\"0193a1b2c3d4e5f60718293a4b5c6d73\"},\"to\":{\"member\":\"0193a1b2c3d4e5f60718293a4b5c6d70\",\"name\":\"limiter-fix\",\"repo\":\"0193a1b2c3d4e5f60718293a4b5c6d74\"},\"kind\":\"message\",\"subject\":\"tests on the limiter\",\"body\":\"Run `go test ./limiter` and tell me.\\n\\n- é ok\",\"refs\":[{\"repo\":\"0193a1b2c3d4e5f60718293a4b5c6d73\",\"path\":\"notes/plan.md\",\"version\":3}],\"created\":\"2026-12-01T10:00:00+01:00\"}\n"
+  },
+  {
+   "why": "a ref with no path",
+   "bytes": "{\"v\":1,\"id\":\"92de04ec55e4fd17325a86c562906b65\",\"thread\":\"5f1c2a3b4c5d6e7f8091a2b3c4d5e6f7\",\"seq\":1,\"from\":{\"member\":\"0193a1b2c3d4e5f60718293a4b5c6d70\",\"name\":\"orchestrator\",\"agent_id\":\"0193a1b2c3d4e5f60718293a4b5c6d71\",\"sidecar_id\":\"0193a1b2c3d4e5f60718293a4b5c6d72\",\"repo\":\"0193a1b2c3d4e5f60718293a4b5c6d73\"},\"to\":{\"member\":\"0193a1b2c3d4e5f60718293a4b5c6d70\",\"name\":\"limiter-fix\",\"repo\":\"0193a1b2c3d4e5f60718293a4b5c6d74\"},\"kind\":\"message\",\"subject\":\"tests on the limiter\",\"body\":\"Run `go test ./limiter` and tell me.\\n\\n- é ok\",\"refs\":[{\"repo\":\"0193a1b2c3d4e5f60718293a4b5c6d73\",\"path\":\"\",\"version\":1}],\"created\":\"2026-12-01T10:00:00Z\"}\n"
+  }
+ ]
+}
