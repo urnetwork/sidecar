@@ -476,6 +476,10 @@ type TlsFront struct {
 	http      *tlsHttpFront
 	// a visitor's dial failed, so the probe runs early
 	probeWake chan struct{}
+	// closed once runProbe has returned
+	probeDone chan struct{}
+	// closed once runUpdates has returned, at once where the front runs none
+	updatesDone chan struct{}
 
 	stateLock sync.Mutex
 	closed    bool
@@ -556,6 +560,8 @@ func NewTlsFront(ctx context.Context, args *TlsFrontArgs) (*TlsFront, error) {
 		sessions:    sessions,
 		reach:       reach,
 		probeWake:   make(chan struct{}, 1),
+		probeDone:   make(chan struct{}),
+		updatesDone: make(chan struct{}),
 		serving:     true,
 		liveConns:   map[*TlsFrontConn]bool{},
 
@@ -572,6 +578,8 @@ func NewTlsFront(ctx context.Context, args *TlsFrontArgs) (*TlsFront, error) {
 	go self.runProbe()
 	if self.updateTls != nil {
 		go self.runUpdates()
+	} else {
+		close(self.updatesDone)
 	}
 	return self, nil
 }
@@ -647,10 +655,13 @@ func (self *TlsFront) update(now time.Time) (*TlsFrontUpdate, time.Time) {
 
 // Keeps the registration's lists in step until the front closes: sends the update at start and whenever it changes, on
 // the source's change, a challenge's, or the clock reaching a name's margin. A send that fails is tried again at the
-// next change or after TargetProbeMinInterval.
+// next change or after TargetProbeMinInterval. No look starts once the front has ended, a wake or a timer taken as it
+// ended included, so no update goes after the end.
 func (self *TlsFront) runUpdates() {
+	defer close(self.updatesDone)
 	var sent *TlsFrontUpdate
-	for {
+	// select takes any of its ready cases at random: a wake or a timer taken as the front ended reads as the end
+	for self.ctx.Err() == nil {
 		var changed <-chan struct{}
 		if self.custom != nil {
 			changed = self.custom.CustomChanged()
@@ -665,6 +676,10 @@ func (self *TlsFront) runUpdates() {
 				sent = update
 			}
 		}
+		if self.ctx.Err() != nil {
+			// a front that ended as the update went asks the clock for nothing
+			return
+		}
 		var at <-chan time.Time
 		switch {
 		case retry:
@@ -674,7 +689,6 @@ func (self *TlsFront) runUpdates() {
 		}
 		select {
 		case <-self.ctx.Done():
-			return
 		case <-changed:
 		case <-self.updateWake:
 		case <-at:
@@ -896,21 +910,30 @@ func (self *TlsFront) targetRefused() {
 }
 
 // Probes the target until the front closes: serving follows whether it accepts a connection (§9.9's SetServing). A
-// component's handler is in this process and always answers, so it is never probed.
+// component's handler is in this process and always answers, so it is never probed. No probe starts once the front
+// has ended, a timer or a refused dial's wake taken as it ended included, a probe whose dial ended with the front
+// tells the listener nothing, and an ended front asks the clock for nothing.
 func (self *TlsFront) runProbe() {
+	defer close(self.probeDone)
 	if self.settings.TargetProbeInterval <= 0 || self.target.Handler != nil {
 		return
 	}
-	for {
-		self.setServing(self.probeTarget())
+	// select takes any of its ready cases at random: a timer or a wake taken as the front ended reads as the end
+	for self.ctx.Err() == nil {
+		serving := self.probeTarget()
+		if self.ctx.Err() != nil {
+			return
+		}
+		self.setServing(serving)
 		select {
 		case <-self.ctx.Done():
-			return
 		case <-self.clock.After(self.settings.TargetProbeMinInterval):
+		}
+		if self.ctx.Err() != nil {
+			return
 		}
 		select {
 		case <-self.ctx.Done():
-			return
 		case <-self.clock.After(self.settings.TargetProbeInterval - self.settings.TargetProbeMinInterval):
 		case <-self.probeWake:
 		}

@@ -384,8 +384,13 @@ func (self *RestoreStep) Run(ctx context.Context, root string, incidentId sideca
 }
 
 // Waits up to restore.map_wait_s for every interface to report progress's map version or a later one, then
-// answers the hosts those reports added and dropped, each once and sorted.
+// answers the hosts those reports added and dropped, each once and sorted. ctx's end answers its error, a poll or
+// the bound taken as it ended included, so no read or later step follows the end; an ended ctx asks the clock for
+// nothing.
 func (self *RestoreStep) awaitMapReports(ctx context.Context, root string, progress *DnsRestoreProgress) (added []string, dropped []string, err error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
 	waitEnded := self.clock.After(dnsSeconds(self.settings.Restore.MapWaitSeconds))
 	for {
 		reports, err := self.deps.CustomHostMaps.RestoreMapReports(ctx, root, progress.IncidentId)
@@ -412,21 +417,32 @@ func (self *RestoreStep) awaitMapReports(ctx context.Context, root string, progr
 		if len(reports) == reportedCount {
 			return added, dropped, nil
 		}
+		ended := false
 		select {
 		case <-ctx.Done():
-			return nil, nil, ctx.Err()
 		case <-waitEnded:
+			ended = true
+		case <-self.clock.After(dnsSeconds(self.settings.Restore.PollSeconds)):
+		}
+		// select takes any of its ready cases at random: the bound or a poll taken as ctx ended reads as the end
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
+		if ended {
 			self.log.Warningf("[dns]restore: %d of %d interfaces reported the restored map; a rerun lists what comes later", reportedCount, len(reports))
 			return added, dropped, nil
-		case <-self.clock.After(dnsSeconds(self.settings.Restore.PollSeconds)):
 		}
 	}
 }
 
 // Waits until every running NS answers an SOA at or above progress's restore serial, starting a
-// stopped one that does. Returns the running NS.
+// stopped one that does. Returns the running NS. ctx's end answers its error, a poll taken as it ended included, so
+// no SOA read or NS start follows the end.
 func (self *RestoreStep) awaitServed(ctx context.Context, root string, progress *DnsRestoreProgress) ([]string, error) {
 	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		soas := self.readSoas(ctx, root)
 		stoppedNs, err := self.deps.Restore.StoppedNs(ctx, root)
 		if err != nil {
@@ -459,9 +475,13 @@ func (self *RestoreStep) awaitServed(ctx context.Context, root string, progress 
 		if len(progress.WaitingNs) == 0 {
 			return running, nil
 		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		// select takes either of two ready cases at random: a poll taken as ctx ended reads as the end at the loop's
+		// top
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
 		case <-self.clock.After(dnsSeconds(self.settings.Restore.PollSeconds)):
 		}
 	}
@@ -469,8 +489,12 @@ func (self *RestoreStep) awaitServed(ctx context.Context, root string, progress 
 
 // Waits up to restore.diff_wait_s for a diff from each running NS, and returns the diffs posted at or
 // above progress's restore serial: those of this restore's reloads, since an earlier restore's are
-// below it.
+// below it. ctx's end answers its error, a poll or the bound taken as it ended included, so no read or later step
+// follows the end; an ended ctx asks the clock for nothing.
 func (self *RestoreStep) awaitDiffs(ctx context.Context, root string, runningCount int, progress *DnsRestoreProgress) ([]*DnsReloadDiff, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	waitEnded := self.clock.After(dnsSeconds(self.settings.Restore.DiffWaitSeconds))
 	for {
 		diffs, err := self.deps.Store.ReloadDiffs(ctx, root)
@@ -482,13 +506,20 @@ func (self *RestoreStep) awaitDiffs(ctx context.Context, root string, runningCou
 		if runningCount <= len(diffs) {
 			return diffs, nil
 		}
+		ended := false
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
 		case <-waitEnded:
+			ended = true
+		case <-self.clock.After(dnsSeconds(self.settings.Restore.PollSeconds)):
+		}
+		// select takes any of its ready cases at random: the bound or a poll taken as ctx ended reads as the end
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if ended {
 			self.log.Warningf("[dns]restore: %d diffs from %d running NS; a rerun lists any that come later", len(diffs), runningCount)
 			return diffs, nil
-		case <-self.clock.After(dnsSeconds(self.settings.Restore.PollSeconds)):
 		}
 	}
 }

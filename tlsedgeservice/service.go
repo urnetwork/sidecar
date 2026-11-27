@@ -363,13 +363,15 @@ func (self *TlsEdgeService) KillsResync() {
 
 // Reads the kill switch until the engine ends: a reload at start and every KillReloadInterval, and the
 // keys of the networks KillChanged named in between. A key read that fails stays pending and is tried
-// again after KillRetryDelay.
+// again after KillRetryDelay. No reload or key read starts once the engine has ended, a wake or a timer
+// taken as it ended included, so none fails on the dead context to be counted.
 func (self *TlsEdgeService) runKills() {
 	defer self.loopGroup.Done()
 	nextReload := self.clock.Now()
 	// a reload that fails is tried again sooner than the cadence, backing off to it
 	failedReloadCount := 0
-	for {
+	// select takes any of its ready cases at random: a wake or a timer taken as the engine ended reads as the end
+	for self.ctx.Err() == nil {
 		now := self.clock.Now()
 		resync := func() bool {
 			self.stateLock.Lock()
@@ -428,7 +430,6 @@ func (self *TlsEdgeService) runKills() {
 		}
 		select {
 		case <-self.ctx.Done():
-			return
 		case <-self.killWake:
 		case <-next:
 		}
@@ -536,10 +537,17 @@ func (self *TlsEdgeService) Serve(listener net.Listener) error {
 				return err
 			}
 			self.metrics.acceptFailures.Add(1)
+			if self.ctx.Err() != nil {
+				return nil
+			}
 			select {
 			case <-self.ctx.Done():
-				return nil
 			case <-self.clock.After(self.settings.AcceptRetryDelay):
+			}
+			// select takes either of two ready cases at random: a retry's timer taken as the engine ended reads as
+			// the end, so no connection is accepted and served past it
+			if self.ctx.Err() != nil {
+				return nil
 			}
 			continue
 		}

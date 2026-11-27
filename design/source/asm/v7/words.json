@@ -146,20 +146,20 @@
  {
   "num": 17,
   "code": "BRIDGE",
-  "words": 16419,
+  "words": 16505,
   "code_words": 8417,
   "ceiling": 3800,
-  "over": 12619,
-  "over_pct": 332.1
+  "over": 12705,
+  "over_pct": 334.3
  },
  {
   "num": 18,
   "code": "SDK",
-  "words": 11619,
+  "words": 11644,
   "code_words": 12499,
   "ceiling": 3000,
-  "over": 8619,
-  "over_pct": 287.3
+  "over": 8644,
+  "over_pct": 288.1
  },
  {
   "num": 19,

@@ -654,7 +654,8 @@ const (
 	purgeOutcomeLeft
 )
 
-// Waits until the next DELETE may issue: DeleteRate a second.
+// Waits until the next DELETE may issue: DeleteRate a second. The purge's end answers its error, a wait whose timer
+// fired as it ended included, so no DELETE issues on its dead context.
 func (self *Purger) pace() error {
 	interval := time.Second / time.Duration(self.settings.DeleteRate)
 	for {
@@ -677,11 +678,17 @@ func (self *Purger) pace() error {
 			self.deps.wait(nextDelete.Sub(now))
 			continue
 		}
+		if err := self.ctx.Err(); err != nil {
+			return err
+		}
 		// for that time itself (QD-1425)
 		select {
 		case <-self.ctx.Done():
-			return self.ctx.Err()
 		case <-sidecar.ClockAfterAt(self.clock, nextDelete):
+		}
+		// select takes either of two ready cases at random: a timer that fired as the purge ended reads as the end
+		if err := self.ctx.Err(); err != nil {
+			return err
 		}
 	}
 }
