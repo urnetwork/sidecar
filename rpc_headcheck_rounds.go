@@ -136,23 +136,32 @@ func (self *headCheckTransport) requestRound() {
 }
 
 // Rounds at each start, each HeadCheckInterval and at each request, until the transport ends. A
-// request inside HeadCheckTimeout of the last round waits out the rest of it, so the loop never spins.
+// request inside HeadCheckTimeout of the last round waits out the rest of it, so the loop never spins. No round
+// starts once the transport has ended, a timer or a request taken as it ended included, so the stop state takes no
+// round step and no act runs past the end, and an ended transport asks the clock for nothing.
 func (self *headCheckTransport) run() {
 	defer self.workers.Done()
 	lastRound := time.Time{}
-	for {
+	// select takes any of its ready cases at random: a case taken as the transport ended reads as the end
+	for self.ctx.Err() == nil {
 		if !lastRound.IsZero() {
 			// the next round may start HeadCheckTimeout after the last, a wait for that time itself (QD-1425)
 			if roundAt := lastRound.Add(self.settings.HeadCheckTimeout); self.clock.Now().Before(roundAt) {
 				select {
 				case <-ClockAfterAt(self.clock, roundAt):
 				case <-self.ctx.Done():
+				}
+				if self.ctx.Err() != nil {
 					return
 				}
 			}
 		}
 		lastRound = self.clock.Now()
 		self.round(self.ctx)
+		if self.ctx.Err() != nil {
+			// a transport that ended as the round ran asks the clock for nothing
+			return
+		}
 		// armed before the round is counted, so whoever waits on roundCount finds the next round's timer set
 		interval := self.clock.After(self.settings.HeadCheckInterval)
 		self.roundCount.Update(func(count uint64) uint64 {
@@ -162,7 +171,6 @@ func (self *headCheckTransport) run() {
 		case <-interval:
 		case <-self.roundRequests:
 		case <-self.ctx.Done():
-			return
 		}
 	}
 }
