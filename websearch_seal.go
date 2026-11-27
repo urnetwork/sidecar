@@ -19,13 +19,14 @@
 //	           bytes, which a retry under one request id and attempt relies on, and two different authorizations under
 //	           one context never share a nonce. The opener holds the nonce to its plaintext's
 //
-// The answer's key is the "fresh key the device sends in the request" of the recorded answer: the device's
-// encapsulation is drawn fresh for each request, and only the device and the signer hold what it opens. The recorded
-// answer also names the broker's ticket as the AAD, which the device never learns, so it cannot bind the device's
-// seal; and binding the request id and attempt, as the plan wrote, would give the signer the inputs of the broker's
-// durable operation key (D-BAL-14), a second key between the two where D-SRCH-12 allows the ticket alone. The binding
-// above is this file's reading, raised as srch-m13-01-websearch-seal-binding; the bytes are proposed until it is
-// recorded, and no device seals a payee before the signed policy carries a search line (G-SRCH-parallel).
+// The answer's key is the "fresh key the device sends in the request" of compute-plan-websearch-seal-format's answer:
+// the device's encapsulation is drawn fresh for each request, and only the device and the signer hold what it opens.
+// That answer also named the broker's ticket as the AAD, which the device never learns; binding the request id and
+// attempt, as the plan wrote, would give the signer the inputs of the broker's durable operation key (D-BAL-14), a
+// second key between the two where D-SRCH-12 allows the ticket alone. The binding above is
+// srch-m13-01-websearch-seal-binding's answer (QD-1453). The bytes stay proposed until the signed policy carries a
+// search line (G-SRCH-parallel), before which no device seals a payee, and the external review of searchsigner reads
+// them.
 //
 // Package-level functions are safe for concurrent use.
 

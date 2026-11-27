@@ -5,7 +5,8 @@
 # amount in its memory, its issued nonces with their values and windows, each UTC day's totals, all without a network,
 # and the sanctions records); and the catalog's search section, under compute-7. The broker sees the sealed payee and the
 # sealed authorization as ciphertext only; the signer opens SearchPayee and builds ComputeSearchAuthorization, so each is
-# a root of its own. A field compute-10 does not name yet waits, pending, on srch-m13-01-websearch-metadata-words.
+# a root of its own. A field compute-10 does not name yet waits, pending, on srch-m13-01-websearch-metadata-words, whose
+# answer (QD-1452) has design-records add its words to compute-10's sees, which these lines then quote.
 
 ComputeSearchAuthorizeRequest.catalog_version: {number: 1, type: uint64, row: compute-10, pending: "the catalog version a search names, which compute-1 names for a model call and compute-10 does not for a search (srch-m13-01-websearch-metadata-words)", until: M13}
 ComputeSearchAuthorizeRequest.request_id: {number: 2, type: bytes, row: compute-10, sees: "request id and attempt"}

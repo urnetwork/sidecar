@@ -164,9 +164,15 @@ func TestWebSearchDigestRefusesMalformed(t *testing.T) {
 	domain := testWebSearchDomain(t)
 	planted := []func(authorization *protocol.ComputeSearchAuthorization){
 		func(authorization *protocol.ComputeSearchAuthorization) { authorization.From = authorization.From[:19] },
-		func(authorization *protocol.ComputeSearchAuthorization) { authorization.To = append(authorization.To, 0) },
-		func(authorization *protocol.ComputeSearchAuthorization) { authorization.Nonce = authorization.Nonce[:31] },
-		func(authorization *protocol.ComputeSearchAuthorization) { authorization.Nonce = append(authorization.Nonce, 0) },
+		func(authorization *protocol.ComputeSearchAuthorization) {
+			authorization.To = append(authorization.To, 0)
+		},
+		func(authorization *protocol.ComputeSearchAuthorization) {
+			authorization.Nonce = authorization.Nonce[:31]
+		},
+		func(authorization *protocol.ComputeSearchAuthorization) {
+			authorization.Nonce = append(authorization.Nonce, 0)
+		},
 		func(authorization *protocol.ComputeSearchAuthorization) { authorization.ValidAfterS = -1 },
 		func(authorization *protocol.ComputeSearchAuthorization) {
 			authorization.ValidBeforeS = authorization.ValidAfterS
