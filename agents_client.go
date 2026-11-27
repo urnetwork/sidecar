@@ -28,8 +28,11 @@ import (
 	"time"
 )
 
-// The component's name.
-const agentsComponentName = "agents"
+// The component's name, and its directory and seal class in the device's sealed store.
+const (
+	agentsComponentName = "agents"
+	agentsStoreName     = "agents"
+)
 
 var (
 	// The network's agent_repos feature is off: nothing was read or written. Wraps the prompt's
@@ -78,6 +81,11 @@ type AgentsClientArgs struct {
 	Clock Clock
 	// Nil is DefaultSkillSettings.
 	Settings *SkillSettings
+	// The model names' grammar a stub holds a card's model to (§6.3, agents_stub.go). Nil is DefaultInferSettings.
+	InferSettings *InferSettings
+	// The device's sealed store, read at each use, which holds the outbox of messages composed and not yet landed
+	// (agents_outbox.go). Nil, or an error, sends no message.
+	Store func() (SidecarStore, error)
 }
 
 // One network's agents: see the file header.
@@ -164,8 +172,12 @@ func newSidecarAgents(sidecar *Sidecar) (*AgentsClient, error) {
 			logId := alarm.LogId
 			sidecar.emitEvent(SidecarEvent{Kind: SidecarEventRecordAlarm, RepoId: &logId, SidecarId: alarm.SidecarId, RecordAlarm: alarm.Reason})
 		},
-		Clock:    sidecar.settings.Clock,
-		Settings: sidecar.settings.Skill,
+		Clock:         sidecar.settings.Clock,
+		Settings:      sidecar.settings.Skill,
+		InferSettings: sidecar.settings.Infer,
+		Store: func() (SidecarStore, error) {
+			return sidecar.LocalStore().Directory(agentsStoreName, agentsStoreName)
+		},
 	})
 }
 
