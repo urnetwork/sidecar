@@ -17,6 +17,22 @@
 //     policy_testhooks.go, under sidecar_testhooks, gives the verifier that pins the test release key
 //     (sidecar.NewComputePolicyVerifierForTest) and a device's policy store, gate and fetcher over it; the untagged
 //     build's answer ErrFakeComputePolicyUnlinked.
+//   - calendar*.go, FakeCalendarServer: the calendars a calendar link reaches (§23.7), one loopback HTTPS listener
+//     serving CalDAV (go-webdav's server over the fake's store, with discovery, privileges, sharing, expanded
+//     recurrences, ETag preconditions and RFC 6638's scheduling beside it), ICS feeds by secret address, and Google
+//     Calendar's and Microsoft Graph's calendar endpoints; every write logged with its precondition and what the
+//     provider mailed (FakeCalendarWrite), and a stop after a write applied and before its answer leaves
+//     (FakeCalendarStop) for §23.9's recovery.
+//   - parallel.go, FakeParallel: Parallel's keyless gateway (§21.3, §21.5), POST /api/search answering an unpaid
+//     request with an x402 v2 exact offer and a fresh payee, verifying a paid retry's EIP-3009 authorization for real
+//     and settling it through its facilitator onto FakeBase, then answering synthetic results in Parallel's schema;
+//     scriptable rate limits, upstream failures after settlement (CO-30), lost and stalled answers and aged payees.
+//   - base.go and base_evm.go, FakeBase: one Base chain served as two JSON-RPC sources (CDP-like and Alchemy-like),
+//     USDC's transferWithAuthorization with FiatToken's checks, a finalized head the test moves, reorgs of the unsafe
+//     head, disagreements and lags between the sources; and the EVM primitives both fakes share, EIP-712's digest and
+//     secp256k1 signatures made and recovered with decred's library and Keccak-256.
+//   - fake_https.go: the loopback HTTPS server the network fakes share, named .example hosts under a test authority
+//     drawn from the seed, reached through each fake's dialer and trusted by its pool alone.
 //
 // Its rules, as sidecartest's:
 //

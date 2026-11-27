@@ -92,6 +92,10 @@ type RecordStreamBody struct {
 // A body file a read lists, by its path alone: a reader fetches its bytes with ReadBody when it opens the run.
 type RecordStreamBodyFile struct {
 	Path string
+	// The file's padded size, as its push's entry version states it, read with the listing and never by fetching the
+	// file: what the storage view counts of a body not yet fetched (DESIGN-COMPUTE §24.10). 0 from a binding that
+	// states none.
+	PaddedByteCount uint64
 }
 
 // One push to a sidecar's own stream in a record-class repo, which §11.8's refs table lets only that sidecar write,

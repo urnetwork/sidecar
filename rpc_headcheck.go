@@ -460,11 +460,15 @@ func (self *headCheckTransport) runActs(ctx context.Context, acts []headCheckAct
 
 // A fetch api did not serve at once: the second try halfway to its deadline, when halfwayFire fires,
 // then at the deadline the fetch rows judge it, which asks its claimant for a proof (§6.4's auth row).
-// Ends early once api has served it, or with the transport.
+// Ends early once api has served it, or with the transport: a halfway or a deadline whose timer fired as the
+// transport ended tries, judges and asks nothing, and an ended transport asks the clock for nothing.
 func (self *headCheckTransport) followFetch(act headCheckAct, halfwayFire <-chan time.Time) {
 	select {
 	case <-halfwayFire:
 	case <-self.ctx.Done():
+	}
+	// select takes either of two ready cases at random: a halfway taken as the transport ended reads as the end
+	if self.ctx.Err() != nil {
 		return
 	}
 	fetchCtx, cancel := self.clockContext(self.ctx, self.settings.HeadCheckTimeout)
@@ -475,10 +479,16 @@ func (self *headCheckTransport) followFetch(act headCheckAct, halfwayFire <-chan
 	if headCheckRelate(self.sources.Auth, self.sources.Auth.Pin(), act.pin) != headCheckRelationAhead {
 		return
 	}
+	if self.ctx.Err() != nil {
+		return
+	}
 	if self.clock.Now().Before(act.deadline) {
 		select {
 		case <-ClockAfterAt(self.clock, act.deadline):
 		case <-self.ctx.Done():
+		}
+		// a deadline taken as the transport ended reads as the end
+		if self.ctx.Err() != nil {
 			return
 		}
 	}

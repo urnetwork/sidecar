@@ -169,6 +169,9 @@ type HarnessContinuation struct {
 	Nodes        []*HarnessPiEntry
 	TaintReasons []RunTaintReason
 	Marks        HarnessMark
+	// The continued run's model where the new run takes another: its first model_change names it as the one it
+	// replaced (§24.7, CTXH-M11-05). Empty where the model is the same.
+	PreviousModel string
 }
 
 // Starts an agent's run on a context the journal rebuilt (CTXH's continue and fork): its first node hangs from the
@@ -354,8 +357,12 @@ func (self *harnessAgent) journalStart(ctx context.Context, skillText string, re
 		return err
 	}
 	self.systemNodeId = systemEntry.Id()
-	change := NewHarnessPiModelChangeEntry(NewHarnessPiEntryId(), self.leafNodeId, now, &HarnessPiModelChange{
-		Provider: resolution.Entry.Provider, ModelId: resolution.Name, ChangedBy: HarnessModelChangedByPerson})
+	modelChange := &HarnessPiModelChange{Provider: resolution.Entry.Provider, ModelId: resolution.Name, ChangedBy: HarnessModelChangedByPerson}
+	if continuation != nil && continuation.PreviousModel != resolution.Name {
+		// a continuation on another model than the continued run's: the change names the old one (§24.7)
+		modelChange.PreviousModelId = continuation.PreviousModel
+	}
+	change := NewHarnessPiModelChangeEntry(NewHarnessPiEntryId(), self.leafNodeId, now, modelChange)
 	return self.journalWith(ctx, change, nil, false, "")
 }
 

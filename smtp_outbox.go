@@ -440,11 +440,18 @@ func smtpDomainCount(recipients []string) int {
 }
 
 // Runs passes until ctx ends: one at once, then each OutboxPollInterval, at a hold's end, and at each wake (a push
-// hint on topic mail, a new o/ entry). Called once, by the daemon's composition.
+// hint on topic mail, a new o/ entry). Called once, by the daemon's composition. No pass starts once ctx has ended, a
+// wake or a timer taken as it ended included, so nothing due is sent or left on the dead context, and an ended ctx
+// asks the clock for nothing.
 func (self *SmtpOutboxRunner) Run(ctx context.Context, wake <-chan struct{}) {
-	for {
+	// select takes any of its ready cases at random: a wake or a timer taken as ctx ended reads as the end
+	for ctx.Err() == nil {
 		if _, err := self.RunOnce(ctx); err != nil && ctx.Err() == nil {
 			self.log.Warningf("[smtp]outbox pass: %v\n", err)
+		}
+		if ctx.Err() != nil {
+			// an outbox that ended as the pass ran asks the clock for nothing
+			return
 		}
 		// the next pass at OutboxPollInterval from now, or at a hold's end where that is sooner: a wait for the earlier
 		// time itself (QD-1425)
@@ -456,7 +463,6 @@ func (self *SmtpOutboxRunner) Run(ctx context.Context, wake <-chan struct{}) {
 		}
 		select {
 		case <-ctx.Done():
-			return
 		case <-wake:
 		case <-ClockAfterAt(self.clock, passAt):
 		}
