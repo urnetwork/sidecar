@@ -183,6 +183,8 @@ type EvsClient struct {
 	repoIdReservedRefs map[Id]*evsReservedRefIds
 	// where M10's index writer joins each write's plan (evs_plan.go), nil until then
 	writeHook EvsWritePlanHook
+	// a guard every plan passes after the inbox refusal (evs_plan.go's SetWriteGuard), nil for none
+	writeGuard EvsWriteGuard
 	// whether the network is in §19.11's format2 gate, from the composition's core state (evs_format_client.go); nil
 	// answers false
 	format2Source func() (admitted bool, known bool)

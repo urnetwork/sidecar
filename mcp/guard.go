@@ -19,6 +19,9 @@
 //	                EvsShare of the mailbox, whose keys open the entries, reaches them by no path (QD-673; §15.7,
 //	                §15.8): only the owner's consented devices read them, through MailVault
 //	recipients      the rcpt/ family on a mailbox or group inbox, including a general repo mailcfg cannot classify
+//	agents' inbox   evs_write and evs_delete of inbox or anything under it in an agent or agents repo or the Team
+//	                inbox (DESIGN-COMPUTE §20.4, D-SKILL-7): only agent_send, agent_broadcast and agent_close write a
+//	                message there, and the write planner refuses every other writer too (sidecar.AgentsInboxGuard)
 //	statements      every authority statement, admissions, KeyRegister and IndexerSet included; approval statements
 //	                but the daemon's own harness decisions; acl and bridge statements but the own-resource filings
 //	                16.5's tools make about this sidecar's own resources, which the tool has checked are its own:
@@ -121,6 +124,9 @@ type McpTarget struct {
 	Path      string
 	// A complete, verified view of mailcfg ruled out a group inbox for this general repo.
 	OrdinaryFileRepo bool
+	// This general repo is the network's Team inbox, or the network could not say it is not (mcpTeamInbox): its
+	// inbox/ takes messages only (DESIGN-COMPUTE §20.4).
+	TeamInbox bool
 
 	// McpTargetStatement's: its type, and for an acl or bridge statement, whether the tool checked it is one of this
 	// sidecar's own-resource filings, or for an ApprovalDecision, whether it is the daemon's own harness decision.
@@ -144,6 +150,8 @@ const (
 	mcpVaultHarnessPrefix = "harness/"
 	// a mailbox's vault entries' family, vault/<h>/<entry_id> (§15.7; QD-673)
 	mcpMailboxVaultFamily = "vault"
+	// an agents' inbox (DESIGN-COMPUTE §20.4)
+	mcpAgentsInboxDirectory = "inbox"
 )
 
 // The own-resource filings a tool may make from MCP, under its tier (§16.6).
@@ -188,6 +196,25 @@ func (self *McpTarget) onMailboxVault() bool {
 // The approved recipients' directory, shards and records.
 func mcpRecipientPath(path string) bool {
 	return path == "rcpt" || strings.HasPrefix(path, "rcpt/")
+}
+
+// An agents' inbox: the directory and everything under it (DESIGN-COMPUTE §20.4).
+func mcpAgentsInboxPath(path string) bool {
+	return path == mcpAgentsInboxDirectory || strings.HasPrefix(path, mcpAgentsInboxDirectory+"/")
+}
+
+// A network that knows which repos' inbox/ takes messages only: *sidecar.Sidecar is one, and each tool view over one.
+type mcpAgentsInboxNetwork interface {
+	AgentsInboxRepo(repoId sidecar.Id) bool
+}
+
+// Whether a general repo may be the Team inbox: true where the network says so, or cannot say, the closed direction.
+func mcpTeamInbox(call *McpCall, repoId sidecar.Id) bool {
+	if call == nil {
+		return true
+	}
+	network, ok := call.Network.(mcpAgentsInboxNetwork)
+	return !ok || network.AgentsInboxRepo(repoId)
 }
 
 // Read mailcfg at most once, on the first protected general-repo path in this call or subscription.
@@ -266,6 +293,21 @@ var mcpGuardRows = []mcpGuardRow{
 			return target.Kind == McpTargetRepo && mcpRecipientPath(target.Path) &&
 				(target.RepoKind == protocol.RepoKind_REPO_KIND_MAILBOX ||
 					target.RepoKind == protocol.RepoKind_REPO_KIND_GENERAL && !target.OrdinaryFileRepo)
+		},
+	},
+	{
+		refusal: NewMcpError(McpCodeRefused, "an agents' inbox takes messages only: use agent_send, agent_broadcast and agent_close", false),
+		refuses: func(target *McpTarget) bool {
+			if target.Kind != McpTargetRepo || !target.repoWrite() || !mcpAgentsInboxPath(target.Path) {
+				return false
+			}
+			switch target.RepoKind {
+			case protocol.RepoKind_REPO_KIND_AGENTS, protocol.RepoKind_REPO_KIND_AGENT:
+				return true
+			case protocol.RepoKind_REPO_KIND_GENERAL:
+				return target.TeamInbox
+			}
+			return false
 		},
 	},
 	{

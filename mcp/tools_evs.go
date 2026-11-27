@@ -237,6 +237,9 @@ func mcpEvsTarget(call *McpCall, repoId sidecar.Id, operation McpRepoOperation, 
 	if kind == protocol.RepoKind_REPO_KIND_GENERAL && mcpRecipientPath(path) && call.ordinaryFileRepo != nil {
 		target.OrdinaryFileRepo = call.ordinaryFileRepo(repoId)
 	}
+	if kind == protocol.RepoKind_REPO_KIND_GENERAL && mcpAgentsInboxPath(path) {
+		target.TeamInbox = mcpTeamInbox(call, repoId)
+	}
 	return target
 }
 

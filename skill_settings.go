@@ -107,6 +107,8 @@ type SkillSettings struct {
 	MessageRefPathByteCount int
 	// The largest message file a reader opens: 40 KiB, a body and subject at their bounds and its refs. Positive.
 	MessageMaxByteCount int
+	// The longest effect key a message carries (§16.3's, a SHA-256): 32 bytes. Positive.
+	MessageEffectByteCount int
 	// How many versions of a message path a reader walks to find its first: 64, past which the message is withheld.
 	// Positive.
 	MessageHistoryMaxCount int
@@ -176,6 +178,7 @@ func DefaultSkillSettings() *SkillSettings {
 		MessageRefMaxCount:       16,
 		MessageRefPathByteCount:  1024,
 		MessageMaxByteCount:      40 * 1024,
+		MessageEffectByteCount:   32,
 		MessageHistoryMaxCount:   64,
 		MessageWriteAttemptCount: 3,
 		OutboxMaxCount:           256,

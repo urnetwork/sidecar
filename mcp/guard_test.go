@@ -426,3 +426,58 @@ func TestToolsOnMailboxVaultRefusedBeforeTheirHandlers(t *testing.T) {
 	unknown := env.callTool(conn, "2025-06-18", "test_repo_read", map[string]any{"repo": sidecar.NewId().String(), "path": otherPaths[0]})
 	wantMcpError(t, unknown, McpCodeRefused, "does not hold")
 }
+
+// An agents' inbox takes messages only (DESIGN-COMPUTE §20.4, D-SKILL-7): evs_write and evs_delete of inbox and of
+// anything under it in an agent and an agents repo, and in a general repo the network calls the Team inbox or cannot
+// say is not, refused with the row's text; reads pass, and so do writes outside inbox/ and in an ordinary general
+// repo; the target of a call through a network that knows its repos carries what it says.
+func TestGuardRefusesWritesUnderAnAgentsInbox(t *testing.T) {
+	message := "inbox/5f1c2a3b4c5d6e7f8091a2b3c4d5e6f7/92de04ec55e4fd17325a86c562906b65.json"
+	refused := []McpTarget{}
+	for _, kind := range []protocol.RepoKind{protocol.RepoKind_REPO_KIND_AGENT, protocol.RepoKind_REPO_KIND_AGENTS} {
+		for _, operation := range []McpRepoOperation{McpRepoWrite, McpRepoDelete} {
+			for _, path := range []string{"inbox", "inbox/5f1c2a3b4c5d6e7f8091a2b3c4d5e6f7", message} {
+				refused = append(refused, McpTarget{Kind: McpTargetRepo, RepoKind: kind, Operation: operation, Path: path})
+			}
+		}
+	}
+	refused = append(refused, McpTarget{Kind: McpTargetRepo, RepoKind: protocol.RepoKind_REPO_KIND_GENERAL, Operation: McpRepoWrite,
+		Path: message, TeamInbox: true})
+	for _, target := range refused {
+		refusal := McpGuard([]McpTarget{target})
+		if refusal == nil || !strings.Contains(refusal.Message, "agents' inbox takes messages only") {
+			t.Errorf("%+v: %v", target, refusal)
+		}
+	}
+	passed := []McpTarget{
+		{Kind: McpTargetRepo, RepoKind: protocol.RepoKind_REPO_KIND_AGENT, Operation: McpRepoRead, Path: message},
+		{Kind: McpTargetRepo, RepoKind: protocol.RepoKind_REPO_KIND_AGENT, Operation: McpRepoList, Path: "inbox"},
+		{Kind: McpTargetRepo, RepoKind: protocol.RepoKind_REPO_KIND_AGENT, Operation: McpRepoWrite, Path: "notes/plan.md"},
+		{Kind: McpTargetRepo, RepoKind: protocol.RepoKind_REPO_KIND_AGENTS, Operation: McpRepoWrite, Path: "inboxes/x"},
+		{Kind: McpTargetRepo, RepoKind: protocol.RepoKind_REPO_KIND_GENERAL, Operation: McpRepoWrite, Path: message},
+	}
+	for _, target := range passed {
+		if refusal := McpGuard([]McpTarget{target}); refusal != nil {
+			t.Errorf("%+v: %v", target, refusal)
+		}
+	}
+	// a network that knows its repos says which general repo is the Team inbox; one that cannot say is taken as one
+	teamInbox, other := sidecar.NewId(), sidecar.NewId()
+	known := &guardTestInboxNetwork{inboxRepoIds: map[sidecar.Id]bool{teamInbox: true}}
+	if !mcpTeamInbox(&McpCall{Network: known}, teamInbox) || mcpTeamInbox(&McpCall{Network: known}, other) {
+		t.Error("a network that knows its repos was not taken at its word")
+	}
+	if !mcpTeamInbox(&McpCall{}, other) {
+		t.Error("a network that cannot say read as no Team inbox")
+	}
+}
+
+// A network that knows which repos' inbox/ takes messages only.
+type guardTestInboxNetwork struct {
+	McpNetwork
+	inboxRepoIds map[sidecar.Id]bool
+}
+
+func (self *guardTestInboxNetwork) AgentsInboxRepo(repoId sidecar.Id) bool {
+	return self.inboxRepoIds[repoId]
+}
