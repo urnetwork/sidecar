@@ -12,7 +12,8 @@ package main
 // `ur search` (compute-plan-ur-search-collision, QD-1382); `ur connect`'s service forms share the command with
 // enrollment, told apart by their arguments (compute-plan-ur-connect-collision, QD-1381); bare `ur agents` lists,
 // `ur agents <task>` still searching (compute-plan-ur-agents-ls, QD-1380). §28's support commands, which §15.1 lists
-// beside compute's, are held too.
+// beside compute's, are held too. And `ur native-host`, the extension's relay to ur daemon, relays no compute method
+// (compute-plan-native-host-compute, QD-1253).
 
 import (
 	"regexp"
@@ -378,6 +379,30 @@ func TestComputeCommandsFailAPlantedGap(t *testing.T) {
 	}
 	if !urComputeFormRegistered(commands, "models set --default --allow --harness --tier") {
 		t.Error("a form whose options sit on two lines of its words is not registered")
+	}
+}
+
+// The families of the daemon's compute methods, by the prefix each area's methods take.
+var testComputeDaemonMethodPrefixes = []string{
+	"harness.", "compute.", "models.", "infer.", "gateway.", "enclave.", "enclaves.", "ssh.", "git.", "agents.",
+	"websearch.", "web_search.", "fetch.", "listeners.", "calendar.", "connections.", "connect.", "safety.", "support.",
+}
+
+// ur native-host relays no compute method to the extension (compute-plan-native-host-compute, QD-1253): its allow-list
+// names none, so each is refused as any unlisted method is, until the extension's Worker returns from Later.
+func TestNativeHostRelaysNoCompute(t *testing.T) {
+	for _, method := range nativeHostRelayedMethods {
+		if slices.ContainsFunc(testComputeDaemonMethodPrefixes, func(prefix string) bool { return strings.HasPrefix(method, prefix) }) {
+			t.Errorf("ur native-host relays %s, a compute method", method)
+		}
+	}
+	for _, method := range []string{"harness.prompt", "compute.balance", "models.list", "infer.run", "agents.send", "support.send"} {
+		if slices.Contains(nativeHostRelayedMethods, method) {
+			t.Errorf("ur native-host relays %s", method)
+		}
+		if !slices.ContainsFunc(testComputeDaemonMethodPrefixes, func(prefix string) bool { return strings.HasPrefix(method, prefix) }) {
+			t.Errorf("%s is in no compute family", method)
+		}
 	}
 }
 
