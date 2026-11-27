@@ -28,6 +28,9 @@
 // A result past SidecarMcpSettings.ResultByteCount keeps its tags and drops its data for the ur:// resource that holds
 // it: a resource_link from 2025-06-18 on, else a text naming the resource, by the session's negotiated version, since
 // go-sdk rewrites nothing for an older session (D-MCP-13). The declared outputSchema allows both forms.
+//
+// A result whose data the record must not keep, a web search's (DESIGN-COMPUTE §24.9), carries its stub
+// (RecordStub), which the call sink records in place of the result (C-31).
 
 package mcp
 
@@ -83,6 +86,9 @@ type McpResult struct {
 	fenced       bool
 	markerBroken bool
 	tainted      bool
+	// what the record keeps in place of the result, set by RecordStub
+	recordStub []byte
+	stubbed    bool
 }
 
 // A fresh result of call, its trust own.
@@ -95,6 +101,23 @@ func (self *McpResult) SetSource(source string) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	self.source = source
+}
+
+// Sets what the record keeps of the call in place of its result (DESIGN-COMPUTE §24.9, CONTRACTS C-31): a web search's
+// stub, §21.6's, which the call sink records instead of the result, so the result's text is nowhere in the record. A
+// call whose result sets one is recorded whatever its tier.
+func (self *McpResult) RecordStub(stub []byte) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.recordStub = append([]byte{}, stub...)
+	self.stubbed = true
+}
+
+// The stub RecordStub set, and whether one was.
+func (self *McpResult) recordStubBytes() ([]byte, bool) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.recordStub, self.stubbed
 }
 
 // Names the ur:// resource that holds the whole result, which an over-limit result links to instead.

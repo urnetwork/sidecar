@@ -357,7 +357,7 @@ func aclDestinationRepoKindName(kind protocol.RepoKind) string {
 // a bare * for all of a kind. Comparable, so a list of them can be searched.
 type AclResource struct {
 	Kind AclResourceKind
-	// AclResourceSubject's.
+	// AclResourceSubject's, and AclResourceListener's selector.
 	Subject AclSelector
 	// The socket name, repo label, dns host, alias or hosts entry, canonical and without its prefix.
 	// Empty for a repo named by id and an ip named by cidr.
@@ -366,6 +366,9 @@ type AclResource struct {
 	RepoId Id
 	// AclResourceRepoKind's: the one kind it names.
 	RepoKind protocol.RepoKind
+	// AclResourceCompute's: compute:enclave, compute:buy or compute:search (DESIGN-COMPUTE §16.2). AclResourceListener's
+	// selector, the subjects whose listed entries listener:<selector> names (§26.7), is Subject.
+	ComputeResource protocol.AclComputeResource
 	// AclResourceIp's, with its host bits clear. ParseAclPolicy fills it in from hosts for an ip named
 	// by a hosts entry; parseAclResource alone leaves that one invalid.
 	Cidr netip.Prefix
@@ -397,7 +400,7 @@ func (self AclResource) String() string {
 	case AclResourceRepoKind:
 		return "evs:kind:" + aclDestinationRepoKindName(self.RepoKind)
 	}
-	return ""
+	return aclComputeResourceText(self)
 }
 
 // One dst's text. A subject here takes a dst's position, and ports are never part of it: §8.5 writes
@@ -496,6 +499,9 @@ func parseAclResource(text string) (AclResource, error) {
 			}
 		}
 		return AclResource{Kind: AclResourceDns, Name: value}, nil
+	case "model", "compute", "listener":
+		// DESIGN-COMPUTE §16.2's resources (acl_compute_resources.go)
+		return parseAclComputeResource(scheme, value)
 	case "mail":
 		// §15.8's local part, [a-z0-9][a-z0-9._-]{0,63}, which may hold *
 		if value == "" || aclAliasMaxByteCount < len(value) || value[0] == '.' || value[0] == '-' || value[0] == '_' ||

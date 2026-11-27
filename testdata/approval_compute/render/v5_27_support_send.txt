@@ -1,0 +1,23 @@
+request 22222222-2222-2222-2222-222222222222: support_send. Send this message to URnetwork's support: URnetwork's support, and the subprocessors its disclosure names, will read it, continuing item 100042. The action, as this daemon built it:
+  body_sha256: 34eb282af18ff44c6bdd4ae0a5cd4b152cc932355964a27193977441fa925ad1
+  taint_reasons: web_fetch
+  auto.basis: 1 (taint)
+  support.product: urnetwork
+  support.entry: 100042
+  support.kind: 1 (bug)
+  support.bundle.events: 40
+  support.bundle.first: 1764201600 (2025-11-27T00:00:00Z)
+  support.bundle.last: 1764205200 (2025-11-27T01:00:00Z)
+  support.bundle.bytes: 2048
+  support.bundle.sha256: 6767676767676767676767676767676767676767676767676767676767676767
+  support.bundle.codes[0].component: daemon
+  support.bundle.codes[0].code: started
+  support.bundle.codes[0].count: 2
+  support.client_ref: 68686868686868686868686868686868
+  support.text, the whole message, untrusted text, each line after a bar:
+    | The build hangs at step 3.
+    | Logs attached.
+asked by sidecar 55555555-5555-5555-5555-555555555555, run 77777777-7777-7777-7777-777777777777, agent 88888888-8888-8888-8888-888888888888
+expires 2025-11-06T00:00:00Z
+untrusted text the agent wrote, which is not the action:
+  summary: point www at the new host

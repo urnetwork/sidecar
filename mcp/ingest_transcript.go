@@ -6,7 +6,9 @@
 // each line whole. A line over PayloadByteCount is cut there, truncated, and the rest of it skipped, a truncation
 // gap. A file shorter than the offset was rewritten: the tail starts over and counts a missed_event, since what
 // stood before is unknown. Cursor's null path, or a path that cannot be opened, is a gap once per run. The offset
-// and next line number persist in the run's ingest state, so a restart resumes where it left.
+// and next line number persist in the run's ingest state, so a restart resumes where it left. A line holding a
+// web_search result is replaced whole by its stub line before it is redacted (DESIGN-COMPUTE §24.9), keeping the
+// framing.
 
 package mcp
 
@@ -79,7 +81,19 @@ func (self *Ingest) tailTranscriptWithLock(ctx context.Context, run *ingestRun, 
 			consumed += skipped
 			self.gap(ctx, run.network, run.networkId, run.runId, sidecar.RecordCoverageGapTruncation)
 		}
-		redacted := self.redact(ctx, run, redactor, lines)
+		stubbed, ok := self.stubLinesWithLock(run, lines)
+		if !ok {
+			// the matcher could not read: nothing of a chunk that may hold a result is kept (§24.9), and the tail moves on
+			self.gap(ctx, run.network, run.networkId, run.runId, sidecar.RecordCoverageGapMissedEvent)
+			state.TranscriptAt += consumed
+			state.TranscriptLine += uint64(lineCount)
+			run.dirty = true
+			if int64(len(chunk)) <= cap {
+				return
+			}
+			continue
+		}
+		redacted := self.redact(ctx, run, redactor, stubbed)
 		redacted, cut := ingestCut(redacted, cap)
 		if cut && !truncated {
 			truncated = true
@@ -107,6 +121,24 @@ func (self *Ingest) tailTranscriptWithLock(ctx context.Context, run *ingestRun, 
 			return
 		}
 	}
+}
+
+// lines with each line holding a web_search result replaced whole by its stub line (DESIGN-COMPUTE §24.9), so the
+// line count stays the tail's; false where the matcher could not read. The run's lock is held.
+func (self *Ingest) stubLinesWithLock(run *ingestRun, lines []byte) ([]byte, bool) {
+	stubber := self.stubberWithLock(run)
+	stubbed := make([]byte, 0, len(lines))
+	for _, line := range bytes.SplitAfter(lines, []byte{'\n'}) {
+		if len(line) == 0 {
+			continue
+		}
+		replaced, _, err := stubber.StubLine(line)
+		if err != nil {
+			return nil, false
+		}
+		stubbed = append(stubbed, replaced...)
+	}
+	return stubbed, true
 }
 
 // Up to byteCount bytes of file from offset.

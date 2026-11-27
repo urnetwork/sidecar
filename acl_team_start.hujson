@@ -17,6 +17,12 @@
     // its members deposit into, and another tagged subject deposits only where a rule names it (Q-HARN-9)
     { "src": ["autogroup:member"], "dst": ["evs:kind:agent"], "allow": ["deposit"] },
     // -agent_repos
+    // +compute_policy
+    // DESIGN-COMPUTE §16.5's defaults: every member device and its agents run any remote model and search the web,
+    // under the Team's budgets and floor; a Team narrows the models or turns search off with its own rules
+    { "src": ["autogroup:member"], "dst": ["model:*"], "allow": ["infer"] },
+    { "src": ["autogroup:member"], "dst": ["compute:search"], "allow": ["query"] },
+    // -compute_policy
   ],
   "requests": [
     // the team directory's reach requests (§16.11), the implicit document's last rule

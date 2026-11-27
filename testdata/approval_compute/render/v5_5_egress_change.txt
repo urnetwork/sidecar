@@ -1,0 +1,8 @@
+request 22222222-2222-2222-2222-222222222222: egress_change. Let sidecar 50505050505050505050505050505050 reach the internet through public egress again, after it took tainted input there. The action, as this daemon built it:
+  subject: 50505050505050505050505050505050
+  egress_mode: 1 (auto)
+  took_tainted: true
+asked by sidecar 55555555-5555-5555-5555-555555555555, run 77777777-7777-7777-7777-777777777777, agent 88888888-8888-8888-8888-888888888888
+expires 2025-11-06T00:00:00Z
+untrusted text the agent wrote, which is not the action:
+  summary: point www at the new host

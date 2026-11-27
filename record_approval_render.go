@@ -29,6 +29,11 @@
 // move the terminal's cursor, end a line early or reorder what follows it (§16.6's ur approve row). Bytes show as
 // lowercase hex, numbers in decimal, and an audience, app mode or egress mode by its proto name beside its number.
 //
+// A version-5 action (DESIGN-COMPUTE §16.3) renders through RenderApprovalRequestCompute (approval_compute_render.go):
+// its nested messages field by field, every string escaped visibly rather than dropped (ApprovalUntrustedText), a
+// send's or a body's whole text in a section of its own, and what the device could not show whole or check named as a
+// reason it takes no approval. Versions 1 to 4 render here as before, byte for byte.
+//
 // Package-level functions are safe for concurrent use; a render is a value nothing changes. On every leg but the
 // ios_extension legs.
 
@@ -60,8 +65,8 @@ const (
 // What names a field an opened sealed_detail holds, ahead of its record.proto name.
 const approvalRenderSealedPrefix = "sealed_detail."
 
-// What a render shows for a field it cannot show as one value: a version-5 action's nested message (DESIGN-COMPUTE
-// §16.3), until version 5's render shows it field by field (CACL-M12-02).
+// What a render of versions 1 to 4 shows for a field it cannot show as one value: a nested message, which only version
+// 5 holds and RenderApprovalRequestCompute shows field by field.
 const approvalRenderUnshownValue = "(not shown by this build)"
 
 // The action holds a field this device's render cannot show whole, so it approves nothing it did not show (D-MCP-17).
@@ -105,10 +110,13 @@ type ApprovalRender struct {
 	// holds no K_sock to derive the token path of, or a name naming another socket than grant_dst does. The device
 	// shows the rest and takes no approval. Set by the approver's device, which reads the name.
 	NameUnread bool
-	// The action holds a field this render cannot show as one value, a version-5 action's nested message (DESIGN-COMPUTE
-	// §16.3), which shows as approvalRenderUnshownValue: the device shows the rest and takes no approval
-	// (approvalRenderShowsWhole).
+	// The action holds a field this render cannot show whole: for versions 1 to 4 a nested message, which shows as
+	// approvalRenderUnshownValue (approvalRenderShowsWhole); for version 5 whatever Compute.Withheld names. The device
+	// shows the rest and takes no approval.
 	Unshown bool
+	// What a version-5 render adds (RenderApprovalRequestCompute): kind 19's disclosure line, the sections holding a
+	// send's, a body's or a message's whole text, flags, and why the device takes no approval. Nil for versions 1 to 4.
+	Compute *ApprovalComputeRender
 	// The agent's own words and the daemon's preview, untrusted, printable.
 	Summary string
 	Preview string
@@ -203,8 +211,9 @@ func approvalRenderMeaning(action *protocol.CanonicalAction) string {
 	return ""
 }
 
-// Whether every field action sets shows as one value: none of version 5's nested messages, which this render does
-// not show until version 5's render lands (CACL-M12-02), so an approver takes no approval of an action that holds one.
+// Whether every field an action of versions 1 to 4 sets shows as one value: none holds a nested message, which only
+// version 5 declares, so an approver takes no approval of an action that holds one. A version-5 action's render says
+// itself whether it showed the action whole (ApprovalRender.Whole).
 func approvalRenderShowsWhole(action *protocol.CanonicalAction) bool {
 	whole := true
 	action.ProtoReflect().Range(func(field protoreflect.FieldDescriptor, value protoreflect.Value) bool {
@@ -272,10 +281,9 @@ func RenderApprovalRequest(request *StoredApprovalRequest) *ApprovalRender {
 	return RenderApprovalRequestDetail(request, nil)
 }
 
-// The render of a request as Pending parsed it, with what its action's sealed_detail opened to on this device
-// (OpenCanonicalActionDetail, which held it to the action); nil for an action that carries none, or one this device
-// could not open.
-func RenderApprovalRequestDetail(request *StoredApprovalRequest, detail *protocol.CanonicalActionDetail) *ApprovalRender {
+// What every render of request shows whatever its version: who asks, the kind, the agent's words and the preview,
+// untrusted and printable, its expiry and approvers, and the uses it names. Neither the meaning nor the fields.
+func approvalRenderHead(request *StoredApprovalRequest) *ApprovalRender {
 	action := request.Action.Action
 	render := &ApprovalRender{
 		ApprovalId:         request.ApprovalId(),
@@ -283,7 +291,6 @@ func RenderApprovalRequestDetail(request *StoredApprovalRequest, detail *protoco
 		KindName:           approvalKindName(SidecarActionKind(action.GetKind())),
 		Version:            action.GetVersion(),
 		Template:           action.GetScope(),
-		Meaning:            approvalRenderMeaning(action),
 		Summary:            ApprovalPrintable(request.Request.GetSummary()),
 		Preview:            ApprovalPrintable(action.GetPreview()),
 		RequesterSidecarId: recordIdOf(request.Request.GetRequesterSidecarId()),
@@ -297,6 +304,20 @@ func RenderApprovalRequestDetail(request *StoredApprovalRequest, detail *protoco
 	for _, approver := range request.Request.GetApprovers() {
 		render.Approvers = append(render.Approvers, recordIdOf(approver))
 	}
+	return render
+}
+
+// The render of a request as Pending parsed it, with what its action's sealed_detail opened to on this device
+// (OpenCanonicalActionDetail, which held it to the action); nil for an action that carries none, or one this device
+// could not open. A version-5 action renders through RenderApprovalRequestCompute with no detail opened and no
+// disclosure line, so it takes no approval where it needs either; ApprovalApprover passes both.
+func RenderApprovalRequestDetail(request *StoredApprovalRequest, detail *protocol.CanonicalActionDetail) *ApprovalRender {
+	action := request.Action.Action
+	if action.GetVersion() == canonicalActionVersionCompute {
+		return RenderApprovalRequestCompute(&ApprovalComputeRenderArgs{Request: request})
+	}
+	render := approvalRenderHead(request)
+	render.Meaning = approvalRenderMeaning(action)
 	message := action.ProtoReflect()
 	for _, number := range setFieldNumbers(message) {
 		switch number {
@@ -309,7 +330,7 @@ func RenderApprovalRequestDetail(request *StoredApprovalRequest, detail *protoco
 		}
 		field := message.Descriptor().Fields().ByNumber(number)
 		if approvalRenderNested(field) {
-			// shown whole by version 5's render alone (CACL-M12-02): until then, named and not approved here
+			// only version 5 declares a nested field, which RenderApprovalRequestCompute shows: named and not approved here
 			render.Unshown = true
 		}
 		render.Fields = append(render.Fields, &ApprovalRenderField{
@@ -342,8 +363,19 @@ func RenderApprovalRequestDetail(request *StoredApprovalRequest, detail *protoco
 	return render
 }
 
+// Whether the device showed the action whole, so it may approve it: nothing unshown, nothing withheld, and a sealed
+// detail opened.
+func (self *ApprovalRender) Whole() bool {
+	if self.Unshown || (self.Sealed && !self.Opened) || self.NameUnread {
+		return false
+	}
+	return self.Compute == nil || len(self.Compute.Withheld) == 0
+}
+
 // What ur approve prints: the kind and what approving it allows where the render says, the action's fields, then who
-// asks, then the untrusted text under its own heading. Every line is printable.
+// asks, then the untrusted text under its own heading. Every line is printable. A version-5 render adds kind 19's
+// disclosure line after the heading, each section after the fields, line by line under a bar, its flags, and each
+// reason it takes no approval.
 func (self *ApprovalRender) Text() string {
 	lines := []string{}
 	heading := fmt.Sprintf("request %s: %s", self.ApprovalId, self.KindName)
@@ -357,16 +389,37 @@ func (self *ApprovalRender) Text() string {
 		heading += ". " + self.Meaning
 	}
 	lines = append(lines, heading+". The action, as this daemon built it:")
+	if self.Compute != nil && self.Compute.DisclosureId != "" {
+		disclosure := self.Compute.Disclosure
+		if disclosure == "" {
+			disclosure = "(does not render on this device)"
+		}
+		lines = append(lines, fmt.Sprintf("  disclosure %s: %s (ur disclosures shows its text)", self.Compute.DisclosureId, disclosure))
+	}
 	for _, field := range self.Fields {
 		lines = append(lines, fmt.Sprintf("  %s: %s", field.Name, field.Value))
 	}
-	if self.Sealed && !self.Opened {
+	if self.Compute != nil {
+		for _, section := range self.Compute.Sections {
+			lines = append(lines, fmt.Sprintf("  %s, %s, untrusted text, each line after a bar:", section.Name, section.Title))
+			for _, line := range section.Lines {
+				lines = append(lines, "    | "+line)
+			}
+		}
+		for _, flag := range self.Compute.Flags {
+			lines = append(lines, "  note: "+flag)
+		}
+		for _, withheld := range self.Compute.Withheld {
+			lines = append(lines, "  "+withheld+", so it takes no approval here")
+		}
+	}
+	if self.Sealed && !self.Opened && self.Compute == nil {
 		lines = append(lines, "  sealed_detail: its prefixes and ports did not open on this device, so it takes no approval here")
 	}
 	if self.NameUnread {
 		lines = append(lines, "  socket_name: it does not read as the action's grant_dst on this device, so it takes no approval here")
 	}
-	if self.Unshown {
+	if self.Unshown && self.Compute == nil {
 		lines = append(lines, "  this build cannot show every field of the action, so it takes no approval here")
 	}
 	asked := fmt.Sprintf("asked by sidecar %s", self.RequesterSidecarId)

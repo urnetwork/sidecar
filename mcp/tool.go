@@ -184,9 +184,15 @@ func AddTool[In, Out any](catalog *McpCatalog, spec *McpToolSpec[In], handler Mc
 		// progress the handler reports goes out while it runs, never after its answer (progress.go)
 		progress := newMcpProgress(request)
 		ctx = withMcpProgress(ctx, progress)
-		result, resultBytes, covered, err := mcpRunTool(ctx, catalog, spec, handler, inResolved, call, request, arguments)
+		recorded := newMcpResult(call)
+		result, resultBytes, covered, err := mcpRunTool(ctx, catalog, spec, handler, inResolved, call, request, arguments, recorded)
 		progress.close()
-		if (spec.Tier == McpTierWrite || covered) && call != nil && catalog.sink != nil {
+		// a result whose data the record must not keep is recorded as its stub, whatever its tier (§24.9, C-31)
+		stub, stubbed := recorded.recordStubBytes()
+		if stubbed {
+			resultBytes = stub
+		}
+		if (spec.Tier == McpTierWrite || covered || stubbed) && call != nil && catalog.sink != nil {
 			catalog.sink.RecordMcpCall(ctx, call, spec.Name, arguments, resultBytes, started.UnixMilli(), catalog.clock.Now().UnixMilli(), err)
 		}
 		if err != nil {
@@ -225,8 +231,8 @@ func mcpArgumentsOf(request *gomcp.CallToolRequest) []byte {
 	return request.Params.Arguments
 }
 
-// One call through every step but the sink: the result to send and its structured bytes, or the refusal, and
-// whether a covering grant ran an O call as W.
+// One call through every step but the sink, its handler filling result: the result to send and its structured bytes,
+// or the refusal, and whether a covering grant ran an O call as W.
 func mcpRunTool[In, Out any](
 	ctx context.Context,
 	catalog *McpCatalog,
@@ -236,6 +242,7 @@ func mcpRunTool[In, Out any](
 	call *McpCall,
 	request *gomcp.CallToolRequest,
 	arguments []byte,
+	result *McpResult,
 ) (*gomcp.CallToolResult, []byte, bool, error) {
 	if call == nil {
 		return nil, nil, false, errMcpNoCall
@@ -298,7 +305,6 @@ func mcpRunTool[In, Out any](
 	}
 
 	meter := &mcpMeter{}
-	result := newMcpResult(call)
 	out, err := handler(withMcpUses(withMcpCovering(withMcpMeter(ctx, meter), covering), uses), call, in, result)
 	if err != nil {
 		return nil, nil, covering.covered, err

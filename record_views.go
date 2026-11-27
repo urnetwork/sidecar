@@ -34,7 +34,8 @@ func AclActionName(action protocol.AclAction) string {
 			return name
 		}
 	}
-	return ""
+	// DESIGN-COMPUTE §16.2's, "" for none
+	return aclComputeActionName(action)
 }
 
 // The keys registered to a member at this state, revoked ones included, by key id. The caller must not change them.

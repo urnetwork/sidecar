@@ -1,0 +1,25 @@
+request 22222222-2222-2222-2222-222222222222: tainted_send. Send a command with ssh_exec into enclave builder (label AP, egress 4 (direct)), from a run tainted by mail. The action, as this daemon built it:
+  body_sha256: cc553c62ee5c9b9b69999279f23137d30addb5d290659f843a1f19d0dbdabf16
+  subject: 56565656565656565656565656565656
+  egress_mode: 4 (direct)
+  enclave.enclave_id: 51515151515151515151515151515151
+  enclave.name: builder
+  enclave.shape: cpu-2
+  enclave.provider: hippius
+  enclave.label: AP
+  enclave.price_per_hour: $0.12 (120000000 nano-USD)
+  enclave.incarnation: 2
+  tool: ssh_exec
+  send.cwd: /work
+  taint_reasons: mail
+  auto.basis: 1 (taint)
+  auto.rules: 1, 9
+  send.text, the whole of what is sent, untrusted text, each line after a bar:
+    | make test
+  send.stdin, the whole of the command's stdin, untrusted text, each line after a bar:
+    | y
+    | 
+asked by sidecar 55555555-5555-5555-5555-555555555555, run 77777777-7777-7777-7777-777777777777, agent 88888888-8888-8888-8888-888888888888
+expires 2025-11-06T00:00:00Z
+untrusted text the agent wrote, which is not the action:
+  summary: point www at the new host

@@ -1,0 +1,10 @@
+request 22222222-2222-2222-2222-222222222222: dns_set. The action, as this daemon built it:
+  expires_millis: 1762387200000
+  dns_name: www
+  dns_type: A
+  dns_value: 192.0.2.10
+  dns_ttl: 300
+asked by sidecar 55555555-5555-5555-5555-555555555555, run 77777777-7777-7777-7777-777777777777, agent 88888888-8888-8888-8888-888888888888
+expires 2025-11-06T00:00:00Z
+untrusted text the agent wrote, which is not the action:
+  summary: point www at the new host

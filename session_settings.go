@@ -34,6 +34,24 @@ type SessionSettings struct {
 	// How long the gateway's index keeps a run's chain hashes after its last call, so a later request finds its prefix
 	// (§24.8's index row): 24 h. A run continued after this rebuilds its index from its nodes.
 	GatewayIndexWindow time.Duration
+	// The bytes of recorded forms the gateway's recorder keeps in memory for one run, by the item's own hash, so a long
+	// session's requests, which carry its whole history at every call, are redacted and hashed only for their new
+	// items (session_gateway.go): 32 MiB. Past it the run's forms are dropped and taken again; 0 keeps none.
+	GatewayFormByteCount int
+	// The most runs one request's prefix is looked for in: its own, the runs it continues and the runs its binding
+	// names as resumed (§24.8's resume row): 8.
+	GatewayResumeRunCount int
+	// The fewest bytes a text the MCP web_search tool served holds for its hash to be kept (session_stub.go's served
+	// row): 32. A shorter one, an empty answer's or a count's, would match strings that are no result.
+	ServedTextMinByteCount int
+	// How long a run's served hashes and noted web_search calls are kept after its last serve or note: 30 days, a run
+	// file's life after its coverage (DESIGN §16.6).
+	ServedLife time.Duration
+	// The most served hashes one run keeps: 4096, past which the tool serves nothing the record could not stub
+	// (§24.9); SRCH's 50 searches a run fit with room.
+	ServedRunHashCount int
+	// The most web_search call ids one run's transcript notes: 4096.
+	ServedRunCallCount int
 	// History stops leaving the device at this fraction of the network's storage (§24.10's caps row, Q-CTXH-13): 0.9.
 	NetworkCapFraction float64
 	// The storage view warns at this fraction of the network's storage, or of a member's share of it, naming the largest
@@ -64,20 +82,26 @@ type SessionSettings struct {
 // The component's defaults, the only place one is set.
 func DefaultSessionSettings() *SessionSettings {
 	return &SessionSettings{
-		PushInterval:         60 * time.Second,
-		PushIntervalMin:      30 * time.Second,
-		PushIntervalMax:      300 * time.Second,
-		GatewayIndexWindow:   24 * time.Hour,
-		NetworkCapFraction:   0.9,
-		WarningFraction:      0.8,
-		ExpiryTargetFraction: 0.7,
-		MemberShareMin:       0.05,
-		MemberShareMax:       1,
-		WarningRunCount:      5,
-		CapCheckInterval:     5 * time.Minute,
-		LimitReadInterval:    1 * time.Hour,
-		NodePrefixMinCount:   8,
-		Body:                 DefaultRecordBodySettings(),
+		PushInterval:           60 * time.Second,
+		PushIntervalMin:        30 * time.Second,
+		PushIntervalMax:        300 * time.Second,
+		GatewayIndexWindow:     24 * time.Hour,
+		GatewayFormByteCount:   32 * 1024 * 1024,
+		GatewayResumeRunCount:  8,
+		ServedTextMinByteCount: 32,
+		ServedLife:             30 * 24 * time.Hour,
+		ServedRunHashCount:     4096,
+		ServedRunCallCount:     4096,
+		NetworkCapFraction:     0.9,
+		WarningFraction:        0.8,
+		ExpiryTargetFraction:   0.7,
+		MemberShareMin:         0.05,
+		MemberShareMax:         1,
+		WarningRunCount:        5,
+		CapCheckInterval:       5 * time.Minute,
+		LimitReadInterval:      1 * time.Hour,
+		NodePrefixMinCount:     8,
+		Body:                   DefaultRecordBodySettings(),
 	}
 }
 
