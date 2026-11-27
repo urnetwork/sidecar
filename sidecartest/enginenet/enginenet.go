@@ -18,9 +18,11 @@
 // base 1 has landed (bootstrap.go; QD-824), and before that the gate holds no log of it and answers nothing.
 //
 // The gate learns of a log's new entries when told (Sync): api writes no {acl_} hint here, and the cache polls
-// nothing. The engines are the Net's (AddEngine), closed with it; the cache closes at the test's end and waits for its
-// loaders, so none reads the Net's stores, reaches its hooks or counts a load once the test's cleanups move on. Safe
-// for concurrent use.
+// nothing. An ask of a network the gate holds no state of tells it too, as at api, and the load it starts installs by
+// itself, so a test that asks again before the gate holds the network holds the gate's loads first (holdGateLoads).
+// The engines are the Net's (AddEngine), closed with it; the cache closes at the test's end and waits for its loaders,
+// so none reads the Net's stores, reaches its hooks or counts a load once the test's cleanups move on. Safe for
+// concurrent use.
 
 package enginenet
 
@@ -86,6 +88,8 @@ type Engines struct {
 	settings *EnginesSettings
 
 	cache *sidecar.AclGateCache
+	// what the cache reads, which a test holds (holdGateLoads)
+	gateSource *enginesGateSource
 	// how many loads the cache has finished, which Sync waits on
 	loads *sidecar.MonitorValue[uint64]
 	gkm   *gkmservice.GkmEngine
@@ -123,7 +127,8 @@ func NewEngines(t testing.TB, net *sidecartest.Net, settings *EnginesSettings) *
 	gateSettings.OnLoad = func(networkId sidecar.Id, pin *bridge.AuthPin, err error) {
 		self.loads.Update(func(count uint64) uint64 { return count + 1 })
 	}
-	self.cache = sidecar.NewAclGateCache(net.Context(), sidecar.NewAclGateDirectSource(net.Host().Redis, net.Host().Blobs, gateSettings), net.Clock(), gateSettings)
+	self.gateSource = &enginesGateSource{source: sidecar.NewAclGateDirectSource(net.Host().Redis, net.Host().Blobs, gateSettings)}
+	self.cache = sidecar.NewAclGateCache(net.Context(), self.gateSource, net.Clock(), gateSettings)
 	// its close cancels a load still running, whose store read the fakes then answer, so the wait ends
 	t.Cleanup(self.cache.CloseAndWait)
 	revocationSettings := sidecar.DefaultRevocationSettings()
@@ -214,6 +219,105 @@ func (self *Engines) Sync(ctx context.Context, networkId sidecar.Id) error {
 			return fmt.Errorf("the gate did not load network %s's position %d: %w", networkId, tip.GetVersion(), ctx.Err())
 		}
 	}
+}
+
+// Holds each read the gate makes of any network's log from now until release, so no load that reads meanwhile installs
+// before it: a test asks with a load running and the gate holding no newer state, as the exchange's ask of a network
+// the gate holds no state of starts a load (sidecar.RequestAclGateSnapshot) that would otherwise install whenever it got
+// there. arrived closes at the first read held. release, which the test's end calls too, lets every held and later read
+// go; a held read also gives up with its load, at the cache's close or the load's timeout (AclGateSettings.LoadTimeout).
+// A Sync meanwhile waits for the release.
+func (self *Engines) holdGateLoads() (arrived <-chan struct{}, release func()) {
+	arrived, release = self.gateSource.hold()
+	self.t.Cleanup(release)
+	return arrived, release
+}
+
+// The gate's source: the Net's stores through AclGateDirectSource, each read waiting out a test's hold
+// (holdGateLoads).
+type enginesGateSource struct {
+	source sidecar.AclGateSource
+
+	stateLock sync.Mutex
+	// the hold set, nil for none
+	held *enginesGateHold
+}
+
+var _ sidecar.AclGateSource = (*enginesGateSource)(nil)
+
+// One holdGateLoads.
+type enginesGateHold struct {
+	// closed at the first read held
+	arrived     chan struct{}
+	arrivedOnce sync.Once
+	// closed by the release
+	released    chan struct{}
+	releaseOnce sync.Once
+}
+
+// Sets a hold, replacing any set before, whose release then lets go only what it held.
+func (self *enginesGateSource) hold() (arrived <-chan struct{}, release func()) {
+	held := &enginesGateHold{arrived: make(chan struct{}), released: make(chan struct{})}
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.held = held
+	}()
+	return held.arrived, func() {
+		held.releaseOnce.Do(func() {
+			func() {
+				self.stateLock.Lock()
+				defer self.stateLock.Unlock()
+				if self.held == held {
+					self.held = nil
+				}
+			}()
+			close(held.released)
+		})
+	}
+}
+
+// Waits out the hold set, if any, until its release or the end of ctx, the load's.
+func (self *enginesGateSource) wait(ctx context.Context) error {
+	held := func() *enginesGateHold {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		return self.held
+	}()
+	if held == nil {
+		return nil
+	}
+	held.arrivedOnce.Do(func() { close(held.arrived) })
+	select {
+	case <-held.released:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// proj/'s entry 0, once the hold lets the read go.
+func (self *enginesGateSource) Genesis(ctx context.Context, networkId sidecar.Id) ([]byte, error) {
+	if err := self.wait(ctx); err != nil {
+		return nil, err
+	}
+	return self.source.Genesis(ctx, networkId)
+}
+
+// The entries after after, once the hold lets the read go.
+func (self *enginesGateSource) Entries(ctx context.Context, networkId sidecar.Id, after *bridge.AuthPin) ([][]byte, error) {
+	if err := self.wait(ctx); err != nil {
+		return nil, err
+	}
+	return self.source.Entries(ctx, networkId, after)
+}
+
+// projrows/'s object, once the hold lets the read go.
+func (self *enginesGateSource) Rows(ctx context.Context, networkId sidecar.Id, rowsSha256 []byte) ([]byte, error) {
+	if err := self.wait(ctx); err != nil {
+		return nil, err
+	}
+	return self.source.Rows(ctx, networkId, rowsSha256)
 }
 
 // The heads evs committed for repoId's refs, as head/<repo>/ holds them on whichever metadata cluster placed it: what
