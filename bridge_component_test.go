@@ -225,13 +225,19 @@ func newTestBridgeComponentWorld(t *testing.T) *testBridgeComponentWorld {
 // A component over the world's client, closed at the test's end.
 func (self *testBridgeComponentWorld) component() *BridgeComponent {
 	self.t.Helper()
+	return self.componentOver(self.heads, NewNoopLogger())
+}
+
+// component, reading heads from heads and logging to log.
+func (self *testBridgeComponentWorld) componentOver(heads ConfigHeadReader, log Logger) *BridgeComponent {
+	self.t.Helper()
 	component, err := NewBridgeComponent(context.Background(), &BridgeComponentArgs{
 		NetworkId: self.net.networkId,
 		Identity: func() *SidecarIdentity {
 			return &SidecarIdentity{NetworkId: self.net.networkId, SidecarId: self.host.sidecarId, IdentityPublicKey: self.host.publicKey()}
 		},
 		Config:       self.client,
-		Heads:        self.heads,
+		Heads:        heads,
 		Rows:         self.net.source,
 		RepoKeyAt:    self.repoKeyAt,
 		ServedRoutes: self.servedRoutes,
@@ -244,7 +250,7 @@ func (self *testBridgeComponentWorld) component() *BridgeComponent {
 			}
 		},
 		Clock:    self.clock,
-		Log:      NewNoopLogger(),
+		Log:      log,
 		Settings: self.settings,
 		parts: &bridgeProviderParts{
 			newNat: func(ctx context.Context, settings *connect.LocalUserNatSettings) *connect.LocalUserNat {

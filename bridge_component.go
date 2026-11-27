@@ -24,6 +24,14 @@
 //	          of FriendsAndFamily on every generation's dispatcher, held while a share this host serves stands
 //	          (bridge_share.go)
 //
+// A wanted compile, and a failed one's retry, are dated by a reading of the clock taken before what caused them could
+// be seen, never after, as the Forwarder's are (bridge_forward.go): the entries run takes before the sink is handed
+// them, since it shows a delta's pin before ApplyDeltas returns and a denial before Revoke does; a device role before
+// it is set and anchored; a binding pass before its first fetch; a retry before the failure is counted or its alarms
+// raised. Whoever sees the cause may move a test's clock at once, and a reading after that move would date the compile
+// past it by the move, which a clock moved once to the time it expects never reaches (wantCompileAt; QD-1425's race
+// one step earlier).
+//
 // The bindings a compile waits for are fetched on a goroutine of their own (GET /sidecar/identity), verified under the
 // identity key the config admits (VerifyBridgeBinding), kept in the cache and the component's store, and only change
 // the compile's inputs. Logs and alarms name opaque ids, never a prefix, an address or a name (I-13).
@@ -381,6 +389,8 @@ func (self *BridgeComponent) SetDeviceRole(sink BridgeStateSink) error {
 	}
 	var startErr error
 	err := self.onRun(func() {
+		// the role's compile is wanted from before Status shows the role set or the role shows its anchor
+		setAt := self.clock.Now()
 		var generation *SidecarEnv
 		set := func() bool {
 			self.stateLock.Lock()
@@ -402,7 +412,7 @@ func (self *BridgeComponent) SetDeviceRole(sink BridgeStateSink) error {
 		self.revokedThrough = sink.Decision().StatePin.GetVersion()
 		self.anchor(sink)
 		self.followReach(sink)
-		self.wantCompile()
+		self.wantCompileAt(setAt)
 		if generation != nil {
 			startErr = self.startGate(generation, sink)
 		}
@@ -687,11 +697,8 @@ func (self *BridgeComponent) run() {
 		}
 		var compileAt <-chan time.Time
 		if self.compileWanted {
-			now := self.clock.Now()
-			due := self.compileWantedAt.Add(self.settings.CompileDelay)
-			due = laterTime(due, self.compileLastAt.Add(self.settings.CompileMinInterval))
-			due = laterTime(due, self.compileRetryAt)
-			if !due.After(now) {
+			due := self.compileDueAt()
+			if !due.After(self.clock.Now()) {
 				self.compileNow()
 				continue
 			}
@@ -707,22 +714,36 @@ func (self *BridgeComponent) run() {
 	}
 }
 
-// Marks a compile wanted, coalescing with one already wanted. On run's goroutine.
-func (self *BridgeComponent) wantCompile() {
+// Marks a compile wanted from at, coalescing with one already wanted. at is a reading of the clock taken before
+// anything that caused the want could be seen (the file's comment): whoever saw it may move a test's clock next, and a
+// reading taken after that move would put the compile CompileDelay past the move rather than past the want. On run's
+// goroutine.
+func (self *BridgeComponent) wantCompileAt(at time.Time) {
 	if !self.compileWanted {
 		self.compileWanted = true
-		self.compileWantedAt = self.clock.Now()
+		self.compileWantedAt = at
 	}
+}
+
+// When the wanted compile may start: CompileDelay after it was wanted, CompileMinInterval after the last one started,
+// and no sooner than a retry's wait. On run's goroutine.
+func (self *BridgeComponent) compileDueAt() time.Time {
+	due := self.compileWantedAt.Add(self.settings.CompileDelay)
+	due = laterTime(due, self.compileLastAt.Add(self.settings.CompileMinInterval))
+	return laterTime(due, self.compileRetryAt)
 }
 
 // Hands the sink entries read from the log, oldest first: those above the newest it holds with ApplyDeltas, then each
 // denial of every entry above the newest whose denials it was handed, at the entry's own position, never 0. A gap
-// below the first read is filled from the log first. On run's goroutine.
+// below the first read is filled from the log first. The compile an entry wants is wanted from a reading taken before
+// the sink is handed any of them. On run's goroutine.
 func (self *BridgeComponent) handEntries(reads []*BridgeConfigEntry) {
 	sink := self.currentSink()
 	if sink == nil || len(reads) == 0 {
 		return
 	}
+	// the sink shows a delta's pin before ApplyDeltas returns, and a denial before Revoke does (wantCompileAt)
+	at := self.clock.Now()
 	decision := sink.Decision()
 	held := max(decision.Pin.GetVersion(), self.revokedThrough)
 	if held+1 < reads[0].N {
@@ -755,7 +776,7 @@ func (self *BridgeComponent) handEntries(reads []*BridgeConfigEntry) {
 			}
 		}
 		if !read.Pure {
-			self.wantCompile()
+			self.wantCompileAt(at)
 		}
 		self.revokedThrough = read.N
 	}
@@ -879,10 +900,18 @@ func (self *BridgeComponent) openRows() func(rowsSha256 []byte) (io.ReadCloser, 
 }
 
 // Compiles at the client's verified tip and hands the sink the state (12.2.5's Compile). An error changes nothing but
-// an alarm, and retries at the next interval. On run's goroutine.
+// an alarm, and retries at the next interval, from a reading taken before the error was first shown: its alarms raised
+// or its failure counted (wantCompileAt), so a retry waits from the failure. On run's goroutine.
 func (self *BridgeComponent) compileNow() {
 	self.compileWanted = false
 	self.compileLastAt = self.clock.Now()
+	// what follows the compile is dated by a reading taken once, just before its outcome is first shown
+	var outcomeAt time.Time
+	markOutcome := func() {
+		if outcomeAt.IsZero() {
+			outcomeAt = self.clock.Now()
+		}
+	}
 	sink := self.currentSink()
 	log := self.args.Config.Log()
 	identity := self.identity()
@@ -928,6 +957,7 @@ func (self *BridgeComponent) compileNow() {
 			local.PublishedNames = self.args.PublishedNames()
 		}
 		compiled, err := CompileBridgeState(view, local, self.settings.Ledger)
+		markOutcome()
 		if compiled != nil {
 			self.raiseAlarms(compiled.Alarms)
 		}
@@ -970,6 +1000,8 @@ func (self *BridgeComponent) compileNow() {
 		return nil
 	}()
 	if err != nil {
+		// a head or a view that failed shows first as Status counts it; a compile that failed was read before its alarms
+		markOutcome()
 		func() {
 			self.stateLock.Lock()
 			defer self.stateLock.Unlock()
@@ -977,8 +1009,8 @@ func (self *BridgeComponent) compileNow() {
 		}()
 		self.log.Warningf("[bridge]%s the compile at %d did not run: %v", self.args.NetworkId, state.Pin().GetVersion(), err)
 		self.compileWanted = true
-		self.compileWantedAt = self.clock.Now()
-		self.compileRetryAt = self.clock.Now().Add(self.compileRetry)
+		self.compileWantedAt = outcomeAt
+		self.compileRetryAt = outcomeAt.Add(self.compileRetry)
 		self.compileRetry = min(2*self.compileRetry, self.settings.CompileRetryMaxInterval)
 		return
 	}
@@ -1050,9 +1082,9 @@ func (self *BridgeComponent) loadBindings(env *SidecarEnv) {
 // The binding fetcher: after each compile, and each BindingRefreshInterval, every binding a compile waits for and
 // every current one past its refresh, verified and kept, a share link host's under the network and key its alias
 // pinned; and the rows of the shares a compile waits for, and each ShareTableRefreshInterval those it compiled. A
-// change wants a compile. Off the compile's path. No pass starts once the component has closed, a wake or a timer
-// taken as it closed included, so no binding expires and no cache is saved past the end, and a closed component asks
-// the clock for nothing.
+// change wants a compile, from the pass's reading of the clock, taken before its first fetch (wantCompileAt). Off the
+// compile's path. No pass starts once the component has closed, a wake or a timer taken as it closed included, so no
+// binding expires and no cache is saved past the end, and a closed component asks the clock for nothing.
 func (self *BridgeComponent) fetchBindings() {
 	fetchedAt := map[Id]time.Time{}
 	// a share link host's network and pinned key, by its sidecar_id, kept for its refreshes
@@ -1138,7 +1170,8 @@ func (self *BridgeComponent) fetchBindings() {
 				self.log.Warningf("[bridge]%s the binding cache was not kept: %v", self.args.NetworkId, err)
 			}
 		}
-		self.onRun(self.wantCompile)
+		// from the pass's reading: api saw its fetches, and the store shows the cache saved, before this
+		self.onRun(func() { self.wantCompileAt(now) })
 	}
 }
 
