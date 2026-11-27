@@ -299,7 +299,8 @@ func (self *bridgeShareMode) run() {
 			}
 			wakeEnd, stopWake = nextEnd, nil
 			if !nextEnd.IsZero() {
-				stopWake = self.clock.AfterFunc(nextEnd.Sub(now), self.poke)
+				// for the end itself (QD-1425); poke never blocks, so an end already reached may poke here
+				stopWake = ClockAfterFuncAt(self.clock, nextEnd, self.poke)
 			}
 		}
 		select {

@@ -412,11 +412,13 @@ func (self *BridgeDiscoveryComponent) run() {
 				}
 			}
 		}()
+		// set for its time itself (QD-1425), a millisecond past now at the least, so a pass that leaves a time passed
+		// cannot spin
 		select {
 		case <-self.ctx.Done():
 			return
 		case <-self.wake:
-		case <-self.clock.After(max(next.Sub(now), time.Millisecond)):
+		case <-ClockAfterAt(self.clock, laterTime(next, now.Add(time.Millisecond))):
 		}
 	}
 }
@@ -576,7 +578,7 @@ func (self *BridgeDiscoveryComponent) viewer(ctx context.Context, dispatcher bri
 		next := self.rebuildView()
 		var expiry <-chan time.Time
 		if !next.IsZero() {
-			expiry = self.clock.After(max(next.Sub(self.clock.Now()), time.Millisecond))
+			expiry = ClockAfterAt(self.clock, laterTime(next, self.clock.Now().Add(time.Millisecond)))
 		}
 		select {
 		case <-ctx.Done():

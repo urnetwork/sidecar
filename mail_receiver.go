@@ -556,14 +556,19 @@ func (self *MailReceiver) wakeKeys() {
 	}
 }
 
-// The key pass, until ctx ends: at once, then when its pass says, or when woken.
+// The key pass, until ctx ends: at once, then when its pass says, or when woken. The pass's wait runs from its end,
+// cut at the time a key's TLSA goes live, which is waited for itself (QD-1425).
 func (self *MailReceiver) runKeys(ctx context.Context, listener MailReceiverListener) {
 	for {
-		wait := self.keyPass(ctx, listener, false)
+		wait, liveAt := self.keyPass(ctx, listener, false)
+		passAt := self.clock.Now().Add(wait)
+		if !liveAt.IsZero() && liveAt.Before(passAt) {
+			passAt = liveAt
+		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-self.clock.After(wait):
+		case <-ClockAfterAt(self.clock, passAt):
 		case <-self.keyWake:
 		}
 	}
@@ -571,12 +576,14 @@ func (self *MailReceiver) runKeys(ctx context.Context, listener MailReceiverList
 
 // One key pass (mail_receiver_keys.go's file header): publishes what lacks a TLSA, decides the key to serve and sets
 // serving to match, rotates out what is neither held nor served and, once a key serves, retires the TLSA of what was
-// rotated out, and answers when the next pass is due. With republish, each held key is posted again whatever its
-// record says, as a restore asks, keeping the times recorded, and the retirement names every one kept.
-func (self *MailReceiver) keyPass(ctx context.Context, listener MailReceiverListener, republish bool) time.Duration {
+// rotated out, and answers when the next pass is due: a wait from the pass's end, and the time a key's TLSA goes live
+// where one is still to, zero for none. With republish, each held key is posted again whatever its record says, as a
+// restore asks, keeping the times recorded, and the retirement names every one kept.
+func (self *MailReceiver) keyPass(ctx context.Context, listener MailReceiverListener, republish bool) (time.Duration, time.Time) {
 	self.passLock.Lock()
 	defer self.passLock.Unlock()
 	nextWait := self.settings.KeyCheckInterval
+	var liveAt time.Time
 	problem := ""
 	fail := func(what string, err error) {
 		if problem == "" {
@@ -593,12 +600,12 @@ func (self *MailReceiver) keyPass(ctx context.Context, listener MailReceiverList
 	if err := self.tlsa.load(); err != nil {
 		// unread records publish nothing and serve nothing new, never a key taken as live that is not
 		fail("tlsa records", err)
-		return nextWait
+		return nextWait, liveAt
 	}
 	names, err := self.args.Names(ctx)
 	if err != nil {
 		fail("names", err)
-		return nextWait
+		return nextWait, liveAt
 	}
 	current, pending, err := self.args.Keys.TlsKeys()
 	if err != nil || current == nil {
@@ -607,7 +614,7 @@ func (self *MailReceiver) keyPass(ctx context.Context, listener MailReceiverList
 		}
 		// a locked keychain changes nothing served: the served key is held in memory, and nothing new is published
 		fail("keys", err)
-		return nextWait
+		return nextWait, liveAt
 	}
 	for _, key := range []*TlsDeviceKey{current, pending} {
 		if key == nil {
@@ -633,17 +640,22 @@ func (self *MailReceiver) keyPass(ctx context.Context, listener MailReceiverList
 	}
 
 	now := self.clock.Now()
-	liveAt := func(key *TlsDeviceKey) (time.Time, bool) {
+	keyLiveAt := func(key *TlsDeviceKey) (time.Time, bool) {
 		publishTime, ok := self.tlsa.publishTime(key)
 		if !ok {
 			return time.Time{}, false
 		}
 		return publishTime.Add(self.settings.liveDelay()), true
 	}
+	soonestLive := func(at time.Time) {
+		if liveAt.IsZero() || at.Before(liveAt) {
+			liveAt = at
+		}
+	}
 	var serve *TlsDeviceKey
-	if at, ok := liveAt(current); ok {
+	if at, ok := keyLiveAt(current); ok {
 		if now.Before(at) {
-			nextWait = min(nextWait, at.Sub(now))
+			soonestLive(at)
 		} else {
 			serve = current
 		}
@@ -658,13 +670,13 @@ func (self *MailReceiver) keyPass(ctx context.Context, listener MailReceiverList
 	}()
 	if serve == nil && served != nil {
 		// the key served before serves on while its successor's TLSA is not live yet
-		if at, ok := liveAt(served); ok && !now.Before(at) {
+		if at, ok := keyLiveAt(served); ok && !now.Before(at) {
 			serve = served
 		}
 	}
 	if pending != nil {
-		if at, ok := liveAt(pending); ok && now.Before(at) {
-			nextWait = min(nextWait, at.Sub(now))
+		if at, ok := keyLiveAt(pending); ok && now.Before(at) {
+			soonestLive(at)
 		}
 	}
 	self.setServed(listener, serve, names)
@@ -689,7 +701,7 @@ func (self *MailReceiver) keyPass(ctx context.Context, listener MailReceiverList
 			}
 		}
 	}
-	return max(nextWait, 0)
+	return max(nextWait, 0), liveAt
 }
 
 // Serves key on names, nil serving none, and sets the registration's serving to match.

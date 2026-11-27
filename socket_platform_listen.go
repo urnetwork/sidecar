@@ -326,7 +326,8 @@ func (self *SocketPlatformListener) accept(ctx context.Context, client *socketPl
 	}
 	self.reportInflight(client)
 	if grantExpireMillis := verdict.ticket.GetGrantExpireTimeMillis(); grantExpireMillis != 0 {
-		tracked.stopExpiry = self.clock.AfterFunc(socketGrantEndTime(admissionState, grantExpireMillis).Sub(self.clock.Now()), func() {
+		// for the grant's end itself (QD-1425)
+		tracked.stopExpiry = ClockAfterFuncAt(self.clock, socketGrantEndTime(admissionState, grantExpireMillis), func() {
 			tracked.Reset(protocol.StreamResetCode_RST_REVOKED)
 		})
 	}

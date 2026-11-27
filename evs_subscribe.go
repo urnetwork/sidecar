@@ -363,7 +363,7 @@ func (self *evsSubscriber) run(ctx context.Context, done chan struct{}) {
 		next := self.runDue(ctx)
 		var timer <-chan time.Time
 		if !next.IsZero() {
-			timer = self.client.clock.After(max(0, next.Sub(self.client.clock.Now())))
+			timer = ClockAfterAt(self.client.clock, next)
 		}
 		select {
 		case <-ctx.Done():
@@ -611,16 +611,16 @@ func (self *evsSubscriber) subscribe(ctx context.Context, repo *EvsRepo, args *E
 			self.wakeRounds()
 			return subscription, nil
 		}
-		wait := func() time.Duration {
+		leaseDueAt := func() time.Time {
 			self.stateLock.Lock()
 			defer self.stateLock.Unlock()
-			return max(0, state.leaseDueAt.Sub(self.client.clock.Now()))
+			return state.leaseDueAt
 		}()
 		select {
 		case <-ctx.Done():
 			self.wakeRounds()
 			return subscription, nil
-		case <-self.client.clock.After(wait):
+		case <-ClockAfterAt(self.client.clock, leaseDueAt):
 		}
 	}
 }

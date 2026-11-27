@@ -280,8 +280,8 @@ func (self *QuotaUsageBatcher) run() {
 	for {
 		self.cutDue()
 		self.sendDue()
-		timeout := self.finishRound()
-		stop := self.clock.AfterFunc(timeout, self.signalWake)
+		// signalWake never blocks, so a time already reached may signal here
+		stop := ClockAfterFuncAt(self.clock, self.finishRound(), self.signalWake)
 		select {
 		case <-self.ctx.Done():
 			stop()
@@ -428,20 +428,23 @@ func (self *QuotaUsageBatcher) report(batch *UsageBatch) error {
 	return err
 }
 
-// Ends a round: tells Drain, and answers how long until the window is due or a batch is, zero when a
-// drain waits on an open window.
-func (self *QuotaUsageBatcher) finishRound() time.Duration {
+// Ends a round: tells Drain, and answers when the window is due or a batch is, now when a drain waits on an open
+// window. run waits for that time itself (QD-1425), so a test that moves the clock once Drain is told cannot land
+// between run's reading and its wait and leave the wait late.
+func (self *QuotaUsageBatcher) finishRound() time.Time {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	close(self.roundDone)
 	self.roundDone = make(chan struct{})
 	now := self.clock.Now()
 	if 0 < self.drainCount && 0 < len(self.keyEvents) {
-		return 0
+		return now
 	}
-	timeout := self.windowStart.Add(self.settings.WindowTimeout).Sub(now)
+	dueTime := self.windowStart.Add(self.settings.WindowTimeout)
 	for _, send := range self.sends {
-		timeout = min(timeout, send.nextSendTime.Sub(now))
+		if send.nextSendTime.Before(dueTime) {
+			dueTime = send.nextSendTime
+		}
 	}
-	return max(timeout, 0)
+	return dueTime
 }

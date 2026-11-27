@@ -87,23 +87,23 @@ func (self *Sidecar) RetireIndexer(ctx context.Context) (int, error) {
 // Whether the daemon exits now (§5.8): it was spawned by a ur, not run from its unit; IdleExitTimeout is set; no
 // session is open and none has made a request for that long; and nothing keeps it busy.
 func (self *Daemon) ShouldIdleExit() bool {
-	wait, idle := self.idleWait()
-	return idle && wait <= 0 && !self.busy()
+	idleAt, idle := self.idleAt()
+	return idle && !self.clock.Now().Before(idleAt) && !self.busy()
 }
 
-// How long until the daemon has been idle for IdleExitTimeout, and whether it may idle out at all: false for a
-// unit-run daemon, with no timeout, or with a session open.
-func (self *Daemon) idleWait() (time.Duration, bool) {
+// When the daemon will have been idle for IdleExitTimeout, and whether it may idle out at all: false for a unit-run
+// daemon, with no timeout, or with a session open.
+func (self *Daemon) idleAt() (time.Time, bool) {
 	timeout := self.settings.Local.IdleExitTimeout
 	if !self.settings.AutoSpawned || timeout <= 0 {
-		return 0, false
+		return time.Time{}, false
 	}
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	if 0 < len(self.sessions) {
-		return 0, false
+		return time.Time{}, false
 	}
-	return timeout - self.clock.Now().Sub(self.lastActivity), true
+	return self.lastActivity.Add(timeout), true
 }
 
 // Whether something keeps the daemon up: a hosted Sidecar's active component or indexer designation, a socket forward

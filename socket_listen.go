@@ -505,7 +505,8 @@ func (self *SocketListener) armGrantEnd(stream *socketListenerStream) {
 	if !tracked || (previous != nil && !previous()) {
 		return
 	}
-	stop := self.clock.AfterFunc(stream.grantEndTime.Sub(self.clock.Now()), func() {
+	// for the grant's end itself (QD-1425), with no lock held, since an end already passed resets here
+	stop := ClockAfterFuncAt(self.clock, stream.grantEndTime, func() {
 		stream.Reset(protocol.StreamResetCode_RST_REVOKED)
 	})
 	kept := func() bool {

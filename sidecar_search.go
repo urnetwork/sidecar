@@ -617,7 +617,8 @@ func (self *Sidecar) RunSearchBackgroundSync(ctx context.Context) error {
 	}
 	windowCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	stop := self.clock.AfterFunc(deadline.Sub(self.clock.Now()), cancel)
+	// for the window's end itself (QD-1425)
+	stop := ClockAfterFuncAt(self.clock, deadline, cancel)
 	defer stop()
 	err = background.RunBackgroundSync(windowCtx)
 	switch {

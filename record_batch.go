@@ -295,8 +295,9 @@ func (self *recordWriter) run(ctx context.Context, tend func(ctx context.Context
 			self.log.Infof("[record]a push did not commit: %s", err)
 		}
 		stop := func() bool { return false }
-		if timeout, ok := self.nextWake(); ok {
-			stop = self.clock.AfterFunc(timeout, self.signal)
+		if wakeAt, ok := self.nextWake(); ok {
+			// for that time itself (QD-1425); signal never blocks, so a time already reached may signal here
+			stop = ClockAfterFuncAt(self.clock, wakeAt, self.signal)
 		}
 		select {
 		case <-ctx.Done():
@@ -308,8 +309,8 @@ func (self *recordWriter) run(ctx context.Context, tend func(ctx context.Context
 	}
 }
 
-// How long until a queue is due or a retry may go, false when nothing waits.
-func (self *recordWriter) nextWake() (time.Duration, bool) {
+// When a queue is due or a retry may go, false when nothing waits.
+func (self *recordWriter) nextWake() (time.Time, bool) {
 	auth := self.auth()
 	nowMillis := self.clock.Now().UnixMilli()
 	self.stateLock.Lock()
@@ -356,9 +357,9 @@ func (self *recordWriter) nextWake() (time.Duration, bool) {
 		consider(self.drainRetryMillis)
 	}
 	if !found {
-		return 0, false
+		return time.Time{}, false
 	}
-	return max(0, time.Duration(next-nowMillis)*time.Millisecond), true
+	return time.UnixMilli(next), true
 }
 
 // Pushes and deposits everything due, or everything queued when force, ignoring backoff then; the first failure.

@@ -140,8 +140,9 @@ func (self *HarnessEventBatcher) Add(event *HarnessEvent) {
 		}
 		if agent.stopFlush == nil {
 			agentKey := event.Agent
-			wait := agent.lastDeltaTime.Add(interval).Sub(now)
-			agent.stopFlush = self.clock.AfterFunc(wait, func() {
+			// for the interval's end itself (QD-1425), and never on this goroutine, which holds the locks the flush
+			// takes, should the clock have reached it already
+			agent.stopFlush = ClockAfterFuncAtAsync(self.clock, agent.lastDeltaTime.Add(interval), func() {
 				self.flushAgent(agentKey)
 			})
 		}

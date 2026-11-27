@@ -673,11 +673,12 @@ func (self *ComputeClient) run() {
 		}
 		retry = nil
 		if !lastRead.IsZero() {
-			if wait := lastRead.Add(self.settings.BalanceReadMinInterval).Sub(self.clock.Now()); 0 < wait {
+			// the next read may go BalanceReadMinInterval after the last, a wait for that time itself (QD-1425)
+			if readAt := lastRead.Add(self.settings.BalanceReadMinInterval); self.clock.Now().Before(readAt) {
 				select {
 				case <-self.ctx.Done():
 					return
-				case <-self.clock.After(wait):
+				case <-ClockAfterAt(self.clock, readAt):
 				}
 			}
 		}

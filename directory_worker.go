@@ -857,26 +857,27 @@ func (self *DirectoryWorker) Close() {
 	}
 }
 
-// Sets the renewal timer when none is set and an item stands: RenewInterval after its last renewal, always a positive
-// timeout, so a fake clock never fires it inline under writeLock.
+// Sets the renewal timer when none is set and an item stands: RenewInterval after its last renewal, a millisecond on at
+// the least, set for that time itself (QD-1425) and never fired inline, so a fake clock never calls the renewal under
+// writeLock (ClockAfterFuncAtAsync).
 func (self *DirectoryWorker) scheduleRenew() {
 	if self.settings.RenewInterval <= 0 {
 		return
 	}
 	nowMillis := self.clock.Now().UnixMilli()
-	timeout, set := func() (time.Duration, bool) {
+	renewAt, set := func() (time.Time, bool) {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		if self.renewStop != nil || self.closed || !self.state.announced() {
-			return 0, false
+			return time.Time{}, false
 		}
 		due := self.state.RenewedMillis + self.settings.RenewInterval.Milliseconds()
-		return time.Duration(max(due-nowMillis, 1)) * time.Millisecond, true
+		return time.UnixMilli(max(due, nowMillis+1)), true
 	}()
 	if !set {
 		return
 	}
-	stop := self.clock.AfterFunc(timeout, self.renew)
+	stop := ClockAfterFuncAtAsync(self.clock, renewAt, self.renew)
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	if self.renewStop == nil && !self.closed {
