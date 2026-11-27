@@ -571,7 +571,7 @@ func (self *SearchSync) Start(ctx context.Context) {
 			next := self.RunDue(runCtx)
 			var timer <-chan time.Time
 			if !next.IsZero() {
-				timer = self.args.clock.After(next.Sub(self.args.clock.Now()))
+				timer = ClockAfterAt(self.args.clock, next)
 			}
 			select {
 			case <-runCtx.Done():

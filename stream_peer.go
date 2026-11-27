@@ -561,8 +561,18 @@ func (self *Subprotocol) closeStreams() {
 
 // A context that ends after timeout on this dispatcher's clock, at cancel, or with parent.
 func (self *Subprotocol) clockContext(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	return clockContextUntil(parent, self.clock.After(timeout))
+}
+
+// A context that ends once this dispatcher's clock reaches at, a wait set for that time itself (QD-1425), at cancel,
+// or with parent.
+func (self *Subprotocol) clockContextAt(parent context.Context, at time.Time) (context.Context, context.CancelFunc) {
+	return clockContextUntil(parent, ClockAfterAt(self.clock, at))
+}
+
+// A context that ends once expire fires, at cancel, or with parent.
+func clockContextUntil(parent context.Context, expire <-chan time.Time) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(parent)
-	expire := self.clock.After(timeout)
 	go func() {
 		select {
 		case <-expire:

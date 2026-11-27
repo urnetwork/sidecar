@@ -437,6 +437,8 @@ func (self *EvsClient) retryRefusingNothing(ctx context.Context, call func() err
 			return err
 		}
 		wait := self.settings.ReadRetryWait
+		// the scope wait's end, which the retry's wait does not pass, zero for none
+		var scopeWaitEnd time.Time
 		if evsError, ok := EvsErrorOf(err); ok {
 			if !evsError.RefusesNothing() && !evsError.OutcomeUnknown {
 				return err
@@ -452,11 +454,11 @@ func (self *EvsClient) retryRefusingNothing(ctx context.Context, call func() err
 				if scopeRefusedAt.IsZero() {
 					scopeRefusedAt = now
 				}
-				left := scopeRefusedAt.Add(self.settings.ExchangeScopeWaitTimeout).Sub(now)
-				if left <= 0 {
+				scopeWaitEnd = scopeRefusedAt.Add(self.settings.ExchangeScopeWaitTimeout)
+				if !now.Before(scopeWaitEnd) {
 					return err
 				}
-				wait = min(wait, left)
+				wait = min(wait, scopeWaitEnd.Sub(now))
 			case refusal.final:
 				return err
 			case 0 < refusal.retryAfter:
@@ -466,10 +468,18 @@ func (self *EvsClient) retryRefusingNothing(ctx context.Context, call func() err
 				wait = refusal.retryAfter
 			}
 		}
+		// a retry's wait, cut at the scope wait's end, a time waited for itself (QD-1425)
+		wait = min(wait, self.settings.PushRetryMaxWait)
+		var retry <-chan time.Time
+		if scopeWaitEnd.IsZero() {
+			retry = self.clock.After(wait)
+		} else {
+			retry = ClockAfterAt(self.clock, earlierTime(scopeWaitEnd, self.clock.Now().Add(wait)))
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-self.clock.After(min(wait, self.settings.PushRetryMaxWait)):
+		case <-retry:
 		}
 	}
 }

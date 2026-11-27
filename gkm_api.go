@@ -498,6 +498,8 @@ func (self *GkmApi) do(ctx context.Context, call *gkmCall) (int, []byte, error) 
 			return 0, nil, err
 		}
 		var wait time.Duration
+		// the scope wait's end, which the retry's wait does not pass, zero for none
+		var scopeWaitEnd time.Time
 		if errors.Is(err, ErrGkmTokenRefused) {
 			if tokenRenewed {
 				// a token minted after gkm's last 401: it does not authenticate there either, or rev/ voids its subject
@@ -532,13 +534,13 @@ func (self *GkmApi) do(ctx context.Context, call *gkmCall) (int, []byte, error) 
 				if scopeRefusedAt.IsZero() {
 					scopeRefusedAt = now
 				}
-				left := scopeRefusedAt.Add(self.settings.ExchangeScopeWaitTimeout).Sub(now)
-				if left <= 0 {
+				scopeWaitEnd = scopeRefusedAt.Add(self.settings.ExchangeScopeWaitTimeout)
+				if !now.Before(scopeWaitEnd) {
 					return 0, nil, err
 				}
-				wait = left
+				wait = scopeWaitEnd.Sub(now)
 				if 0 < self.settings.ReadRetryWait {
-					wait = min(self.settings.ReadRetryWait, left)
+					wait = min(self.settings.ReadRetryWait, wait)
 				}
 			case refusal.final:
 				return 0, nil, err
@@ -581,10 +583,17 @@ func (self *GkmApi) do(ctx context.Context, call *gkmCall) (int, []byte, error) 
 				return 0, nil, err
 			}
 		}
+		// a retry's wait, cut at the scope wait's end, a time waited for itself (QD-1425)
+		var retry <-chan time.Time
+		if scopeWaitEnd.IsZero() {
+			retry = self.clock.After(wait)
+		} else {
+			retry = ClockAfterAt(self.clock, earlierTime(scopeWaitEnd, self.clock.Now().Add(wait)))
+		}
 		select {
 		case <-ctx.Done():
 			return 0, nil, ctx.Err()
-		case <-self.clock.After(wait):
+		case <-retry:
 		}
 	}
 }

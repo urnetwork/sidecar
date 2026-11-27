@@ -200,8 +200,9 @@ func (self *Driver) Run(ctx context.Context) *Report {
 			*into = stats
 		}
 	}
-	stopStartReading := self.clock.AfterFunc(warmupEnd.Sub(self.clock.Now()), readAllocations(&self.allocationsAtStart))
-	stopEndReading := self.clock.AfterFunc(steadyEnd.Sub(self.clock.Now()), readAllocations(&self.allocationsAtEnd))
+	// each for its time itself (QD-1425), so a fake clock moved as one is set does not leave it late
+	stopStartReading := sidecar.ClockAfterFuncAt(self.clock, warmupEnd, readAllocations(&self.allocationsAtStart))
+	stopEndReading := sidecar.ClockAfterFuncAt(self.clock, steadyEnd, readAllocations(&self.allocationsAtEnd))
 
 	arrive := func(n int64, due time.Time) {
 		steady := !due.Before(warmupEnd)
@@ -245,7 +246,7 @@ func (self *Driver) Run(ctx context.Context) *Report {
 	var schedule func(n int64)
 	schedule = func(n int64) {
 		due := self.due(start, n)
-		stop := self.clock.AfterFunc(due.Sub(self.clock.Now()), func() {
+		stop := sidecar.ClockAfterFuncAt(self.clock, due, func() {
 			if ctx.Err() != nil {
 				endArrivals()
 				return

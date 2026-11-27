@@ -90,7 +90,9 @@ func testComputeSpendRead(by model.ComputeSpendBy) *ComputeSpendRead {
 	}
 	providerA, providerB, parallel, cathedral := int16(1), int16(2), int16(8), int16(9)
 	modelA, modelB, shape := "chutes-qwen3.8-27b-tee-high", "engy-llama-5-70b-direct-medium", "cpu-2"
-	tokens := func(n int64) model.ComputeUnits { return model.ComputeUnits{InputTokens: 1000 * n, OutputTokens: 200 * n} }
+	tokens := func(n int64) model.ComputeUnits {
+		return model.ComputeUnits{InputTokens: 1000 * n, OutputTokens: 200 * n}
+	}
 	day := func(n int) *time.Time {
 		d := testComputeReadDay(n)
 		return &d

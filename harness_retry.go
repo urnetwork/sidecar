@@ -28,25 +28,24 @@ func harnessRetryable(code InferErrorCode) bool {
 	return code == InferErrorCapacity || code == InferErrorEngineFailed
 }
 
-// The wait before retry attempt (1 for the first): RetryBase doubled per attempt, or the broker's time where it gives a
-// later one.
-func (self *harnessAgent) retryWait(attempt int, failure *InferError) time.Duration {
-	wait := time.Duration(0)
+// When retry attempt (1 for the first) goes, from now: RetryBase doubled per attempt on, or the broker's time where it
+// gives a later one.
+func (self *harnessAgent) retryTime(now time.Time, attempt int, failure *InferError) time.Time {
+	retryTime := now
 	if 0 < self.harness.settings.RetryBase {
-		wait = self.harness.settings.RetryBase << (attempt - 1)
+		retryTime = now.Add(self.harness.settings.RetryBase << (attempt - 1))
 	}
 	if 0 < failure.RetryAtMs {
-		if until := time.UnixMilli(failure.RetryAtMs).Sub(self.harness.clock.Now()); wait < until {
-			wait = until
-		}
+		retryTime = laterTime(retryTime, time.UnixMilli(failure.RetryAtMs))
 	}
-	return wait
+	return retryTime
 }
 
-// Waits on the Harness's clock, false where ctx ended first.
-func (self *harnessAgent) wait(ctx context.Context, wait time.Duration) bool {
+// Waits on the Harness's clock until at, which a wait sets for that time itself (QD-1425), false where ctx ended
+// first.
+func (self *harnessAgent) waitUntil(ctx context.Context, at time.Time) bool {
 	select {
-	case <-self.harness.clock.After(wait):
+	case <-ClockAfterAt(self.harness.clock, at):
 		return true
 	case <-ctx.Done():
 		return false
@@ -81,9 +80,10 @@ func (self *harnessAgent) callWithRecovery(ctx context.Context) (*HarnessPiMessa
 		switch {
 		case harnessRetryable(failure.Code) && retries < self.harness.settings.RetryCount:
 			retries += 1
-			wait := self.retryWait(retries, failure)
-			self.emit(NewHarnessAutoRetryStartEvent(retries, self.harness.settings.RetryCount, wait.Milliseconds(), failure.Error()))
-			if !self.wait(ctx, wait) {
+			now := self.harness.clock.Now()
+			retryTime := self.retryTime(now, retries, failure)
+			self.emit(NewHarnessAutoRetryStartEvent(retries, self.harness.settings.RetryCount, retryTime.Sub(now).Milliseconds(), failure.Error()))
+			if !self.waitUntil(ctx, retryTime) {
 				return nil, self.aborted()
 			}
 			continue
@@ -99,11 +99,12 @@ func (self *harnessAgent) callWithRecovery(ctx context.Context) (*HarnessPiMessa
 		case failure.Code == InferErrorInsufficientQuota && failure.Reason == InferQuotaReasonHeld:
 			if heldRetries < self.harness.settings.HeldRetryCount {
 				heldRetries += 1
-				wait := time.Duration(0)
+				// the broker's time, none going again at once
+				var retryTime time.Time
 				if 0 < failure.RetryAtMs {
-					wait = time.UnixMilli(failure.RetryAtMs).Sub(self.harness.clock.Now())
+					retryTime = time.UnixMilli(failure.RetryAtMs)
 				}
-				if !self.wait(ctx, wait) {
+				if !self.waitUntil(ctx, retryTime) {
 					return nil, self.aborted()
 				}
 				continue

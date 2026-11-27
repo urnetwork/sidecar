@@ -95,10 +95,10 @@ func TestBridgeRevocationsCloseExactlyTheirTags(t *testing.T) {
 // §22.5's reset against drain: a route withdrawn to drain keeps admitting until max(drain_seconds, 600 s) from its
 // start, then the bridge publishes and closes its tag; withdrawn with reset, it closes at once.
 //
-// run, which times the drain's end, sets its timer as a duration from its own read of the clock. The state returns
-// here with run between that read and the timer's arm, held there so this comes on every run: under load tip-check
-// moved the clock to 300 s inside that window, and run's timer stood 600 s after the move. The clock moves only once
-// the timer at the floor stands.
+// run, which times the drain's end, once set its timer as a duration from its own read of the clock, and under load
+// tip-check moved the clock to 300 s between that read and the timer's arm, so run's timer stood 600 s after the move.
+// run now sets its timer for the floor itself (QD-1425); the state still returns here with run held between its read
+// and the arm, so this meets that window on every run, and the clock moves only once the timer at the floor stands.
 func TestBridgeResetAgainstDrain(t *testing.T) {
 	routed := egressTestTag(egressTestUntagged, sidecartest.BridgeFixtureRouteId(1))
 	start := time.UnixMilli(egressTestTimeMs)
@@ -111,7 +111,7 @@ func TestBridgeResetAgainstDrain(t *testing.T) {
 		clock = newStateTestHeldClock(settings)
 	})
 	// the fixture times nothing, so run's next arm is the drain's
-	held, release := clock.holdNextAfter()
+	held, release := clock.holdNextArm()
 	t.Cleanup(release)
 	drain.log.Tick()
 	drain.setState(draining, true)
@@ -174,7 +174,7 @@ func TestBridgeDrainFloorCountsFromTheDrainsStart(t *testing.T) {
 	test := newStateTestWithSettings(t, before, true, func(settings *device.BridgeSettings) {
 		clock = newStateTestHeldClock(settings)
 		// nothing times the bridge until the state before, so run's first arm is its expiry's
-		held, release = clock.holdNextAfter()
+		held, release = clock.holdNextArm()
 	})
 	t.Cleanup(release)
 	test.awaitHeld(held)

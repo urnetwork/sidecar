@@ -48,23 +48,24 @@ func newDaemonRequestBound(clock Clock, timeout time.Duration, expire func()) *d
 	return bound
 }
 
-// Runs the bound on with what the request's own work left of it, unless it ended or a wait is under way. Called with
-// no lock held, since a clock may call back before it answers.
+// Runs the bound on with what the request's own work left of it, unless it ended or a wait is under way: its expiry is
+// that much past the run's start, the time the timer is set for itself (QD-1425), as a wait counts from that start.
+// Called with no lock held, since a clock may call back before it answers.
 func (self *daemonRequestBound) run() {
-	generation, left, ok := func() (uint64, time.Duration, bool) {
+	generation, expireAt, ok := func() (uint64, time.Time, bool) {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		if self.done || 0 < self.waits {
-			return 0, 0, false
+			return 0, time.Time{}, false
 		}
 		self.generation += 1
 		self.runAt = self.clock.Now()
-		return self.generation, self.timeout - self.counted, true
+		return self.generation, self.runAt.Add(self.timeout - self.counted), true
 	}()
 	if !ok {
 		return
 	}
-	stop := self.clock.AfterFunc(left, func() {
+	stop := ClockAfterFuncAt(self.clock, expireAt, func() {
 		expired := func() bool {
 			self.stateLock.Lock()
 			defer self.stateLock.Unlock()

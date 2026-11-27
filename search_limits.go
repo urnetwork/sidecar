@@ -80,8 +80,8 @@ func (self *searchLimits) forget(session Id) {
 	delete(self.sessions, session)
 }
 
-// Takes one of the rate's tokens for a new search of session, or answers how long until one comes.
-func (self *searchLimits) takeToken(limits *searchSessionLimits) (bool, time.Duration) {
+// Takes one of the rate's tokens for a new search of session, or answers when one comes.
+func (self *searchLimits) takeToken(limits *searchSessionLimits) (bool, time.Time) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	rate := self.settings.SessionSearchRate
@@ -93,9 +93,9 @@ func (self *searchLimits) takeToken(limits *searchSessionLimits) (bool, time.Dur
 	}
 	if 1 <= limits.tokens {
 		limits.tokens -= 1
-		return true, 0
+		return true, time.Time{}
 	}
-	return false, time.Duration((1 - limits.tokens) * float64(perToken))
+	return false, now.Add(time.Duration((1 - limits.tokens) * float64(perToken)))
 }
 
 // Admits one call of session: a new search takes a rate token first; then a session slot and a daemon slot, each
@@ -104,14 +104,15 @@ func (self *searchLimits) admit(ctx context.Context, session Id, newSearch bool)
 	limits := self.sessionOf(session)
 	if newSearch && session != searchLocalSession {
 		for {
-			ok, wait := self.takeToken(limits)
+			ok, tokenAt := self.takeToken(limits)
 			if ok {
 				break
 			}
+			// for the time the token comes itself (QD-1425)
 			select {
 			case <-ctx.Done():
 				return nil, ErrSearchBusy
-			case <-self.clock.After(wait):
+			case <-ClockAfterAt(self.clock, tokenAt):
 			}
 		}
 	}

@@ -554,8 +554,8 @@ func (self *DirectoryClient) Run(ctx context.Context) {
 			}
 			continue
 		}
-		wait := time.Duration(self.dueMillis()-nowMillis) * time.Millisecond
-		stop := self.clock.AfterFunc(wait, self.signal)
+		// for the next sync's due time itself (QD-1425); signal never blocks, so a due already reached may signal here
+		stop := ClockAfterFuncAt(self.clock, time.UnixMilli(self.dueMillis()), self.signal)
 		select {
 		case <-ctx.Done():
 			stop()

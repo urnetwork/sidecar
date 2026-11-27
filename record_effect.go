@@ -30,10 +30,11 @@ import (
 	"sync"
 )
 
-// Whether a kind's effect is consumed at §8.10's server gate rather than on this device: in v0 only §12.8's POST
-// /dns/records, since grant activations use grant_id (§16.6's server row).
+// Whether a kind's effect is consumed at a server's gate rather than on this device: §12.8's POST /dns/records, since
+// grant activations use grant_id (§16.6's server row), and DESIGN-COMPUTE §16.3's kind 21 at the broker's POST
+// compute/v1/budget/raise (BAL-M12-16).
 func sidecarActionServerGated(kind SidecarActionKind) bool {
-	return kind == SidecarActionDnsSet || kind == SidecarActionDnsDelete
+	return kind == SidecarActionDnsSet || kind == SidecarActionDnsDelete || kind == SidecarActionComputeBudgetRaise
 }
 
 // Registers kind's Lookup for this sidecar's gate, replacing any before; the answer removes it, if it is still the

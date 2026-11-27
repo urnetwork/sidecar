@@ -218,11 +218,11 @@ func (self *Subprotocol) noteAnswerRefused(sourceId connect.Id, requestId uint64
 	}
 }
 
-// Waits for pending's response, at most timeout on this side's clock, ctx, or the Subprotocol's end. A
-// timeout is DEADLINE_EXCEEDED with requestId, which the caller retries with. An answer this side's gate
-// refused ends the wait as UNAUTHENTICATED with requestId, which Call meets with a fresh Hello, unless a
-// response the gate took came beside it.
-func (self *Subprotocol) awaitPending(ctx context.Context, pending *rpcPending, timeout time.Duration, requestId uint64) (*rpcResponse, error) {
+// Waits for pending's response, until deadline at most on this side's clock, a wait for that time itself (QD-1425),
+// ctx, or the Subprotocol's end. A deadline reached is DEADLINE_EXCEEDED with requestId, which the caller retries
+// with. An answer this side's gate refused ends the wait as UNAUTHENTICATED with requestId, which Call meets with a
+// fresh Hello, unless a response the gate took came beside it.
+func (self *Subprotocol) awaitPending(ctx context.Context, pending *rpcPending, deadline time.Time, requestId uint64) (*rpcResponse, error) {
 	select {
 	case response := <-pending.responses:
 		return response, nil
@@ -233,7 +233,7 @@ func (self *Subprotocol) awaitPending(ctx context.Context, pending *rpcPending, 
 		default:
 		}
 		return nil, &SubprotocolError{Code: protocol.ErrorCode_ERR_UNAUTHENTICATED, RequestId: requestId}
-	case <-self.clock.After(timeout):
+	case <-ClockAfterAt(self.clock, deadline):
 		return nil, &SubprotocolError{Code: protocol.ErrorCode_ERR_DEADLINE_EXCEEDED, RequestId: requestId}
 	case <-ctx.Done():
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
@@ -380,7 +380,7 @@ func (self *Subprotocol) Call(ctx context.Context, clientId Id, messageType prot
 	// refused came after the Hello the call went under ended: either way one fresh Hello, then the same request
 	// again, which a mutating handler that ran answers from what it kept (see the file header)
 	for attempt := 0; ; attempt += 1 {
-		if err := self.ensurePeerVerifiedWithin(ctx, peerId, deadline.Sub(self.clock.Now())); err != nil {
+		if err := self.ensurePeerVerifiedWithin(ctx, peerId, deadline); err != nil {
 			var subprotocolError *SubprotocolError
 			switch {
 			case errors.As(err, &subprotocolError):
@@ -465,7 +465,7 @@ func (self *Subprotocol) callOnce(
 		return nil, err
 	}
 
-	response, err := self.awaitPending(ctx, pending, deadline.Sub(self.clock.Now()), requestId)
+	response, err := self.awaitPending(ctx, pending, deadline, requestId)
 	if err != nil {
 		// a search is never cancelled (§11.14): the indexer answers it at its size whatever happens here
 		if code, ok := SubprotocolErrorCode(err); ok && code == protocol.ErrorCode_ERR_CANCELLED && !search {

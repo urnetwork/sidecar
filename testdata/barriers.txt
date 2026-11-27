@@ -142,6 +142,8 @@ barrier compute_book.commit.after controller/compute_book.go
 barrier compute_book.commit.before controller/compute_book.go
 barrier compute_book.drop.after controller/compute_book.go
 barrier compute_book.drop.before controller/compute_book.go
+barrier compute_budget_raise.claim.after controller/compute_budget_raise.go
+barrier compute_budget_raise.claim.before controller/compute_budget_raise.go
 barrier compute_client.low.after compute_client.go
 barrier compute_client.low.before compute_client.go
 barrier compute_ledger.confirm.after controller/compute_ledger.go

@@ -211,7 +211,8 @@ func (self *Subprotocol) dispatchRequest(handler SubprotocolHandler, options *Ha
 		self.sendRefusal(reply, &SubprotocolError{Code: protocol.ErrorCode_ERR_RESOURCE_EXHAUSTED})
 		return
 	}
-	stopTimer := self.clock.AfterFunc(deadline.Sub(self.clock.Now()), func() {
+	// for the deadline itself (QD-1425); a cancel takes no lock this holds, so a deadline already passed may cancel here
+	stopTimer := ClockAfterFuncAt(self.clock, deadline, func() {
 		cancel(errHandlerDeadline)
 	})
 	var peer *SubprotocolPeerIdentity

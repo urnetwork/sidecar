@@ -142,9 +142,10 @@ func (self *headCheckTransport) run() {
 	lastRound := time.Time{}
 	for {
 		if !lastRound.IsZero() {
-			if gap := self.settings.HeadCheckTimeout - self.clock.Now().Sub(lastRound); 0 < gap {
+			// the next round may start HeadCheckTimeout after the last, a wait for that time itself (QD-1425)
+			if roundAt := lastRound.Add(self.settings.HeadCheckTimeout); self.clock.Now().Before(roundAt) {
 				select {
-				case <-self.clock.After(gap):
+				case <-ClockAfterAt(self.clock, roundAt):
 				case <-self.ctx.Done():
 					return
 				}

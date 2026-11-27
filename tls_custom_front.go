@@ -98,7 +98,8 @@ func (self *sidecarTlsCustomAlpn) Serve(ctx context.Context, host, owner, keyAut
 		return ErrTlsPublishUnavailable
 	}
 	waitCtx, cancel := context.WithCancel(ctx)
-	stop := front.clock.AfterFunc(expireTime.Sub(front.clock.Now()), cancel)
+	// for the challenge's expiry itself (QD-1425)
+	stop := ClockAfterFuncAt(front.clock, expireTime, cancel)
 	defer stop()
 	defer cancel()
 	if err := socket.awaitAcmeClaim(waitCtx, host, claimSeq); err != nil {

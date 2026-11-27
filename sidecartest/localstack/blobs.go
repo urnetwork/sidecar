@@ -331,7 +331,8 @@ func (self *blobCluster) send(ctx context.Context, request *blobRequest) (*blobR
 		deadline := sidecar.BlobRequestDeadline(ctx, issued, self.RequestTimeout())
 		httpRequest.Header.Set(blobDeadlineHeader, strconv.FormatInt(deadline.UnixMilli(), 10))
 		if !self.delayed {
-			stopDeadline = self.store.clock.AfterFunc(deadline.Sub(issued), cancel)
+			// for the deadline itself (QD-1425), not a timeout from the reading the request was issued at
+			stopDeadline = sidecar.ClockAfterFuncAt(self.store.clock, deadline, cancel)
 		}
 	}
 	signS3Request(httpRequest, self.store.credentials, issued, payloadSha256)

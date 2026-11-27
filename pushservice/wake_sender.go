@@ -449,8 +449,10 @@ func (self *WakeSender) runDispatcher() {
 		}
 		stop := func() bool { return false }
 		if waiting {
-			stop = self.clock.AfterFunc(time.Duration(nextDueMs-self.clock.Now().UnixMilli())*time.Millisecond, self.wakeDispatcher)
-			// a clock that passed the due while the timer was set leaves the timer standing late: wake now
+			// for the due time itself (QD-1425)
+			stop = sidecar.ClockAfterFuncAt(self.clock, time.UnixMilli(nextDueMs), self.wakeDispatcher)
+			// a clock that takes a timeout from a reading, and passed the due while the timer was set, leaves the
+			// timer standing late: wake now
 			if nextDueMs <= self.clock.Now().UnixMilli() {
 				self.wakeDispatcher()
 			}

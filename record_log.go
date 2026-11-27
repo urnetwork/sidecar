@@ -1342,11 +1342,14 @@ func (self *RecordLog) Tick(ctx context.Context) {
 	}
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
-	view.nextTickMillis = writer.clock.Now().Add(interval).UnixMilli()
+	// the tick's wake for the time it records itself (QD-1425); signal never blocks, so a time already reached may
+	// signal here under the lock
+	tickAt := writer.clock.Now().Add(interval)
+	view.nextTickMillis = tickAt.UnixMilli()
 	if self.stopWake != nil {
 		self.stopWake()
 	}
-	self.stopWake = writer.clock.AfterFunc(interval, writer.signal)
+	self.stopWake = ClockAfterFuncAt(writer.clock, tickAt, writer.signal)
 }
 
 // The log as this device reads it now, without syncing: what `ur record log status` prints after a sync.

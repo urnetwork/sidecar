@@ -315,7 +315,9 @@ func (self *EvsHintNotifier) send(repoId sidecar.Id, hint *sidecar.ClientHint, c
 		case now.Sub(state.lastSent) < self.settings.HintPerRepoInterval:
 			state.pending = hint
 			state.pendingHeads = []time.Time{seenAt}
-			self.clock.AfterFunc(state.lastSent.Add(self.settings.HintPerRepoInterval).Sub(now), func() {
+			// for the interval's end itself (QD-1425); the flush runs on its own goroutine, so an end already reached may
+			// start it here
+			sidecar.ClockAfterFuncAt(self.clock, state.lastSent.Add(self.settings.HintPerRepoInterval), func() {
 				go self.flush(repoId)
 			})
 		default:

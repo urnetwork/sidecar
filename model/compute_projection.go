@@ -674,9 +674,18 @@ type ComputeProjectionCounter struct {
 	ChargedNanoUsd int64
 }
 
+// One raise in force in a rebuild's snapshot: the cap a kind-21 raise lifted every budget of its subject to for the
+// UTC day or month of At (BAL-M12-16).
+type ComputeProjectionRaisedCap struct {
+	SubjectId  operator.Id
+	Period     ComputeBudgetPeriod
+	At         time.Time
+	CapNanoUsd int64
+}
+
 // What a rebuild writes: the account's settled balance and version, each open row's hold and reservation, each
-// settled row's charge, and the day's and month's booked charges by subject, read in one REPEATABLE READ snapshot
-// under the network's fence (BAL-M12-04).
+// settled row's charge, the day's and month's booked charges by subject, and the raises in force, read in one snapshot
+// under the network's fence (BAL-M12-04, BAL-M12-16).
 type ComputeProjectionSnapshot struct {
 	NetworkId operator.Id
 	Account   *ComputeProjectionAccount
@@ -685,6 +694,7 @@ type ComputeProjectionSnapshot struct {
 	Holds          []*ComputeProjectionHoldRow
 	Charges        []*ComputeProjectionChargeRow
 	Counters       []*ComputeProjectionCounter
+	Raises         []*ComputeProjectionRaisedCap
 }
 
 // Writes snapshot's projection whole and clears the mark (§9.7): every counter the projection listed is deleted with
@@ -746,6 +756,18 @@ func ComputeProjectionRebuild(env operator.Env, ctx context.Context, settings *C
 		}
 		args = append(args, hex.EncodeToString(counter.SubjectId[:]), counter.Budget, field, strconv.FormatInt(counter.ChargedNanoUsd, 10))
 		subjectIds = append(subjectIds, counter.SubjectId)
+	}
+	args = append(args, strconv.Itoa(len(snapshot.Raises)))
+	for _, raise := range snapshot.Raises {
+		field, err := ComputeBudgetPeriodField(raise.Period, raise.At)
+		if err != nil {
+			return err
+		}
+		if err := computeProjectionAmount("a raised cap", raise.CapNanoUsd); err != nil {
+			return err
+		}
+		args = append(args, hex.EncodeToString(raise.SubjectId[:]), field, strconv.FormatInt(raise.CapNanoUsd, 10))
+		subjectIds = append(subjectIds, raise.SubjectId)
 	}
 	// the subjects the projection listed, whose counters go with it
 	key := ComputeProjectionKey(snapshot.NetworkId)

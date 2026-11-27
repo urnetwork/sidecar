@@ -263,7 +263,7 @@ func (self *GkmGroupClient) armWelcomeAsk(repoId Id) {
 			if !ok {
 				return
 			}
-			if self.wait(ctx, due.Sub(self.clock.Now())+self.jitter(self.settings.PendingCommitJitter)) != nil {
+			if self.waitUntil(ctx, due.Add(self.jitter(self.settings.PendingCommitJitter))) != nil {
 				return
 			}
 			self.logFlowError("welcome ask", self.RunPending(ctx, repoId))

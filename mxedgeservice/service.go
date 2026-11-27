@@ -229,9 +229,14 @@ func (self *MxEdgeService) run() {
 			return self.store != nil && self.store.Ping(ctx) == nil
 		}()
 		self.storesReachable.Set(reachable)
-		// a probe at the date change too, so a new day's k is read before a session needs it
+		// a probe at the date change too, so a new day's k is read before a session needs it: a wait for the earlier
+		// time itself (QD-1425)
 		now := self.clock.Now()
-		probeTimer := self.clock.After(min(self.settings.ReadyProbeInterval, mxUtcDayStart(mxUtcDay(now)+1).Sub(now)))
+		probeTime := now.Add(self.settings.ReadyProbeInterval)
+		if dayStart := mxUtcDayStart(mxUtcDay(now) + 1); dayStart.Before(probeTime) {
+			probeTime = dayStart
+		}
+		probeTimer := sidecar.ClockAfterAt(self.clock, probeTime)
 		self.probeCount.Update(func(count int) int { return count + 1 })
 		select {
 		case <-self.ctx.Done():

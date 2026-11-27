@@ -367,7 +367,7 @@ func (self *TlsCertManager) run() {
 		select {
 		case <-self.ctx.Done():
 		case <-self.wake:
-		case <-self.clock.After(self.nextPassWait()):
+		case <-ClockAfterAt(self.clock, self.nextPassTime()):
 		}
 		// select takes any of its ready cases at random: a hint or a timer taken as the manager closed reads as the end
 		if self.ctx.Err() != nil {
@@ -409,21 +409,23 @@ func (self *TlsCertManager) wait(ctx context.Context, timeout time.Duration) err
 	return self.endErr(ctx)
 }
 
-// How long the loop waits with no hint: the resync, or less when an installed certificate expires sooner.
-func (self *TlsCertManager) nextPassWait() time.Duration {
-	wait := self.settings.CertResyncInterval
+// When the loop's next pass with no hint is due: the resync, CertResyncInterval from now, or sooner when an installed
+// certificate expires before it. The loop waits for this time itself (QD-1425), so a move of the clock as it sets the
+// wait cannot leave it past an expiry.
+func (self *TlsCertManager) nextPassTime() time.Time {
 	now := self.clock.Now()
+	passTime := now.Add(self.settings.CertResyncInterval)
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	for _, entry := range self.state.Certs {
 		if entry.leaf == nil {
 			continue
 		}
-		if untilExpiry := entry.leaf.NotAfter.Sub(now); 0 < untilExpiry && untilExpiry < wait {
-			wait = untilExpiry
+		if notAfter := entry.leaf.NotAfter; now.Before(notAfter) && notAfter.Before(passTime) {
+			passTime = notAfter
 		}
 	}
-	return wait
+	return passTime
 }
 
 // An error's text for a log: a refusal's route and status, and for anything else its kind, never a name.

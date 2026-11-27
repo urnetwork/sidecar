@@ -554,9 +554,10 @@ func (self *pushAttempt) takeOver(key string, origin EvsSlotOrigin, stored []byt
 	if !clockCheck.Sure() {
 		return false, slotUnwritten
 	}
-	if wait := lastModified.Add(self.settings.SlotSettleAge).Sub(self.engine.clock.Now()); 0 < wait && !evsSlotTwinBreaks(evsSlotTwinTakesUnsettled) {
+	// the slot settles SlotSettleAge after its last write, a time waited for itself (QD-1425)
+	if settledAt := lastModified.Add(self.settings.SlotSettleAge); self.engine.clock.Now().Before(settledAt) && !evsSlotTwinBreaks(evsSlotTwinTakesUnsettled) {
 		select {
-		case <-self.engine.clock.After(wait):
+		case <-sidecar.ClockAfterAt(self.engine.clock, settledAt):
 		case <-unsure:
 			return false, slotUnwritten
 		case <-self.ctx.Done():

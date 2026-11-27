@@ -500,7 +500,7 @@ func (self *HeadStopState) run() {
 		next := self.tick()
 		var wake <-chan time.Time
 		if !next.IsZero() {
-			wake = self.env.Clock.After(next.Sub(self.env.Clock.Now()))
+			wake = ClockAfterAt(self.env.Clock, next)
 		}
 		self.loopMark.Set(headStopLoopMark{passes: pass, seen: seen})
 		select {
