@@ -2,12 +2,14 @@ package controller
 
 // Auto-renew as the sidecar repo sees it (BAL-M12-11): threshold's figures and their bounds, the day's and month's
 // counts rolling over at UTC midnight and month, a top-up's idempotency key fixed by its network, day, attempt and pack,
-// the run's cursor round trip, and what a change refuses before any store is asked. The runs on real PostgreSQL and
-// Redis, with a fake Stripe and clock, are server/computet3/compute_auto_renew_t3_test.go's.
+// the run's cursor round trip, what a change refuses before any store is asked, and what a store subscription's report
+// does to the network's monthly row. The runs on real PostgreSQL and Redis, with a fake Stripe and clock, are
+// server/computet3/compute_auto_renew_t3_test.go's.
 
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -152,8 +154,115 @@ func TestComputeAutoRenewRecordsRefuseWhatTheyCannotTake(t *testing.T) {
 	if _, err := ComputeMonthlyGrant(env, context.Background(), settings, &ComputeMonthlyGrantRequest{NetworkId: networkId, PaymentIntentId: "pi_x", Credits: 30}); !errors.Is(err, ErrComputeAutoRenewArgs) {
 		t.Errorf("a grant of a plan not sold: %v", err)
 	}
+	long := strings.Repeat("t", settings.StoreSubscriptionRefMaxByteCount+1)
+	for name, report := range map[string]*ComputeStoreSubscriptionReport{
+		"no network":          {Market: model.ComputeMarketGooglePlay, StoreRef: "token", Credits: 25, Renews: true},
+		"Stripe's":            {NetworkId: networkId, Market: model.ComputeMarketStripe, StoreRef: "sub_x", Credits: 25, Renews: true},
+		"no subscription":     {NetworkId: networkId, Market: model.ComputeMarketAppStore, Credits: 25, Renews: true},
+		"no plan":             {NetworkId: networkId, Market: model.ComputeMarketAppStore, StoreRef: "1000", Renews: true},
+		"a token past bounds": {NetworkId: networkId, Market: model.ComputeMarketGooglePlay, StoreRef: long, Credits: 25, Renews: true},
+		"a replaced token past bounds": {
+			NetworkId: networkId, Market: model.ComputeMarketGooglePlay, StoreRef: "token", ReplacesStoreRef: long, Credits: 25, Renews: true,
+		},
+	} {
+		if _, err := ComputeMonthlyStoreReport(env, context.Background(), settings, report); !errors.Is(err, ErrComputeAutoRenewArgs) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
 	if env.db.callCount != 0 {
 		t.Fatalf("a refused record asked the database %d times", env.db.callCount)
+	}
+}
+
+// A store subscription's report takes the network's monthly row where no plan renews or the row stands for it (or for
+// the one it replaced), turning it on or off as it renews; leaves a renewing plan the row's, but for a Play
+// subscription over an App Store one; and never records a stopped subscription the row does not stand for.
+func TestComputeStoreReportKeepsOnePlanAndPrefersPlayOverTheAppStore(t *testing.T) {
+	networkId := sidecar.NewId()
+	ref := func(text string) *string {
+		return &text
+	}
+	credits := func(count int64) *int64 {
+		return &count
+	}
+	stripe := &model.ComputeAutoRenew{
+		NetworkId: networkId, Mode: model.ComputeAutoRenewModeMonthly, Enabled: true, Market: model.ComputeMarketStripe,
+		MonthlyCredits: credits(50), PayerMemberId: &networkId, StripeCustomerId: ref("cus_x"), StripeSubscriptionId: ref("sub_x"),
+	}
+	apple := &model.ComputeAutoRenew{
+		NetworkId: networkId, Mode: model.ComputeAutoRenewModeMonthly, Enabled: true, Market: model.ComputeMarketAppStore,
+		MonthlyCredits: credits(25), StoreRef: ref("1000"),
+	}
+	play := &model.ComputeAutoRenew{
+		NetworkId: networkId, Mode: model.ComputeAutoRenewModeMonthly, Enabled: true, Market: model.ComputeMarketGooglePlay,
+		MonthlyCredits: credits(25), StoreRef: ref("token-a"),
+	}
+	clone := func(row *model.ComputeAutoRenew, enabled bool) *model.ComputeAutoRenew {
+		copied := *row
+		copied.Enabled = enabled
+		return &copied
+	}
+	report := func(market model.ComputeMarket, storeRef string, replaces string, plan int64, renews bool) *ComputeStoreSubscriptionReport {
+		return &ComputeStoreSubscriptionReport{NetworkId: networkId, Market: market, StoreRef: storeRef, ReplacesStoreRef: replaces, Credits: plan, Renews: renews}
+	}
+	type want struct {
+		recorded   bool
+		concurrent bool
+		// the row written: its store, subscription, plan and whether it renews
+		market  model.ComputeMarket
+		ref     string
+		credits int64
+		enabled bool
+	}
+	for name, c := range map[string]struct {
+		monthly *model.ComputeAutoRenew
+		report  *ComputeStoreSubscriptionReport
+		want    want
+	}{
+		"no row, a plan that renews": {nil, report(model.ComputeMarketAppStore, "1000", "", 25, true),
+			want{recorded: true, market: model.ComputeMarketAppStore, ref: "1000", credits: 25, enabled: true}},
+		"no row, a stopped plan": {nil, report(model.ComputeMarketAppStore, "1000", "", 25, false), want{}},
+		"its own row turned off": {apple, report(model.ComputeMarketAppStore, "1000", "", 25, false),
+			want{recorded: true, market: model.ComputeMarketAppStore, ref: "1000", credits: 25, enabled: false}},
+		"its own row downgraded": {apple, report(model.ComputeMarketAppStore, "1000", "", 10, true),
+			want{recorded: true, market: model.ComputeMarketAppStore, ref: "1000", credits: 10, enabled: true}},
+		"a Play replacement": {play, report(model.ComputeMarketGooglePlay, "token-b", "token-a", 50, true),
+			want{recorded: true, market: model.ComputeMarketGooglePlay, ref: "token-b", credits: 50, enabled: true}},
+		"over an ended Stripe plan": {clone(stripe, false), report(model.ComputeMarketGooglePlay, "token-a", "", 25, true),
+			want{recorded: true, market: model.ComputeMarketGooglePlay, ref: "token-a", credits: 25, enabled: true}},
+		"over a running Stripe plan":    {stripe, report(model.ComputeMarketGooglePlay, "token-a", "", 25, true), want{concurrent: true}},
+		"a second App Store plan":       {apple, report(model.ComputeMarketAppStore, "2000", "", 25, true), want{concurrent: true}},
+		"an App Store plan over Play's": {play, report(model.ComputeMarketAppStore, "1000", "", 25, true), want{concurrent: true}},
+		"a second Play plan":            {play, report(model.ComputeMarketGooglePlay, "token-c", "", 25, true), want{concurrent: true}},
+		"another subscription stops":    {apple, report(model.ComputeMarketAppStore, "2000", "", 25, false), want{}},
+		"another store's plan over one off": {clone(apple, false), report(model.ComputeMarketGooglePlay, "token-a", "", 25, true),
+			want{recorded: true, market: model.ComputeMarketGooglePlay, ref: "token-a", credits: 25, enabled: true}},
+		"Play's over the App Store's": {apple, report(model.ComputeMarketGooglePlay, "token-a", "", 50, true),
+			want{recorded: true, concurrent: true, market: model.ComputeMarketGooglePlay, ref: "token-a", credits: 50, enabled: true}},
+	} {
+		var monthly *model.ComputeAutoRenew
+		if c.monthly != nil {
+			monthly = clone(c.monthly, c.monthly.Enabled)
+		}
+		row, answer := computeStoreReportRow(monthly, c.report)
+		if answer.Recorded != c.want.recorded || answer.Concurrent != c.want.concurrent || answer.Closed {
+			t.Errorf("%s: %+v", name, answer)
+			continue
+		}
+		if !c.want.recorded {
+			if row != nil {
+				t.Errorf("%s: wrote %+v", name, row)
+			}
+			continue
+		}
+		if row == nil || row.Market != c.want.market || row.StoreRef == nil || *row.StoreRef != c.want.ref || row.MonthlyCredits == nil ||
+			*row.MonthlyCredits != c.want.credits || row.Enabled != c.want.enabled || row.Mode != model.ComputeAutoRenewModeMonthly {
+			t.Errorf("%s: wrote %+v", name, row)
+			continue
+		}
+		if row.PayerMemberId != nil || row.StripeCustomerId != nil || row.StripePaymentMethodId != nil || row.StripeSubscriptionId != nil {
+			t.Errorf("%s: a store's plan keeps a card or a Stripe subscription: %+v", name, row)
+		}
 	}
 }
 

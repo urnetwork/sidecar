@@ -293,6 +293,9 @@ type ComputeAutoRenew struct {
 	TopUpMonthNanoUsd     int64
 	NextRetryTime         *time.Time
 	UpdateTime            time.Time
+	// A store's monthly plan: its own subscription, kept across its renewals, the App Store's original transaction id
+	// or Play's purchase token; nil for a Stripe plan and for threshold.
+	StoreRef *string
 }
 
 // What a dispute came to (D-BAL-11), as compute_dispute.state holds it.

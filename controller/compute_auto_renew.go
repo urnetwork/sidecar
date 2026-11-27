@@ -8,7 +8,8 @@
 //	           it on. Before each charge the payer is checked to be a member whose role or grant still lets them buy,
 //	           and otherwise their card is detached, which stops threshold until another is saved.
 //	monthly    M credits each month: a Stripe subscription made by Checkout in subscription mode, its invoice.paid
-//	           crediting a kind-2 lot under the invoice's PaymentIntent; unused credits carry over.
+//	           crediting a kind-2 lot under the invoice's PaymentIntent; or a store subscription, the App Store's or
+//	           Play's, whose grants their paths credit and whose plan they report here; unused credits carry over.
 //
 // What runs here, and who calls it:
 //
@@ -28,6 +29,14 @@
 //	ComputeMonthlyEnded         the webhook's customer.subscription.deleted
 //	ComputeMonthlyPaymentFailed the webhook's invoice.payment_failed: the billing contacts told, Stripe's own billing
 //	                            retry following
+//	ComputeMonthlyStoreReport   the App Store's and Play's compute paths (server's compute_store_apple.go and
+//	                            compute_store_play.go): a store subscription's grant, plan change or change of renewal,
+//	                            so its plan shows as the network's and a closure finds it to stop (compute_close.go)
+//
+// A network holds one monthly plan. A Stripe plan subscribing over a store's that renews is cancelled at once, since
+// the store's cannot be (only its holder cancels an App Store subscription); a store's reported over another plan that
+// renews leaves that plan the network's, but for a Play subscription over an App Store one, which takes the row, since a
+// closure finds an App Store subscription from its grants and a Play subscription only from the row.
 //
 // It registers at init BAL-M12-08's two seams, so a pack's checkout with threshold turned on saves its payer's card
 // (RegisterComputeAutoRenewCards) and the monthly plan opens through Checkout (RegisterComputeMonthlyCheckout). Stripe's
@@ -722,8 +731,11 @@ type ComputeMonthlySubscription struct {
 }
 
 // Records the plan's subscription (the webhook's checkout.session.completed): monthly turned on, its payer the member
-// who opened it. A delivery naming the subscription the row holds changes nothing; another subscription replaces the
-// one it held, which is cancelled after the commit, so no network holds two.
+// who opened it. A delivery naming the subscription the row holds changes nothing; another Stripe subscription replaces
+// the one it held, which is cancelled after the commit, so no network holds two. A store's plan that renews, or a
+// closed account, keeps the row as it stands and the new subscription is cancelled after the commit instead: the
+// store's cannot be cancelled here, and a closed account takes no plan. Under the network's fence, so a closure
+// (compute_close.go) reads the row this writes, or this reads the account it closed.
 func ComputeMonthlySubscribed(env operator.Env, ctx context.Context, settings *model.ComputeLedgerSettings, subscription *ComputeMonthlySubscription) error {
 	var zero operator.Id
 	if subscription.NetworkId == zero || subscription.PayerMemberId == zero || subscription.StripeCustomerId == "" ||
@@ -739,9 +751,16 @@ func ComputeMonthlySubscribed(env operator.Env, ctx context.Context, settings *m
 		return err
 	}
 	now := clock.Now()
-	replaced := ""
+	cancelled := ""
 	err = db.Tx(ctx, func(tx operator.DbTx) error {
-		replaced = ""
+		cancelled = ""
+		if err := model.ComputeFenceInTx(env, ctx, tx, subscription.NetworkId); err != nil {
+			return err
+		}
+		account, err := model.ComputeAccountInTx(env, ctx, tx, subscription.NetworkId)
+		if err != nil {
+			return err
+		}
 		row, err := model.ComputeAutoRenewGetInTx(env, ctx, tx, subscription.NetworkId, model.ComputeAutoRenewModeMonthly, true)
 		if err != nil {
 			return err
@@ -749,10 +768,14 @@ func ComputeMonthlySubscribed(env operator.Env, ctx context.Context, settings *m
 		if row != nil && row.StripeSubscriptionId != nil && *row.StripeSubscriptionId == subscription.StripeSubscriptionId {
 			return nil
 		}
+		if (account != nil && account.State == model.ComputeAccountStateClosed) || (row != nil && row.Enabled && row.Market.Store()) {
+			cancelled = subscription.StripeSubscriptionId
+			return nil
+		}
 		if row == nil {
 			row = &model.ComputeAutoRenew{NetworkId: subscription.NetworkId, Mode: model.ComputeAutoRenewModeMonthly}
 		} else if row.Enabled && row.StripeSubscriptionId != nil {
-			replaced = *row.StripeSubscriptionId
+			cancelled = *row.StripeSubscriptionId
 		}
 		credits, payer := subscription.Credits, subscription.PayerMemberId
 		customer, subscriptionId := subscription.StripeCustomerId, subscription.StripeSubscriptionId
@@ -761,17 +784,18 @@ func ComputeMonthlySubscribed(env operator.Env, ctx context.Context, settings *m
 		row.MonthlyCredits = &credits
 		row.PayerMemberId, row.StripeCustomerId, row.StripeSubscriptionId = &payer, &customer, &subscriptionId
 		row.OffReason = nil
+		row.StoreRef = nil
 		return model.ComputeAutoRenewPutInTx(env, ctx, tx, row, now)
 	}, operator.DbIsolationReadCommitted)
 	if err != nil {
 		return err
 	}
-	if replaced != "" {
+	if cancelled != "" {
 		stripe := ComputeRegisteredStripeRenew()
 		if stripe == nil {
 			return ErrComputeStripeRenewUnavailable
 		}
-		return stripe.CancelSubscription(ctx, replaced)
+		return stripe.CancelSubscription(ctx, cancelled)
 	}
 	return nil
 }
@@ -846,6 +870,121 @@ func ComputeMonthlyPaymentFailed(env operator.Env, ctx context.Context, subscrip
 			NetworkId: row.NetworkId, Kind: ComputeNoticeMonthlyFailed, Key: "monthly/" + row.NetworkId.String() + "/" + invoiceId, AmountNanoUsd: amount,
 		})
 	}, operator.DbIsolationReadCommitted)
+}
+
+// One report of a store's compute subscription (§9.5, §9.8): what the App Store's or Play's compute path learned of it
+// from a grant, a plan change or a change of its renewal, as the store answered it.
+type ComputeStoreSubscriptionReport struct {
+	NetworkId operator.Id
+	// app_store or google_play.
+	Market model.ComputeMarket
+	// The subscription's own id, kept across its renewals and plan changes: the App Store's original transaction id,
+	// Play's purchase token.
+	StoreRef string
+	// The subscription this one replaced, where the store names one: a Play replacement's linked purchase token. A row
+	// standing for it moves to this one.
+	ReplacesStoreRef string
+	// The plan's credits a month: the product that renews next.
+	Credits int64
+	// Whether the store bills it again.
+	Renews bool
+}
+
+// What a store subscription's report did.
+type ComputeStoreSubscriptionAnswer struct {
+	// The network's monthly row now stands for the subscription, on or off as it renews.
+	Recorded bool
+	// Another plan renews beside it, a Stripe one or another store's: two grant each month. The row keeps its own,
+	// but for a Play subscription over an App Store one (see the file header).
+	Concurrent bool
+	// The network's account is closed: nothing recorded.
+	Closed bool
+}
+
+// Reports a store's compute subscription (see the file header), under the network's fence, so a closure reads the row
+// this writes, or this reads the account it closed. A closed account records nothing.
+func ComputeMonthlyStoreReport(env operator.Env, ctx context.Context, settings *model.ComputeLedgerSettings, report *ComputeStoreSubscriptionReport) (*ComputeStoreSubscriptionAnswer, error) {
+	var zero operator.Id
+	if report.NetworkId == zero || !report.Market.Store() || report.StoreRef == "" || report.Credits <= 0 ||
+		settings.StoreSubscriptionRefMaxByteCount < len(report.StoreRef) || settings.StoreSubscriptionRefMaxByteCount < len(report.ReplacesStoreRef) {
+		return nil, fmt.Errorf("%w: a store subscription names its network, its store, its own id of at most %d bytes and its plan", ErrComputeAutoRenewArgs, settings.StoreSubscriptionRefMaxByteCount)
+	}
+	clock, err := env.Clock()
+	if err != nil {
+		return nil, err
+	}
+	db, err := env.Db()
+	if err != nil {
+		return nil, err
+	}
+	now := clock.Now()
+	answer := &ComputeStoreSubscriptionAnswer{}
+	err = db.Tx(ctx, func(tx operator.DbTx) error {
+		*answer = ComputeStoreSubscriptionAnswer{}
+		if err := model.ComputeFenceInTx(env, ctx, tx, report.NetworkId); err != nil {
+			return err
+		}
+		account, err := model.ComputeAccountInTx(env, ctx, tx, report.NetworkId)
+		if err != nil {
+			return err
+		}
+		if account != nil && account.State == model.ComputeAccountStateClosed {
+			answer.Closed = true
+			return nil
+		}
+		monthly, err := model.ComputeAutoRenewGetInTx(env, ctx, tx, report.NetworkId, model.ComputeAutoRenewModeMonthly, true)
+		if err != nil {
+			return err
+		}
+		row, decided := computeStoreReportRow(monthly, report)
+		*answer = *decided
+		if row == nil {
+			return nil
+		}
+		return model.ComputeAutoRenewPutInTx(env, ctx, tx, row, now)
+	}, operator.DbIsolationReadCommitted)
+	if err != nil {
+		return nil, err
+	}
+	return answer, nil
+}
+
+// What report does to the network's monthly row, monthly, nil where it has none (see the file header): the row to
+// write, nil for none, and the answer.
+func computeStoreReportRow(monthly *model.ComputeAutoRenew, report *ComputeStoreSubscriptionReport) (*model.ComputeAutoRenew, *ComputeStoreSubscriptionAnswer) {
+	answer := &ComputeStoreSubscriptionAnswer{}
+	standsFor := monthly != nil && monthly.Market.Store() && monthly.StoreRef != nil &&
+		(*monthly.StoreRef == report.StoreRef || (report.ReplacesStoreRef != "" && *monthly.StoreRef == report.ReplacesStoreRef))
+	switch {
+	case standsFor:
+		// the row's own subscription, or the one it replaced: on or off as it renews
+	case !report.Renews:
+		// a subscription the row does not stand for stops: nothing to record
+		return nil, answer
+	case monthly == nil || !monthly.Enabled:
+		// no plan renews: this one is the network's
+	case monthly.Market == model.ComputeMarketAppStore && report.Market == model.ComputeMarketGooglePlay:
+		// Play's takes the row; the App Store's is found from its grants at a closure
+		answer.Concurrent = true
+	default:
+		answer.Concurrent = true
+		return nil, answer
+	}
+	row := monthly
+	if row == nil {
+		row = &model.ComputeAutoRenew{NetworkId: report.NetworkId, Mode: model.ComputeAutoRenewModeMonthly}
+	}
+	credits, storeRef := report.Credits, report.StoreRef
+	row.Enabled = report.Renews
+	row.Market = report.Market
+	row.MonthlyCredits = &credits
+	row.StoreRef = &storeRef
+	// a store's plan charges no card: an ended Stripe plan's customer and subscription leave the row, so a late
+	// webhook of it finds none
+	row.PayerMemberId, row.StripeCustomerId, row.StripePaymentMethodId, row.StripeSubscriptionId = nil, nil, nil, nil
+	row.OffReason = nil
+	answer.Recorded = true
+	return row, answer
 }
 
 // What one run of compute_auto_renew did.

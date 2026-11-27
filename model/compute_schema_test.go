@@ -45,10 +45,10 @@ var testComputeLedgerColumnClasses = map[string][]string{
 		"paid_lot_required", "version", "catalog_version", "price_read", "terms_version", "clause", "draw_index",
 	},
 	// another party's id for the same money, model or call: a PaymentIntent, a transaction, an order, a catalog id,
-	// an instance and its nonce, a Stripe customer, method or subscription
+	// an instance and its nonce, a Stripe customer, method or subscription, a store's subscription
 	"reference": {
 		"market_ref", "catalog_id", "provider_ref", "stripe_customer_id", "stripe_payment_method_id",
-		"stripe_subscription_id",
+		"stripe_subscription_id", "store_ref",
 	},
 	// keyed hashes (§9.11)
 	"hash": {"code_hash", "payer_hash"},

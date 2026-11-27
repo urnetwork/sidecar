@@ -42,6 +42,9 @@ type ComputeLedgerSettings struct {
 	StoreSubscriptionCredits []int64
 	// §9.8's Stripe monthly plan, M, in credits: 10, 25, 50, 100 or 250.
 	MonthlyPlanCredits []int64
+	// The longest store subscription a store's monthly plan names, the App Store's original transaction id or Play's
+	// purchase token, in bytes: 1024, past both stores' ids. A reading: neither store bounds a purchase token.
+	StoreSubscriptionRefMaxByteCount int
 
 	// §9.11's balance cap: $10,000 a network. A purchase that would pass it is refused before payment.
 	BalanceCapNanoUsd int64
@@ -104,6 +107,14 @@ type ComputeLedgerSettings struct {
 	RefundWindow time.Duration
 	// §9.12: a deleted network's unspent purchased credit goes back to the card within 90 days of purchase.
 	ClosureRefundWindow time.Duration
+	// How far back a closure reads the App Store's monthly grants for subscriptions that may still bill, as Pro's are
+	// checked at deletion: 92 days, a period of at most 31 days and the App Store's 60 days of billing retry, past which
+	// a subscription with no grant renews nothing. A reading: §9.12 names no figure.
+	ClosureStoreWindow time.Duration
+	// The most of those grants a closure asks the App Store about: 24, three months of eight subscriptions; past it the
+	// closure counts the network's App Store subscriptions as renewing, so its deletion waits (fails closed). A
+	// reading: §9.12 names no figure.
+	ClosureStoreGrantMaxCount int
 
 	// §9.4's and §14.6's retention: per-request rows 90 days; a web search's at most 72 hours, purged from 71 h 55 min
 	// (§14.5); the day rows 400 days; lots, promotion codes and redemptions 7 years (financial records); a payer's
@@ -279,6 +290,8 @@ func DefaultComputeLedgerSettings() *ComputeLedgerSettings {
 		StoreSubscriptionCredits: []int64{10, 25, 50, 100},
 		MonthlyPlanCredits:       []int64{10, 25, 50, 100, 250},
 
+		StoreSubscriptionRefMaxByteCount: 1024,
+
 		BalanceCapNanoUsd:         usd(10_000),
 		NewAccountDayNanoUsd:      usd(100),
 		NewAccountWindowNanoUsd:   usd(200),
@@ -307,8 +320,10 @@ func DefaultComputeLedgerSettings() *ComputeLedgerSettings {
 		PromoLapseBatchCount:           500,
 		PromoTextMaxByteCount:          256,
 
-		RefundWindow:        30 * day,
-		ClosureRefundWindow: 90 * day,
+		RefundWindow:              30 * day,
+		ClosureRefundWindow:       90 * day,
+		ClosureStoreWindow:        92 * day,
+		ClosureStoreGrantMaxCount: 24,
 
 		ChargeRetention:          90 * day,
 		SearchChargeRetention:    72 * time.Hour,

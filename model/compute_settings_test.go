@@ -40,6 +40,8 @@ func TestComputeLedgerSettingsDefaults(t *testing.T) {
 		{name: "ThresholdMonthLimitNanoUsd", got: settings.ThresholdMonthLimitNanoUsd, want: usd(200)},
 		{name: "ThresholdDayMaxCount", got: settings.ThresholdDayMaxCount, want: 3},
 		{name: "ThresholdFailureMaxCount", got: settings.ThresholdFailureMaxCount, want: 3},
+		// a reading: past both stores' subscription ids
+		{name: "StoreSubscriptionRefMaxByteCount", got: settings.StoreSubscriptionRefMaxByteCount, want: 1024},
 		// §9.11's promotions
 		{name: "PromoMaxNanoUsd", got: settings.PromoMaxNanoUsd, want: usd(10)},
 		{name: "PromoLapse", got: settings.PromoLapse, want: 30 * day},
@@ -51,6 +53,9 @@ func TestComputeLedgerSettingsDefaults(t *testing.T) {
 		// §9.12
 		{name: "RefundWindow", got: settings.RefundWindow, want: 30 * day},
 		{name: "ClosureRefundWindow", got: settings.ClosureRefundWindow, want: 90 * day},
+		// readings: a month's period and the App Store's 60 days of billing retry; three months of eight subscriptions
+		{name: "ClosureStoreWindow", got: settings.ClosureStoreWindow, want: 92 * day},
+		{name: "ClosureStoreGrantMaxCount", got: settings.ClosureStoreGrantMaxCount, want: 24},
 		// §9.4 and §14.6's retention
 		{name: "ChargeRetention", got: settings.ChargeRetention, want: 90 * day},
 		{name: "SearchChargeRetention", got: settings.SearchChargeRetention, want: 72 * time.Hour},

@@ -7,11 +7,12 @@
 //	ComputeAutoRenewBySubscriptionInTx the monthly row of a Stripe subscription
 //	ComputeAutoRenewThresholdNetworks  compute_auto_renew's cursor: the networks with threshold on, by network id, on
 //	                                   the table's primary key
+//	ComputeStoreGrantsInTx             a network's recent monthly grants from a store, which a closure asks it about
 //	ComputeAutoRenewOffInTx            both of a network's modes off, at its closure
 //
 // A row holds the mode's settings, the member whose card it charges and that card's Stripe customer and payment
-// method, or the plan's subscription, never a card itself; and the day's and month's counts its limits read. Days and
-// months are UTC dates, written as YYYY-MM-DD, never a cast in the session's zone.
+// method, or the plan's subscription, a Stripe one or a store's, never a card itself; and the day's and month's counts
+// its limits read. Days and months are UTC dates, written as YYYY-MM-DD, never a cast in the session's zone.
 
 package model
 
@@ -23,11 +24,11 @@ import (
 	operator "github.com/urnetwork/operator-core"
 )
 
-// compute_auto_renew's columns, in the order computeAutoRenewScan reads them.
+// compute_auto_renew's columns, in the order computeAutoRenewQuery scans them.
 const computeAutoRenewColumns = `network_id, mode, enabled, market, below_nano_usd, pack_credits, month_limit_nano_usd,
 	monthly_credits, payer_member_id, stripe_customer_id, stripe_payment_method_id, stripe_subscription_id, off_reason,
 	top_up_day::text, top_up_day_count, failure_day_count, failure_run_count, top_up_month::text, top_up_month_nano_usd,
-	next_retry_time, update_time`
+	next_retry_time, update_time, store_ref`
 
 // A UTC date's text, nil for none.
 func computeDayText(day *time.Time) *string {
@@ -66,7 +67,7 @@ func computeAutoRenewQuery(ctx context.Context, querier operator.DbQuerier, sql 
 			&row.MonthLimitNanoUsd, &row.MonthlyCredits, &row.PayerMemberId, &row.StripeCustomerId,
 			&row.StripePaymentMethodId, &row.StripeSubscriptionId, &offReason, &topUpDay, &row.TopUpDayCount,
 			&row.FailureDayCount, &row.FailureRunCount, &topUpMonth, &row.TopUpMonthNanoUsd, &row.NextRetryTime,
-			&row.UpdateTime)
+			&row.UpdateTime, &row.StoreRef)
 		if err != nil {
 			return nil, err
 		}
@@ -90,6 +91,12 @@ func computeAutoRenewQuery(ctx context.Context, querier operator.DbQuerier, sql 
 		autoRenews = append(autoRenews, row)
 	}
 	return autoRenews, rows.Err()
+}
+
+// Whether the market is a store's, the App Store or Google Play, whose subscriptions the store bills and renews itself
+// (§9.5).
+func (self ComputeMarket) Store() bool {
+	return self == ComputeMarketAppStore || self == ComputeMarketGooglePlay
 }
 
 // Whether §9.8 names the mode.
@@ -171,13 +178,16 @@ func ComputeAutoRenewPutInTx(env operator.Env, ctx context.Context, tx operator.
 		retry := row.NextRetryTime.UTC()
 		nextRetry = &retry
 	}
+	if row.StoreRef != nil && (row.Mode != ComputeAutoRenewModeMonthly || !row.Market.Store() || *row.StoreRef == "") {
+		return fmt.Errorf("%w: only a store's monthly plan names a store subscription", ErrComputeLotArgs)
+	}
 	row.UpdateTime = now.UTC()
 	_, err := tx.Exec(ctx, `
 		INSERT INTO compute_auto_renew (network_id, mode, enabled, market, below_nano_usd, pack_credits,
 			month_limit_nano_usd, monthly_credits, payer_member_id, stripe_customer_id, stripe_payment_method_id,
 			stripe_subscription_id, off_reason, top_up_day, top_up_day_count, failure_day_count, failure_run_count,
-			top_up_month, top_up_month_nano_usd, next_retry_time, update_time)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::date, $15, $16, $17, $18::date, $19, $20, $21)
+			top_up_month, top_up_month_nano_usd, next_retry_time, update_time, store_ref)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::date, $15, $16, $17, $18::date, $19, $20, $21, $22)
 		ON CONFLICT (network_id, mode) DO UPDATE SET
 			enabled = EXCLUDED.enabled,
 			market = EXCLUDED.market,
@@ -197,11 +207,12 @@ func ComputeAutoRenewPutInTx(env operator.Env, ctx context.Context, tx operator.
 			top_up_month = EXCLUDED.top_up_month,
 			top_up_month_nano_usd = EXCLUDED.top_up_month_nano_usd,
 			next_retry_time = EXCLUDED.next_retry_time,
-			update_time = EXCLUDED.update_time
+			update_time = EXCLUDED.update_time,
+			store_ref = EXCLUDED.store_ref
 	`, row.NetworkId, int16(row.Mode), row.Enabled, int16(row.Market), row.BelowNanoUsd, row.PackCredits,
 		row.MonthLimitNanoUsd, row.MonthlyCredits, row.PayerMemberId, row.StripeCustomerId, row.StripePaymentMethodId,
 		row.StripeSubscriptionId, offReason, computeDayText(row.TopUpDay), row.TopUpDayCount, row.FailureDayCount,
-		row.FailureRunCount, computeDayText(row.TopUpMonth), row.TopUpMonthNanoUsd, nextRetry, row.UpdateTime)
+		row.FailureRunCount, computeDayText(row.TopUpMonth), row.TopUpMonthNanoUsd, nextRetry, row.UpdateTime, row.StoreRef)
 	return err
 }
 
@@ -254,6 +265,20 @@ func ComputeAutoRenewThresholdNetworks(env operator.Env, ctx context.Context, af
 		return rows.Err()
 	})
 	return networkIds, err
+}
+
+// networkId's monthly grants from market credited at or after since, in tx, newest first, at most limit: the store
+// grants a closure asks the store about (§9.12), read on compute_lot_draw's (network_id, kind) and never locked.
+func ComputeStoreGrantsInTx(env operator.Env, ctx context.Context, tx operator.DbTx, networkId operator.Id, market ComputeMarket, since time.Time, limit int) ([]*ComputeLot, error) {
+	if limit <= 0 {
+		return []*ComputeLot{}, nil
+	}
+	return computeLotQuery(ctx, tx, `
+		SELECT `+computeLotColumns+` FROM compute_lot
+		WHERE network_id = $1 AND kind = $2 AND market = $3 AND create_time >= $4
+		ORDER BY create_time DESC, lot_id
+		LIMIT $5
+	`, networkId, int16(ComputeLotKindSubscription), int16(market), since.UTC(), limit)
 }
 
 // Turns both of networkId's modes off in tx (its closure, §9.12): what each was is answered, so the caller cancels its

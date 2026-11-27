@@ -18,7 +18,7 @@
 //	compute_charge_total      the lifetime rollup, no day, sidecar or agent (Q-BAL-10, QD-1258) (compute-3)
 //	compute_charge_pruned     the day rows dropped past 400 days, summed per kind (compute-3)
 //	compute_op                each billable operation from before its liability until booked (compute-1)
-//	compute_auto_renew        each network's two modes (compute-6)
+//	compute_auto_renew        each network's two modes, with a store plan's own subscription (a later step) (compute-6)
 //	compute_dispute           each charge_mismatch (compute-8)
 //	compute_budget_raise      each raise kind 21 approved, unique by approval and use and by effect key (compute-6)
 //	compute_promo_code        each promotion code, by a keyed hash of it (compute-2)
@@ -476,6 +476,17 @@ func ComputeLedgerMigrations() []*operator.Migration {
 			Id: "compute_account_review",
 			Sql: `
 				CREATE INDEX compute_account_review ON compute_account (network_id) WHERE state <> 1 AND state <> 5
+			`,
+		},
+		{
+			// a store's monthly plan (§9.5, §9.8; BAL-M12-11, BAL-M12-14): the subscription its monthly row stands for,
+			// the App Store's original transaction id or Play's purchase token, each kept across its renewals, so the
+			// plan shows as the network's and a closure stops it as Pro's are stopped at deletion; NULL for a Stripe
+			// plan and for threshold. A reading: §14.4 lists no column of compute_auto_renew, and compute-6's row names
+			// the auto-renew settings, the Stripe plan's subscription among them
+			Id: "compute_auto_renew_store_ref",
+			Sql: `
+				ALTER TABLE compute_auto_renew ADD COLUMN store_ref text
 			`,
 		},
 	}
