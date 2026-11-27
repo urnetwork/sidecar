@@ -50,6 +50,7 @@ var testProtoFiles = []string{
 	"protocol/gkm.proto",
 	"protocol/harness.proto",
 	"protocol/infer.proto",
+	"protocol/listeners.proto",
 	"protocol/mail.proto",
 	"protocol/push.proto",
 	"protocol/record.proto",
