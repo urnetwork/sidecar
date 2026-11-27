@@ -491,7 +491,8 @@ func (self *Subprotocol) callOnce(
 // Hands connect envelopes for peerId in order, each with ack, until deadline on this side's clock: a send
 // connect refuses before then goes again after CallSendRetryInterval, the same envelope under the same
 // request_id, and is counted. barrier runs before and after each send, at its linearization point. A Required
-// peer with no session, or a refusal at the deadline, is sendFailure's; ctx's end CANCELLED.
+// peer with no session, or a refusal at the deadline, is sendFailure's; ctx's end CANCELLED, and the dispatcher's
+// errSubprotocolClosed, a pause whose timer fired as either ended included, so no envelope goes again after the end.
 func (self *Subprotocol) sendEnvelopesUntil(
 	ctx context.Context,
 	peerId connect.Id,
@@ -518,14 +519,31 @@ func (self *Subprotocol) sendEnvelopesUntil(
 			}
 			// refused before the deadline: the same envelope, the same request_id, after a pause
 			self.stats.callSendRetryCount.Add(1)
+			if err := self.sendEndErr(ctx, requestId); err != nil {
+				return err
+			}
 			select {
 			case <-self.clock.After(self.settings.CallSendRetryInterval):
 			case <-ctx.Done():
-				return &SubprotocolError{Code: protocol.ErrorCode_ERR_CANCELLED, RequestId: requestId}
 			case <-self.ctx.Done():
-				return errSubprotocolClosed
+			}
+			// select takes any of its ready cases at random: a pause that ended as ctx or the dispatcher did sends
+			// nothing more
+			if err := self.sendEndErr(ctx, requestId); err != nil {
+				return err
 			}
 		}
+	}
+	return nil
+}
+
+// CANCELLED with requestId once ctx has ended, else errSubprotocolClosed once the dispatcher has, else nil.
+func (self *Subprotocol) sendEndErr(ctx context.Context, requestId uint64) error {
+	if ctx.Err() != nil {
+		return &SubprotocolError{Code: protocol.ErrorCode_ERR_CANCELLED, RequestId: requestId}
+	}
+	if self.ctx.Err() != nil {
+		return errSubprotocolClosed
 	}
 	return nil
 }
