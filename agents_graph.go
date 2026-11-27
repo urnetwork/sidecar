@@ -79,6 +79,8 @@ type AgentsGraphSummary struct {
 	Source  string `json:"source"`
 	Text    string `json:"text"`
 	Trusted bool   `json:"trusted"`
+	// Its text was withheld from a caller that may feed a model: an untrusted writer's run wrote it.
+	Withheld bool `json:"withheld,omitempty"`
 }
 
 // One chosen agent's view: its summaries, each a version, newest first, and the threads it is in.
@@ -151,7 +153,8 @@ func (self *AgentsClient) Graph(ctx context.Context, args *AgentsGraphArgs) (*Ag
 			parent = entry.Stub.Parent
 		}
 		if parent != "" && drawn[parent] {
-			launches = append(launches, &AgentsGraphEdge{Kind: AgentsGraphEdgeLaunch, From: parent, To: entry.Name, Trusted: entry.Trusted || entry.Stub != nil})
+			// the parent is the child card's word, held to a name's grammar: trusted as the card is
+			launches = append(launches, &AgentsGraphEdge{Kind: AgentsGraphEdgeLaunch, From: parent, To: entry.Name, Trusted: entry.Trusted})
 		}
 	}
 	slices.SortFunc(launches, func(a *AgentsGraphEdge, b *AgentsGraphEdge) int {
@@ -173,12 +176,27 @@ func (self *AgentsClient) Graph(ctx context.Context, args *AgentsGraphArgs) (*Ag
 			return nil, fmt.Errorf("%w: %s", ErrAgentCardAbsent, chosen)
 		}
 		agent := &AgentsGraphAgent{Name: string(chosen), Summaries: []*AgentsGraphSummary{}, Threads: agentThreads}
-		if !args.ForModel || args.Include || slices.ContainsFunc(list.Agents, func(entry *AgentListEntry) bool {
-			return entry.Name == string(chosen) && entry.Trusted
-		}) {
-			// an untrusted writer's summaries reach a model only as its stub, so a model's view of it holds none
-			if agent.Summaries, err = self.Summaries(ctx, chosen); err != nil {
-				return nil, err
+		if agent.Summaries, err = self.Summaries(ctx, chosen); err != nil {
+			return nil, err
+		}
+		if args.ForModel && slices.ContainsFunc(agent.Summaries, func(summary *AgentsGraphSummary) bool { return !summary.Trusted }) {
+			switch {
+			case !args.Include:
+				// a version an untrusted writer's run wrote reaches a model only as withheld
+				for _, summary := range agent.Summaries {
+					if !summary.Trusted {
+						summary.Text, summary.Withheld = "", true
+					}
+				}
+			case !graph.Untrusted:
+				// the taint goes first, write-ahead: a failure returns nothing
+				if args.TaintFirst == nil {
+					return nil, ErrAgentsTaintFirst
+				}
+				if err := args.TaintFirst(ctx); err != nil {
+					return nil, fmt.Errorf("%w: %w", ErrAgentsTaintFirst, err)
+				}
+				graph.Untrusted = true
 			}
 		}
 		graph.Agent = agent

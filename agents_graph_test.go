@@ -333,3 +333,36 @@ func TestPersonContinueAnswersTheRefusal(t *testing.T) {
 		t.Fatalf("refused sends wrote %d times", env.world.writeCount-writes)
 	}
 }
+
+// A chosen agent's summary versions an untrusted writer's run wrote reach a caller that may feed a model withheld, or,
+// with include, once its runs were tainted first; the person's view shows them all.
+func TestGraphChosenAgentHoldsUntrustedVersions(t *testing.T) {
+	env := newTestAgentToolsEnv(t)
+	ctx := env.world.ctx
+	scraper := testAgentToolsInjection
+	if err := env.laptop.WriteSummary(ctx, &AgentSummaryWrite{Name: "fix", Summary: &AgentSummary{Source: AgentSummarySourceAgent, Text: scraper}, Tainted: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.laptop.WriteSummary(ctx, &AgentSummaryWrite{Name: "fix", Summary: &AgentSummary{Source: AgentSummarySourceAgent, Text: "## Completed\n- merged"}}); err != nil {
+		t.Fatal(err)
+	}
+	person, err := env.phone.Graph(ctx, &AgentsGraphArgs{Agent: "fix"})
+	if err != nil || len(person.Agent.Summaries) != 3 || person.Agent.Summaries[1].Text != scraper || person.Agent.Summaries[1].Trusted {
+		t.Fatalf("the person's view: %+v, %v", person.Agent, err)
+	}
+	model, err := env.phone.Graph(ctx, &AgentsGraphArgs{Agent: "fix", ForModel: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary := model.Agent.Summaries[1]; summary.Text != "" || !summary.Withheld || model.Agent.Summaries[0].Text != "## Completed\n- merged" {
+		t.Fatalf("a model's view: %+v", model.Agent.Summaries)
+	}
+	taints := 0
+	included, err := env.phone.Graph(ctx, &AgentsGraphArgs{Agent: "fix", ForModel: true, Include: true, TaintFirst: func(ctx context.Context) error {
+		taints += 1
+		return nil
+	}})
+	if err != nil || included.Agent.Summaries[1].Text != scraper || !included.Untrusted || taints != 1 {
+		t.Fatalf("include: %+v, %v, %d taints", included, err, taints)
+	}
+}
