@@ -187,6 +187,10 @@ func (self *RunBinder) indexFor(ctx context.Context, runs *sidecar.RunStore) (*r
 			key.sessionId = sessionId
 			self.addRunWithLock(index, file.RunId, key, process)
 		}
+		if len(file.SessionIds) == 0 {
+			// a gateway call's run that named no session is its harness process's alone (hook_bind_gateway.go)
+			self.addProcessRunWithLock(index, file.RunId, process)
+		}
 	}
 	index.loaded = true
 	return index, nil

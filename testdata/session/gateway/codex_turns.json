@@ -1,0 +1,54 @@
+{
+  "comment": "Two turns of a Codex-shaped session through the gateway, shaped from the Open Responses revision of 2026-04-24 and Codex's stateless requests (DESIGN-COMPUTE §8.3): the first request, the output items as the gateway completes them in response.output_item.done, and the second request, which carries them back as Codex does: without the items' ids and statuses, the reasoning item's sealed blob as it got it and a null content, the message without its empty annotations. Every value is synthetic.",
+  "first_request": {
+    "model": "local-test-model-high",
+    "instructions": "You are Codex, a coding agent. Work in the synthetic repository.",
+    "tools": [
+      {"type": "function", "name": "shell", "description": "Runs a command.", "strict": false,
+       "parameters": {"type": "object", "properties": {"command": {"type": "array", "items": {"type": "string"}}, "workdir": {"type": "string"}}, "required": ["command"]}},
+      {"type": "web_search"}
+    ],
+    "tool_choice": "auto",
+    "parallel_tool_calls": false,
+    "reasoning": {"effort": "high", "summary": "auto"},
+    "store": false,
+    "stream": true,
+    "include": ["reasoning.encrypted_content"],
+    "prompt_cache_key": "00000000-0000-4000-8000-000000000001",
+    "input": [
+      {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "<permissions instructions>Commands run in a sandbox.</permissions instructions>"}]},
+      {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "<environment_context>\n  <cwd>/tmp/synthetic</cwd>\n</environment_context>"}]},
+      {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Why does the synthetic build fail?"}]}
+    ]
+  },
+  "first_outputs": [
+    {"type": "reasoning", "id": "rs_000001", "summary": [{"type": "summary_text", "text": "Run the build to see the error."}], "encrypted_content": "gAAAAA-synthetic-sealed-blob-1"},
+    {"type": "function_call", "id": "fc_000001", "status": "completed", "call_id": "call_000001", "name": "shell", "arguments": "{\"command\":[\"go\",\"build\",\"./...\"],\"workdir\":\"/tmp/synthetic\"}"},
+    {"type": "message", "id": "msg_000001", "status": "completed", "role": "assistant", "content": [{"type": "output_text", "text": "Building now.", "annotations": [], "logprobs": []}]}
+  ],
+  "second_request": {
+    "model": "local-test-model-high",
+    "instructions": "You are Codex, a coding agent. Work in the synthetic repository.",
+    "tools": [
+      {"type": "function", "name": "shell", "description": "Runs a command.", "strict": false,
+       "parameters": {"type": "object", "properties": {"command": {"type": "array", "items": {"type": "string"}}, "workdir": {"type": "string"}}, "required": ["command"]}},
+      {"type": "web_search"}
+    ],
+    "tool_choice": "auto",
+    "parallel_tool_calls": false,
+    "reasoning": {"effort": "high", "summary": "auto"},
+    "store": false,
+    "stream": true,
+    "include": ["reasoning.encrypted_content"],
+    "prompt_cache_key": "00000000-0000-4000-8000-000000000001",
+    "input": [
+      {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "<permissions instructions>Commands run in a sandbox.</permissions instructions>"}]},
+      {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "<environment_context>\n  <cwd>/tmp/synthetic</cwd>\n</environment_context>"}]},
+      {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Why does the synthetic build fail?"}]},
+      {"type": "reasoning", "id": "rs_000001", "summary": [{"type": "summary_text", "text": "Run the build to see the error."}], "content": null, "encrypted_content": "gAAAAA-synthetic-sealed-blob-1"},
+      {"type": "function_call", "call_id": "call_000001", "name": "shell", "arguments": "{\"command\":[\"go\",\"build\",\"./...\"],\"workdir\":\"/tmp/synthetic\"}"},
+      {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Building now."}]},
+      {"type": "function_call_output", "call_id": "call_000001", "output": "./parse.go:12:2: undefined: lexToken"}
+    ]
+  }
+}

@@ -19,6 +19,10 @@
 //	coverage     ingest_coverage.go: at SessionEnd or after Record.CoverageIdleTimeout idle, naming the sources,
 //	             every gap counted where it occurred, and first_seq and last_seq
 //
+// A harness's copies of the MCP web_search tool's results, in its hook payloads and transcript lines, become their
+// stubs before anything of them is redacted or sealed (DESIGN-COMPUTE §24.9, CTXH-M13-01; sidecar.SessionStubber),
+// matched by the calls that carried them and by the hashes the tool served in the run.
+//
 // Limits are Ingest's settings: a payload or tool body over PayloadByteCount is cut, a file over FileByteCount goes by
 // hash and size, and a run past RunHourByteCount in an hour drops the rest of that hour's bodies. Every cut, missed
 // event, redaction, bypass mode and changed config is a gap on the run's file (RunStore.AddGap), in RECORD.md's codes,
@@ -54,6 +58,9 @@ const (
 	ingestClass         = "ingest"
 	ingestStateVersion  = 1
 )
+
+// The MCP tool whose results the ingest stubs (DESIGN-COMPUTE §24.9), on ur's server: an identifier.
+const ingestWebSearchTool = "web_search"
 
 // Nothing can be sealed: the network has no redactor (no spool), so the event is a gap.
 var ErrIngestNoRedactor = errors.New("ingest has no redactor")
@@ -128,6 +135,48 @@ type IngestArgs struct {
 	Record *sidecar.SidecarRecordSettings
 	// What hears each run's card dues (ingest_runcard.go): the record log's companion schedule. Nil hears nothing.
 	RunCards RunCardSchedule
+}
+
+// A network that keeps the hashes the MCP web_search tool served (DESIGN-COMPUTE §24.9): *sidecar.Sidecar.
+type ingestServedNetwork interface {
+	SessionServedHashes() (*sidecar.SessionServedHashes, error)
+}
+
+// The run's matcher of web_search results, over the network's served set where it has one, else by the calls its
+// lines and payloads name alone; one built while the network had no served set, locked say, is built again once it
+// has one. The run's lock is held.
+func (self *Ingest) stubberWithLock(run *ingestRun) *sidecar.SessionStubber {
+	if run.stubber != nil && run.stubberServed {
+		return run.stubber
+	}
+	var served *sidecar.SessionServedHashes
+	if network, ok := run.network.(ingestServedNetwork); ok {
+		if built, err := network.SessionServedHashes(); err == nil {
+			served = built
+		}
+	}
+	if run.stubber == nil || served != nil {
+		run.stubber = sidecar.NewSessionStubber(served, run.runId)
+		run.stubberServed = served != nil
+	}
+	return run.stubber
+}
+
+// The event's payload with each copy of a web_search result stubbed (DESIGN-COMPUTE §24.9, CTXH-M13-01): a
+// PostToolUse of ur's web_search keeps its call and loses its result, and any payload a result of a call the run met,
+// or a text the tool served in the run, is stubbed where it stands. A payload the matcher cannot read is kept as an
+// empty object and a missed_event, so no result is recorded. The run's lock is held.
+func (self *Ingest) stubPayloadWithLock(ctx context.Context, run *ingestRun, event *HookEvent, payload []byte) []byte {
+	if len(payload) == 0 {
+		return payload
+	}
+	names := event.ToolServer == urMcpServerName && event.ToolName == ingestWebSearchTool
+	stubbed, _, err := self.stubberWithLock(run).StubPayload(payload, names)
+	if err != nil {
+		self.gap(ctx, run.network, run.networkId, run.runId, sidecar.RecordCoverageGapMissedEvent)
+		return []byte("{}")
+	}
+	return stubbed
 }
 
 // A network whose record writer the daemon exposes: *sidecar.Sidecar through Record().Writer().
@@ -243,6 +292,10 @@ type ingestRun struct {
 	cardDueMillis int64
 	cardMoved     bool
 	cardDues      []*ingestCardDue
+	// the run's matcher of web_search results (DESIGN-COMPUTE §24.9): the calls its lines and payloads named, over the
+	// network's served set; built at the run's first need, and again while it has no served set
+	stubber       *sidecar.SessionStubber
+	stubberServed bool
 }
 
 // The persisted part of a run's ingest state: enough for a restart to resume the tail, keep the hour's budget and
@@ -521,27 +574,29 @@ func (self *Ingest) captureHook(ctx context.Context, captured *HookCaptured) err
 		self.armIdleWithLock(run)
 		return nil
 	}
+	// a harness's copies of web_search results never reach a capture (§24.9)
+	payload := self.stubPayloadWithLock(ctx, run, event, captured.Payload)
 	if event.PermissionMode != "" && slices.Contains(self.settings.BypassPermissionModes, event.PermissionMode) {
 		if !state.Bypass || state.PermissionMode != event.PermissionMode {
 			self.gap(ctx, run.network, run.networkId, run.runId, sidecar.RecordCoverageGapBypassMode)
 		}
 		state.Bypass = true
 	}
-	self.captureContextWithLock(ctx, run, redactor, event, captured.Payload)
+	self.captureContextWithLock(ctx, run, redactor, event, payload)
 	switch event.Kind {
 	case HookEventPostToolUse:
-		self.captureToolCallWithLock(ctx, run, redactor, event, captured.Payload)
+		self.captureToolCallWithLock(ctx, run, redactor, event, payload)
 	default:
-		captured.EventLeaf = self.captureHookEventWithLock(ctx, run, redactor, event, captured.Payload)
+		captured.EventLeaf = self.captureHookEventWithLock(ctx, run, redactor, event, payload)
 	}
-	self.captureHookModelCallWithLock(ctx, run, redactor, event, captured.Payload)
+	self.captureHookModelCallWithLock(ctx, run, redactor, event, payload)
 	if event.Kind == HookEventPermissionRequest {
 		self.capturePermissionWithLock(ctx, run, redactor, event)
 	}
 	if event.Kind == HookEventUserPrompt {
-		self.capturePromptWithLock(ctx, run, redactor, event, captured.Payload)
+		self.capturePromptWithLock(ctx, run, redactor, event, payload)
 	}
-	self.captureScanWithLock(ctx, run, redactor, event, captured.Payload)
+	self.captureScanWithLock(ctx, run, redactor, event, payload)
 	switch event.Kind {
 	case HookEventStop, HookEventCompact, HookEventSessionEnd:
 		self.tailTranscriptWithLock(ctx, run, redactor)

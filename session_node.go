@@ -112,6 +112,9 @@ type SessionNode struct {
 	Tool *SessionToolResult
 	// An item the gateway records from a harness's request, which is that harness's word: source hook.
 	FromHarness bool
+	// The stubs the caller put in Item already, a harness's copies of web search results the gateway's recorder
+	// replaced (§24.9, CTXH-M13-01), counted in the node's stubs beside the journal's own.
+	Stubs int
 }
 
 var (
@@ -131,6 +134,8 @@ func (self *SessionNode) check() error {
 		return fmt.Errorf("%w: node type %d", ErrSessionNodeRefused, self.Type)
 	case len(self.Item) == 0:
 		return fmt.Errorf("%w: no item", ErrSessionNodeRefused)
+	case self.Stubs < 0:
+		return fmt.Errorf("%w: %d stubs", ErrSessionNodeRefused, self.Stubs)
 	case self.ParentKey != "" && (self.ParentRunId != nil || self.ParentNodeId != nil):
 		return fmt.Errorf("%w: a parent in its run and in another", ErrSessionNodeRefused)
 	case (self.ParentRunId == nil) != (self.ParentNodeId == nil) || (self.ParentNodeId != nil && len(self.ParentChainSha256) != 32):

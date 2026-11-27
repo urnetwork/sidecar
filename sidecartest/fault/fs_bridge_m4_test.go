@@ -2,7 +2,8 @@
 
 // BRIDGE-M4-22's schedules on T2 (fs_bridge_m4.go): FS-38's M4 part and its forged case, and FS-56, each under every
 // rule §22.8 gives its case; server/controller/connect_bridge_m4_test.go runs the same builders on T3. Beside them,
-// §22.5's §17 rows end to end on the same world, blocks and reset against drain, and §17.4's carve on a sender.
+// §22.5's §17 rows end to end on the same world, blocks and reset against drain, §17.4's carve on a sender, and a lost
+// echo answered once its wait sends it again.
 
 package fault
 
@@ -15,6 +16,8 @@ import (
 	"time"
 
 	"google.golang.org/protobuf/proto"
+
+	"github.com/urnetwork/connect"
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol/bridge"
@@ -31,6 +34,54 @@ func TestFs38Forged(t *testing.T) {
 
 func TestFs56(t *testing.T) {
 	RunRow(t, "FS-56", "", nil)
+}
+
+// tip-check's red at 49799797: FS-56's twin sent its first echo once and waited out its 30 s for a reply its path had
+// lost. An echo's path may lose it by design with nothing wrong on the bridge: the host's NAT drops a reply its session
+// to a new window cannot seal yet rather than wait, and on darwin the kernel drops a reply at a flow's datagram ICMP
+// socket once the host's other echo replies have filled it (BridgeNetSettings.EchoResendInterval). Here an echo on a
+// flow its window's first echo opened is lost outright, never sent, as such a reply is never answered: the wait that
+// sends nothing sees no answer, and the wait that sends the echo again is answered, on the flow the host decided once.
+func TestFsBridgeLostEchoIsAnsweredWhenSentAgain(t *testing.T) {
+	testNet := sidecartest.NewNet(t.Context(), nil)
+	defer testNet.Close()
+	settings := sidecartest.DefaultBridgeNetSettings()
+	// each lost echo costs the wait one interval
+	settings.EchoResendInterval = 20 * time.Millisecond
+	world := newFsBridgeWorld()
+	world.world = sidecartest.NewBridgeNet(t, testNet, settings)
+	t.Cleanup(world.world.Close)
+	hostDevice := world.world.AddDevice("host")
+	subject := world.world.AddDevice("subject")
+	host := world.world.StartHost(hostDevice, &sidecartest.BridgeNetHostSettings{Address: fsBridgeHostAddress})
+	world.host = host
+	window := world.world.OpenWindow("window", subject, host, nil)
+
+	if err := window.SendEcho(host.Address, 1); err != nil {
+		t.Fatal(err)
+	}
+	if !window.WaitEchoAnswered(host.Address, 1, settings.WaitTimeout) {
+		t.Fatalf("the echo opening the flow was never answered; %s", fsBridgeEchoSeen(world, window))
+	}
+	resendCount := window.EchoResendCount()
+
+	// the second echo is lost: no copy of it exists, so the wait that sends nothing sees none answered in twice the
+	// time the other wait takes to send it again, as it would in any time
+	if window.WaitEchoReply(2, 2*settings.EchoResendInterval) {
+		t.Fatal("an echo never sent was answered: the test proves nothing")
+	}
+	if !window.WaitEchoAnswered(host.Address, 2, settings.WaitTimeout) {
+		t.Fatalf("the lost echo, sent again, was never answered; %s", fsBridgeEchoSeen(world, window))
+	}
+	if window.EchoResendCount() <= resendCount {
+		t.Fatal("the lost echo was answered with no copy sent again: the test proves nothing")
+	}
+	echoDecisions := slices.DeleteFunc(host.Decisions(window.Client.ClientId), func(decision *sidecartest.BridgeNetDecision) bool {
+		return decision.Protocol != connect.IpProtocolIcmp
+	})
+	if len(echoDecisions) != 1 || !echoDecisions[0].Opens() {
+		t.Fatalf("the copy did not ride the flow the first echo opened: the host decided %d echo flows of the window; %s", len(echoDecisions), fsBridgeEchoSeen(world, window))
+	}
 }
 
 // §22.5's §17 rows end to end on the BridgeNet, beside the schedules: blocks, and reset against drain.

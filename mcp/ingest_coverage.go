@@ -2,8 +2,8 @@
 
 // §16.7's Coverage (§16.8; RECORD.md sections 4.3 and 6.4; MCP.md's reading 8): at SessionEnd, or after
 // Record.CoverageIdleTimeout with no event, the run's coverage entry names its harness, ur's version, the sources
-// that fed it, every gap the run file counted where it occurred, and first_seq and last_seq, the writer's chain
-// across the run's entries. The run file notes the entry (RunStore.Covered), which starts its retention, and the
+// that fed it (gateway among them where the gateway recorded the run's calls, DESIGN-COMPUTE §24.8), every gap the
+// run file counted where it occurred, and first_seq and last_seq, the writer's chain across the run's entries. The run file notes the entry (RunStore.Covered), which starts its retention, and the
 // lifecycle's RunEnded fires. A later event re-opens the run, and its next coverage supersedes; idling never clears
 // taint (D-MCP-16). M3's exit says coverage names every gap, so none is inferred here: the list is the run file's.
 
@@ -16,6 +16,12 @@ import (
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
 )
+
+// A network whose gateway records model calls as session entries (*sidecar.Sidecar, DESIGN-COMPUTE §24.8): a run it
+// recorded in names source gateway in its coverage.
+type ingestGatewayNetwork interface {
+	SessionGatewayRecorded(runId sidecar.Id) bool
+}
 
 // Arms the idle coverage, CoverageIdleTimeout from now. The run's lock is held.
 func (self *Ingest) armIdleWithLock(run *ingestRun) {
@@ -83,6 +89,11 @@ func (self *Ingest) coverWithLock(ctx context.Context, run *ingestRun, redactor 
 	}
 	gaps = slices.DeleteFunc(gaps, func(gap string) bool { return gap == "" })
 	sources := slices.Clone(state.Sources)
+	if gateway, ok := run.network.(ingestGatewayNetwork); ok && gateway.SessionGatewayRecorded(run.runId) &&
+		!slices.Contains(sources, sidecar.RecordCoverageSourceGateway) {
+		// the gateway recorded the run's model calls as session entries (DESIGN-COMPUTE §24.8's coverage row)
+		sources = append(sources, sidecar.RecordCoverageSourceGateway)
+	}
 	slices.Sort(sources)
 	runId := run.runId
 	now := self.clock.Now().UnixMilli()
