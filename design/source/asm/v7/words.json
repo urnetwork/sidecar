@@ -65,11 +65,11 @@
  {
   "num": 8,
   "code": "ACL",
-  "words": 14696,
+  "words": 14784,
   "code_words": 6168,
   "ceiling": 3800,
-  "over": 10896,
-  "over_pct": 286.7
+  "over": 10984,
+  "over_pct": 289.1
  },
  {
   "num": 9,
@@ -137,11 +137,11 @@
  {
   "num": 16,
   "code": "MCP",
-  "words": 17298,
+  "words": 17488,
   "code_words": 23902,
   "ceiling": 3500,
-  "over": 13798,
-  "over_pct": 394.2
+  "over": 13988,
+  "over_pct": 399.7
  },
  {
   "num": 17,

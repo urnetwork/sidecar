@@ -1852,3 +1852,35 @@ The build raised both implementing DESIGN-COMPUTE.md, §17.2's suspension (CARCH
 - **Text.** No bare placeholders or HTML tags; the one research-sheet id stands; 12,937 section references, with the one unresolved as before. `v7/words.json` was regenerated, and `v7/text_checks.json` regenerated unchanged.
 - **DESIGN-DEFER.md.** 106 entries and 172 pointers, unchanged.
 - **The metadata list** is v75, compute-3's, compute-5's and compute-10's words; check's `metadataListAdditions` is empty.
+
+### The compute answers QD-1439 to QD-1445, QD-1449, QD-1451, QD-1453 and QD-1454
+
+The owner answered eleven more questions the build raised implementing DESIGN-COMPUTE.md on 2026-11-27, the last, QD-1454, while the first piece ran, one at a time, each with the recommended option, under the owner's standing acceptance of recommended options. They answer compute questions, so they take no number, as QD-1433 to QD-1436 took none: DESIGN-COMPUTE-AMENDMENTS.md files them as the build's under its §2, §8, §15, §16, §17, §21, §24, §25 and §28, §15 and §17 taking sections of their own for the first time, its lead and index naming them and the plan's readings QD-1383 and QD-1254 taking a line each, and what they change here is written here:
+
+| Ledger id | Filed under | What it settles |
+|---|---|---|
+| QD-1439 | §17 | The broker refuses compute to an address in cu, ir or kp, or in Crimea, Sevastopol, Donetsk Oblast or Luhansk Oblast, a settings default counsel confirms before M12's exit. |
+| QD-1440 | §25 | `connect:custom`'s version-1 text words `<service>` generically, so every rendered word stays signed. |
+| QD-1441 | §16 | A network that already has a document gains `compute_policy`'s implicit rules only by an admin's save, as DESIGN-COMPUTE.md's Q-LSTN-8 has it for listeners. |
+| QD-1442 | §15 | §15.3's `StorePurchase` takes the app's own `Api`, as BAL-M12-19 built it. |
+| QD-1443 | §2 | D-CTRUST-1 reads IC-1 to IC-24, the invariants §2.4 lists. |
+| QD-1444 | §2 | The daemon's secret matcher holds the device's ReaderKey seeds, every generation the keychain and gkm keep. |
+| QD-1445 | §24 | A gateway call recorded under an inferred binding taints the run it records into, so every reader takes its entries as untrusted with no format change. |
+| QD-1449 | §2 | The matcher holds the agent subkeys and the TLS and DKIM keys too; §10's key cache waits for a bounded matcher. |
+| QD-1451 | §28 | `SupportLog.Start` refuses once Close has begun. |
+| QD-1453 | §21 | A search's sealed payee binds the challenge's network, asset and amount as its AAD, where QD-1383 named the broker's ticket. |
+| QD-1454 | §8 | golang.org/x/image moves past GO-2026-6222 in every repository at once, so the gateway re-encodes an oversized WebP again; until then it refuses one, failing closed. |
+
+- **Existing documents (QD-1441).** §8.5's paragraph on the documents DESIGN-COMPUTE.md amends takes `compute_policy`'s rules, `autogroup:member`'s `infer` on `model:*` and `query` on `compute:search`, in the implicit document, compiled after the frozen block only once a base turns the feature on, and in Team's starting document's `compute_policy` block, as CACL-M12-04 built them (cacl-m12-02, sidecar 84ef4104), a network that saved its document before the turn-on gaining them only by an admin's save; the turn-on prompt's sentence and `ur acl`'s offer are stated ahead of their code, and the clause cites owner decision 750, whose every provider the rules open.
+- **The daemon's credentials (QD-1444, QD-1449), as built.** §16.6's secrets rule names what the daemon's credentials are, which `Sidecar.SecretMatcher` holds as secret-matcher-reader-keys built it (sidecar 10645d37, a5d1785d, 617be950) beside what it held before, and says that §10's key cache waits for a bounded matcher, an RK_g in a result or an error passing unchecked until then. I-7 itself does not change.
+- **Untrusted gateway nodes (QD-1445), as built.** RECORD.md section 21's continuations row says that no field marks a node recorded under an inferred binding: the gateway taints its run before it journals, so every reader, those already released included, takes it as untrusted by its tainted bit (ctxh-m12-01, sidecar 14da4515).
+- **The rest.** QD-1439, QD-1440, QD-1442, QD-1443, QD-1451, QD-1453 and QD-1454 change nothing this design carries: §2.8's compute-5 names the address the region check reads since the first piece, §2.9's compute invariants paragraph already reads IC-1 to IC-24, §18.5 names `Compute()` without its methods' signatures, and §4.7 asks only that shared module versions match, which QD-1454's one change in every repository keeps. QD-1451 waits for fix track support-log-start-after-close, QD-1454 for dependency track x-image-vuln-bump, RK_g's part of QD-1449 for a bounded matcher, and QD-1453 for srch-m13-01's landing; QD-1442's line and QD-1443's count are the owner's to write into DESIGN-COMPUTE.md, so sdk's `sdkComputeMethodDiffers` entry for `StorePurchase` stays.
+- **The fences.** What the compute tracks declared since the sixteenth fold began joins none of this design's fences: listeners.proto's file and live ask (LSTN-M13-01, sidecar 60a57e06) and compute.proto's budget raise (BAL-M12-16, sidecar 3e021ac6) are DESIGN-COMPUTE.md's field lists, which protocol/design_unfenced_test.go's `testUnfencedFence` holds as it holds `SupportHint`, and §6.11's fence already carries `LISTENERS` and `LISTENERS_RESULT`. Every additions list stays empty.
+
+`build.sh` on this folder reproduces DESIGN.md (SHA-256 `362adf0eab1bdbe61dce45f9ff2f272e7ae3eede553fda5b4796b4494a2bbd36`) and DESIGN-DEFER.md (SHA-256 `3af6b10c35e06eaa2230e6232dc953d77f4539fe4065623950425ebab41895a6`, unchanged), and the validation shows:
+
+- **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item and no §2.8 row, so no guard line.
+- **Owner decisions.** All 807 rows are present and cited; APPLY.md's section pairs hold. The eleven answers take no number, so `MAXD`, the range checks and `LATE_DATES` stay at 807. One open owner question, Q-REPO-6.
+- **Superseded options.** A fresh grep finds 320 hits, none on a line this piece changed, every reading carried to its line; none live.
+- **Text.** No bare placeholders or HTML tags; the one research-sheet id stands; 12,941 section references, with the one unresolved as before. `v7/words.json` was regenerated, and `v7/text_checks.json` regenerated unchanged.
+- **DESIGN-DEFER.md.** 106 entries and 172 pointers, unchanged: RK_g's wait for a bounded matcher is the review phase's or a later track's work, which no release defers, so it takes no entry.
