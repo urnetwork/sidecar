@@ -374,7 +374,12 @@ func (self *AgentsClient) landMessage(ctx context.Context, repoId Id, repo Agent
 			}
 			return false, err
 		}
-		if ctx.Err() != nil || errors.Is(err, ErrEvsInboxMessagesOnly) {
+		if errors.Is(err, ErrEvsInboxMessagesOnly) {
+			// refused for good: never retried from the outbox
+			self.outboxRemove(message.Id)
+			return false, err
+		}
+		if ctx.Err() != nil {
 			return false, err
 		}
 	}

@@ -160,6 +160,7 @@ func (self *agentsStoreTaken) readWithLock(agent AgentName, thread AgentThreadId
 	return taken, nil
 }
 
+// Whether agent took the message id of thread, as the record holds it.
 func (self *agentsStoreTaken) Taken(agent AgentName, thread AgentThreadId, id AgentMessageId) (bool, error) {
 	self.client.takenLock.Lock()
 	defer self.client.takenLock.Unlock()
@@ -170,6 +171,7 @@ func (self *agentsStoreTaken) Taken(agent AgentName, thread AgentThreadId, id Ag
 	return taken[id.String()], nil
 }
 
+// Records agent's take of the message id of thread, its thread's file rewritten whole.
 func (self *agentsStoreTaken) Take(agent AgentName, thread AgentThreadId, id AgentMessageId) error {
 	self.client.takenLock.Lock()
 	defer self.client.takenLock.Unlock()

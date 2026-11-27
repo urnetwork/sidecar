@@ -295,12 +295,14 @@ type agentMessageWire struct {
 	Support *agentSupportWire  `json:"support,omitempty"`
 }
 
+// An address as a file writes it.
 type agentAddressWire struct {
 	Member string `json:"member"`
 	Name   string `json:"name"`
 	Repo   string `json:"repo"`
 }
 
+// An agent's from as a file writes it.
 type agentFromAgentWire struct {
 	Member    string `json:"member"`
 	Name      string `json:"name"`
@@ -309,21 +311,25 @@ type agentFromAgentWire struct {
 	Repo      string `json:"repo"`
 }
 
+// The person's from as a file writes it.
 type agentFromPersonWire struct {
 	Member string `json:"member"`
 	Person bool   `json:"person"`
 }
 
+// Support's from as a file writes it.
 type agentFromSupportWire struct {
 	Support string `json:"support"`
 }
 
+// A ref as a file writes it.
 type agentMessageRef struct {
 	Repo    string `json:"repo"`
 	Path    string `json:"path"`
 	Version uint64 `json:"version"`
 }
 
+// A support notice's fields as a file writes them.
 type agentSupportWire struct {
 	Product string `json:"product"`
 	Entry   string `json:"entry"`
