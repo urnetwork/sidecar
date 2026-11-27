@@ -108,7 +108,8 @@ func TestListenersLabelsRefusals(t *testing.T) {
 	}
 }
 
-// A file that does not read hides the device whole, the closed direction, until the person writes again.
+// A file that does not read hides the device whole, the closed direction: a write of the person's replaces it with the
+// device still hidden, since what it hid is unknown, and only their unhide of the device lifts that.
 func TestListenersLabelsThatDoNotReadHideTheDevice(t *testing.T) {
 	store := testListenersLabelsStore(t)
 	writer, err := store.Create(listenersLabelsName)
@@ -127,7 +128,17 @@ func TestListenersLabelsThatDoNotReadHideTheDevice(t *testing.T) {
 	if err := labels.SetHidden(protocol.ListenersProtocol_LISTENERS_PROTOCOL_TCP, 22, true); err != nil {
 		t.Fatal(err)
 	}
-	if labels.HidesDevice() || !labels.HidesPort(protocol.ListenersProtocol_LISTENERS_PROTOCOL_TCP, 22) {
-		t.Error("the person's write did not replace it")
+	if !labels.HidesDevice() || !labels.HidesPort(protocol.ListenersProtocol_LISTENERS_PROTOCOL_TCP, 22) {
+		t.Error("a write opened the device, or was not kept")
+	}
+	restarted, err := OpenListenersLabels(store, DefaultListenersSettings())
+	if err != nil || !restarted.HidesDevice() {
+		t.Fatalf("the replaced file: hidden %t, %v", restarted.HidesDevice(), err)
+	}
+	if err := restarted.SetDeviceHidden(false); err != nil {
+		t.Fatal(err)
+	}
+	if restarted.HidesDevice() || !restarted.HidesPort(protocol.ListenersProtocol_LISTENERS_PROTOCOL_TCP, 22) {
+		t.Error("the person's unhide of the device did not lift it")
 	}
 }

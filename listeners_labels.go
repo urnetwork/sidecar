@@ -13,8 +13,9 @@
 //
 // Only the person's own act writes here: LSTN-M13-10's methods take a label and an unhide only as a confirmed act, a
 // hide at once; this file keeps what they write. The file is JSON, versioned; a file that does not read, or a version
-// this build does not know, is refused and kept, and the device then hides itself whole, the closed direction, until
-// the person writes again (as discovery's state does). Safe for concurrent use.
+// this build does not know, is refused and kept, and the device then hides itself whole, the closed direction: what
+// that file hid is unknown, so the person's next write starts from an empty file with the device still hidden, which
+// only their unhide of the device lifts. Safe for concurrent use.
 
 package sidecar
 
@@ -167,11 +168,11 @@ func (self *ListenersLabels) writeWithLock(state *listenersLabelsState) error {
 }
 
 // Applies edit to a copy of the state and writes it; the state moves only once the write commits. A state that did
-// not read starts again from empty, the person's write replacing it.
+// not read starts again from empty, the device hidden whole until the person's own unhide of it (the file's comment).
 func (self *ListenersLabels) commit(edit func(state *listenersLabelsState) error) error {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
-	next := &listenersLabelsState{Version: listenersLabelsVersion}
+	next := &listenersLabelsState{Version: listenersLabelsVersion, HiddenDevice: true}
 	if self.stateErr == nil {
 		next.HiddenDevice = self.state.HiddenDevice
 		next.Labels = slices.Clone(self.state.Labels)
