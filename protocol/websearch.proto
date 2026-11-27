@@ -1,0 +1,211 @@
+// Web search's wire (DESIGN-COMPUTE §21.5, §21.8, §6.3; SRCH-M13-01): what URnetwork's servers see of a search, which is
+// its payment and nothing else. §21.5 writes the first four messages in compute.proto's block; CONTRACTS C-36 keeps
+// them here, in SRCH's own file under the same package, with the design's names and numbers, so a later move changes no
+// wire byte. The rest are the plan's reading of what §21.5, §21.8 and §6.3 name without fields, numbered in the order
+// written, each proposed: the broker's answer to an authorize and the device's daily outcomes (compute/v1, whose bodies
+// are deterministic protobuf and whose refusals are the broker's JSON code, QD-1246); the search signer's API, which the
+// broker alone calls; and the catalog's search section.
+//
+// The payee and the device's nonce reach searchsigner alone, sealed by the device (websearch_seal.go), and the
+// authorization the signer seals back is relayed unread, so the broker sees neither. No message here carries a query, a
+// mode or a result.
+
+syntax = "proto3";
+package urnetwork.sidecar;
+
+option go_package = "github.com/urnetwork/sidecar/protocol";
+
+// A search's payment, the only part of a search URnetwork's servers see (§21.5): POST compute/v1/search/authorize.
+message ComputeSearchAuthorizeRequest {
+  uint64 catalog_version = 1;
+  // 16 random bytes; a retry with the same id and attempt gets the same authorization.
+  bytes request_id = 2;
+  // As ComputeInferHeader's, for budgets; empty without an agent.
+  bytes agent_id = 3;
+  // 1 to 3: a new 402 under the same request id takes the next, with its own hold.
+  uint32 attempt = 4;
+  // SearchPayee, HPKE-sealed to searchsigner's key in the policy; relayed unread.
+  bytes sealed_payee = 5;
+  // The challenge's amount in USDC's 6 decimals.
+  uint64 amount = 6;
+  // The challenge's asset: the policy's USDC contract, 20 bytes.
+  bytes asset = 7;
+  // The challenge's network, CAIP-2.
+  string network = 8;
+  // This device's search outcomes not yet reported (§21.8).
+  SearchOutcomes outcomes = 9;
+}
+
+// Read only by searchsigner.
+message SearchPayee {
+  // The challenge's payTo, 20 bytes, which no policy pins (CO-29).
+  bytes pay_to = 1;
+  // 32 bytes the device drew; the signer signs exactly it, and refuses one it has seen.
+  bytes nonce = 2;
+}
+
+// Counts by class: no request ids, no times.
+message SearchOutcomes {
+  uint32 ok = 1;
+  uint32 provider_error = 2;
+  uint32 timeout = 3;
+  uint32 refused = 4;
+}
+
+// Sealed back under sealed_payee's HPKE context; the broker relays it unread.
+message ComputeSearchAuthorization {
+  // URnetwork's payer address on Base.
+  bytes from = 1;
+  // pay_to, as the device sent it.
+  bytes to = 2;
+  // The amount, at most the policy's ceiling.
+  uint64 value = 3;
+  // The minute's start less 60 s.
+  int64 valid_after_s = 4;
+  // The minute's start plus 120 s: at most 3 minutes, inside the offer's 300 s.
+  int64 valid_before_s = 5;
+  // The device's; Base marks it used when the authorization settles.
+  bytes nonce = 6;
+  // EIP-712, by the payer key in searchsigner, deterministic (RFC 6979): r, s and v, 65 bytes.
+  bytes signature = 7;
+}
+
+// POST compute/v1/search/authorize's answer (§21.5, §14.3): the signer's authorization, sealed under the device's own
+// request and relayed unread. A refusal is the broker's JSON code instead (QD-1246): search_off, insufficient_quota,
+// rate_limited, payee_refused, capacity or catalog_stale, with a retry time where it gives one.
+message ComputeSearchAuthorizeResponse {
+  // ComputeSearchAuthorization, sealed by searchsigner (websearch_seal.go).
+  bytes sealed_authorization = 1;
+}
+
+// POST compute/v1/search/outcomes's request (§21.8, §14.3): a device's outcome counts not yet reported, sent once a day
+// when it searches no more. Counts by class alone.
+message ComputeSearchOutcomesRequest {
+  SearchOutcomes outcomes = 1;
+}
+
+// Why searchsigner signs nothing for a ticket (§21.5).
+enum SearchSignRefusal {
+  SEARCH_SIGN_REFUSAL_UNSPECIFIED = 0;
+  // The screen lists the payee, or, once the policy sets payee_fresh, the payee has a past.
+  SEARCH_SIGN_REFUSAL_PAYEE_REFUSED = 1;
+  // The nonce was issued under another ticket.
+  SEARCH_SIGN_REFUSAL_NONCE_REUSED = 2;
+  // The signer's own rate.
+  SEARCH_SIGN_REFUSAL_RATE_LIMITED = 3;
+  // The value issued and not yet final would pass max_unsettled.
+  SEARCH_SIGN_REFUSAL_UNSETTLED_CAP = 4;
+  // The signer's own daily cap.
+  SEARCH_SIGN_REFUSAL_DAY_CAP = 5;
+  // An amount past the policy's ceiling.
+  SEARCH_SIGN_REFUSAL_CEILING = 6;
+  // The screen's lists have not fetched for 72 hours.
+  SEARCH_SIGN_REFUSAL_LISTS_STALE = 7;
+  // Signing stopped until an operator restarts it, or is off before G-SRCH-parallel.
+  SEARCH_SIGN_REFUSAL_STOPPED = 8;
+  // The sealed payee does not open under the request's amount and the policy's asset and network.
+  SEARCH_SIGN_REFUSAL_SEAL_INVALID = 9;
+}
+
+// The signer's POST /v1/sign, which the broker alone sends, over mTLS: one admitted ticket.
+message SearchSignRequest {
+  // 32 bytes the broker drew, kept in the two services' memory alone.
+  bytes ticket = 1;
+  // The admitted amount, in USDC's 6 decimals.
+  uint64 amount = 2;
+  // The admission's minute, its start in Unix seconds: the authorization's window is a fixed function of it.
+  int64 minute_s = 3;
+  // As the device sent it, unread by the broker.
+  bytes sealed_payee = 4;
+}
+
+// Its answer: the sealed authorization, or a refusal; the payee only with payee_refused, for the broker's sanctions
+// record (compute-10).
+message SearchSignResponse {
+  // ComputeSearchAuthorization, sealed under the device's request.
+  bytes sealed_authorization = 1;
+  SearchSignRefusal refusal = 2;
+  bytes payee = 3;
+}
+
+// What became of an authorization at the signer's finality cursor (§21.5's Finality and attribution).
+enum SearchSignerReportKind {
+  SEARCH_SIGNER_REPORT_KIND_UNSPECIFIED = 0;
+  // Its nonce used at or before its window's end, by the facilitator.
+  SEARCH_SIGNER_REPORT_KIND_SETTLED = 1;
+  // A finalized block past its window, the nonce unused.
+  SEARCH_SIGNER_REPORT_KIND_LAPSED = 2;
+  // Settled by a sender outside the facilitator's settlement addresses.
+  SEARCH_SIGNER_REPORT_KIND_OUT_OF_BAND = 3;
+}
+
+// One final authorization, reported by its ticket.
+message SearchSignerReport {
+  bytes ticket = 1;
+  SearchSignerReportKind kind = 2;
+  // The authorization's minute, its start in Unix seconds, to which its charge is timed.
+  int64 minute_s = 3;
+  // An out_of_band settlement's payee and transaction, for the sanctions record; empty otherwise.
+  bytes payee = 4;
+  bytes transaction = 5;
+}
+
+// The reports the broker pulls in one call.
+message SearchSignerReports {
+  repeated SearchSignerReport reports = 1;
+}
+
+// The broker's answer to a report.
+enum SearchReportAnswer {
+  SEARCH_REPORT_ANSWER_UNSPECIFIED = 0;
+  // A settled ticket the broker held: its hold became a kind-6 charge.
+  SEARCH_REPORT_ANSWER_CHARGED = 1;
+  // A lapsed ticket: its hold released.
+  SEARCH_REPORT_ANSWER_RELEASED = 2;
+  // A ticket the broker no longer holds: settled and unattributed.
+  SEARCH_REPORT_ANSWER_UNKNOWN = 3;
+}
+
+// The broker's answer to one report, by its ticket.
+message SearchSignerAnswer {
+  bytes ticket = 1;
+  SearchReportAnswer answer = 2;
+}
+
+// The answers to one pull's reports.
+message SearchSignerAnswers {
+  repeated SearchSignerAnswer answers = 1;
+}
+
+// A UTC day's totals asked of the signer, for the day's reconciliation (§21.8).
+message SearchSignerDayRequest {
+  // The day's start, Unix seconds.
+  int64 day_s = 1;
+}
+
+// A UTC day's authorizations by their minute, with no network: counts, and values in USDC's 6 decimals.
+message SearchSignerDay {
+  int64 day_s = 1;
+  uint64 issued_count = 2;
+  uint64 issued_value = 3;
+  uint64 settled_count = 4;
+  uint64 settled_value = 5;
+  uint64 attributed_count = 6;
+  uint64 attributed_value = 7;
+  uint64 unattributed_count = 8;
+  uint64 unattributed_value = 9;
+}
+
+// The catalog's search section (§6.3's search ids, §21.8), its body under the name search: an endpoint per engine and
+// mode at its price per search.
+message WebSearchCatalogSection {
+  repeated WebSearchCatalogEntry entries = 1;
+}
+
+// One search endpoint, search/<engine>/<mode>.
+message WebSearchCatalogEntry {
+  string engine = 1;
+  string mode = 2;
+  // The network's price per search, in nano-USD: the gateway's price times the compute markup, rounded up (§21.8).
+  int64 nano_usd_per_search = 3;
+}

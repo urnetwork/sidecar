@@ -1,0 +1,74 @@
+# DESIGN-COMPUTE.md §21.5's and §21.8's web search wire (SRCH-M13-01), protocol/websearch.proto: what the broker decodes
+# and builds on POST compute/v1/search/authorize and /outcomes, under compute-10 (an admission's network, agent, request
+# id and attempt, its minute and its charge) and compute-11 (outcome counts by class, across all networks); what
+# searchsigner, apart, decodes and builds on the API only the broker reaches, under compute-10 (the payee, nonce and
+# amount in its memory, its issued nonces with their values and windows, each UTC day's totals, all without a network,
+# and the sanctions records); and the catalog's search section, under compute-7. The broker sees the sealed payee and the
+# sealed authorization as ciphertext only; the signer opens SearchPayee and builds ComputeSearchAuthorization, so each is
+# a root of its own. A field compute-10 does not name yet waits, pending, on srch-m13-01-websearch-metadata-words.
+
+ComputeSearchAuthorizeRequest.catalog_version: {number: 1, type: uint64, row: compute-10, pending: "the catalog version a search names, which compute-1 names for a model call and compute-10 does not for a search (srch-m13-01-websearch-metadata-words)", until: M13}
+ComputeSearchAuthorizeRequest.request_id: {number: 2, type: bytes, row: compute-10, sees: "request id and attempt"}
+ComputeSearchAuthorizeRequest.agent_id: {number: 3, type: bytes, row: compute-10, sees: "opaque agent id"}
+ComputeSearchAuthorizeRequest.attempt: {number: 4, type: uint32, row: compute-10, sees: "request id and attempt"}
+ComputeSearchAuthorizeRequest.sealed_payee: {number: 5, type: bytes, row: compute-10, pending: "the payee and nonce sealed to searchsigner, ciphertext at the broker, which relays it unread; compute-10 names what the signer reads, not the sealed bytes (srch-m13-01-websearch-metadata-words)", until: M13}
+ComputeSearchAuthorizeRequest.amount: {number: 6, type: uint64, row: compute-10, sees: "the charge"}
+ComputeSearchAuthorizeRequest.asset: {number: 7, type: bytes, row: compute-10, pending: "the policy's USDC contract, public and the same for every search; compute-10 names no asset (srch-m13-01-websearch-metadata-words)", until: M13}
+ComputeSearchAuthorizeRequest.network: {number: 8, type: string, row: compute-10, pending: "the asset's CAIP-2 chain, public and the same for every search; compute-10 names no chain (srch-m13-01-websearch-metadata-words)", until: M13}
+ComputeSearchAuthorizeRequest.outcomes: {number: 9, type: SearchOutcomes, row: compute-11, sees: "which a device reports with its next search authorization"}
+
+SearchOutcomes.ok: {number: 1, type: uint32, row: compute-11, sees: "its outcome class (ok, provider_error, timeout, refused)"}
+SearchOutcomes.provider_error: {number: 2, type: uint32, row: compute-11, sees: "its outcome class (ok, provider_error, timeout, refused)"}
+SearchOutcomes.timeout: {number: 3, type: uint32, row: compute-11, sees: "its outcome class (ok, provider_error, timeout, refused)"}
+SearchOutcomes.refused: {number: 4, type: uint32, row: compute-11, sees: "its outcome class (ok, provider_error, timeout, refused)"}
+
+SearchPayee.pay_to: {number: 1, type: bytes, row: compute-10, sees: "the authorization's nonce, payee and amount in memory"}
+SearchPayee.nonce: {number: 2, type: bytes, row: compute-10, sees: "the authorization's nonce, payee and amount in memory"}
+
+ComputeSearchAuthorization.from: {number: 1, type: bytes, row: compute-10, pending: "URnetwork's own payer address, public on Base and the same for every search; compute-10 names no payer (srch-m13-01-websearch-metadata-words)", until: M13}
+ComputeSearchAuthorization.to: {number: 2, type: bytes, row: compute-10, sees: "the authorization's nonce, payee and amount in memory"}
+ComputeSearchAuthorization.value: {number: 3, type: uint64, row: compute-10, sees: "its issued nonces, with their values and windows"}
+ComputeSearchAuthorization.valid_after_s: {number: 4, type: int64, row: compute-10, sees: "its issued nonces, with their values and windows"}
+ComputeSearchAuthorization.valid_before_s: {number: 5, type: int64, row: compute-10, sees: "its issued nonces, with their values and windows"}
+ComputeSearchAuthorization.nonce: {number: 6, type: bytes, row: compute-10, sees: "its issued nonces, with their values and windows"}
+ComputeSearchAuthorization.signature: {number: 7, type: bytes, row: compute-10, pending: "the payer key's EIP-712 signature, which the signer makes in memory and Base publishes once it settles; compute-10 names none (srch-m13-01-websearch-metadata-words)", until: M13}
+
+ComputeSearchAuthorizeResponse.sealed_authorization: {number: 1, type: bytes, row: compute-10, pending: "the signer's authorization sealed under the device's request, ciphertext at the broker, which relays it unread (srch-m13-01-websearch-metadata-words)", until: M13}
+
+ComputeSearchOutcomesRequest.outcomes: {number: 1, type: SearchOutcomes, row: compute-11, sees: "or in a daily count"}
+
+SearchSignRequest.ticket: {number: 1, type: bytes, row: compute-10, sees: "the broker's ticket for it in memory until the signer reports"}
+SearchSignRequest.amount: {number: 2, type: uint64, row: compute-10, sees: "the authorization's nonce, payee and amount in memory"}
+SearchSignRequest.minute_s: {number: 3, type: int64, row: compute-10, sees: "authorization and settlement times to the minute"}
+SearchSignRequest.sealed_payee: {number: 4, type: bytes, row: compute-10, sees: "the authorization's nonce, payee and amount in memory"}
+
+SearchSignResponse.sealed_authorization: {number: 1, type: bytes, row: compute-10, pending: "as ComputeSearchAuthorizeResponse.sealed_authorization (srch-m13-01-websearch-metadata-words)", until: M13}
+SearchSignResponse.refusal: {number: 2, type: SearchSignRefusal, row: compute-10, sees: "a sanctions record for a payee the screen refused"}
+SearchSignResponse.payee: {number: 3, type: bytes, row: compute-10, sees: "a sanctions record for a payee the screen refused"}
+
+SearchSignerReport.ticket: {number: 1, type: bytes, row: compute-10, sees: "the broker's ticket for it in memory until the signer reports"}
+SearchSignerReport.kind: {number: 2, type: SearchSignerReportKind, row: compute-10, sees: "settled or lapsed"}
+SearchSignerReport.minute_s: {number: 3, type: int64, row: compute-10, sees: "authorization and settlement times to the minute"}
+SearchSignerReport.payee: {number: 4, type: bytes, row: compute-10, sees: "network, sidecar, payee, transaction and time"}
+SearchSignerReport.transaction: {number: 5, type: bytes, row: compute-10, sees: "network, sidecar, payee, transaction and time"}
+SearchSignerReports.reports: {number: 1, type: repeated SearchSignerReport, row: compute-10, sees: "until the signer reports"}
+
+SearchSignerAnswer.ticket: {number: 1, type: bytes, row: compute-10, sees: "the broker's ticket for it in memory until the signer reports"}
+SearchSignerAnswer.answer: {number: 2, type: SearchReportAnswer, row: compute-10, sees: "then only the answer it gave, with no network, an hour"}
+SearchSignerAnswers.answers: {number: 1, type: repeated SearchSignerAnswer, row: compute-10, sees: "then only the answer it gave, with no network, an hour"}
+
+SearchSignerDayRequest.day_s: {number: 1, type: int64, row: compute-10, sees: "each UTC day's issued, settled, attributed and unattributed counts and values"}
+SearchSignerDay.day_s: {number: 1, type: int64, row: compute-10, sees: "each UTC day's issued, settled, attributed and unattributed counts and values"}
+SearchSignerDay.issued_count: {number: 2, type: uint64, row: compute-10, sees: "each UTC day's issued, settled, attributed and unattributed counts and values"}
+SearchSignerDay.issued_value: {number: 3, type: uint64, row: compute-10, sees: "each UTC day's issued, settled, attributed and unattributed counts and values"}
+SearchSignerDay.settled_count: {number: 4, type: uint64, row: compute-10, sees: "each UTC day's issued, settled, attributed and unattributed counts and values"}
+SearchSignerDay.settled_value: {number: 5, type: uint64, row: compute-10, sees: "each UTC day's issued, settled, attributed and unattributed counts and values"}
+SearchSignerDay.attributed_count: {number: 6, type: uint64, row: compute-10, sees: "each UTC day's issued, settled, attributed and unattributed counts and values"}
+SearchSignerDay.attributed_value: {number: 7, type: uint64, row: compute-10, sees: "each UTC day's issued, settled, attributed and unattributed counts and values"}
+SearchSignerDay.unattributed_count: {number: 8, type: uint64, row: compute-10, sees: "each UTC day's issued, settled, attributed and unattributed counts and values"}
+SearchSignerDay.unattributed_value: {number: 9, type: uint64, row: compute-10, sees: "each UTC day's issued, settled, attributed and unattributed counts and values"}
+
+WebSearchCatalogSection.entries: {number: 1, type: repeated WebSearchCatalogEntry, row: compute-7, sees: "the areas' sections"}
+WebSearchCatalogEntry.engine: {number: 1, type: string, row: compute-7, sees: "the areas' sections"}
+WebSearchCatalogEntry.mode: {number: 2, type: string, row: compute-7, sees: "the areas' sections"}
+WebSearchCatalogEntry.nano_usd_per_search: {number: 3, type: int64, row: compute-7, sees: "the areas' sections"}
