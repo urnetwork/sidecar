@@ -87,6 +87,14 @@ type BridgeNetSettings struct {
 	ContractByteCount uint64
 	// How long a window's send waits for its client to take a packet: 5 s.
 	SendTimeout time.Duration
+	// How often, in real time, a wait for an echo's answer sends the echo again while none has come
+	// (BridgeNetWindow.WaitEchoAnswered): 1 s, as ping sends. An echo is a datagram its path may lose, by design, with
+	// nothing wrong on the bridge: the host's NAT drops a reply its session to a new window cannot seal yet rather than
+	// wait for it (connect's zero-wait datagram return), and on darwin every datagram ICMP socket on the host takes every
+	// echo reply the host receives, holding about 43 in its 8 KiB before the kernel drops the rest, so a flow whose
+	// reader falls behind the host's pings loses its own (FS-56's twin, tip-check at 49799797). Non-positive sends
+	// nothing again.
+	EchoResendInterval time.Duration
 	// The binding cache the hosts' components keep: 7 days and 16 a sidecar, the component's defaults.
 	BindingRetainTimeout time.Duration
 	BindingMaxCount      int
@@ -121,6 +129,7 @@ func DefaultBridgeNetSettings() *BridgeNetSettings {
 		DelegationLifetime:       time.Hour,
 		ContractByteCount:        8 * 1024 * 1024,
 		SendTimeout:              5 * time.Second,
+		EchoResendInterval:       time.Second,
 		BindingRetainTimeout:     7 * 24 * time.Hour,
 		BindingMaxCount:          16,
 		PollInterval:             10 * time.Millisecond,
@@ -2237,6 +2246,8 @@ type BridgeNetWindow struct {
 	echoReplies map[uint16]bool
 	echoes      *connect.MonitorValue[int]
 	echoId      uint16
+	// the echoes WaitEchoAnswered sent again
+	echoResendCount int
 	// the packets of the window's stack its link refused, each lost before it left the window
 	refusedCount int
 }
@@ -2559,7 +2570,8 @@ func (self *BridgeNetWindow) SendSyn(address netip.AddrPort) error {
 	return nil
 }
 
-// Waits for the reply to the echo of sequence, false past timeout.
+// Waits for the reply to the echo of sequence, false past timeout. It sends nothing, so an echo whose path lost it
+// stays unanswered: a wait that needs the answer is WaitEchoAnswered.
 func (self *BridgeNetWindow) WaitEchoReply(sequence uint16, timeout time.Duration) bool {
 	deadline := time.After(timeout)
 	for {
@@ -2573,6 +2585,51 @@ func (self *BridgeNetWindow) WaitEchoReply(sequence uint16, timeout time.Duratio
 			return false
 		}
 	}
+}
+
+// Waits for the reply to the echo of sequence, which the caller sent to address, sending the echo again each
+// EchoResendInterval while none has come, as ping sends; false past timeout, or once the window has closed. The echo's
+// path may lose it by design (BridgeNetSettings.EchoResendInterval), and a reply to any copy answers it. Every copy
+// carries the same sequence on the same flow, so one the host takes rides the flow the first opened while that flow
+// lives, and is decided again only once the host has closed it. A copy the window's link refuses is lost like any
+// other. Non-positive EchoResendInterval sends nothing again, as WaitEchoReply.
+func (self *BridgeNetWindow) WaitEchoAnswered(address netip.Addr, sequence uint16, timeout time.Duration) bool {
+	resendInterval := self.bridgeNet.settings.EchoResendInterval
+	if resendInterval <= 0 {
+		return self.WaitEchoReply(sequence, timeout)
+	}
+	deadline := time.After(timeout)
+	resend := time.After(resendInterval)
+	for {
+		_, changed := self.echoes.Get()
+		if self.EchoReplied(sequence) {
+			return true
+		}
+		select {
+		case <-changed:
+		case <-resend:
+			if self.SendEcho(address, sequence) == nil {
+				func() {
+					self.stateLock.Lock()
+					defer self.stateLock.Unlock()
+					self.echoResendCount += 1
+				}()
+			}
+			resend = time.After(resendInterval)
+		case <-self.ctx.Done():
+			return false
+		case <-deadline:
+			return false
+		}
+	}
+}
+
+// How many echoes WaitEchoAnswered sent again so far, each when none of an echo's copies had been answered within
+// EchoResendInterval.
+func (self *BridgeNetWindow) EchoResendCount() int {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.echoResendCount
 }
 
 // Whether the echo of sequence was answered.

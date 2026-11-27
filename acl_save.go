@@ -54,15 +54,17 @@ var (
 	ErrAclSaveUnconfirmed = errors.New("acl save: no confirmed preview")
 )
 
-// The head files a save writes.
+// The head files a save writes: the block-alone compute record among them, which a first document takes in and the
+// save removes (DESIGN-COMPUTE §16.4; AclComputeCarryRecord).
 var aclSaveHeadPaths = []string{
 	ConfigHeadPolicyPath, ConfigHeadTagsPath, ConfigHeadGroupsPath, ConfigHeadRulesPath, ConfigHeadResolvePath,
+	ConfigHeadComputePath,
 }
 
 // The head files a preview stands on: what a save writes, and the labels and K_sock its compile reads.
 var aclSaveBasePaths = []string{
 	ConfigHeadPolicyPath, ConfigHeadTagsPath, ConfigHeadGroupsPath, ConfigHeadRulesPath, ConfigHeadResolvePath,
-	ConfigHeadLabelsPath, ConfigHeadSocketKeyPath,
+	ConfigHeadComputePath, ConfigHeadLabelsPath, ConfigHeadSocketKeyPath,
 }
 
 // What resolves a document's selectors at save, beside the head's resolve file (plan-ACL-selector-resolution): the
@@ -201,7 +203,11 @@ func aclSaveNamesOf(policy *AclPolicy) *aclSaveNames {
 	}
 	addResources := func(resources []AclResource) {
 		for _, resource := range resources {
-			if resource.Kind == AclResourceSubject {
+			switch resource.Kind {
+			case AclResourceSubject:
+				add(resource.Subject)
+			case AclResourceListener:
+				// DESIGN-COMPUTE §26.7's listener:<selector>
 				add(resource.Subject)
 			}
 		}
@@ -232,6 +238,10 @@ func aclSaveNamesOf(policy *AclPolicy) *aclSaveNames {
 	}
 	if policy.Audit != nil {
 		add(policy.Audit.Reader)
+	}
+	// the compute block's budget subjects and egress exits (DESIGN-COMPUTE §16.4)
+	for _, selector := range policy.Compute.selectors() {
+		add(selector)
 	}
 	for _, test := range policy.Tests {
 		add(test.Src)
@@ -390,7 +400,17 @@ func PlanAclSave(ctx context.Context, input *AclSaveInput) (*AclSavePlan, error)
 	if random == nil {
 		random = cryptorand.Reader
 	}
-	policy, err := ParseAclPolicy(input.Policy)
+	source := input.Policy
+	if record := input.Head.File(ConfigHeadComputePath); record != nil {
+		// a network that kept its compute block alone takes it into its first document, its text unchanged, and the
+		// head drops the record (DESIGN-COMPUTE §16.4); a document naming a block of its own is the person's to reconcile
+		carried, err := AclComputeCarryRecord(input.Policy, record)
+		if err != nil {
+			return nil, err
+		}
+		source = carried
+	}
+	policy, err := ParseAclPolicy(source)
 	if err != nil {
 		return nil, err
 	}
@@ -435,7 +455,10 @@ func PlanAclSave(ctx context.Context, input *AclSaveInput) (*AclSavePlan, error)
 			return nil, err
 		}
 	}
-	if head, err = head.WithFile(ConfigHeadPolicyPath, input.Policy); err != nil {
+	if head, err = head.WithFile(ConfigHeadPolicyPath, source); err != nil {
+		return nil, err
+	}
+	if head, err = head.WithFile(ConfigHeadComputePath, nil); err != nil {
 		return nil, err
 	}
 

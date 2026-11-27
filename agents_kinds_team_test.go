@@ -55,8 +55,8 @@ func TestAclTeamStartFeatureBlocks(t *testing.T) {
 		!slices.Equal(deposit.Allow, []protocol.AclAction{protocol.AclAction_ACL_ACTION_DEPOSIT}) {
 		t.Fatalf("agent_repos' rule: %+v", deposit)
 	}
-	// every feature but agent_repos adds nothing to the document
-	if !bytes.Equal(AclTeamStartDocumentFor(AuthFeatureComputePolicy|AuthFeatureListeners|AuthFeatureEnclaves), off) {
+	// every feature but agent_repos and compute_policy, whose block acl_compute_resources_test.go holds, adds nothing
+	if !bytes.Equal(AclTeamStartDocumentFor(AuthFeatureListeners|AuthFeatureEnclaves), off) {
 		t.Fatal("a feature with no block changed the document")
 	}
 	for _, source := range []string{

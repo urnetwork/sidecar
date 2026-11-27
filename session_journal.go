@@ -382,6 +382,8 @@ func (self *SessionJournal) journalNode(state *sessionJournalRun, run *SessionRu
 	if err != nil {
 		return nil, err
 	}
+	// the caller's own stubs, a gateway's search copies (CTXH-M13-01)
+	counts.stubs += node.Stubs
 	recordBody := self.settings.body()
 	oversize := 0
 	item, cuts, err := sessionCutParts(value, recordBody, func(size uint64) bool {

@@ -1,0 +1,20 @@
+request 22222222-2222-2222-2222-222222222222: service_write. Send POST https://api.example.com/v1/notes through connection Notes to notes as me@example.com: it changes the person's own data. The action, as this daemon built it:
+  body_sha256: 6c6146b39afc9d1dd12749ec401f23bae062fe3d2970a63fa355d3550ec9d887
+  host: api.example.com
+  taint_reasons: service_call
+  service_call.connection: 59595959595959595959595959595959
+  service_call.label: Notes
+  service_call.service: notes
+  service_call.account: me@example.com
+  service_call.method: POST
+  service_call.path: /v1/notes
+  service_call.content_type: application/json
+  service_call.class: 1 (write)
+  service_call.feature: notes
+  auto.basis: 1 (taint)
+  service_call.body, the whole body the call sends, untrusted text, each line after a bar:
+    | {"text":"buy milk"}
+asked by sidecar 55555555-5555-5555-5555-555555555555, run 77777777-7777-7777-7777-777777777777, agent 88888888-8888-8888-8888-888888888888
+expires 2025-11-06T00:00:00Z
+untrusted text the agent wrote, which is not the action:
+  summary: point www at the new host

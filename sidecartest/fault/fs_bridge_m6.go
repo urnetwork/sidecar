@@ -202,8 +202,9 @@ func (self *fsShareFlows) expectOpen(payload string) error {
 	if err := self.window.SendEcho(share.Alias(), 1); err != nil {
 		return err
 	}
-	if !self.window.WaitEchoReply(1, settings.WaitTimeout) {
-		return fmt.Errorf("%s's echo was never answered; %s", self.window.Name, self.seenOf(connect.IpProtocolIcmp, netip.AddrPortFrom(share.Alias(), 0), nil, len(host.Dials())))
+	// sent again while it waits, since its path may lose it (BridgeNetWindow.WaitEchoAnswered)
+	if !self.window.WaitEchoAnswered(share.Alias(), 1, settings.WaitTimeout) {
+		return fmt.Errorf("%s's echo was never answered, sent again %d times; %s", self.window.Name, self.window.EchoResendCount(), self.seenOf(connect.IpProtocolIcmp, netip.AddrPortFrom(share.Alias(), 0), nil, len(host.Dials())))
 	}
 	principals := host.Principals(self.window.Client.ClientId)
 	if len(principals) == 0 || principals[0].Principal == nil {

@@ -1,0 +1,7 @@
+// compute_policy's implicit fragment (DESIGN-COMPUTE §16.5, §16.6's implicit row): in a network with no document every
+// member device and its agents run any remote model and search the web, under their budgets and the network's floor; a
+// local model needs no grant (CO-9). It compiles after the frozen implicit document only once a base turns
+// compute_policy on, so every release compiles the same rows before that base.
+{ "grants": [
+    { "src": ["autogroup:member"], "dst": ["model:*"], "allow": ["infer"] },
+    { "src": ["autogroup:member"], "dst": ["compute:search"], "allow": ["query"] } ] }
