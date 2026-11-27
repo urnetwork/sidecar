@@ -6,6 +6,7 @@
 //	policy    ATTEST's gate and newest policy, INFER's catalog (webSearchSidecarPolicy, websearch_policy.go)
 //	broker    INFER's compute service client (webSearchComputeBroker, websearch_broker.go)
 //	budget    the device's budget ledger, a search holding its price as a remote call holds its worst case
+//	          (websearch_budget.go); on the js leg, which runs no ledger, a stand-in that refuses every hold
 //	outcomes  the network's sealed store, websearch/outcomes.json, class websearch
 //	egress    FETCH-M13-01's SidecarEgress on auto, which has not landed: until it does every search answers
 //	          unavailable before a byte leaves, the closed side
@@ -89,51 +90,6 @@ type webSearchEgressDialer struct {
 // See WebSearchDialer.
 func (self *webSearchEgressDialer) Session(ctx context.Context, args *WebSearchSessionArgs) (WebSearchSession, error) {
 	return nil, ErrWebSearchNoEgress
-}
-
-// The device's budget ledger as a search spends it: the budgets a call from this sidecar naming the agent spends, the
-// search's price held, settled or released as a remote call's worst case is (budget_ledger.go).
-type webSearchSidecarBudget struct {
-	sidecar *Sidecar
-}
-
-// See WebSearchBudget.
-func (self *webSearchSidecarBudget) Hold(ctx context.Context, holdId Id, agentId *Id, priceNanoUsd int64) error {
-	if priceNanoUsd < 0 {
-		return errors.New("a negative price")
-	}
-	now := self.sidecar.clock.Now()
-	call, err := self.sidecar.computeBudgetCall(agentId, now)
-	if err != nil {
-		return err
-	}
-	ledger, err := self.sidecar.BudgetLedger()
-	if err != nil {
-		return err
-	}
-	settings := self.sidecar.settings.Budget
-	if settings == nil {
-		settings = DefaultBudgetSettings()
-	}
-	return ledger.Hold(holdId, ComputeBudgetsFor(call, settings, now), uint64(priceNanoUsd))
-}
-
-// See WebSearchBudget.
-func (self *webSearchSidecarBudget) Settle(holdId Id, priceNanoUsd int64) error {
-	ledger, err := self.sidecar.BudgetLedger()
-	if err != nil {
-		return err
-	}
-	return ledger.Settle(holdId, uint64(max(priceNanoUsd, 0)))
-}
-
-// See WebSearchBudget.
-func (self *webSearchSidecarBudget) Release(holdId Id) error {
-	ledger, err := self.sidecar.BudgetLedger()
-	if err != nil {
-		return err
-	}
-	return ledger.Release(holdId)
 }
 
 // The Sidecar's web search directory, resolved at each call from the network it has enrolled in: before that, and
