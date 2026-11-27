@@ -1,0 +1,489 @@
+{
+  "session_id": "0d0c0de0-0171-4000-8000-000000000001",
+  "title": "an edit and a test run over three turns, each a full history, with Codex's hosted web_search tool offered",
+  "requests": [
+    {
+      "name": "turn-1",
+      "headers": {
+        "x-client-request-id": "0d0c0de0-0171-4000-8000-0000000000a1"
+      },
+      "body": {
+        "model": "local-scripted-off",
+        "input": [
+          {
+            "type": "message",
+            "id": "msg_c0de0171000001",
+            "role": "developer",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "You are a coding agent in /work/example. Use the shell tool to run commands. (synthetic base instructions, Codex 0.171.0)"
+              }
+            ]
+          },
+          {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Rename the greeting in src/main.go and run the tests."
+              }
+            ]
+          }
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "name": "shell",
+            "description": "Runs a shell command and returns its output.",
+            "strict": false,
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "command": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "workdir": {
+                  "type": "string"
+                },
+                "timeout_ms": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "command"
+              ],
+              "additionalProperties": false
+            }
+          },
+          {
+            "type": "function",
+            "name": "update_plan",
+            "description": "Updates the task plan.",
+            "strict": false,
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "plan": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "step": {
+                        "type": "string"
+                      },
+                      "status": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "step",
+                      "status"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "plan"
+              ],
+              "additionalProperties": false
+            }
+          },
+          {
+            "type": "web_search",
+            "external_web_access": false
+          }
+        ],
+        "tool_choice": "auto",
+        "parallel_tool_calls": false,
+        "reasoning": {
+          "effort": "high",
+          "summary": "auto"
+        },
+        "store": false,
+        "stream": true,
+        "include": [
+          "reasoning.encrypted_content"
+        ],
+        "prompt_cache_key": "0d0c0de0-0171-4000-8000-0000000000c1",
+        "client_metadata": {
+          "turn": "1"
+        },
+        "request_country": "US"
+      },
+      "model": {
+        "reasoning": [
+          "Edit the greeting, ",
+          "then run the tests."
+        ],
+        "tool_calls": [
+          {
+            "id": "call_c0de0171_1",
+            "name": "shell",
+            "arguments": "{\"command\":[\"sed\",\"-i\",\"s/hello/goodbye/\",\"src/main.go\"],\"workdir\":\"/work/example\"}"
+          }
+        ],
+        "usage": {
+          "input_tokens": 812,
+          "output_tokens": 64
+        }
+      },
+      "expect": {
+        "status": 200,
+        "output": [
+          "reasoning",
+          "function_call"
+        ],
+        "function_calls": [
+          {
+            "id": "call_c0de0171_1",
+            "name": "shell"
+          }
+        ],
+        "dropped_tools": [
+          "web_search"
+        ]
+      }
+    },
+    {
+      "name": "turn-2",
+      "headers": {
+        "x-client-request-id": "0d0c0de0-0171-4000-8000-0000000000a2"
+      },
+      "body": {
+        "model": "local-scripted-off",
+        "input": [
+          {
+            "type": "message",
+            "id": "msg_c0de0171000001",
+            "role": "developer",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "You are a coding agent in /work/example. Use the shell tool to run commands. (synthetic base instructions, Codex 0.171.0)"
+              }
+            ]
+          },
+          {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Rename the greeting in src/main.go and run the tests."
+              }
+            ]
+          },
+          {
+            "type": "reasoning",
+            "id": "rs_c0de0171000001",
+            "summary": [
+              {
+                "type": "summary_text",
+                "text": "(the summary Codex kept of turn 1)"
+              }
+            ],
+            "encrypted_content": "{{reasoning:turn-1}}"
+          },
+          {
+            "type": "function_call",
+            "id": "fc_c0de0171000001",
+            "call_id": "call_c0de0171_1",
+            "name": "shell",
+            "arguments": "{\"command\":[\"sed\",\"-i\",\"s/hello/goodbye/\",\"src/main.go\"],\"workdir\":\"/work/example\"}"
+          },
+          {
+            "type": "function_call_output",
+            "call_id": "call_c0de0171_1",
+            "output": "{\"output\":\"\",\"metadata\":{\"exit_code\":0,\"duration_seconds\":0.1}}"
+          }
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "name": "shell",
+            "description": "Runs a shell command and returns its output.",
+            "strict": false,
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "command": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "workdir": {
+                  "type": "string"
+                },
+                "timeout_ms": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "command"
+              ],
+              "additionalProperties": false
+            }
+          },
+          {
+            "type": "function",
+            "name": "update_plan",
+            "description": "Updates the task plan.",
+            "strict": false,
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "plan": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "step": {
+                        "type": "string"
+                      },
+                      "status": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "step",
+                      "status"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "plan"
+              ],
+              "additionalProperties": false
+            }
+          },
+          {
+            "type": "web_search",
+            "external_web_access": false
+          }
+        ],
+        "tool_choice": "auto",
+        "parallel_tool_calls": false,
+        "reasoning": {
+          "effort": "high",
+          "summary": "auto"
+        },
+        "store": false,
+        "stream": true,
+        "include": [
+          "reasoning.encrypted_content"
+        ],
+        "prompt_cache_key": "0d0c0de0-0171-4000-8000-0000000000c1",
+        "client_metadata": {
+          "turn": "2"
+        },
+        "request_country": "US"
+      },
+      "model": {
+        "tool_calls": [
+          {
+            "id": "call_c0de0171_2",
+            "name": "shell",
+            "arguments": "{\"command\":[\"go\",\"test\",\"./...\"],\"workdir\":\"/work/example\"}"
+          }
+        ],
+        "usage": {
+          "input_tokens": 901,
+          "output_tokens": 31
+        }
+      },
+      "expect": {
+        "status": 200,
+        "output": [
+          "function_call"
+        ],
+        "function_calls": [
+          {
+            "id": "call_c0de0171_2",
+            "name": "shell"
+          }
+        ],
+        "dropped_tools": [
+          "web_search"
+        ]
+      }
+    },
+    {
+      "name": "turn-3",
+      "headers": {
+        "x-client-request-id": "0d0c0de0-0171-4000-8000-0000000000a3"
+      },
+      "body": {
+        "model": "local-scripted-off",
+        "input": [
+          {
+            "type": "message",
+            "id": "msg_c0de0171000001",
+            "role": "developer",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "You are a coding agent in /work/example. Use the shell tool to run commands. (synthetic base instructions, Codex 0.171.0)"
+              }
+            ]
+          },
+          {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Rename the greeting in src/main.go and run the tests."
+              }
+            ]
+          },
+          {
+            "type": "reasoning",
+            "id": "rs_c0de0171000001",
+            "summary": [
+              {
+                "type": "summary_text",
+                "text": "(the summary Codex kept of turn 1)"
+              }
+            ],
+            "encrypted_content": "{{reasoning:turn-1}}"
+          },
+          {
+            "type": "function_call",
+            "id": "fc_c0de0171000001",
+            "call_id": "call_c0de0171_1",
+            "name": "shell",
+            "arguments": "{\"command\":[\"sed\",\"-i\",\"s/hello/goodbye/\",\"src/main.go\"],\"workdir\":\"/work/example\"}"
+          },
+          {
+            "type": "function_call_output",
+            "call_id": "call_c0de0171_1",
+            "output": "{\"output\":\"\",\"metadata\":{\"exit_code\":0,\"duration_seconds\":0.1}}"
+          },
+          {
+            "type": "function_call",
+            "id": "fc_c0de0171000002",
+            "call_id": "call_c0de0171_2",
+            "name": "shell",
+            "arguments": "{\"command\":[\"go\",\"test\",\"./...\"],\"workdir\":\"/work/example\"}"
+          },
+          {
+            "type": "function_call_output",
+            "call_id": "call_c0de0171_2",
+            "output": "{\"output\":\"ok  \\texample.example/greeting\\t0.012s\\n\",\"metadata\":{\"exit_code\":0,\"duration_seconds\":1.2}}"
+          }
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "name": "shell",
+            "description": "Runs a shell command and returns its output.",
+            "strict": false,
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "command": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "workdir": {
+                  "type": "string"
+                },
+                "timeout_ms": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "command"
+              ],
+              "additionalProperties": false
+            }
+          },
+          {
+            "type": "function",
+            "name": "update_plan",
+            "description": "Updates the task plan.",
+            "strict": false,
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "plan": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "step": {
+                        "type": "string"
+                      },
+                      "status": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "step",
+                      "status"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "plan"
+              ],
+              "additionalProperties": false
+            }
+          },
+          {
+            "type": "web_search",
+            "external_web_access": false
+          }
+        ],
+        "tool_choice": "auto",
+        "parallel_tool_calls": false,
+        "reasoning": {
+          "effort": "high",
+          "summary": "auto"
+        },
+        "store": false,
+        "stream": true,
+        "include": [
+          "reasoning.encrypted_content"
+        ],
+        "prompt_cache_key": "0d0c0de0-0171-4000-8000-0000000000c1",
+        "client_metadata": {
+          "turn": "3"
+        },
+        "request_country": "US"
+      },
+      "model": {
+        "text": [
+          "The greeting now says goodbye, ",
+          "and the tests pass."
+        ],
+        "usage": {
+          "input_tokens": 960,
+          "output_tokens": 18
+        }
+      },
+      "expect": {
+        "status": 200,
+        "output": [
+          "message"
+        ],
+        "dropped_tools": [
+          "web_search"
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "harness": "codex",
+  "version": "0.171.0",
+  "pin": "rust-v0.171.0",
+  "released": "2026-11-20",
+  "role": "current",
+  "api": "responses",
+  "path": "/v1/responses",
+  "headers": {
+    "Content-Type": "application/json",
+    "Accept": "text/event-stream",
+    "originator": "codex_cli_rs",
+    "OpenAI-Beta": "responses=experimental",
+    "User-Agent": "codex_cli_rs/0.171.0 (Linux; x86_64) synthetic (codex-exec; 0.171.0)"
+  },
+  "session_header": "session-id",
+  "sources": [
+    "openai/codex rust-v0.171.0, the latest stable release on 2026-11-23, and main at a52fdb3, as research_notes/Brave web search tool/hosted_search_in_harnesses.md reads them: the hosted web_search tool with external_web_access, include reasoning.encrypted_content alone for a provider that is not OpenAI",
+    "openai/codex main at 5f645d73, as research_notes/Compute extension building blocks/gateway_harness_compat.md reads it: ResponsesApiRequest's fields (model, stream, input, tools, tool_choice, parallel_tool_calls, reasoning, store, include, prompt_cache_key, client_metadata, request_country), base instructions as the first input item, a message with an id, and the headers originator, session-id and x-client-request-id",
+    "the Responses API's published schema (openai-python's response_create_params.py and response_stream_event.py) and Open Responses' 2026-04-24 revision"
+  ],
+  "read": "2026-11-23",
+  "recorded": "synthetic in every value: written from the sources' request shapes and the Responses API's published schema, never captured traffic"
+}
