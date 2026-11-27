@@ -154,9 +154,9 @@ func TestAgentRepoKindRuleSaveTestsAndNarrowing(t *testing.T) {
 	}
 	input := func(source string) *AclCompileInput {
 		world.setPolicy(t, source)
-		input := world.input()
-		input.AuthFeatures = AuthFeatureAgentRepos
-		return input
+		compile := world.input()
+		compile.AuthFeatures = AuthFeatureAgentRepos
+		return compile
 	}
 	run := func(source string) *AclPolicyTestReport {
 		report, err := AclPolicyTestRun(&AclPolicyTestInput{Compile: input(source), View: world.view(), Now: aclTestNow})
@@ -266,6 +266,8 @@ type testAgentApiNet struct {
 	repoIds  map[AgentName]Id
 }
 
+// The network networkLabel names, its first base turning agent_repos on, its member's consented device then filing an
+// agent repo's RepoCreate for each name in order.
 func newTestAgentApiNet(t *testing.T, networkLabel string, rk1Text string, names []AgentName) *testAgentApiNet {
 	t.Helper()
 	net := newTestConfigNetOf(t, networkLabel)
