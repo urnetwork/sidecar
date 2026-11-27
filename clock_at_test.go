@@ -84,9 +84,9 @@ func TestClockAfterAtSetsAClockAtsWaitForTheTime(t *testing.T) {
 	clock := newTestClockAt()
 	at := clock.Now().Add(time.Second)
 	later := at.Add(time.Second)
-	fired := clockAfterAt(clock, at)
+	fired := ClockAfterAt(clock, at)
 	called := make(chan struct{})
-	clockAfterFuncAt(clock, later, func() {
+	ClockAfterFuncAt(clock, later, func() {
 		close(called)
 	})
 	if times, timeoutCount := clock.asked(); !slices.EqualFunc(times, []time.Time{at, later}, time.Time.Equal) || timeoutCount != 0 {
@@ -104,12 +104,12 @@ func TestClockAfterAtTimesAnotherClockFromAReading(t *testing.T) {
 	clock.firesWaits = true
 	waits := clock.waitCount.Value()
 	at := clock.Now().Add(time.Second)
-	fired := clockAfterAt(clock, at)
+	fired := ClockAfterAt(clock, at)
 	if set, _ := clock.waitAt(waits, at); !set {
 		t.Fatal("no wait set for the timeout to the time")
 	}
 	called := make(chan struct{})
-	clockAfterFuncAt(clock, at, func() {
+	ClockAfterFuncAt(clock, at, func() {
 		close(called)
 	})
 	clock.Advance(time.Second)
@@ -121,9 +121,9 @@ func TestClockAfterAtTimesAnotherClockFromAReading(t *testing.T) {
 func TestClockAfterAtOnTheRealClockFiresAPassedTimeAtOnce(t *testing.T) {
 	clock := RealClock{}
 	passed := clock.Now().Add(-time.Second)
-	testAwait(t, clockAfterAt(clock, passed), "the wait for a passed time")
+	testAwait(t, ClockAfterAt(clock, passed), "the wait for a passed time")
 	called := make(chan struct{})
-	clockAfterFuncAt(clock, passed, func() {
+	ClockAfterFuncAt(clock, passed, func() {
 		close(called)
 	})
 	testAwait(t, called, "the call at a passed time")
