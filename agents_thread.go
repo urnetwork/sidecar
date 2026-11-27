@@ -83,6 +83,9 @@ type AgentSendResult struct {
 	Path   string
 	// A retry found the message already landed.
 	Duplicate bool
+	// The recipient's state from its status (§20.7: agent_send answers it), offline among them, so a sender can say when
+	// a reply may come; empty for a message to every agent.
+	RecipientState AgentState
 }
 
 // The message's id, from its key (§20.7's ids row).
@@ -256,7 +259,11 @@ func (self *AgentsClient) sendKind(ctx context.Context, args *AgentSendArgs, all
 	if err != nil {
 		return nil, err
 	}
-	return &AgentSendResult{Message: message, RepoId: repoId, Path: message.Path(), Duplicate: duplicate}, nil
+	result := &AgentSendResult{Message: message, RepoId: repoId, Path: message.Path(), Duplicate: duplicate}
+	if !all {
+		result.RecipientState = self.recipientState(ctx, place, args.To)
+	}
+	return result, nil
 }
 
 // A message path's first version as a reader takes it: its bytes, signer, time and provenance; withheld where the
@@ -324,7 +331,7 @@ func (self *AgentsClient) landMessage(ctx context.Context, repoId Id, repo Agent
 			authority, err := self.args.Authority()
 			own = err == nil && authority.UntaggedConsented(first.version.SignerSidecarId, message.From.MemberId)
 		}
-		if own && bytes.Equal(first.data, data) {
+		if (own && bytes.Equal(first.data, data)) || self.sameSupportNotice(first, message) {
 			return true, nil
 		}
 		self.alarmReason(repoId, first.version, SidecarRecordAlarmIdReuse)

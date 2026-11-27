@@ -635,8 +635,9 @@ func (self *AgentStatusWriter) settle(job *agentStatusJob, err error) {
 	switch {
 	case err == nil:
 		line.last, line.lastTainted = job.status, job.tainted
-	case errors.Is(err, ErrAgentCardAbsent), errors.Is(err, ErrAgentsNotWriter), errors.Is(err, ErrAgentsRepoAbsent),
-		errors.Is(err, ErrAgentReposOff):
+	case errors.Is(err, ErrAgentCardAbsent), errors.Is(err, ErrAgentsNotWriter):
+		// no card of this sidecar's at the name in this network: another network's agent, left alone here. A network
+		// whose feature is off, or whose agents repo is not made yet, is tried again at the next note
 		line.foreign = true
 		line.pending, line.pendingSummary = nil, nil
 	}

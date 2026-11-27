@@ -96,6 +96,8 @@ type AgentsClient struct {
 
 	stateLock      sync.Mutex
 	alarmedPushIds map[Id]bool
+	// held across a taken record's read and rewrite in the sealed store (agents_deliver.go), never with stateLock
+	takenLock sync.Mutex
 }
 
 // A client over args: Self, Authority and Repo are required.
