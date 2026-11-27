@@ -15,6 +15,6 @@ const computePolicyStagingBuild = false
 
 // The release's copy of the policy in attest_policy_release/, and its detached signature.
 const (
-	computePolicyReleaseDocumentName  = "compute-policy.json"
-	computePolicyReleaseSignatureName = "compute-policy.json.sig"
+	computePolicyReleaseDocumentName  = computePolicyProductionCopyName
+	computePolicyReleaseSignatureName = computePolicyProductionCopyName + computePolicySignatureSuffix
 )
