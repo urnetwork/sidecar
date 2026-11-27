@@ -7,8 +7,9 @@
 //	asks      an id that asks nothing is covered
 //	whose     the acknowledgments that cover this sidecar are its member's where it reads its member's vault, an
 //	          untagged member device (and from M14 the member's agents' enclave, which never takes the network's); else
-//	          the network's, an Owner's or Admin's, on a tagged or cloud sidecar, which reads no vault (CO-41): those are
-//	          CTRUST-M12-02's, so until it lands such a sidecar has none and is refused, naming --network
+//	          the network's, an Owner's or Admin's, on a tagged or cloud sidecar, which reads no vault (CO-41): the
+//	          entries of the compute block ComputeNetworkDisclosures takes (disclosure_network.go), so with none such a
+//	          sidecar is refused, naming --network
 //	covered   at the current version, or at the previous one while now is before the instant the current version took
 //	          effect plus its grace days (QD-1242's since_ms; 14 unless the signers set 0, and 0 where the policy names
 //	          no instant, so a new version refuses at once); a revision changes nothing
@@ -136,10 +137,17 @@ func computeDisclosureCovered(acknowledged uint32, disclosure *ComputeDisclosure
 	return false, time.Time{}
 }
 
-// The network's acknowledgments a tagged or cloud sidecar takes, by id the version that stands at this device's
-// verified state (CTRUST-M12-02's ComputeNetworkDisclosures).
+// The network's acknowledgments a tagged or cloud sidecar takes, by id the version a taken entry names at this device's
+// verified state, which the check holds to the current version or the previous one within its grace
+// (ComputeNetworkDisclosures).
 type ComputeNetworkDisclosureAcks interface {
 	Versions(ctx context.Context) (map[string]uint32, error)
+}
+
+// A ComputeNetworkDisclosureAcks that lists its entries too, as the Sidecar's does: what the lists name of each id's
+// network acknowledgment.
+type computeNetworkDisclosureEntries interface {
+	Entries(ctx context.Context) ([]*ComputeNetworkDisclosure, error)
 }
 
 // What a check is built on.
@@ -148,7 +156,7 @@ type ComputeDisclosureCheckArgs struct {
 	Registry *ComputeDisclosureRegistry
 	// The person's. Required.
 	Acks *ComputeDisclosureAcks
-	// The network's; nil until CTRUST-M12-02, so a tagged or cloud sidecar has none.
+	// The network's (ComputeNetworkDisclosures); nil, a tagged or cloud sidecar has none.
 	Network ComputeNetworkDisclosureAcks
 	// The changed marks; nil marks nothing.
 	marks *computeDisclosureMarks
@@ -271,6 +279,7 @@ func newComputeDisclosureParts(sidecar *Sidecar, registry *ComputeDisclosureRegi
 	check, err := NewComputeDisclosureCheck(&ComputeDisclosureCheckArgs{
 		Registry: registry,
 		Acks:     acks,
+		Network:  &computeNetworkDisclosureSidecarAcks{sidecar: sidecar},
 		marks:    marks,
 		Now: func() time.Time {
 			gate, err := sidecar.ComputePolicyGate()
@@ -343,8 +352,9 @@ func (self *Sidecar) OpenedComputeDisclosure(ctx context.Context, id string, ver
 }
 
 // The disclosure fields of list, whose views are disclosures', index for index: each view's acknowledged version, whose,
-// whether it is covered now and whether its lines are marked changed. Acknowledgments that do not read leave each view
-// unacknowledged and, where it asks, not covered, the closed reading.
+// whether it is covered now and whether its lines are marked changed, and the network's acknowledgment where its block
+// holds one. Acknowledgments that do not read leave each view unacknowledged and, where it asks, not covered, the
+// closed reading; a network state that does not read names no network acknowledgment.
 func (self *computeDisclosureComponent) withAcks(ctx context.Context, list *ComputeDisclosureList, disclosures []*ComputeDisclosure) *ComputeDisclosureList {
 	scope, versions, err := self.check.covering(ctx)
 	if err != nil {
@@ -355,12 +365,23 @@ func (self *computeDisclosureComponent) withAcks(ctx context.Context, list *Comp
 	}
 	idChanged := self.marks.changed(disclosures, versions)
 	now := self.check.now()
+	idNetworks := map[string]*ComputeNetworkDisclosure{}
+	if network, ok := self.check.network.(computeNetworkDisclosureEntries); ok {
+		entries, err := network.Entries(ctx)
+		if err != nil && self.sidecar.log.V(1).Enabled() {
+			self.sidecar.log.Infof("[disclosure]the network's acknowledgments do not read: %s", err)
+		}
+		for _, entry := range entries {
+			idNetworks[entry.Id] = entry
+		}
+	}
 	for i, view := range list.Disclosures {
 		view.Scope, view.Acknowledged, view.Changed = scope, versions[view.Id], idChanged[view.Id]
 		view.Covered = !view.Asks
 		if view.Asks && scope != "" {
 			view.Covered, _ = computeDisclosureCovered(view.Acknowledged, disclosures[i], now)
 		}
+		view.Network = idNetworks[view.Id]
 	}
 	return list
 }

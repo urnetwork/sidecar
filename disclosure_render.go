@@ -87,6 +87,11 @@ type ComputeDisclosureView struct {
 	Acknowledged uint32                 `json:"acknowledged"`
 	Covered      bool                   `json:"covered"`
 	Changed      bool                   `json:"changed"`
+	// The network's acknowledgment (CTRUST-M12-02), filled by Sidecar.ComputeDisclosures where the network's compute
+	// block holds one for the id: who gave it and when, whether this device takes it and whether it covers a use now,
+	// what an Owner's or Admin's settings and each tagged or cloud sidecar's card show. Nil for none, or where the
+	// network's state could not be read.
+	Network *ComputeNetworkDisclosure `json:"network,omitempty"`
 }
 
 // disclosure in the person's locale, every string from the policy made printable.

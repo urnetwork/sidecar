@@ -685,7 +685,8 @@ type SidecarEvent struct {
 	EvsAlarm SidecarEvsAlarm
 	// evs_alarm of reason prefix_rule (DESIGN-DETAILS 16.2.10): what it stands for; the ref version and the push of
 	// the first change it names, or for set_void and set_newer the set's log position and no push; and how many
-	// changes it stands for, one event a (repo, ref, signer) in AclPrefixSettings.AlarmInterval.
+	// changes it stands for, one event a (repo, ref, signer) in AclPrefixSettings.AlarmInterval. disclosure_changed:
+	// Version is the disclosure's current version.
 	EvsAlarmDetail SidecarEvsAlarmDetail
 	Version        uint64
 	PushId         *Id
@@ -706,6 +707,9 @@ type SidecarEvent struct {
 	// upgrade_required (DESIGN-COMPUTE §16.6's hold): the authorization features the network turned on that this
 	// release lacks, which the update that ends the hold brings.
 	AuthFeatures AuthFeature
+	// disclosure_changed (DESIGN-COMPUTE §2.8's new version row; disclosure_network.go): the disclosure whose network
+	// acknowledgment names an older version than the newest verified policy's, its current version in Version.
+	DisclosureId string
 }
 
 // Called for each event, on whatever goroutine raised it. It must not block or call CloseAndWait
