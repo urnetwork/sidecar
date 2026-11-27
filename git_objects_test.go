@@ -85,7 +85,9 @@ func TestLooseObjectRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	stockCommit := strings.TrimSpace(out)
-	for _, stock := range []struct{ hex, kind string }{{stockBlob, evsGitBlobKind}, {stockTree, evsGitTreeKind}, {stockCommit, evsGitCommitKind}} {
+	for _, stock := range []struct{ hex, kind string }{
+		{hex: stockBlob, kind: evsGitBlobKind}, {hex: stockTree, kind: evsGitTreeKind}, {hex: stockCommit, kind: evsGitCommitKind},
+	} {
 		oid := mustHexOid(t, stock.hex)
 		kind, content, err := objects.ReadGitObject(ctx, oid)
 		if err != nil || kind != stock.kind {

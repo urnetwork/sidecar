@@ -130,14 +130,18 @@ func gitOsName(name string) string {
 	return filepath.FromSlash(path.Clean(name))
 }
 
+// The name's own information beneath the root, never a link's target's.
 func (self *gitOsFileSystem) Lstat(name string) (fs.FileInfo, error) {
 	return self.root.Lstat(gitOsName(name))
 }
 
+// A regular file beneath the root, to read.
 func (self *gitOsFileSystem) Open(name string) (io.ReadCloser, error) {
 	return self.root.Open(gitOsName(name))
 }
 
+// A file beneath the root to write, its old size released from the budget where it is truncated, every write
+// reserved before it lands.
 func (self *gitOsFileSystem) Create(name string, perm fs.FileMode, exclusive bool) (GitFile, error) {
 	flags := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
 	if exclusive {
@@ -158,6 +162,7 @@ func (self *gitOsFileSystem) Create(name string, perm fs.FileMode, exclusive boo
 	return &gitBudgetFile{file: file, budget: self.budget}, nil
 }
 
+// Moves a file beneath the root, the size of the file it replaces released.
 func (self *gitOsFileSystem) Rename(oldName string, newName string) error {
 	freed := int64(0)
 	if info, err := self.root.Lstat(gitOsName(newName)); err == nil && info.Mode().IsRegular() {
@@ -172,6 +177,7 @@ func (self *gitOsFileSystem) Rename(oldName string, newName string) error {
 	return nil
 }
 
+// Removes a file, link or empty directory beneath the root, a file's size released.
 func (self *gitOsFileSystem) Remove(name string) error {
 	freed := int64(0)
 	if info, err := self.root.Lstat(gitOsName(name)); err == nil && info.Mode().IsRegular() {
@@ -186,23 +192,28 @@ func (self *gitOsFileSystem) Remove(name string) error {
 	return nil
 }
 
+// Makes a directory beneath the root with its missing parents.
 func (self *gitOsFileSystem) MkdirAll(name string, perm fs.FileMode) error {
 	return self.root.MkdirAll(gitOsName(name), perm)
 }
 
+// A directory's entries beneath the root, sorted by name.
 func (self *gitOsFileSystem) ReadDir(name string) ([]fs.DirEntry, error) {
 	return fs.ReadDir(self.root.FS(), path.Clean(name))
 }
 
+// Makes a link beneath the root holding target, which the worktree held to its rules first.
 func (self *gitOsFileSystem) Symlink(target string, name string) error {
 	return self.root.Symlink(filepath.FromSlash(target), gitOsName(name))
 }
 
+// A link's target, '/'-separated.
 func (self *gitOsFileSystem) Readlink(name string) (string, error) {
 	target, err := self.root.Readlink(gitOsName(name))
 	return filepath.ToSlash(target), err
 }
 
+// Sets a file's permission bits.
 func (self *gitOsFileSystem) Chmod(name string, mode fs.FileMode) error {
 	return self.root.Chmod(gitOsName(name), mode)
 }
@@ -213,6 +224,7 @@ type gitBudgetFile struct {
 	budget GitByteBudget
 }
 
+// Writes p once the budget takes it, releasing what did not land.
 func (self *gitBudgetFile) Write(p []byte) (int, error) {
 	if err := self.budget.Reserve(int64(len(p))); err != nil {
 		return 0, err
@@ -224,10 +236,12 @@ func (self *gitBudgetFile) Write(p []byte) (int, error) {
 	return n, err
 }
 
+// Closes the file.
 func (self *gitBudgetFile) Close() error {
 	return self.file.Close()
 }
 
+// Makes what was written durable.
 func (self *gitBudgetFile) Sync() error {
 	return self.file.Sync()
 }

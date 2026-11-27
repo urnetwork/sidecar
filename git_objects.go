@@ -229,6 +229,7 @@ func (self *gitObjectReader) Read(p []byte) (int, error) {
 	return n, nil
 }
 
+// Closes the inflater and the file.
 func (self *gitObjectReader) Close() error {
 	self.inflater.Close()
 	return self.file.Close()
