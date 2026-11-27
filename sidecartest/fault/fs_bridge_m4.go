@@ -36,6 +36,7 @@ import (
 	"fmt"
 	"net/netip"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/urnetwork/connect"
@@ -165,7 +166,7 @@ func (self *fsBridgeFlows) udpAddress() netip.AddrPort {
 }
 
 // Every flow opens: the TCP payload and the datagram reach the upstream, and the datagram and the echo are
-// answered.
+// answered, the echo sent again while it waits, since its path may lose it (BridgeNetWindow.WaitEchoAnswered).
 func (self *fsBridgeFlows) expectOpen(payload string) error {
 	host := self.world.host
 	settings := self.world.world.Settings()
@@ -190,10 +191,33 @@ func (self *fsBridgeFlows) expectOpen(payload string) error {
 	if err := self.window.SendEcho(host.Address, 1); err != nil {
 		return err
 	}
-	if !self.window.WaitEchoReply(1, settings.WaitTimeout) {
-		return fmt.Errorf("%s's echo was never answered", self.window.Name)
+	if !self.window.WaitEchoAnswered(host.Address, 1, settings.WaitTimeout) {
+		return fmt.Errorf("%s's echo was never answered; %s", self.window.Name, fsBridgeEchoSeen(self.world, self.window))
 	}
 	return nil
+}
+
+// What the world saw of a window's echoes, for one never answered to say where it stopped: the packets the window's
+// link refused, the copies WaitEchoAnswered sent again, and the host's decisions of the window's echo flows. The world
+// keeps no record of an echo past the host's hook, so an opened flow whose echo went unanswered lost it at the NAT, the
+// kernel's echo or on the way back.
+func fsBridgeEchoSeen(world *fsBridgeWorld, window *sidecartest.BridgeNetWindow) string {
+	seen := []string{
+		fmt.Sprintf("the window's link refused %d packets", window.RefusedCount()),
+		fmt.Sprintf("the window sent an echo again %d times", window.EchoResendCount()),
+	}
+	decided := false
+	for _, decision := range world.host.Decisions(window.Client.ClientId) {
+		if decision.Protocol != connect.IpProtocolIcmp {
+			continue
+		}
+		decided = true
+		seen = append(seen, fmt.Sprintf("the host decided an echo flow %s to %s at generation %d", decision.Verdict, decision.Target, decision.Generation))
+	}
+	if !decided {
+		seen = append(seen, "the host decided no echo flow of the window")
+	}
+	return strings.Join(seen, ", ")
 }
 
 // No flow of the window opens a socket: its TCP connection is refused, the hook denies its TCP, UDP and ICMP flows
@@ -642,7 +666,9 @@ func fs56HeldDial(world *fsBridgeWorld, subjectName string, ipProtocol connect.I
 // An echo the subject's window sends, answered; then, revoked or not, its second echo, and a first echo of a new window
 // of the subject's. A revoked subject's are never answered, and the new window's flow, which no closed flow can
 // shadow, is denied; the twin's are answered. The old window's second echo may meet its closed flow and be dropped
-// before any decision, which is the silent drop too, so only the new window's decision is waited for.
+// before any decision, which is the silent drop too, so only the new window's decision is waited for. Each wait for an
+// answer sends its echo again while none has come (BridgeNetWindow.WaitEchoAnswered): the echo's path may lose it with
+// nothing wrong on the bridge, as it lost the first echo of tip-check's twin at 49799797, which was sent once.
 func fs56Echo(world *fsBridgeWorld, subjectName string, revoke bool) error {
 	host := world.host
 	settings := world.world.Settings()
@@ -652,8 +678,8 @@ func fs56Echo(world *fsBridgeWorld, subjectName string, revoke bool) error {
 	if err := window.SendEcho(host.Address, 1); err != nil {
 		return err
 	}
-	if !window.WaitEchoReply(1, settings.WaitTimeout) {
-		return errors.New("the first echo was never answered")
+	if !window.WaitEchoAnswered(host.Address, 1, settings.WaitTimeout) {
+		return fmt.Errorf("the first echo was never answered; %s", fsBridgeEchoSeen(world, window))
 	}
 	if revoke {
 		n := world.world.RevokeDevice(subject)
@@ -669,8 +695,11 @@ func fs56Echo(world *fsBridgeWorld, subjectName string, revoke bool) error {
 		return err
 	}
 	if !revoke {
-		if !window.WaitEchoReply(2, settings.WaitTimeout) || !next.WaitEchoReply(1, settings.WaitTimeout) {
-			return errors.New("an echo of the unrevoked subject was never answered")
+		if !window.WaitEchoAnswered(host.Address, 2, settings.WaitTimeout) {
+			return fmt.Errorf("the unrevoked subject's second echo was never answered; %s", fsBridgeEchoSeen(world, window))
+		}
+		if !next.WaitEchoAnswered(host.Address, 1, settings.WaitTimeout) {
+			return fmt.Errorf("the unrevoked subject's new window's echo was never answered; %s", fsBridgeEchoSeen(world, next))
 		}
 		return nil
 	}
