@@ -808,7 +808,7 @@ func agentsTurnHookNow() time.Time {
 	if 0 < len(writers) {
 		return writers[0].clock.Now()
 	}
-	return time.Now()
+	return RealClock{}.Now()
 }
 
 // A turn starts: working.
