@@ -1,4 +1,4 @@
-# metadata_list.yml v74; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
+# metadata_list.yml v75; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
 # §7.9, §10, §11). v6 adds to v5 (2026-11-04) connect-1's ShareCert, api-6's push-token slot sentinels, api-7's
 # {acl_}q, cascade signers, recovery bindings, restored bindings' recovery windows and orphaned networks, api-13's
 # per-eraser closure counters, evs-1's secret kind and orphans, evs-3's creation block, fence time, deleted flag
@@ -283,6 +283,17 @@
 # catalog route and compute_catalog_version, MG-C2's, each published version of the remote catalog and when it
 # was published (DESIGN-COMPUTE §6.3), which every device lists and every remote charge is priced from. No Redis
 # family or ttl changes.
+# v75, updated 2026-11-27 for the owner's answers QD-1438 (carch-m12-01-compute-hold-row), which CARCH-M12-01
+# published through check's additions, and QD-1452 (srch-m13-01-websearch-metadata-words), adds no row: compute-3
+# takes compute_abuse_hold, MG-C1's, and its projection {cmp_<network_id>}:a, an operator's suspension of a
+# network's compute every broker admission reads, with its reason class, when it was placed and resumed and the
+# staff members' opaque reviewer ids, the projection holding the version and class alone, kept for the network's
+# life as the account is (DESIGN-COMPUTE §17.2); compute-5 takes each admission's address, which the broker's region
+# check reads in memory and keeps nowhere (I-13); and compute-10 takes the catalog version a search names, the
+# payee and the authorization sealed between the device and the signer, ciphertext at the broker, and the asset,
+# its chain and URnetwork's payer address and signature, public on Base, which the broker and the signer already
+# handle (DESIGN-COMPUTE §21.5). One Redis family is added, {cmp_<network_id>}:a, and compute-3's ttl takes the
+# hold's; no other ttl changes.
 # Each row gives service, store (tables, Redis families, object families, logs or memory),
 # sees, why, ttl, and owner: the section that designs the value and states its ttl. Withdrawn rows keep
 # their ids so citations resolve. Public: this list ships in DESIGN.md on the public sidecar repo (owner
@@ -1065,7 +1076,7 @@ compute-9:
 compute-10:
   service: compute (the broker's search admissions) and searchsigner (the payer key, apart, on hosts of its own); taskworker (compute_search_tickets, compute_search_purge)
   store: compute_op, compute_charge and compute_search_flag (MG-C1, MG-C2); Redis {cmpr_<network_id>} (a network's search rate and its searches today), {cmps} (the global search limiter, no network) and {cmpa} (open search admissions, on an instance of its own); the signer's search_signer_nonce, search_signer_day, search_signer_cursor, search_signer_facilitator and search_signer_screen (MG-S1, in its own database) and its own Redis
-  sees: "per search: network, sidecar, opaque agent id, request id and attempt, authorization and settlement times to the minute, settled or lapsed, the charge, in its charge and operation rows (DESIGN-COMPUTE §9.7); the broker's ticket for it in memory until the signer reports, then only the answer it gave, with no network, an hour; the signer, apart, the authorization's nonce, payee and amount in memory until it settles or lapses on Base's finalized head, about 30 minutes, its issued nonces, with their values and windows and whether each settled and was attributed, and each UTC day's issued, settled, attributed and unattributed counts and values, all without a network; a sanctions record for a payee the screen refused or an authorization settled by a sender other than the facilitator: network, sidecar, payee, transaction and time (§21.5); a network's search rate and its searches this UTC day, against its day_max (§21.9); never the query, the mode or the results"
+  sees: "per search: network, sidecar, opaque agent id, request id and attempt, authorization and settlement times to the minute, settled or lapsed, the charge, in its charge and operation rows (DESIGN-COMPUTE §9.7); the broker's ticket for it in memory until the signer reports, then only the answer it gave, with no network, an hour; the signer, apart, the authorization's nonce, payee and amount in memory until it settles or lapses on Base's finalized head, about 30 minutes, its issued nonces, with their values and windows and whether each settled and was attributed, and each UTC day's issued, settled, attributed and unattributed counts and values, all without a network; a sanctions record for a payee the screen refused or an authorization settled by a sender other than the facilitator: network, sidecar, payee, transaction and time (§21.5); a network's search rate and its searches this UTC day, against its day_max (§21.9); the catalog version a search names; the payee sealed to the signer and the authorization sealed back, as ciphertext at the broker; the asset, its chain and URnetwork's payer address and signature, public on Base; never the query, the mode or the results"
   why: a search's admission, hold and charge, paid by a one-search authorization no one system joins to its network (DESIGN-COMPUTE §21.5, D-CSRV-1); sanctions screening (§21.5)
   ttl: "per-search rows at most 72 hours, deleted from 71 h 55 min (§14.5), then compute-3's day rows; issued nonces a day past their window; the signer's day totals 7 years; sanctions records for OFAC's recordkeeping period, which counsel confirms; a network's searches today a day"
   owner: DESIGN-COMPUTE §14.6 (§21.5)

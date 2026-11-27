@@ -147,6 +147,9 @@ type GatewaySettings struct {
 	// The most calls one network's table holds, in flight and kept: 256. A call past it is not kept, the oldest ended
 	// one dropped first.
 	KeptCallCount int
+	// The most bytes of one call's kept file, its answer's frames in base64 and the call's own fields: 24 MiB, past
+	// KeptResponseByteCount's answer. A file past it is not read, so its call's retry is a new call.
+	KeptFileByteCount int
 	// How long a planned restart (an upgrade, ur daemon restart) waits for calls in flight before the gateway stops: 10
 	// min. New calls are refused 503 meanwhile, with BusyRetryAfter. Non-positive waits for none.
 	PlannedRestartWait time.Duration
@@ -210,6 +213,7 @@ func DefaultGatewaySettings() *GatewaySettings {
 		KeptResponseLife:      10 * time.Minute,
 		KeptResponseByteCount: 16 * 1024 * 1024,
 		KeptCallCount:         256,
+		KeptFileByteCount:     24 * 1024 * 1024,
 		PlannedRestartWait:    10 * time.Minute,
 	}
 }

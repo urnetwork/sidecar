@@ -1831,3 +1831,24 @@ The owner answered QD-1437, which forward-lapse-decision-race raised while this 
 - **DESIGN-DEFER.md.** 106 entries and 172 pointers, unchanged.
 
 The fold numbered owner decisions 806 and 807 (QD-1432, QD-1437) and filed QD-1433 to QD-1436 in DESIGN-COMPUTE-AMENDMENTS.md with no number; what it left is as the third piece lists, with 807's code (forward-lapse-decision-race) beside it.
+
+## Validation after the seventeenth fold: the answers QD-1438 to QD-1453, what was built since the sixteenth, and the owner's landing allowances (2026-11-27)
+
+The design-records track dr25-fold (lane slot mail, wave f48m) brings the design up to what was decided or built after the sixteenth fold (sidecar c477656c to 57804126): the owner's answers recorded since, QD-1438 to QD-1453, every one of them answered on 2026-11-27, one at a time, under the owner's standing acceptance of recommended options; owner decision 807, which the sixteenth fold stated ahead of its code and forward-lapse-decision-race has since built; and owner decision 801's last site. DESIGN-UI.md's changes to this design wait for the DESIGN-UI phase (owner, 2026-11-26: "The implementation needs to start working on DESIGN-UI.md after DESIGN-COMPUTE.md"), and so does the owner's v1 scope update of 2026-11-26 and 2026-11-27 (Team seats as GitHub's model and one Team price everywhere, §20.9), so none is folded here. It lands in pieces, each a commit of its own, recorded below as each lands.
+
+### §2.8's compute-3, compute-5 and compute-10: QD-1438 and QD-1452
+
+The build raised both implementing DESIGN-COMPUTE.md, §17.2's suspension (CARCH-M12-01) and §21.5's payment (SRCH-M13-01), and each amends §14.6's rows of that document, so neither takes a number, as QD-1388 took none for compute-4's words: DESIGN-COMPUTE-AMENDMENTS.md files both under its §14, its lead and index naming them, and their words go into §2.8's block, which Appendix D's row for this list carries.
+
+- **An operator's hold (QD-1438), as built.** compute-3's store takes `compute_abuse_hold`, MG-C1's, and its projection `{cmp_<network_id>}:a`, its sees an operator's suspension of a network's compute, its reason class, when it was placed and resumed and the staff members' opaque reviewer ids, the projection holding the version and class alone, and its ttl a hold for the network's life, as the account; compute-5's sees takes each broker admission's address, read in memory against the refused regions and kept nowhere (I-13). CARCH-M12-01 published both rows through check's additions (carch-m12-01, sidecar 03f1e7ca), which this piece writes into the block word for word, so check/metadata_list_test.go's two `metadataListAdditions` entries leave and the list is empty again.
+- **A search's payment (QD-1452).** compute-10's sees takes the catalog version a search names, the payee sealed to the signer and the authorization sealed back, ciphertext at the broker, and the asset, its chain and URnetwork's payer address and signature, public on Base, in the answer's words, which the schema guard's mapping of websearch.proto quotes where its lines wait on this answer (SRCH-M13-01, on the srch-m13-01 track, not landed when this piece was written).
+- **The list** moves to v75 with no new row, so `testdata/metadata/fields.yml` takes no guard line; `make metadata` copies the block, and the only Redis family it adds, `{cmp_<network_id>}:a`, is mapped to compute-3 by sidecartest's guard since carch-m12-01.
+
+`build.sh` on this folder reproduces DESIGN.md (SHA-256 `f8697332614b10fb1fe2f6df9c553e1980b722e9412f306e4fcecec10e8fe4c3`) and DESIGN-DEFER.md (SHA-256 `3af6b10c35e06eaa2230e6232dc953d77f4539fe4065623950425ebab41895a6`, unchanged), and the validation shows:
+
+- **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item and no new §2.8 row, so no guard line.
+- **Owner decisions.** All 807 rows are present and cited; APPLY.md's section pairs hold. The two answers take no number, so `MAXD`, the range checks and `LATE_DATES` stay at 807. One open owner question, Q-REPO-6.
+- **Superseded options.** A fresh grep finds 320 hits, none on a line this piece changed; the v75 note moved 30 of §2.8's, and `v7/hits_class.json` carries every reading to its hit's current line; none live.
+- **Text.** No bare placeholders or HTML tags; the one research-sheet id stands; 12,937 section references, with the one unresolved as before. `v7/words.json` was regenerated, and `v7/text_checks.json` regenerated unchanged.
+- **DESIGN-DEFER.md.** 106 entries and 172 pointers, unchanged.
+- **The metadata list** is v75, compute-3's, compute-5's and compute-10's words; check's `metadataListAdditions` is empty.
