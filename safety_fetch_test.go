@@ -448,7 +448,8 @@ func TestSafetyModelStoreRefusesARedirectElsewhere(t *testing.T) {
 	if err := store.checkRedirect(request, []*http.Request{from}); err == nil {
 		t.Error("a redirect off https")
 	}
-	request, _ = http.NewRequest(http.MethodGet, "https://objects.githubusercontent.com/release/model.onnx", nil)
+	store.settings.FetchRedirectHostSuffixes = []string{"releases.example"}
+	request, _ = http.NewRequest(http.MethodGet, "https://assets.releases.example/release/model.onnx", nil)
 	if err := store.checkRedirect(request, []*http.Request{from}); err != nil {
 		t.Errorf("a redirect to a release host the settings name: %v", err)
 	}
