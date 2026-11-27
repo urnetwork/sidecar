@@ -58,9 +58,16 @@ type harnessRunEnd struct {
 	errorMessage string
 }
 
-// Runs one prompt to its end, on its own goroutine, and marks the agent idle.
+// Runs one prompt to its end, on its own goroutine, and marks the agent idle. It works only while it holds one of the
+// Harness's work slots (§7.9's agents at work), a prompt past them waiting its turn, and an abort while it waits settling
+// it aborted.
 func (self *harnessAgent) runPrompt(ctx context.Context, input *harnessInput) {
 	defer self.endRun()
+	if err := self.takeWorkSlot(ctx); err != nil {
+		self.settle(nil, self.slotEnd(ctx, err))
+		return
+	}
+	defer self.releaseWorkSlot()
 	self.emit(NewHarnessAgentStartEvent())
 	self.emit(NewHarnessTurnStartEvent())
 	newMessages := []*HarnessPiMessage{}
@@ -103,6 +110,11 @@ func (self *harnessAgent) Resume(ctx context.Context) error {
 	}
 	go func() {
 		defer self.endRun()
+		if err := self.takeWorkSlot(runCtx); err != nil {
+			self.settle(nil, self.slotEnd(runCtx, err))
+			return
+		}
+		defer self.releaseWorkSlot()
 		self.emit(NewHarnessAgentStartEvent())
 		newMessages := []*HarnessPiMessage{}
 		self.settle(newMessages, self.turns(runCtx, &newMessages, paused))
@@ -110,8 +122,20 @@ func (self *harnessAgent) Resume(ctx context.Context) error {
 	return nil
 }
 
-// Emits agent_end and agent_settled with the run's end.
+// Emits agent_end and agent_settled with the run's end, keeping the run's last assistant message and stop reason for
+// agent_wait (harness_launch.go).
 func (self *harnessAgent) settle(newMessages []*HarnessPiMessage, end *harnessRunEnd) {
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.lastStopReason = end.stopReason
+		for i := len(newMessages) - 1; 0 <= i; i-- {
+			if newMessages[i].Role() == HarnessPiRoleAssistant {
+				self.lastMessage = newMessages[i]
+				break
+			}
+		}
+	}()
 	self.emit(NewHarnessAgentEndEvent(newMessages, false))
 	settled := NewHarnessAgentSettledEvent(end.aborted, end.stopReason)
 	if end.errorMessage != "" {

@@ -107,6 +107,11 @@ type HarnessSettings struct {
 	// 4 levels counted along the parent chain the Harness holds. Non-positive starts none.
 	AgentConcurrentCount int
 	AgentDepthCount      int
+	// agent_wait's wait for a child to settle (§7.9): 5 minutes where the call names no timeout, and at most 30
+	// minutes, past which the call answers that the child is still at work, so a parent's turn is never held past
+	// what a person would wait for an answer. Non-positive answers at once.
+	AgentWaitTimeout    time.Duration
+	AgentWaitMaxTimeout time.Duration
 
 	// §7.10's attach link (HARN-M14). The longest JSON line either end reads: 16 MiB, room for a prompt's images in
 	// base64. A line past it ends the session. A protocol limit both ends read from these settings. Non-positive ends
@@ -198,6 +203,8 @@ func DefaultHarnessSettings() *HarnessSettings {
 
 		AgentConcurrentCount: 8,
 		AgentDepthCount:      4,
+		AgentWaitTimeout:     5 * time.Minute,
+		AgentWaitMaxTimeout:  30 * time.Minute,
 
 		RpcLineByteCount:        16 * 1024 * 1024,
 		RpcReplayEventCount:     4096,

@@ -198,6 +198,9 @@ type HarnessArgs struct {
 	// constructs after the Harness. Nil while the release's support switch is off, which leaves the support tools,
 	// their skill and support_update out (§28.21; harness_support.go).
 	Support func() (*SupportClient, error)
+	// The network the in-process DESIGN tools act on (harness_tool_design.go): on a Sidecar its own, read at each
+	// call. Nil leaves evs_*, search, record_query and record_append out.
+	Network harnessDesignNetwork
 }
 
 // One subscriber: its queue and its goroutine.
@@ -344,10 +347,13 @@ type Harness struct {
 	stamper         *harnessEventStamper
 	subscribers     *harnessSubscribers
 	support         func() (*SupportClient, error)
+	network         harnessDesignNetwork
 	// the events a view reads after the fact, nil until a view first asks (harness_view_log.go)
 	view atomic.Pointer[harnessViewLog]
 	// held across one emission: never stateLock
 	emitLock sync.Mutex
+	// §7.9's agents at work: a token for each running prompt, at most AgentConcurrentCount (harness_launch.go)
+	workSlots chan struct{}
 
 	// held across the support listener's add and removal, never with stateLock
 	supportLock sync.Mutex
@@ -398,6 +404,8 @@ func NewHarness(args *HarnessArgs) (*Harness, error) {
 		workspaceCap:    workspaceCap,
 		observer:        args.Observer,
 		support:         args.Support,
+		network:         args.Network,
+		workSlots:       make(chan struct{}, max(settings.AgentConcurrentCount, 0)),
 		stamper:         newHarnessEventStamper(),
 		subscribers:     newHarnessSubscribers(settings, log),
 		agents:          map[Id]*harnessAgent{},
@@ -460,6 +468,10 @@ func (self *Harness) Emit(agentId Id, event *HarnessEvent) error {
 	}()
 	if agent != nil {
 		agent.subscribers.deliver(event)
+		// a launched child's events reach its ancestors' subscribers too, nested under its agent_spawned (§7.9)
+		for ancestor := agent.parent; ancestor != nil; ancestor = ancestor.parent {
+			ancestor.subscribers.deliver(event)
+		}
 	}
 	self.subscribers.deliver(event)
 	return nil

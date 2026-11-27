@@ -64,8 +64,6 @@ var (
 	// The act is the person's alone: confirmed on /dev/tty or in an app's UI, with no harness process among the
 	// caller's ancestors.
 	ErrHarnessPersonOnly = errors.New("this is the person's own act, from a terminal or the app with no harness process among its ancestors")
-	// No agent of that id is open in the network's Harness.
-	ErrHarnessAgentUnknown = errors.New("no such agent is open in this harness")
 	// No model was named, and the catalog recommends none for this device.
 	ErrHarnessModelUnnamed = errors.New("name a model: this device's catalog recommends none (ur models lists them)")
 )
