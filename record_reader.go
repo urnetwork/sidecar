@@ -113,6 +113,8 @@ type RecordEntryCopy struct {
 	// A body-apart copy's body file, s/<n> of its stream, and the version that created it; 0 while none stands.
 	BodyPath    string
 	BodyVersion uint64
+	// That body file's padded size as the listing states it, fetched or not (DESIGN-COMPUTE §24.10's storage view).
+	BodyByteCount uint64
 }
 
 // One verified entry, as a reader holds it.
@@ -877,6 +879,7 @@ func (self *recordReadLog) takeBodyFilesWithLock(streamId Id, version *RecordStr
 				if copyN, ok := RecordStreamPathCounter(entryCopy.Path); ok && copyN == n && entryCopy.BodyVersion == 0 {
 					entryCopy.BodyPath = bodyFile.Path
 					entryCopy.BodyVersion = version.Version
+					entryCopy.BodyByteCount = bodyFile.PaddedByteCount
 				}
 			}
 		}

@@ -775,6 +775,9 @@ type recordHeldBody struct {
 	Seq        uint64 `json:"seq"`
 	Counter    uint64 `json:"counter"`
 	SealedBody []byte `json:"sealed_body"`
+	// its entry's run, which a drop past the spool's budget names in that run's coverage (DESIGN-COMPUTE §24.10); empty
+	// from a body held before it was kept
+	RunId []byte `json:"run_id,omitempty"`
 }
 
 // A held body's file name: its counter in 20 decimal digits, so a listing sorts by counter.
@@ -840,9 +843,13 @@ func (self *recordWriter) storeHeldBodies(plan *recordPushPlan) error {
 		if sealed == nil {
 			continue
 		}
-		content, err := json.Marshal(&recordHeldBody{
+		held := &recordHeldBody{
 			Version: recordHeldBodyVersion, LogId: plan.LogId, Seq: planEntry.Seq, Counter: planEntry.Counter, SealedBody: sealed.BodyBytes(),
-		})
+		}
+		if header, err := sealed.Header(); err == nil {
+			held.RunId = header.Header.GetRunId()
+		}
+		content, err := json.Marshal(held)
 		if err != nil {
 			return err
 		}

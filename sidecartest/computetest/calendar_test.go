@@ -897,3 +897,22 @@ func TestFakeCalendarStopsAfterApplying(t *testing.T) {
 		t.Fatalf("%d Graph events after the retry, want 1", count)
 	}
 }
+
+func TestFakeCalendarScriptedRedirects(t *testing.T) {
+	server, _ := newTestCalendarServer(t, &FakeCalendarAccountArgs{WellKnownLocation: "https://caldav.other.example/dav/"})
+	// the well-known redirect names where the test said: here another registrable domain
+	response, _ := testCalendarDo(t, server, "PROPFIND", "https://"+FakeCalendarCaldavHost+"/.well-known/caldav", "", nil)
+	if response.StatusCode != http.StatusMovedPermanently || response.Header.Get("Location") != "https://caldav.other.example/dav/" {
+		t.Fatalf("well-known answered %d to %q", response.StatusCode, response.Header.Get("Location"))
+	}
+	// a scripted redirect answers the next request, touching nothing, then the front serves again
+	server.FailNext(&FakeCalendarFailure{Protocol: FakeCalendarCaldav, Status: http.StatusTemporaryRedirect, Location: "http://192.0.2.7/dav/"})
+	header := map[string]string{"Depth": "0", "Authorization": testCaldavAuthorization()}
+	response, _ = testCalendarDo(t, server, "PROPFIND", "https://"+FakeCalendarCaldavHost+testCalendarPersonalPath, "", header)
+	if response.StatusCode != http.StatusTemporaryRedirect || response.Header.Get("Location") != "http://192.0.2.7/dav/" {
+		t.Fatalf("a scripted redirect answered %d to %q", response.StatusCode, response.Header.Get("Location"))
+	}
+	if response, _ := testCalendarDo(t, server, "PROPFIND", "https://"+FakeCalendarCaldavHost+testCalendarPersonalPath, "", header); response.StatusCode != http.StatusMultiStatus {
+		t.Fatalf("the request after the redirect answered %d", response.StatusCode)
+	}
+}

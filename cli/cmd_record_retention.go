@@ -81,7 +81,7 @@ type urRecordRetentionTarget interface {
 // Section 8's class names, as --class takes them.
 var urRecordRetentionClasses = []sidecar.RecordClass{
 	sidecar.RecordClassCapture, sidecar.RecordClassAction, sidecar.RecordClassCoordination, sidecar.RecordClassAnnounce,
-	sidecar.RecordClassRequest, sidecar.RecordClassAccounting,
+	sidecar.RecordClassRequest, sidecar.RecordClassAccounting, sidecar.RecordClassBulk,
 }
 
 // --class's values: a class a policy takes, by section 8's name.
@@ -91,7 +91,7 @@ func parseUrRecordRetentionClass(text string) (sidecar.RecordClass, error) {
 			return class, nil
 		}
 	}
-	return sidecar.RecordClassUnspecified, fmt.Errorf("--class is capture, action, coordination, announce, request or accounting, not %q", text)
+	return sidecar.RecordClassUnspecified, fmt.Errorf("--class is capture, action, coordination, announce, request, accounting or bulk, not %q", text)
 }
 
 // A policy as printed.

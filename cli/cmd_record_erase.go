@@ -1,6 +1,8 @@
-// ur record erase (RECORD.md section 8, §16.8's Erasure; RECORD-M3-06, RECORD-M10-01).
+// ur record erase (RECORD.md section 8, §16.8's Erasure; RECORD-M3-06, RECORD-M10-01; DESIGN-COMPUTE §24.10's prune row,
+// CTXH-M11-06).
 //
 //	ur record erase --log=<log> --entry=<id>... [--reason=<reason>] [--dry-run]
+//	ur record erase --run=<id> [--context | --blobs-only] [--log=<log>] [--reason=<reason>] [--dry-run]
 //
 // A log admin's erasure of entries by key destruction, which cannot be undone, so a person does it: the command lists
 // what it will destroy on the terminal and erases only on a yes there, and --dry-run prints the list and erases
@@ -8,6 +10,14 @@
 // keep its agent label and session ids, which a person who wants those gone erases too (DESIGN-DETAILS 15.2.8). The daemon refuses a caller with a harness process among its ancestors, by the pid it read off the socket,
 // and no MCP tool reaches it. --reason is person, the default, or moderation. The answer names the one log the
 // erasure reached: a copy or twin in another log is not reached, and an erasure there is its own.
+//
+// --run erases a run's context history (the root's record_erase_run.go): every entry of the run, its transcript,
+// context, tool call, model call and coverage entries among them; with --context its session entries and blobs; with
+// --blobs-only its blobs alone; in the author's vault unless --log names another. Erasing a session entry, by --entry
+// or --run, erases its parts' blobs too. The list then names what the erasure cuts beside the entries it takes: the
+// run's nodes left without their item (same_as), the model calls whose context it cuts, and the continued and forked
+// runs whose paths cross into it. What the person confirms is what is erased: the erasure takes the entries listed,
+// never those a live run journals after the list.
 
 package main
 
@@ -30,17 +40,24 @@ const (
 
 func init() {
 	registerUrRecordPart(&urRecordPart{
-		word:  "erase",
-		usage: []string{"  ur record erase --log=<log> --entry=<id>... [--reason=<reason>] [--dry-run]"},
-		run:   runUrRecordErase,
+		word: "erase",
+		usage: []string{
+			"  ur record erase --log=<log> --entry=<id>... [--reason=<reason>] [--dry-run]",
+			"  ur record erase --run=<id> [--context | --blobs-only] [--log=<log>] [--reason=<reason>] [--dry-run]",
+		},
+		run: runUrRecordErase,
 	})
 	urDaemonMethodExtensions = append(urDaemonMethodExtensions, urRecordEraseMethods)
 }
 
-// What an erasure asks for, as the methods take it.
+// What an erasure asks for, as the methods take it: entries of a log, or a run's.
 type urRecordEraseParams struct {
-	Log     string       `json:"log"`
-	Entries []sidecar.Id `json:"entries"`
+	Log     string       `json:"log,omitempty"`
+	Entries []sidecar.Id `json:"entries,omitempty"`
+	// A run's entries by scope (all, context or blobs), in the author's vault where Log is empty: the plan's alone; the
+	// erasure takes the entries the plan listed.
+	Run   *sidecar.Id `json:"run,omitempty"`
+	Scope string      `json:"scope,omitempty"`
 	// person or moderation; empty is person
 	Reason string `json:"reason,omitempty"`
 }
@@ -62,6 +79,11 @@ type urRecordEraseReply struct {
 	LogId   sidecar.Id           `json:"log_id"`
 	Items   []*urRecordEraseItem `json:"items"`
 	Missing []sidecar.Id         `json:"missing,omitempty"`
+	// What erasing session history cuts beside its entries: nodes left without their item, model calls whose context
+	// it cuts, and runs that continue it.
+	SameAs []sidecar.Id `json:"same_as,omitempty"`
+	Calls  []sidecar.Id `json:"calls,omitempty"`
+	Runs   []sidecar.Id `json:"runs,omitempty"`
 	// an erasure's; empty for a plan
 	ErasureId *sidecar.Id  `json:"erasure_id,omitempty"`
 	Erased    []sidecar.Id `json:"erased,omitempty"`
@@ -86,7 +108,8 @@ func parseUrRecordEraseReason(text string) (sidecar.RecordErasureReason, error) 
 	return sidecar.RecordErasureReasonUnspecified, fmt.Errorf("--reason is person or moderation, not %q", text)
 }
 
-// The erasure request for params on the hosted record, with whether pid runs under a harness.
+// The erasure request for params on the hosted record, with whether pid runs under a harness: its entries, a run's by
+// scope where it names one, each session entry's blobs added.
 func (self *urDaemonNetwork) recordEraseArgs(ctx context.Context, params *urRecordEraseParams, pid int) (*sidecar.SidecarRecord, *sidecar.RecordEraseArgs, error) {
 	running, err := self.onlySidecar()
 	if err != nil {
@@ -96,15 +119,23 @@ func (self *urDaemonNetwork) recordEraseArgs(ctx context.Context, params *urReco
 	if err != nil {
 		return nil, nil, err
 	}
-	logId, err := record.ResolveLog(params.Log)
-	if err != nil {
-		return nil, nil, err
-	}
 	reason, err := parseUrRecordEraseReason(params.Reason)
 	if err != nil {
 		return nil, nil, err
 	}
-	return record, &sidecar.RecordEraseArgs{LogId: logId, EntryIds: params.Entries, Reason: reason, HarnessAncestor: running.HarnessAncestor(ctx, pid)}, nil
+	spec := &sidecar.SessionPruneSpec{RunId: params.Run, Scope: sidecar.RecordEraseRunScope(params.Scope), EntryIds: params.Entries}
+	if params.Log != "" {
+		logId, err := record.ResolveLog(params.Log)
+		if err != nil {
+			return nil, nil, err
+		}
+		spec.LogId = &logId
+	}
+	logId, entryIds, err := record.SessionPruneEntries(ctx, spec)
+	if err != nil {
+		return nil, nil, err
+	}
+	return record, &sidecar.RecordEraseArgs{LogId: logId, EntryIds: entryIds, Reason: reason, HarnessAncestor: running.HarnessAncestor(ctx, pid)}, nil
 }
 
 func (self *urDaemonNetwork) recordErasePlan(ctx context.Context, params *urRecordEraseParams, pid int) (*urRecordEraseReply, error) {
@@ -112,32 +143,52 @@ func (self *urDaemonNetwork) recordErasePlan(ctx context.Context, params *urReco
 	if err != nil {
 		return nil, err
 	}
-	plan, err := record.Eraser().Plan(ctx, args)
+	reply := &urRecordEraseReply{LogId: args.LogId, Items: []*urRecordEraseItem{}}
+	if len(args.EntryIds) == 0 {
+		return reply, nil
+	}
+	plan, err := record.Eraser().PlanAll(ctx, args)
 	if err != nil {
 		return nil, err
 	}
-	reply := &urRecordEraseReply{LogId: plan.LogId, Items: []*urRecordEraseItem{}, Missing: plan.Missing}
+	reply.Missing = plan.Missing
 	for _, item := range plan.Items {
 		reply.Items = append(reply.Items, &urRecordEraseItem{
 			EntryId: item.EntryId, Kind: item.Kind.String(), TimeMillis: item.TimeMillis, CopyCount: item.CopyCount, Erased: item.Erased,
 			KeptContextCount: item.KeptContextCount,
 		})
 	}
+	impact, err := record.Eraser().SessionImpact(ctx, args.LogId, args.EntryIds)
+	if err != nil {
+		return nil, err
+	}
+	reply.SameAs, reply.Calls, reply.Runs = impact.SameAs, impact.Calls, impact.Runs
 	return reply, nil
 }
 
 func (self *urDaemonNetwork) recordErase(ctx context.Context, params *urRecordEraseParams, pid int, confirmed bool) (*urRecordEraseReply, error) {
+	if params.Run != nil {
+		// the erasure takes the entries the plan listed, which the command sends back
+		return nil, errors.New("an erasure names the entries its plan listed")
+	}
 	record, args, err := self.recordEraseArgs(ctx, params, pid)
 	if err != nil {
 		return nil, err
 	}
 	args.Confirmed = confirmed
-	result, err := record.Eraser().Erase(ctx, args)
+	results, err := record.Eraser().EraseAll(ctx, args)
+	reply := &urRecordEraseReply{LogId: args.LogId, Items: []*urRecordEraseItem{}}
+	for _, result := range results {
+		erasureId := result.ErasureId
+		reply.ErasureId = &erasureId
+		reply.Erased = append(reply.Erased, result.Erased...)
+		reply.Missing = append(reply.Missing, result.Missing...)
+		reply.KeyCount += len(result.Keys)
+	}
 	if err != nil {
 		return nil, err
 	}
-	erasureId := result.ErasureId
-	return &urRecordEraseReply{LogId: result.LogId, Items: []*urRecordEraseItem{}, Missing: result.Missing, ErasureId: &erasureId, Erased: result.Erased, KeyCount: len(result.Keys)}, nil
+	return reply, nil
 }
 
 // The erase methods over target, when it runs a Sidecar's record.
@@ -148,8 +199,8 @@ func urRecordEraseMethods(target urDaemonTarget) []*sidecar.DaemonMethod {
 	}
 	decode := func(call *sidecar.DaemonCall) (*urRecordEraseParams, error) {
 		params := &urRecordEraseParams{}
-		if err := decodeUrParams(call, params); err != nil || params.Log == "" || len(params.Entries) == 0 {
-			return nil, errors.New("an erasure takes the log and its entries")
+		if err := decodeUrParams(call, params); err != nil || (params.Run == nil && (params.Log == "" || len(params.Entries) == 0)) {
+			return nil, errors.New("an erasure takes the log and its entries, or a run")
 		}
 		return params, nil
 	}
@@ -196,17 +247,39 @@ func printUrRecordErasePlan(out interface{ Write([]byte) (int, error) }, reply *
 	for _, entryId := range reply.Missing {
 		fmt.Fprintf(out, "  %s  not in this log\n", entryId)
 	}
+	for _, entryId := range reply.SameAs {
+		fmt.Fprintf(out, "  %s  a node of the run that stays but loses its item (same_as or a shared part)\n", entryId)
+	}
+	for _, entryId := range reply.Calls {
+		fmt.Fprintf(out, "  %s  a model call whose context this cuts: its rebuild reads unverifiable there\n", entryId)
+	}
+	for _, runId := range reply.Runs {
+		fmt.Fprintf(out, "  run %s continues or forks from this run: its path reads erased there\n", runId)
+	}
 	fmt.Fprintf(out, "Each body's key goes for good; headers and chains stay. Copies in other logs are not reached.\n")
 }
 
-// Lists, asks on the terminal, then has the daemon erase.
+// Lists, asks on the terminal, then has the daemon erase what it listed.
 func runUrRecordErase(ctx context.Context, cli *urCli, options docopt.Opts) error {
 	params := &urRecordEraseParams{Log: urOptionString(options, "--log"), Reason: urOptionString(options, "--reason")}
 	if _, err := parseUrRecordEraseReason(params.Reason); err != nil {
 		return err
 	}
 	var err error
-	if params.Entries, err = parseUrRecordIds(urOptionStrings(options, "--entry")); err != nil {
+	if run := urOptionString(options, "--run"); run != "" {
+		runId, err := parseUrRecordId(run)
+		if err != nil {
+			return err
+		}
+		params.Run = &runId
+		params.Scope = string(sidecar.RecordEraseRunAll)
+		switch {
+		case urOptionBool(options, "--context"):
+			params.Scope = string(sidecar.RecordEraseRunContext)
+		case urOptionBool(options, "--blobs-only"):
+			params.Scope = string(sidecar.RecordEraseRunBlobs)
+		}
+	} else if params.Entries, err = parseUrRecordIds(urOptionStrings(options, "--entry")); err != nil {
 		return err
 	}
 	plan := &urRecordEraseReply{}
@@ -236,12 +309,21 @@ func runUrRecordErase(ctx context.Context, cli *urCli, options docopt.Opts) erro
 		cli.printf("nothing was erased\n")
 		return nil
 	}
+	// what was listed is what is erased
+	erase := &urRecordEraseParams{Log: plan.LogId.String(), Reason: params.Reason}
+	for _, item := range plan.Items {
+		erase.Entries = append(erase.Entries, item.EntryId)
+	}
 	erased := &urRecordEraseReply{}
-	if err := cli.callDaemon(ctx, urMethodRecordErase, params, true, erased); err != nil {
+	if err := cli.callDaemon(ctx, urMethodRecordErase, erase, true, erased); err != nil {
 		return err
 	}
+	erasure := ""
+	if erased.ErasureId != nil {
+		erasure = erased.ErasureId.String()
+	}
 	cli.printf("erased %d entries of log %s by %d keys, erasure %s; its erasure entry follows in your stream there, and copies in other logs are not reached\n",
-		len(erased.Erased), erased.LogId, erased.KeyCount, erased.ErasureId)
+		len(erased.Erased), erased.LogId, erased.KeyCount, erasure)
 	for _, entryId := range erased.Missing {
 		cli.printf("not in this log: %s\n", entryId)
 	}
