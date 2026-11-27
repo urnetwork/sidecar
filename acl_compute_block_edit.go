@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // Editing the compute block's disclosures in place (DESIGN-COMPUTE §2.8, §16.4; CO-41; CACL-M12-03), for
 // CTRUST-M12-02's network acknowledgments: SetComputeBlockDisclosure adds or replaces one entry of compute.disclosures
 // and RemoveComputeBlockDisclosure takes one out, in a document's source or in a network with no document's block-alone
@@ -13,7 +15,8 @@
 // Every edit is read back through ParseAclPolicy, so no edit answers a source the readers would refuse. The positions
 // come from the standardized text, whose offsets are the source's (aclStandardizeHujson).
 //
-// On every leg, as the parse is. Package-level functions, safe for concurrent use; the caller's source is not changed.
+// On every leg but the ios_extension legs, which edit no document. Package-level functions, safe for concurrent use; the
+// caller's source is not changed.
 
 package sidecar
 

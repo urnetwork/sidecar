@@ -1,4 +1,4 @@
-//go:build !ios_extension && !sidecar_http
+//go:build !ios_extension && !sidecar_http && !js
 
 // BudgetLedger (DESIGN-COMPUTE §16.4; D-CACL-6, IC-6, IC-11; CACL-M12-05): the daemon's own tallies of the budgets it can
 // see, its agents', its grants' and its runs' and its own calls', by budget and UTC day, UTC month or run, from each
@@ -18,7 +18,8 @@
 // no more.
 //
 // The ledger is one file in the sidecar's network store, rewritten whole at each change (SidecarStore's commit swaps
-// it in at once), its tallies pruned past BudgetSettings.LedgerRetention. Safe for concurrent use. Device legs only.
+// it in at once), its tallies pruned past BudgetSettings.LedgerRetention. Safe for concurrent use. Device legs only, and
+// not plain js, where compute_balance's view (compute_tools.go) is not built.
 
 package sidecar
 

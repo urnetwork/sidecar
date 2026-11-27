@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 package sidecar
 
 // CACL-M12-03: editing compute.disclosures in place for CTRUST-M12-02 (DESIGN-COMPUTE §2.8, §16.4): one entry added,
