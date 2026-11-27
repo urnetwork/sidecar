@@ -46,7 +46,8 @@ func runUrInstallDaemon(ctx context.Context, cli *urCli, options docopt.Opts) er
 	if err != nil {
 		return err
 	}
-	if err := installDaemonUnit(ctx, env, cli.unitRunner(cli), cli.instance, executable); err != nil {
+	// the unit holds the gateway's port while a grant stands (cmd_gateway_daemon.go)
+	if err := installDaemonUnit(ctx, env, cli.unitRunner(cli), cli.instance, executable, urGatewayUnitPort(cli)); err != nil {
 		return err
 	}
 	cli.printf("the daemon of instance %s runs from its unit\n", cli.instance)
@@ -268,7 +269,8 @@ func installDaemonUnitIfAbsent(ctx context.Context, cli *urCli) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	plan, err := unitPlanFor(env, cli.instance, executable)
+	gatewayPort := urGatewayUnitPort(cli)
+	plan, err := unitPlanFor(env, cli.instance, executable, gatewayPort)
 	if err != nil {
 		return false, err
 	}
@@ -277,7 +279,7 @@ func installDaemonUnitIfAbsent(ctx context.Context, cli *urCli) (bool, error) {
 			return false, nil
 		}
 	}
-	if err := installDaemonUnit(ctx, env, cli.unitRunner(cli), cli.instance, executable); err != nil {
+	if err := installDaemonUnit(ctx, env, cli.unitRunner(cli), cli.instance, executable, gatewayPort); err != nil {
 		return false, err
 	}
 	return true, nil

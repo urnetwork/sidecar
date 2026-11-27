@@ -15,5 +15,7 @@ systemctl --user daemon-reload
 systemctl --user enable --now ur@work
 loginctl enable-linger
 --- uninstall
+systemctl --user disable --now ur@work.socket
 systemctl --user disable --now ur@work
 systemctl --user daemon-reload
+remove /home/synthetic/.config/systemd/user/ur@work.socket

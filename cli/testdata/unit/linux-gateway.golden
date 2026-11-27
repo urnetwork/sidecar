@@ -1,0 +1,35 @@
+path: /home/synthetic/.config/systemd/user/ur@work.service
+--- content
+[Unit]
+Description=URnetwork sidecar daemon, instance work
+
+[Service]
+Type=simple
+ExecStart="/opt/urnetwork/bin/ur" "daemon" "--instance" "work" "--unit"
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+--- socket /home/synthetic/.config/systemd/user/ur@work.socket
+[Unit]
+Description=URnetwork sidecar gateway port, instance work
+
+[Socket]
+ListenStream=127.0.0.1:21234
+ListenStream=[::1]:21234
+BindIPv6Only=ipv6-only
+FileDescriptorName=gateway
+
+[Install]
+WantedBy=sockets.target
+--- install
+systemctl --user daemon-reload
+systemctl --user enable --now ur@work.socket
+systemctl --user enable ur@work
+systemctl --user restart ur@work
+loginctl enable-linger
+--- uninstall
+systemctl --user disable --now ur@work.socket
+systemctl --user disable --now ur@work
+systemctl --user daemon-reload
+remove /home/synthetic/.config/systemd/user/ur@work.socket

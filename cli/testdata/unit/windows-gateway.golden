@@ -1,0 +1,8 @@
+path: 
+--- content
+--- install
+schtasks /Create /F /TN URnetwork\ur-work /SC ONLOGON /RL LIMITED /TR "C:\Program Files\URnetwork\ur.exe" daemon --instance work --unit
+schtasks /Run /TN URnetwork\ur-work
+--- uninstall
+schtasks /End /TN URnetwork\ur-work
+schtasks /Delete /F /TN URnetwork\ur-work
