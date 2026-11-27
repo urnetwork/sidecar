@@ -250,22 +250,29 @@ func loadSidecarReaderKeyCredentials(secrets SidecarSecrets, settings *GkmSettin
 		settings = DefaultGkmSettings()
 	}
 	credentials := [][]byte{}
-	for _, kept := range []struct {
-		name string
-		kind string
-	}{
-		{name: sidecarReaderKeyRecordName, kind: "ReaderKey"},
-		{name: sidecarDelegationReaderKeyRecordName, kind: "delegation_reader_seed"},
-	} {
-		seed, err := secrets.Get(kept.name)
+	// a core record holds its seed whole, nil where it is absent
+	keptSeed := func(name string) ([]byte, error) {
+		seed, err := secrets.Get(name)
 		if errors.Is(err, ErrSidecarStoreAbsent) {
-			continue
+			return nil, nil
 		}
-		if err != nil {
-			return credentials, err
-		}
-		testHookSecret(kept.kind, seed)
-		credentials = append(credentials, seed)
+		return seed, err
+	}
+	firstSeed, err := keptSeed(sidecarReaderKeyRecordName)
+	if err != nil {
+		return credentials, err
+	}
+	if firstSeed != nil {
+		testHookSecret("ReaderKey", firstSeed)
+		credentials = append(credentials, firstSeed)
+	}
+	delegationSeed, err := keptSeed(sidecarDelegationReaderKeyRecordName)
+	if err != nil {
+		return credentials, err
+	}
+	if delegationSeed != nil {
+		testHookSecret("delegation_reader_seed", delegationSeed)
+		credentials = append(credentials, delegationSeed)
 	}
 	var gkmSecrets SidecarSecrets
 	if namespaces, ok := secrets.(sidecarKeychainNamespaces); ok {
