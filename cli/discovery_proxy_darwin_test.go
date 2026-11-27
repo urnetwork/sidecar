@@ -6,6 +6,11 @@
 // followed with the instance staying registered; an empty set withdraws it at once; a name another LocalOnly
 // registration holds is refused once, counted, and tried again only at the set's next change; and over a fake
 // connection, a connection that ends is built again and everything registered on it anew.
+//
+// Every wait is on an apply, a reply or a browse, bounded by darwinDnsSdTestTimeout alone. mDNSResponder is the
+// machine's and orders no two connections' requests by when they were sent, so a step that needs another connection's
+// request taken first waits until a browse hears it. discovery_proxy_darwin_hooks_test.go holds a refusal at the
+// proxy's read of it.
 
 package main
 
@@ -17,6 +22,7 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/urnetwork/sidecar"
 )
@@ -34,10 +40,35 @@ func testDarwinDiscoveryProxy(t *testing.T) (*urDarwinDiscoveryProxy, chan urDis
 	return proxy, applied
 }
 
-// Reads applies until one's status is want: a set handed over before the connection opens is applied twice.
+// Reads applies until one's status is want, failing with the statuses it heard past darwinDnsSdTestTimeout: a set
+// handed over before the connection opens is applied twice, so an earlier apply's status may still be waiting.
 func testDarwinProxyApplied(t *testing.T, applied chan urDiscoveryProxyStatus, want urDiscoveryProxyStatus) {
 	t.Helper()
-	for status := testDarwinDnsSdNext(t, applied, "apply"); status != want; status = testDarwinDnsSdNext(t, applied, "apply") {
+	heard := []urDiscoveryProxyStatus{}
+	guard := time.After(darwinDnsSdTestTimeout)
+	for {
+		select {
+		case status := <-applied:
+			if status == want {
+				return
+			}
+			heard = append(heard, status)
+		case <-guard:
+			t.Fatalf("no apply publishing %+v within %s; heard %+v", want, darwinDnsSdTestTimeout, heard)
+		}
+	}
+}
+
+// Waits for a browse's next reply, which must be name's addition, or with added false its removal.
+func testDarwinProxyBrowsed(t *testing.T, browsed chan *darwinDnsSdBrowseReply, name string, added bool) {
+	t.Helper()
+	what := "removal"
+	if added {
+		what = "addition"
+	}
+	reply := testDarwinDnsSdNext(t, browsed, what+" of "+name)
+	if reply.Err != nil || reply.Name != name || (reply.Flags&darwinDnsSdFlagsAdd != 0) != added {
+		t.Fatalf("waiting for the %s of %q the browse heard %+v", what, name, reply)
 	}
 }
 
@@ -143,6 +174,16 @@ func TestDarwinDiscoveryProxyLeavesATakenNameOut(t *testing.T) {
 	service := "_urtest" + testDarwinDnsSdLabel(t, "")[:6] + "._tcp"
 	name := "Taken " + testDarwinDnsSdLabel(t, "")
 	client := testDarwinDnsSdLabel(t, "host-b-")
+	// how the test hears mDNSResponder take the name and let it go: it orders no two connections' requests by when they
+	// were sent, so under load it can take the proxy's registration before the holder's cancel sent ahead of it, and
+	// refuse it as taken
+	watcher := testDarwinDnsSdConnection(t)
+	browsed := make(chan *darwinDnsSdBrowseReply, 8)
+	if _, err := watcher.Browse(darwinDnsSdInterfaceIndexLocalOnly, service, "local.", func(reply *darwinDnsSdBrowseReply) {
+		browsed <- reply
+	}); err != nil {
+		t.Fatal(err)
+	}
 	// another LocalOnly registration holds the name first
 	holder := testDarwinDnsSdConnection(t)
 	registered := make(chan *darwinDnsSdRegisterReply, 2)
@@ -154,16 +195,21 @@ func TestDarwinDiscoveryProxyLeavesATakenNameOut(t *testing.T) {
 	if reply := testDarwinDnsSdNext(t, registered, "blocker"); reply.Err != nil {
 		t.Fatal(reply.Err)
 	}
+	testDarwinProxyBrowsed(t, browsed, name, true)
 	registrations := []*sidecar.BridgeDiscoveryRegistration{
 		testDarwinProxyRegistration(name, service, "nas", client, "100.80.128.9", 445, ""),
 	}
 	proxy.Set(registrations, nil)
-	// the refusal arrives on the reader, which wakes one more apply that withdraws and counts it
+	// mDNSResponder refuses a LocalOnly name it holds as the registration's answer; a refusal on the reader instead
+	// would wake one more apply that withdraws and counts it
 	testDarwinProxyApplied(t, applied, urDiscoveryProxyStatus{RefusedCount: 1})
-	// the name is free at the set's next change, which tries it again
+	// the name is free at the set's next change, which tries it again, once mDNSResponder has let the holder's go
 	holder.Cancel(blocker)
+	testDarwinProxyBrowsed(t, browsed, name, false)
 	proxy.Set(slices.Clone(registrations), nil)
 	testDarwinProxyApplied(t, applied, urDiscoveryProxyStatus{RegisteredCount: 1})
+	// and mDNSResponder took it
+	testDarwinProxyBrowsed(t, browsed, name, true)
 }
 
 // A refused name is withdrawn and not tried again by its refusal's wake or any other under the same set, and is tried
@@ -394,19 +440,23 @@ func TestDarwinDiscoveryProxyBuildsAgainAfterAFailure(t *testing.T) {
 	if !slices.Equal(services, []string{"Files", "Screen"}) || !slices.Equal(records, []string{"nas.host-a.local."}) {
 		t.Fatalf("held %v %v", services, records)
 	}
-	// mDNSResponder restarts: everything goes again on a new connection
+	// mDNSResponder restarts: the proxy holds nothing once the connection ends, then everything goes again on a new
+	// one. An apply on the first connection may have published both before, so the second's are read after the end's.
 	first.end()
 	second := testDarwinDnsSdNext(t, connections, "second connection")
+	testDarwinProxyApplied(t, applied, urDiscoveryProxyStatus{})
 	testDarwinProxyApplied(t, applied, urDiscoveryProxyStatus{RegisteredCount: 2})
 	services, records = second.held()
 	if !slices.Equal(services, []string{"Files", "Screen"}) || !slices.Equal(records, []string{"nas.host-a.local."}) {
 		t.Fatalf("held again %v %v", services, records)
 	}
-	// a target that is no host name is left out, and the rest stay
+	// a target that is no host name is left out, and the rest stay; one more instance at the good target makes this
+	// set's apply the one publishing three
 	bad := testDarwinProxyRegistration("Bad", "_smb._tcp", "nas", "host_a", "100.80.128.10", 445, "")
-	proxy.Set(append(slices.Clone(registrations), bad), nil)
-	testDarwinProxyApplied(t, applied, urDiscoveryProxyStatus{RegisteredCount: 2})
-	if services, _ := second.held(); !slices.Equal(services, []string{"Files", "Screen"}) {
+	printer := testDarwinProxyRegistration("Printer", "_ipp._tcp", "nas", "host-a", "100.80.128.9", 631, "")
+	proxy.Set(append(slices.Clone(registrations), bad, printer), nil)
+	testDarwinProxyApplied(t, applied, urDiscoveryProxyStatus{RegisteredCount: 3})
+	if services, _ := second.held(); !slices.Equal(services, []string{"Files", "Printer", "Screen"}) {
 		t.Fatalf("with a bad target held %v", services)
 	}
 	proxy.Close()
