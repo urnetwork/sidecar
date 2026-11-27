@@ -46,6 +46,9 @@ type SessionSettings struct {
 	// member and 2/n for one of n.
 	MemberShareMin float64
 	MemberShareMax float64
+	// The fewest hex characters of a node's id that name it, where a person gives a prefix of one (`ur harness continue
+	// --at`, CTXH-M11-05): 8, the short form `ur harness show` prints.
+	NodePrefixMinCount int
 	// The record's caps a node, a part and a blob are held to, which every reader checks too (RECORD.md section 5.5's
 	// step 5): RecordBodySettings' own, carried rather than copied.
 	Body *RecordBodySettings
@@ -63,6 +66,7 @@ func DefaultSessionSettings() *SessionSettings {
 		ExpiryTargetFraction: 0.7,
 		MemberShareMin:       0.05,
 		MemberShareMax:       1,
+		NodePrefixMinCount:   8,
 		Body:                 DefaultRecordBodySettings(),
 	}
 }

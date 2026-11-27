@@ -119,6 +119,10 @@ func (self *harnessSessionJournal) sessionNodeOf(store harnessSessionStore, node
 		return nil, nil, fmt.Errorf("%w: a continuation's root names no node", ErrSessionNodeRefused)
 	}
 	parentNodeId, chain, ok := store.Node(*node.ParentRunId, parentKey)
+	if held, adopted := self.heldNode(*node.ParentRunId, parentKey); !ok && adopted {
+		// a run another device journaled, whose path a continuation took in (session_continue.go)
+		parentNodeId, chain, ok = held.journaled.NodeId, held.journaled.ChainSha256, true
+	}
 	if !ok {
 		return nil, nil, fmt.Errorf("%w: the continued run's node is not journaled here", ErrSessionNodeRefused)
 	}

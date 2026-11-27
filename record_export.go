@@ -40,6 +40,7 @@ package sidecar
 import (
 	"bytes"
 	"context"
+	cryptorand "crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -66,17 +67,27 @@ const (
 	RecordExportFormatOtel  RecordExportFormat = 3
 	// `ur evs export` of a log: each entry's file holds its canonical line with bodies.
 	RecordExportFormatGit RecordExportFormat = 4
+	// `ur harness export` of a run (DESIGN-COMPUTE §24.6, CTXH-M11-05): Pi's v3 session JSONL, every node and part of
+	// the run, its addresses and numbers hashed under record.redact.pii (session_export_pi.go).
+	RecordExportFormatPi RecordExportFormat = 5
 )
 
 // The export's format values: the canonical line's version and time layout, and the follow jobs' state files.
 const (
-	recordExportLineVersion    = 1
-	recordExportTimeLayout     = "2006-01-02T15:04:05.000Z"
-	recordExportJobDirectory   = "export"
-	recordExportJobVersion     = 1
-	recordExportJobByteCount   = 1024 * 1024
-	recordExportReceiptIdCount = 64
+	recordExportLineVersion  = 1
+	recordExportTimeLayout   = "2006-01-02T15:04:05.000Z"
+	recordExportJobDirectory = "export"
+	recordExportJobVersion   = 1
 )
+
+// The Pi format's exporter (session_export_pi.go) on the legs that read sessions; nil elsewhere, where a pi export is
+// refused.
+var recordExportPi func(ctx context.Context, export *RecordExport, args *RecordExportArgs) (*RecordExported, error)
+
+// A session entry's or blob's body with its email addresses and phone numbers hashed under redactor's
+// record.redact.pii, and how many (session_export_pii.go; DESIGN-COMPUTE §24.9, D-CTXH-11); nil on a leg that reads no
+// session body, where an export of one is refused.
+var recordExportSessionPii func(redactor *Redactor, kind RecordKind, body []byte) ([]byte, int, error)
 
 var (
 	// The request names a format, a range or a kind an export does not take.
@@ -96,6 +107,8 @@ func RecordExportFormatNamed(name string) (RecordExportFormat, bool) {
 		return RecordExportFormatOcsf, true
 	case "otel":
 		return RecordExportFormatOtel, true
+	case "pi":
+		return RecordExportFormatPi, true
 	}
 	return 0, false
 }
@@ -113,6 +126,18 @@ type RecordExportArgs struct {
 	Format RecordExportFormat
 	// The person confirmed the command on /dev/tty or in an app's UI.
 	Confirmed bool
+	// The network's capture redactor, whose record.redact.pii the addresses and numbers in kinds 54 and 55's bodies are
+	// hashed under wherever an export carries them (DESIGN-COMPUTE §24.9, Q-CTXH-15). Nil hashes them under a key of
+	// the export's own, never leaving them as written.
+	Redactor *Redactor
+}
+
+// The redactor kinds 54 and 55's bodies are hashed under: the request's, else one of this export's own, which hashes.
+func (self *RecordExportArgs) piiRedactor() (*Redactor, error) {
+	if self.Redactor != nil {
+		return self.Redactor, nil
+	}
+	return NewRedactor(cryptorand.Reader)
 }
 
 // An export as made, its record landed.
@@ -172,11 +197,14 @@ func (self *RecordExportArgs) check() error {
 	if self == nil {
 		return fmt.Errorf("%w: no request", ErrRecordExportArgs)
 	}
-	if self.Format < RecordExportFormatJsonl || RecordExportFormatGit < self.Format {
+	if self.Format < RecordExportFormatJsonl || RecordExportFormatPi < self.Format {
 		return fmt.Errorf("%w: format %d", ErrRecordExportArgs, uint32(self.Format))
 	}
 	if self.Format == RecordExportFormatGit && !self.Bodies {
 		return fmt.Errorf("%w: an evs export's lines carry bodies", ErrRecordExportArgs)
+	}
+	if self.Format == RecordExportFormatPi && (!self.Bodies || self.RunId == nil) {
+		return fmt.Errorf("%w: a pi export is one run's, with its bodies", ErrRecordExportArgs)
 	}
 	if self.SinceMillis < 0 || self.UntilMillis < 0 || (0 < self.UntilMillis && self.UntilMillis <= self.SinceMillis) {
 		return fmt.Errorf("%w: a range from %d to %d", ErrRecordExportArgs, self.SinceMillis, self.UntilMillis)
@@ -375,12 +403,55 @@ func recordExportAgentLabels(entries []*RecordReadEntry) map[string]string {
 	return labels
 }
 
+// A session entry's or blob's line with bodies, its addresses and numbers hashed (DESIGN-COMPUTE §24.9, D-CTXH-11): where
+// hashing changed the body, the line carries the hashed body's fields and pii_hashed, the count, and leaves out the
+// body and salt, which would carry them as written; a body hashing leaves as it was keeps its line whole, verifiable.
+// The fields the ocsf and otel maps read are the hashed body's.
+func recordExportSessionLine(line map[string]any, fields map[string]any, entry *RecordReadEntry, redactor *Redactor) (map[string]any, error) {
+	if entry.Body == nil || entry.State == RecordEntryErased {
+		return fields, nil
+	}
+	if recordExportSessionPii == nil {
+		return nil, fmt.Errorf("%w: this leg cannot hash a session body's addresses, so it exports none", ErrRecordExportArgs)
+	}
+	hashed, count, err := recordExportSessionPii(redactor, entry.Kind(), entry.Body)
+	if err != nil {
+		return nil, err
+	}
+	if count == 0 {
+		return fields, nil
+	}
+	hashedFields := recordExportBodyFields(entry.Kind(), hashed)
+	for _, key := range []string{"body", "salt", "entry_version", "fields"} {
+		delete(line, key)
+	}
+	if hashedFields != nil {
+		line["fields"] = hashedFields
+	}
+	line["pii_hashed"] = count
+	return hashedFields, nil
+}
+
 // The lines of entries in format, each as the format writes one entry.
 func (self *RecordExport) lines(auth RecordAuthView, args *RecordExportArgs, entries []*RecordReadEntry, labels map[string]string) ([][]byte, error) {
 	lines := [][]byte{}
+	var redactor *Redactor
 	for _, entry := range entries {
 		label := labels[string(entry.Header.Header.GetRunId())]
 		line, fields := recordExportLine(entry, args.Bodies, label)
+		if RecordKindPiiExempt(entry.Kind()) && (args.Bodies || args.Format != RecordExportFormatJsonl) {
+			// kinds 54 and 55 keep addresses as written in the vault alone: every export hashes them
+			if redactor == nil {
+				var err error
+				if redactor, err = args.piiRedactor(); err != nil {
+					return nil, err
+				}
+			}
+			var err error
+			if fields, err = recordExportSessionLine(line, fields, entry, redactor); err != nil {
+				return nil, err
+			}
+		}
 		switch args.Format {
 		case RecordExportFormatOcsf:
 			line = recordExportOcsf(auth, entry, fields)
@@ -422,6 +493,12 @@ func (self *RecordExport) Export(ctx context.Context, args *RecordExportArgs) (*
 	if err := args.check(); err != nil {
 		return nil, err
 	}
+	if args.Format == RecordExportFormatPi {
+		if recordExportPi == nil {
+			return nil, fmt.Errorf("%w: this leg writes no pi export", ErrRecordExportArgs)
+		}
+		return recordExportPi(ctx, self, args)
+	}
 	record := self.record
 	auth := record.writer.auth()
 	if !auth.Reads(args.LogId, record.writer.sidecarId) {
@@ -429,6 +506,14 @@ func (self *RecordExport) Export(ctx context.Context, args *RecordExportArgs) (*
 	}
 	if err := record.reader.Sync(ctx, args.LogId); err != nil {
 		return nil, err
+	}
+	if args.Bodies {
+		// a body filed apart (DESIGN-COMPUTE §24.5) is fetched as its entry is exported, each held to its commitment
+		if _, err := record.reader.FetchBodies(ctx, args.LogId, func(entry *RecordReadEntry) bool {
+			return entry.BodyApart && args.takes(entry)
+		}); err != nil {
+			return nil, err
+		}
 	}
 	all := record.reader.Entries(args.LogId)
 	taken := []*RecordReadEntry{}
@@ -530,7 +615,7 @@ func (self *RecordExport) loadJobs() error {
 		if err != nil {
 			return err
 		}
-		content, err := io.ReadAll(io.LimitReader(reader, recordExportJobByteCount))
+		content, err := io.ReadAll(io.LimitReader(reader, self.record.writer.settings.ExportJobByteCount))
 		reader.Close()
 		if err != nil {
 			return err
