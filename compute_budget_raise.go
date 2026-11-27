@@ -176,6 +176,7 @@ type computeBudgetRaiseLookup struct {
 	unregister func()
 }
 
+// The component for sidecar, its Lookup registered at once; its close unregisters it.
 func newSidecarComputeBudgetRaiseLookup(sidecar *Sidecar) (*computeBudgetRaiseLookup, error) {
 	return &computeBudgetRaiseLookup{unregister: RegisterComputeBudgetRaiseLookup(sidecar)}, nil
 }

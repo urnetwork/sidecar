@@ -117,6 +117,7 @@ func RegisterComputeBudgetLeftSource(source ComputeBudgetLeftSource) {
 	computeBudgetLeftSource = source
 }
 
+// The source CACL registered, nil for none.
 func computeRegisteredBudgetLeftSource() ComputeBudgetLeftSource {
 	computeBudgetLeftLock.Lock()
 	defer computeBudgetLeftLock.Unlock()
@@ -409,14 +410,17 @@ var (
 	_ HarnessBudgetRaiser = (*computeHarnessHost)(nil)
 )
 
+// The Sidecar's compute client. See ComputeToolHost.
 func (self *computeHarnessHost) ComputeClient() (*ComputeClient, error) {
 	return self.sidecar.ComputeClient()
 }
 
+// Whether the Sidecar is its person's consented device. See ComputeToolHost.
 func (self *computeHarnessHost) ComputeConsentedDevice() (bool, error) {
 	return self.sidecar.ComputeConsentedDevice()
 }
 
+// CACL's view of agentId's budget on the Sidecar. See ComputeToolHost.
 func (self *computeHarnessHost) ComputeBudgetLeft(ctx context.Context, agentId Id) (*ComputeBudgetLeft, error) {
 	return self.sidecar.ComputeBudgetLeft(ctx, agentId)
 }
@@ -525,10 +529,12 @@ func newComputeHarnessTool(harness *Harness, name string) (HarnessTool, error) {
 	return &computeHarnessTool{harness: harness, tools: NewComputeTools(host), name: name}, nil
 }
 
+// See HarnessTool.
 func (self *computeHarnessTool) Name() string {
 	return self.name
 }
 
+// The description the model reads, fixed by the build. See HarnessTool.
 func (self *computeHarnessTool) Description() string {
 	switch self.name {
 	case HarnessToolComputeBalance:
@@ -539,6 +545,7 @@ func (self *computeHarnessTool) Description() string {
 	return computeBudgetRaiseToolDescription
 }
 
+// The arguments' schema. See HarnessTool.
 func (self *computeHarnessTool) Schema() []byte {
 	switch self.name {
 	case HarnessToolComputeBalance:
@@ -549,6 +556,7 @@ func (self *computeHarnessTool) Schema() []byte {
 	return computeBudgetRaiseToolSchema
 }
 
+// Sequential for the raise, which waits on its approval; parallel for the reads. See HarnessTool.
 func (self *computeHarnessTool) Mode() string {
 	if self.name == HarnessToolComputeBudgetRaise {
 		return HarnessToolSequential
@@ -556,6 +564,7 @@ func (self *computeHarnessTool) Mode() string {
 	return HarnessToolParallel
 }
 
+// O for the raise, kind 21; R for the reads. See HarnessTool.
 func (self *computeHarnessTool) Tier() string {
 	if self.name == HarnessToolComputeBudgetRaise {
 		return HarnessToolTierOutward
