@@ -19,14 +19,14 @@ type ComputeAbuseSettings struct {
 	Hold *model.ComputeAbuseHoldSettings
 	// The countries whose addresses every admission refuses (§17.2's sanctioned users), ISO 3166-1 alpha-2 in lower
 	// case, as GeoLite2 City writes them: Cuba, Iran and North Korea, the countries under comprehensive US sanctions
-	// on 2026-11-27, which counsel confirms before M12's exit (question carch-m12-01-refused-regions, option 1).
+	// on 2026-11-27, which counsel confirms before M12's exit (QD-1439, question carch-m12-01-refused-regions).
 	// Empty refuses no country.
 	RefusedCountryCodes []string
 	// The subdivisions whose addresses every admission refuses, by the GeoNames id GeoLite2 City gives an address's
 	// first subdivision, matched in any country, since GeoLite2 may file one region's addresses under either of two:
 	// Crimea (703883), Sevastopol (694422), Donetsk Oblast (709716) and Luhansk Oblast (702657), the regions of Ukraine
-	// under comprehensive US sanctions, refused by oblast, the finest GeoLite2 places an address (the same question).
-	// The rota checks each id against the deployed GeoLite2 build. Empty refuses no subdivision.
+	// under comprehensive US sanctions, refused by oblast, the finest GeoLite2 places an address (QD-1439). The rota
+	// checks each id against the deployed GeoLite2 build. Empty refuses no subdivision.
 	RefusedSubdivisionGeonameIds []uint32
 }
 
