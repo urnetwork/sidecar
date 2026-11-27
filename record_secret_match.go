@@ -9,9 +9,10 @@
 //	             first ReaderKey, every generation gkm's upkeep keeps, a replaced or lapsed one until 30 days past its
 //	             not_after (§10.5), and a Delegation's reader seed (§7.8), the connect identity a client generation
 //	             keeps (§5.9's connect_identity): its seed and the keys that derive from it, the sequence
-//	             certificate's key and each provide secret key (record_secret_match_connect.go), and the compute
-//	             credentials each area registers for this Sidecar (DESIGN-COMPUTE §2.5, compute_custody.go): the cache
-//	             secret, SSH keys, calendar links' secrets, connections' OAuth credentials and access tokens, and an
+//	             certificate's key and each provide secret key (record_secret_match_connect.go), and, on a leg that runs
+//	             compute, the compute credentials each area registers for this Sidecar (DESIGN-COMPUTE §2.5,
+//	             compute_custody.go, record_secret_match_custody.go; none on the page Worker's leg): the cache secret,
+//	             SSH keys, calendar links' secrets, connections' OAuth credentials and access tokens, and an
 //	             incarnation's provisioning key, each raw, as hex in either case and as base64 in the standard and URL
 //	             alphabets, padded and not
 //	token forms  every rule of the redactor's (record_redact_rules.go), PII aside, which is no credential: the shapes a
@@ -190,7 +191,7 @@ func (self *Sidecar) SecretMatcher() (*SecretMatcher, error) {
 	case !errors.Is(err, ErrSidecarStoreAbsent):
 		return nil, fmt.Errorf("secret matcher: %w", err)
 	}
-	computeCredentials, err := self.computeCustodyCredentials()
+	computeCredentials, err := self.secretMatchComputeCredentials()
 	credentials = append(credentials, computeCredentials...)
 	if err != nil {
 		return nil, fmt.Errorf("secret matcher: %w", err)
