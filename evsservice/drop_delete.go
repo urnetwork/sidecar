@@ -328,10 +328,11 @@ func (self *dropDeleteRun) pace() error {
 		self.paceStart, self.paceCount = now, 0
 	}
 	if perSecond <= self.paceCount {
+		// the next second's start, waited for itself (QD-1425)
 		select {
 		case <-self.ctx.Done():
 			return self.ctx.Err()
-		case <-self.deleter.clock.After(self.paceStart.Add(time.Second).Sub(now)):
+		case <-sidecar.ClockAfterAt(self.deleter.clock, self.paceStart.Add(time.Second)):
 		}
 		self.paceStart, self.paceCount = self.deleter.clock.Now(), 0
 	}

@@ -507,11 +507,12 @@ func (self *mxSplice) run(grantExpireTime time.Time) {
 	// armed before a byte can move, so a byte that moved says the waits are set
 	idleTimeout := settings.SpliceIdleTimeout
 	idle := clock.After(idleTimeout)
-	slow := clock.After(max(settings.SpliceSlowTimeout-clock.Now().Sub(self.startTime), 0))
-	session := clock.After(max(settings.SpliceSessionTimeout-clock.Now().Sub(self.startTime), 0))
+	// the bounds from the splice's start and the grant's expiry, each a time waited for itself (QD-1425)
+	slow := sidecar.ClockAfterAt(clock, self.startTime.Add(settings.SpliceSlowTimeout))
+	session := sidecar.ClockAfterAt(clock, self.startTime.Add(settings.SpliceSessionTimeout))
 	var expired <-chan time.Time
 	if !grantExpireTime.IsZero() {
-		expired = clock.After(max(grantExpireTime.Sub(clock.Now()), 0))
+		expired = sidecar.ClockAfterAt(clock, grantExpireTime)
 	}
 	testHookBarrier("mxedge.splice.start", "")
 	done := make(chan struct{}, 2)
@@ -528,13 +529,15 @@ func (self *mxSplice) run(grantExpireTime time.Time) {
 		case <-done:
 			doneCount += 1
 		case <-idle:
-			idleFor := clock.Now().UnixNano() - self.lastActiveNanos.Load()
+			lastActiveNanos := self.lastActiveNanos.Load()
+			idleFor := clock.Now().UnixNano() - lastActiveNanos
 			if int64(idleTimeout) <= idleFor {
 				self.end(mxSpliceEndIdle, protocol.StreamResetCode_RST_PEER_TIMEOUT)
 				// a nil channel never fires: the copies return now that both sides are closed
 				idle = nil
 			} else {
-				idle = clock.After(idleTimeout - time.Duration(idleFor))
+				// idleTimeout past the last byte, a time waited for itself (QD-1425)
+				idle = sidecar.ClockAfterAt(clock, time.Unix(0, lastActiveNanos).Add(idleTimeout))
 			}
 		case <-slow:
 			slow = nil

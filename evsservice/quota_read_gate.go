@@ -249,12 +249,14 @@ type QuotaReadPace struct {
 // Takes byteCount bytes and returns once they may be sent, or with ctx's error when it ends first. A network
 // that has left the spent set, or whose rate is unpaced, never waits.
 func (self *QuotaReadPace) Wait(ctx context.Context, byteCount int) error {
-	timeout := self.reads.draw(self.networkId, byteCount, self.reads.clock.Now())
+	now := self.reads.clock.Now()
+	timeout := self.reads.draw(self.networkId, byteCount, now)
 	if timeout <= 0 {
 		return nil
 	}
+	// the draw's wait runs from its reading of the clock: a wait for that time itself (QD-1425)
 	select {
-	case <-self.reads.clock.After(timeout):
+	case <-sidecar.ClockAfterAt(self.reads.clock, now.Add(timeout)):
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()

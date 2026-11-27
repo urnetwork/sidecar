@@ -220,8 +220,9 @@ func (self *mxProber) pace(ctx context.Context, address netip.Addr) error {
 	}
 	now := self.clock.Now()
 	if next, ok := self.nextDials[prefix]; ok && now.Before(next) {
+		// for the next dial's time itself (QD-1425)
 		select {
-		case <-self.clock.After(next.Sub(now)):
+		case <-sidecar.ClockAfterAt(self.clock, next):
 		case <-ctx.Done():
 			return ctx.Err()
 		}

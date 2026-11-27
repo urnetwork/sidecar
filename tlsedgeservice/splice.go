@@ -19,6 +19,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
 )
 
@@ -74,11 +75,13 @@ func (self *tlsEdgeConnection) admitChunk(byteCount int) bool {
 		return false
 	}
 	if bucket := self.hold.Bandwidth(); bucket != nil {
-		if wait := bucket.Draw(byteCount, service.clock.Now()); 0 < wait {
+		now := service.clock.Now()
+		if wait := bucket.Draw(byteCount, now); 0 < wait {
+			// the draw's wait runs from its reading of the clock: a wait for that time itself (QD-1425)
 			select {
 			case <-self.ended:
 				return false
-			case <-service.clock.After(wait):
+			case <-sidecar.ClockAfterAt(service.clock, now.Add(wait)):
 			}
 		}
 	}
@@ -175,13 +178,15 @@ func (self *tlsEdgeConnection) splice() {
 		case <-done:
 			doneCount += 1
 		case <-idle:
-			idleFor := service.clock.Now().UnixNano() - self.lastActiveNanos.Load()
+			lastActiveNanos := self.lastActiveNanos.Load()
+			idleFor := service.clock.Now().UnixNano() - lastActiveNanos
 			if int64(idleTimeout) <= idleFor {
 				self.end(tlsStreamEndIdle, protocol.StreamResetCode_RST_PEER_TIMEOUT)
 				// a nil channel never fires: the copies return now that both sides are closed
 				idle = nil
 			} else {
-				idle = service.clock.After(idleTimeout - time.Duration(idleFor))
+				// idleTimeout past the last byte, a time waited for itself (QD-1425)
+				idle = sidecar.ClockAfterAt(service.clock, time.Unix(0, lastActiveNanos).Add(idleTimeout))
 			}
 		}
 	}

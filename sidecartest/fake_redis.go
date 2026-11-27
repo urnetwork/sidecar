@@ -426,7 +426,9 @@ func (self *FakeRedis) setExpiryWithLock(key string, entry *fakeRedisEntry, ttl 
 	}
 	entry.expiresAt = self.clock.Now().Add(ttl)
 	expireSeq := entry.expireSeq
-	self.clock.AfterFunc(ttl, func() {
+	// for the expiry itself (QD-1425), so a schedule that moves the clock to it as the timer is set still fires it,
+	// and never on this goroutine, which holds the lock the timer takes
+	sidecar.ClockAfterFuncAtAsync(self.clock, entry.expiresAt, func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		if current, ok := self.entries[key]; ok && current == entry && entry.expireSeq == expireSeq {
@@ -769,7 +771,8 @@ func (self *FakeRedis) hashExpireWithLock(key string, fields []string, ttl time.
 			continue
 		}
 		value.expiresAt = expiresAt
-		self.clock.AfterFunc(ttl, func() {
+		// for the expiry itself, never on this goroutine, which holds the lock the timer takes
+		sidecar.ClockAfterFuncAtAsync(self.clock, expiresAt, func() {
 			self.stateLock.Lock()
 			defer self.stateLock.Unlock()
 			current, ok := self.entries[key]
