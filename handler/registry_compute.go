@@ -17,8 +17,6 @@ var computeApiRouteUnbuilt = []string{
 	"GET /compute/charges",
 	"GET /compute/statement",
 	"GET /compute/spend",
-	// §9.12's refunds, BAL-M12-14
-	"POST /compute/refund",
 	// §21.9's terms and their clauses, BAL-M13-03
 	"GET /compute/terms",
 	"POST /compute/terms",

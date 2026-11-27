@@ -942,19 +942,25 @@ func computeAutoRenewNetwork(env operator.Env, ctx context.Context, settings *mo
 	}
 	var row *model.ComputeAutoRenew
 	var balance *model.ComputeAccountBalance
+	chargeback := false
 	err = db.Tx(ctx, func(tx operator.DbTx) error {
 		var err error
 		if row, err = model.ComputeAutoRenewGetInTx(env, ctx, tx, networkId, model.ComputeAutoRenewModeThreshold, false); err != nil {
 			return err
 		}
-		balance, err = model.ComputeAccountBalanceInTx(env, ctx, tx, settings, networkId)
+		if balance, err = model.ComputeAccountBalanceInTx(env, ctx, tx, settings, networkId); err != nil {
+			return err
+		}
+		chargeback, err = model.ComputeChargebackSuspendedInTx(env, ctx, tx, networkId)
 		return err
 	}, operator.DbIsolationRepeatableRead, operator.DbReadOnly)
 	if err != nil {
 		return "", err
 	}
+	// a closed account takes no credit, and a chargeback's suspension charges no saved card until a person's review lifts
+	// it: the credit would land on an account the states hold suspended (§9.9, §9.11's chargeback row; a reading)
 	if row == nil || !row.Enabled || row.PayerMemberId == nil || row.StripeCustomerId == nil || row.StripePaymentMethodId == nil ||
-		(balance.Account != nil && balance.Account.State == model.ComputeAccountStateClosed) {
+		(balance.Account != nil && balance.Account.State == model.ComputeAccountStateClosed) || chargeback {
 		return computeAutoRenewResultSkipped, nil
 	}
 	figures := computeThresholdFiguresOfRow(settings, row)
