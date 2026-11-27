@@ -432,3 +432,4 @@ rows:
     milestone: M13
     targets:
       - {name: FuzzSafetyTokenizer, package: "."}
+      - {name: FuzzSafetyNormalize, package: ".", owner: SAFE-M13-02}
