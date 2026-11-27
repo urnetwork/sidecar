@@ -26,7 +26,6 @@ import (
 	"fmt"
 	"net/netip"
 	"slices"
-	"time"
 
 	"github.com/urnetwork/sidecar"
 )
@@ -110,15 +109,20 @@ func urSharedBlocksFor(shared []urSharedBlock, networkId sidecar.Id) []urSharedB
 	return withheld
 }
 
-// Judges the shared blocks again on each wake, every SharedBlockInterval regardless, until the daemon ends.
+// Judges the shared blocks again on each wake, every SharedBlockInterval of the daemon's clock regardless, until the
+// daemon ends. No judgment starts once the daemon has ended, a wake or a timer taken as it ended included, so no
+// shared_block alarm is raised and no status kept past the end.
 func (self *urBridgeDaemon) runSharedBlocks() {
 	defer close(self.sharedDone)
-	for {
+	// select takes any of its ready cases at random: a wake or a timer taken as the daemon ended reads as the end
+	for self.ctx.Err() == nil {
 		select {
 		case <-self.ctx.Done():
-			return
 		case <-self.sharedWake:
-		case <-time.After(self.settings.SharedBlockInterval):
+		case <-self.clock.After(self.settings.SharedBlockInterval):
+		}
+		if self.ctx.Err() != nil {
+			return
 		}
 		self.judgeSharedBlocks()
 	}

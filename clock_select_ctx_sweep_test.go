@@ -44,9 +44,10 @@
 //	  stop), acl_contract.go run (loadHeads), sidecar_core.go run, envelope_reassembly.go run (its expire gives back
 //	  reservations, and close waits for it), cli/daemon_desktop_tls.go's two loops, mail_direct.go runAssigned and
 //	  bridge_discovery_component.go watch (each loop's condition; a watch's call answers the dead context before its
-//	  Hello), push_state.go pushFeed.run's retry (the refetch's error on an ended context returns), and
+//	  Hello), push_state.go pushFeed.run's retry (the refetch's error on an ended context returns),
 //	  dnsservice/probe.go Prober.run (its probes take the dead context, and a round on an ended context records and
-//	  publishes nothing)
+//	  publishes nothing), cli/relay.go reconnect (the loop's top), and cli/tun_device.go runSync (sync refuses an
+//	  ended tun before it sets the device)
 //	the step past the end is a call that takes the dead context, which refuses it before any I/O (net/http checks it
 //	  before dialing; the stores, Redis, gkm and evs take it), with nothing local, durable or seen by another reader
 //	  first: attest_policy_fetch.go run, compute_client.go run (both selects), config_client.go run, dns_hint.go
@@ -76,8 +77,9 @@
 //	  idle (only Close), keys_instance.go run (the auto-lock it was due), acl_gate.go run (the epoch and dirty marks;
 //	  no loader loads past the end), bridge_discovery_component.go viewer (its end withdraws every host and rebuilds
 //	  the view), bridge_share.go run (a wake its timer gives only ends a share, which releases the holds the end's
-//	  teardown releases), and socketsservice/ticket_keys.go run (a reread of the key file into the view of an engine
-//	  that has ended)
+//	  teardown releases), socketsservice/ticket_keys.go run (a reread of the key file into the view of an engine
+//	  that has ended), and cli/tun_device.go runLocal (a read past the end hands the bridge addresses that the tun's
+//	  close, which waits for the loop, then puts back to unknown)
 //	test support and upstream: sidecartest's fakes and drivers, built into no release leg, and third_party's
 //	  go-sev-guest and go-tdx-guest, kept as upstream ships them
 //
@@ -85,16 +87,18 @@
 // binding fetcher (which its Close now joins), discovery's host loop, remote serving's follow, the directory client's
 // Run, device.Bridge's run and its link manager's, the evs receive queue and sync engine, the index schedule, the mail
 // component's generation, IMAP IDLE, mail ingest's passes, the head check's rounds and fetch follow-up, the
-// scim_signer component, the SMTP outbox, the share loader and the stream keepalive.
+// scim_signer component, the SMTP outbox, the share loader, the stream keepalive, and in the ur daemon the shared
+// blocks' judgment, which now waits on the daemon's clock, and the cap on the core's clock checks
+// (cli/clock_select_ctx_sweep_test.go).
 //
 // Left for a later pass, the step past the end outward or durable and its fix not built here:
 //
 //	held by another lane when the sweep ran: agents_deliver.go, agents_status.go, bridge_forward.go
 //	whose file brings a settings migration with it (QD-702): rpc_headcheck_stop.go run, whose alarm owner decision
 //	  129 fixes outside settings, beside a document bound and witness_bound_hours' range
-//	outward past the end, with no clock seam a fake clock drives (real time): the ur daemon's
-//	  cli/bridge_shared_block.go, discovery proxies, relay reconnect, resume.go clock cap and tun device's sync and
-//	  local loops
+//	outward past the end, with no clock seam a fake clock drives (real time): the ur daemon's discovery proxies
+//	  (cli/discovery_proxy_darwin.go's and discovery_proxy_mdns.go's runs), whose registration, apply or announce
+//	  past the end goes to mDNSResponder or the LAN
 //	to judge on a closer reading: evs_component.go's mapper and repair loops, evs_subscribe.go run (a round past the
 //	  end moves the resync's and the renewals' times), evs_write.go waitPathEpoch (it answers nil past the end, and its
 //	  caller plans again), gkm_directory.go and gkm_group.go's waits, gkm_upkeep.go run, gkmservice/reconciler.go run,
