@@ -303,13 +303,13 @@ func TestNonUrRemotesRefused(t *testing.T) {
 			t.Fatalf("%q: a refused clone wrote %d entries", url, len(entries))
 		}
 	}
-	for _, url := range []string{"ur://net/project-notes", "ur://net/", "ur:///id:00000000000000000000000000", "ur://net/id:nothex"} {
+	for _, url := range []string{"ur://network.example/project-notes", "ur://network.example/", "ur:///id:00000000000000000000000000", "ur://network.example/id:nothex"} {
 		if _, err := sidecar.ParseGitRemoteUrl(url); !errors.Is(err, sidecar.ErrGitRemoteInvalid) {
 			t.Fatalf("%q: %v", url, err)
 		}
 	}
-	remote, err := sidecar.ParseGitRemoteUrl("ur://net/id:" + strings.Repeat("ab", 16))
-	if err != nil || remote.Network != "net" {
+	remote, err := sidecar.ParseGitRemoteUrl("ur://network.example/id:" + strings.Repeat("ab", 16))
+	if err != nil || remote.Network != "network.example" {
 		t.Fatalf("a 32-hex repo id: %+v, %v", remote, err)
 	}
 }
