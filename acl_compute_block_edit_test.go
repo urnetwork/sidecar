@@ -141,3 +141,23 @@ func TestComputeBlockDisclosureEditRefuses(t *testing.T) {
 		}
 	}
 }
+
+// A network's first document takes its block-alone record's block in, the block's text as the record holds it, and a
+// document naming a block of its own is the person's to reconcile.
+func TestComputeBlockCarryRecordKeepsItsText(t *testing.T) {
+	record := []byte("{\"compute\": { /* set in March */ \"fetch\": {\"enabled\": false} }}\n")
+	document := []byte(`{"grants": [], /* none yet */}`)
+	carried, err := AclComputeCarryRecord(document, record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !testComputeEditInserted(document, carried, `, "compute": { /* set in March */ "fetch": {"enabled": false} }`) {
+		t.Errorf("the carried document: %s", carried)
+	}
+	if _, err := AclComputeCarryRecord([]byte(`{"compute": {}}`), record); !errors.Is(err, ErrAclComputeRecordBesideDocument) {
+		t.Errorf("a document with its own block: %v", err)
+	}
+	if _, err := AclComputeCarryRecord(document, []byte(`{"compute": {}, "grants": []}`)); !errors.Is(err, ErrAclComputeEditInvalid) {
+		t.Errorf("a record that is no record: %v", err)
+	}
+}

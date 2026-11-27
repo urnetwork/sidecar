@@ -249,6 +249,29 @@ func SetComputeBlockDisclosure(source []byte, id string, statement string) ([]by
 	return aclComputeEditParsed(edited)
 }
 
+// document with record's compute block carried into it, the block's text as the record holds it, comments included,
+// added after the document's last top-level key: what a network that kept its block alone (ConfigHeadComputePath) saves
+// as its first document, so a writer's save carries the block unchanged. ErrAclComputeEditInvalid for a record or a
+// document that does not parse, and for a document that names its own compute block, which only the person reconciles.
+func AclComputeCarryRecord(document []byte, record []byte) ([]byte, error) {
+	if _, err := ParseAclComputeRecord(record); err != nil {
+		return nil, errors.Join(ErrAclComputeEditInvalid, err)
+	}
+	recordTop, _, _, err := aclComputeEditLocate(record)
+	if err != nil {
+		return nil, err
+	}
+	block := recordTop.member("compute")
+	documentTop, compute, _, err := aclComputeEditLocate(document)
+	if err != nil {
+		return nil, err
+	}
+	if compute != nil {
+		return nil, errors.Join(ErrAclComputeEditInvalid, ErrAclComputeRecordBesideDocument)
+	}
+	return aclComputeEditParsed(aclComputeEditAdd(document, documentTop, aclComputeEditMemberText("compute", record[block.valueStart:block.valueEnd])))
+}
+
 // source with compute.disclosures' entry id taken out with the comma beside it, every other byte as written; source
 // as it was where no such entry stands. ErrAclComputeEditInvalid for an id or a source the parse would refuse.
 func RemoveComputeBlockDisclosure(source []byte, id string) ([]byte, error) {

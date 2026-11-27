@@ -863,6 +863,10 @@ const ConfigHeadComputePath = "compute.hujson"
 // A block-alone record that is no record: one holding a key beside compute, or no compute.
 var ErrAclComputeRecordInvalid = errors.New("invalid compute record")
 
+// The network has a document, which holds its own compute block: a block-alone record has no place beside it, and a
+// first document that names a block of its own while the network keeps one alone needs the person to reconcile them.
+var ErrAclComputeRecordBesideDocument = errors.New("the network's document holds its compute block, so no block-alone record stands beside it")
+
 // The block a network with no document keeps alone (ConfigHeadComputePath): HuJSON holding {"compute": {...}} and no
 // other key, parsed as a document's block is. nil and an error wrapping ErrAclPolicyInvalid, and ErrAclComputeRecordInvalid
 // for one holding anything else, for a record it refuses.

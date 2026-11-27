@@ -84,6 +84,12 @@ func (self *AclState) classifyComputeTarget(rule *aclRule, target *protocol.AclT
 	return false, nil
 }
 
+// The compute block's rows these rows carry (DESIGN-COMPUTE §16.4), nil before the network's compute_policy feature or
+// without a block: what the broker enforces, §16.5's defaults where nil. The caller must not change them.
+func (self *AclState) ComputeRows() *protocol.AclComputeRows {
+	return self.rows.GetComputeRows()
+}
+
 // How many of §16.2's target kinds a target sets, which classifyTarget counts beside §8.4's.
 func aclComputeTargetKindCount(target *protocol.AclTarget) int {
 	count := 0
