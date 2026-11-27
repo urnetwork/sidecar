@@ -828,14 +828,14 @@ func TestParseAclPolicyRefusesNesting(t *testing.T) {
 		return []byte(strings.Repeat(`{"a":`, count) + "1" + strings.Repeat("}", count))
 	}
 	for _, source := range [][]byte{
-		arrays(``, 5, ``),
-		arrays(`{"tests": [{"accept": `, 2, `}]}`),
+		arrays(``, 6, ``),
+		arrays(`{"tests": [{"accept": `, 3, `}]}`),
 		arrays(`{"tests": [{"accept": `, 9000, `}]}`),
 		arrays(`{"grants": `, 9000, `}`),
 		arrays(`{"groups": {"group:a": `, 9000, `}}`),
 		arrays(`{"expiresDefault": `, 9000, `}`),
 		arrays(``, 9000, ``),
-		objects(5),
+		objects(6),
 		objects(9000),
 		// unbalanced, where a closer never comes
 		[]byte(strings.Repeat("[", 9000)),
@@ -860,14 +860,19 @@ func TestParseAclPolicyNestingBelowTheBound(t *testing.T) {
 		{source: `{"grants": [[]]}`, want: "grants[0]: invalid acl policy: not an object"},
 		{source: `{"grants": [[[]]]}`, want: "grants[0]: invalid acl policy: not an object"},
 		{source: `{"grants": [{"src": []}]}`, want: "grants[0].src: invalid acl policy: an empty list"},
-		{source: `{"grants": [{"src": [{}]}]}`, want: "nested too deep"},
-		{source: `{"tests": [{"accept": [[]]}]}`, want: "nested too deep"},
+		{source: `{"grants": [{"src": [{}]}]}`, want: "grants[0].src[0]: invalid acl policy: not a string"},
+		{source: `{"grants": [{"src": [[{}]]}]}`, want: "nested too deep"},
+		{source: `{"tests": [{"accept": [[]]}]}`, want: "tests[0].accept[0]: invalid acl policy: not a string"},
+		{source: `{"tests": [{"accept": [[[]]]}]}`, want: "nested too deep"},
+		// the compute block's budgets[].subjects, five levels down, reaches the schema (DESIGN-COMPUTE §16.4)
+		{source: `{"compute": {"budgets": [{"subjects": [[]]}]}}`, want: "nested too deep"},
 		{source: `{"tests": [{"accept": [1]}]}`, want: "tests[0].accept[0]: invalid acl policy: not a string"},
 		{source: `{"groups": {"group:a": [[]]}}`, want: "groups[0][0]: invalid acl policy: not a string"},
 		{source: `{"a": {"b": {"c": {"d": 1}}}}`, want: ": an unknown key"},
-		{source: `{"a": {"b": {"c": {"d": {}}}}}`, want: "nested too deep"},
+		{source: `{"a": {"b": {"c": {"d": {}}}}}`, want: ": an unknown key"},
+		{source: `{"a": {"b": {"c": {"d": {"e": {}}}}}}`, want: "nested too deep"},
 		// a closed list gives back the one level it took, so a sibling after it is held to the same bound
-		{source: `{"grants": [{"src": ["tag:a"], "dst": ["*"], "allow": ["dial"]}], "tests": [{"accept": [[]]}]}`, want: "nested too deep"},
+		{source: `{"grants": [{"src": ["tag:a"], "dst": ["*"], "allow": ["dial"]}], "tests": [{"accept": [[[]]]}]}`, want: "nested too deep"},
 		// and a closed document gives back its own, so a second value after it is refused as one
 		{source: `{} [[[[]]]]`, want: "not HuJSON"},
 		// brackets inside a string or comment are not nesting
@@ -1006,7 +1011,7 @@ func TestAclStandardizeHujson(t *testing.T) {
 			t.Errorf("%q: standardized again to %q, %v", c.source, again, err)
 		}
 	}
-	for _, source := range []string{"/*", "/* a", "/* a *", "/*/", "{} /*", "/* /* */ /*", "[[[[[", "{{{{{", "[{[{["} {
+	for _, source := range []string{"/*", "/* a", "/* a *", "/*/", "{} /*", "/* /* */ /*", "[[[[[[", "{{{{{{", "[{[{[{"} {
 		if got, err := aclStandardizeHujson([]byte(source)); err == nil {
 			t.Errorf("%q passed as %q", source, got)
 		}

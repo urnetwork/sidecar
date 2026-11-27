@@ -603,7 +603,10 @@ func (self *GkmReconciler) noteChange(change *GkmStateChange) {
 	}
 }
 
-// The hint loop: noted changes, due expiry wakes and the closed gates' interval, then a wait for the next of them.
+// The hint loop: noted changes, due expiry wakes and the closed gates' interval, then a wait for the next of them. No
+// pass starts once the reconciler has ended, a wake or a due time taken as it ended included, since a pass reads the
+// states the gate cache holds, which no dead context refuses, takes the noted changes off their list, and asks the
+// cache to load a network whose state it lacks; an ended reconciler asks the clock for nothing.
 func (self *GkmReconciler) run() {
 	defer func() {
 		if self.stopWatch != nil {
@@ -612,7 +615,8 @@ func (self *GkmReconciler) run() {
 	}()
 	gateHintInterval := min(self.settings.PendingHintInterval, self.settings.DroppedLeafHintInterval)
 	nextGateHint := self.clock.Now().Add(gateHintInterval)
-	for {
+	// select takes any of its ready cases at random: a wake or a due time taken as the reconciler ended reads as the end
+	for self.ctx.Err() == nil {
 		changes := map[sidecar.Id]*GkmStateChange{}
 		resync := false
 		func() {
@@ -646,6 +650,10 @@ func (self *GkmReconciler) run() {
 			nextGateHint = now.Add(gateHintInterval)
 		}
 		self.passCount.Update(func(count int) int { return count + 1 })
+		if self.ctx.Err() != nil {
+			// a reconciler that ended as the pass ran asks the clock for nothing
+			return
+		}
 		wakeAt := nextGateHint
 		if earliest, ok := self.earliestWake(); ok && earliest.Before(wakeAt) {
 			wakeAt = earliest
@@ -659,6 +667,10 @@ func (self *GkmReconciler) run() {
 			return
 		case <-self.wake:
 		case <-timeout:
+		}
+		if self.ctx.Err() != nil {
+			// a wake or a due time taken as the reconciler ended leaves it idle, as the end's case does
+			return
 		}
 		self.idle.Set(false)
 	}

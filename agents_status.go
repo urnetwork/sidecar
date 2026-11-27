@@ -662,10 +662,14 @@ func (self *AgentStatusWriter) write(job *agentStatusJob) error {
 	return nil
 }
 
-// The writer's rounds: each due job written, then a wait for the next due time, a note or Close.
+// The writer's rounds: each due job written, then a wait for the next due time, a note or Close. No round starts once
+// the writer has closed, a signal taken as it closed included, so no status, registration or summary is taken off its
+// line or written past Close, and a closed writer asks the clock for nothing.
 func (self *AgentStatusWriter) run() {
 	defer close(self.done)
-	for {
+	// select takes either of its ready cases at random: a note's or a due time's signal taken as the writer closed reads
+	// as the end
+	for self.ctx.Err() == nil {
 		jobs, wait := self.takeDue(self.clock.Now())
 		for _, job := range jobs {
 			err := self.write(job)
@@ -678,6 +682,7 @@ func (self *AgentStatusWriter) run() {
 			}
 		}
 		if self.ctx.Err() != nil {
+			// a writer that closed as the round wrote asks the clock for nothing
 			return
 		}
 		if 0 < len(jobs) {
@@ -689,8 +694,6 @@ func (self *AgentStatusWriter) run() {
 		}
 		select {
 		case <-self.ctx.Done():
-			stop()
-			return
 		case <-self.wake:
 		}
 		stop()

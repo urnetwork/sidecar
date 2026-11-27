@@ -60,8 +60,8 @@ const aclRowsMaxAtomCount = 4096
 // §9.4's token per socket name segment.
 const aclSocketTokenByteCount = 16
 
-// The highest AclAction value this code reads; a higher one matches nothing.
-const aclActionMax = protocol.AclAction_ACL_ACTION_SEND
+// The highest AclAction value this code reads, DESIGN-COMPUTE §16.2's ssh; a higher one matches nothing.
+const aclActionMax = protocol.AclAction_ACL_ACTION_SSH
 
 // The actions a dial or route reach reads (§8.10's contract rule).
 const aclReachActions = 1<<uint32(protocol.AclAction_ACL_ACTION_DIAL) | 1<<uint32(protocol.AclAction_ACL_ACTION_ROUTE)
@@ -333,6 +333,9 @@ type AclState struct {
 	// whether AclRows.bridge is bytes no verifier folded: no route row names an advertiser, and every egress mode reads
 	// as none (acl_reach.go), the closed direction
 	bridgeMalformed bool
+
+	// by rule index: DESIGN-COMPUTE §16.2's model_glob, compute_resource and listener targets (acl_compute_eval.go)
+	computeTargets map[int32]*aclComputeRuleTargets
 }
 
 // A rows error naming its field. The field is the rows' own, never a name from a policy (I-13).
@@ -604,8 +607,12 @@ func (self *AclState) classifyTarget(rule *aclRule, target *protocol.AclTarget, 
 	count(target.GetMailSend())
 	count(len(target.GetClientId()) != 0)
 	count(target.GetRepoKind() != protocol.RepoKind_REPO_KIND_UNSPECIFIED)
+	kindCount += aclComputeTargetKindCount(target)
 	if 1 < kindCount {
 		return aclRowsRefusal("%s sets %d kinds", field, kindCount)
+	}
+	if handled, err := self.classifyComputeTarget(rule, target, field); handled {
+		return err
 	}
 	switch {
 	case len(target.GetAtom()) != 0:

@@ -320,7 +320,9 @@ func (self *dropDeleteRun) holdsAtDelete() error {
 	return nil
 }
 
-// Waits so at most DeletesPerSecond requests go in each second of the clock.
+// Waits so at most DeletesPerSecond requests go in each second of the clock. The run's error once it has ended, the
+// next second's start taken as it ended included, so no HEAD or DELETE goes on the dead context and no answer is
+// recorded from its failure.
 func (self *dropDeleteRun) pace() error {
 	perSecond := max(1, self.request.DeletesPerSecond)
 	now := self.deleter.clock.Now()
@@ -331,8 +333,11 @@ func (self *dropDeleteRun) pace() error {
 		// the next second's start, waited for itself (QD-1425)
 		select {
 		case <-self.ctx.Done():
-			return self.ctx.Err()
 		case <-sidecar.ClockAfterAt(self.deleter.clock, self.paceStart.Add(time.Second)):
+		}
+		// select takes either of its ready cases at random: the second's start taken as the run ended answers the end
+		if err := self.ctx.Err(); err != nil {
+			return err
 		}
 		self.paceStart, self.paceCount = self.deleter.clock.Now(), 0
 	}

@@ -73,6 +73,9 @@ func (self *aclCompiler) targets(resource AclResource) ([]*protocol.AclTarget, e
 		return []*protocol.AclTarget{{PublicName: resource.Name}}, nil
 	case AclResourceMail:
 		return []*protocol.AclTarget{{MailSend: true}}, nil
+	case AclResourceModel, AclResourceCompute, AclResourceListener:
+		// DESIGN-COMPUTE §16.2's, under their feature (acl_compute_resources.go)
+		return self.computeTargets(resource)
 	}
 	return nil, aclCompileRefusal("a resource of no kind")
 }
@@ -271,6 +274,10 @@ func aclGrantCanonical(grant *AclGrant) []byte {
 	case protocol.AclAudience_ACL_AUDIENCE_PUBLIC:
 		object.string("audience", "public")
 	}
+	// an ssh grant's check period, in seconds (DESIGN-COMPUTE §16.2), where it names one
+	if grant.Ssh != nil && grant.Ssh.Check != 0 {
+		object.integer("check", int64(grant.Ssh.Check/time.Second))
+	}
 	object.strings("dst", aclSortedTexts(grant.Dst, aclResourceCanonical))
 	if !grant.Expires.IsZero() {
 		object.integer("expires", grant.Expires.UnixMilli())
@@ -282,10 +289,18 @@ func aclGrantCanonical(grant *AclGrant) []byte {
 	if grant.LinkSpkiSha256 != nil {
 		object.string("link_spki_sha256", hex.EncodeToString(grant.LinkSpkiSha256))
 	}
+	// a compute:enclave rule's shapes (DESIGN-COMPUTE §16.2), where it names them
+	if grant.Shapes != nil {
+		object.strings("shapes", aclSortedTexts(grant.Shapes, func(shape string) string { return shape }))
+	}
 	if grant.Sock != nil {
 		object.string("sock", aclResourceCanonical(*grant.Sock))
 	}
 	object.strings("src", aclSortedTexts(grant.Src, AclSelector.String))
+	// an ssh grant's users (DESIGN-COMPUTE §16.2)
+	if grant.Ssh != nil {
+		object.strings("users", aclSortedTexts(grant.Ssh.Users, func(user string) string { return user }))
+	}
 	if grant.Via != nil {
 		object.strings("via", aclSortedTexts(grant.Via, AclSelector.String))
 	}

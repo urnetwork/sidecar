@@ -1,0 +1,29 @@
+request 22222222-2222-2222-2222-222222222222: calendar_write. Write 2 events to calendar Work at caldav.example.com. The action, as this daemon built it:
+  calendar_label: Work
+  calendar_host: caldav.example.com
+  calendar_events[0].operation: 1 (add)
+  calendar_events[0].uid: u1@example.com
+  calendar_events[0].title: Lunch with Bo
+  calendar_events[0].start: 2026-11-27T12:00:00
+  calendar_events[0].end: 2026-11-27T13:00:00
+  calendar_events[0].zone: Europe/Berlin
+  calendar_events[0].reminders: -PT15M
+  calendar_events[0].source: the mail from Bo
+  calendar_events[1].operation: 2 (change)
+  calendar_events[1].uid: u2@example.com
+  calendar_events[1].expected: etag-7
+  calendar_events[1].title: Standup
+  calendar_events[1].attendees: ana@example.com
+  calendar_events[1].mails: an update to ana@example.com
+  calendar_events[1].before.title: Stand-up
+  calendar_events[1].before.attendees: ana@example.com
+  calendar_link: 57575757575757575757575757575757
+  calendar_target: 5858585858585858585858585858585858585858585858585858585858585858
+  calendar_name: Work
+  auto.basis: 2 (always)
+  auto.rules: 2
+  a calendar write's events are shown one card each, with its switch, only by the calendar's card, so it takes no approval here
+asked by sidecar 55555555-5555-5555-5555-555555555555, run 77777777-7777-7777-7777-777777777777, agent 88888888-8888-8888-8888-888888888888
+expires 2025-11-06T00:00:00Z
+untrusted text the agent wrote, which is not the action:
+  summary: point www at the new host

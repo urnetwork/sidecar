@@ -53,11 +53,15 @@ func TestParseAclGrantDst(t *testing.T) {
 		}
 	}
 	for action := protocol.AclAction_ACL_ACTION_DIAL; action <= aclActionMax; action += 1 {
+		if aclComputeAction(action) {
+			// DESIGN-COMPUTE §16.2's take no requested grant yet
+			continue
+		}
 		if parsed, err := ParseAclGrantAllow(aclActionName(action)); err != nil || parsed != action {
 			t.Errorf("%s: %v, %v", action, parsed, err)
 		}
 	}
-	for _, allow := range []string{"", "*", "Dial", "create"} {
+	for _, allow := range []string{"", "*", "Dial", "create", "infer", "ssh"} {
 		if _, err := ParseAclGrantAllow(allow); !errors.Is(err, ErrAclGrantFieldInvalid) {
 			t.Errorf("%q: %v", allow, err)
 		}

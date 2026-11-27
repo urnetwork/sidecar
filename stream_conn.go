@@ -553,7 +553,7 @@ func (self *SubprotocolStream) SetWriteDeadline(t time.Time) error {
 // passed deadline ends one at once and a cleared one lets it wait on. A stream that has ended or closed gets
 // no wait, since no call of it waits.
 //
-// The wait is set for t itself (clockAfterFuncAt), with no lock held, since a clock may call back on the
+// The wait is set for t itself (ClockAfterFuncAt), with no lock held, since a clock may call back on the
 // setting goroutine. A clock that sets waits for a time, sidecartest's FakeClock among them, sets it under
 // its own lock, so no move of the clock sets it late. Another clock takes the timeout to t from a reading
 // of it, and a move by another goroutine between the reading and the setting sets the wait late, past t,
@@ -583,7 +583,7 @@ func (self *SubprotocolStream) setDeadline(deadline *streamDeadline, t time.Time
 		// no deadline, one already passed, which each call's own check sees, or a stream no call waits on
 		return
 	}
-	stop := clockAfterFuncAt(clock, t, func() {
+	stop := ClockAfterFuncAt(clock, t, func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		if deadline.setCount == setCount {

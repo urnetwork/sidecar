@@ -1,0 +1,30 @@
+request 22222222-2222-2222-2222-222222222222: tainted_send. Continue run 64646464646464646464646464646464 at its node 65656565656565656565656565656565, into enclave builder (label AP, egress 2 (exits)): 12 nodes, 1 flagged and 3 untrusted; its context holds 2 mail messages, 1 calendar events, 4 fetched pages and 0 connected services' results. The action, as this daemon built it:
+  body_sha256: 6363636363636363636363636363636363636363636363636363636363636363
+  subject: 56565656565656565656565656565656
+  egress_mode: 2 (exits)
+  enclave.enclave_id: 51515151515151515151515151515151
+  enclave.name: builder
+  enclave.shape: cpu-2
+  enclave.provider: hippius
+  enclave.label: AP
+  enclave.price_per_hour: $0.12 (120000000 nano-USD)
+  enclave.incarnation: 2
+  tool: harness_continue
+  context.run_id: 64646464646464646464646464646464
+  context.entry_id: 65656565656565656565656565656565
+  context.nodes: 12
+  context.flagged: 1
+  context.untrusted: 3
+  context.mail_messages: 2
+  context.calendar_events: 1
+  context.fetched_pages: 4
+  context.act: 1 (continue)
+  taint_reasons: mail
+  auto.basis: 1 (taint)
+  auto.rules: 1, 9
+  send.text, the whole of what is sent, untrusted text, each line after a bar:
+    | go on
+asked by sidecar 55555555-5555-5555-5555-555555555555, run 77777777-7777-7777-7777-777777777777, agent 88888888-8888-8888-8888-888888888888
+expires 2025-11-06T00:00:00Z
+untrusted text the agent wrote, which is not the action:
+  summary: point www at the new host

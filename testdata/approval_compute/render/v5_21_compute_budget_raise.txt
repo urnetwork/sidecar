@@ -1,0 +1,9 @@
+request 22222222-2222-2222-2222-222222222222: compute_budget_raise. Raise agent 55555555555555555555555555555555's budget to $10.00 a day, from $5.00. The action, as this daemon built it:
+  budget.agent_id: 55555555555555555555555555555555
+  budget.period: 1 (day)
+  budget.amount: $10.00 (10000000000 nano-USD)
+  budget.current: $5.00 (5000000000 nano-USD)
+asked by sidecar 55555555-5555-5555-5555-555555555555, run 77777777-7777-7777-7777-777777777777, agent 88888888-8888-8888-8888-888888888888
+expires 2025-11-06T00:00:00Z
+untrusted text the agent wrote, which is not the action:
+  summary: point www at the new host

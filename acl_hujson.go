@@ -16,9 +16,12 @@ import (
 	"unicode/utf8"
 )
 
-// How deep a document nests: §8.5's deepest value is a test's accept entry, four levels down. A format
-// value, as what a reader refuses must not differ by leg.
-const aclPolicyMaxNestingDepth = 4
+// How deep a document nests: §8.5's deepest value is a test's accept entry, four levels down, and DESIGN-COMPUTE
+// §16.4's compute block a budget's subjects, five (compute, budgets, a budget, subjects). A format value, as what a
+// reader refuses must not differ by leg. Raised from four with the block (CACL-M12-03): a document five deep names
+// compute, which a reader built before the block refuses as an unknown key and one built after refuses before the
+// network's compute_policy feature is on, so no two readers judge such a document apart.
+const aclPolicyMaxNestingDepth = 5
 
 // The same document as standard JSON, at the same byte offsets: each comment and trailing comma
 // becomes spaces, as hujson's Standardize does, so a line number read off this text is the source's.

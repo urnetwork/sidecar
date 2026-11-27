@@ -1,0 +1,20 @@
+request 22222222-2222-2222-2222-222222222222: tainted_send. Send a message with agent_send to member 62626262626262626262626262626262's agent planner, from a run tainted by mail. The action, as this daemon built it:
+  body_sha256: 2e6ab9c0a95e3daddb8497d6ef5c81a796efc92c386c1566ecd988d20a5b7ccd
+  subject: 56565656565656565656565656565656
+  tool: agent_send
+  send.target_agent: planner
+  send.target_agent_id: 61616161616161616161616161616161
+  send.target_member_id: 62626262626262626262626262626262
+  send.refs[0].repo_id: 53535353535353535353535353535353
+  send.refs[0].path: notes/plan.md
+  send.refs[0].version: 7
+  taint_reasons: mail
+  auto.basis: 1 (taint)
+  auto.rules: 1, 9
+  send.text, the whole of what is sent, untrusted text, each line after a bar:
+    | Subject: the build
+    | It passed; see the plan.
+asked by sidecar 55555555-5555-5555-5555-555555555555, run 77777777-7777-7777-7777-777777777777, agent 88888888-8888-8888-8888-888888888888
+expires 2025-11-06T00:00:00Z
+untrusted text the agent wrote, which is not the action:
+  summary: point www at the new host
