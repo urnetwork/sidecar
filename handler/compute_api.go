@@ -9,7 +9,7 @@
 //	POST /compute/checkout      MayBuy
 //	GET  /compute/auto-renew    MayBuy
 //	POST /compute/auto-renew    MayBuy
-//	GET  /compute/charges       SeesNetwork, or a Member's own (SeesMember)
+//	GET  /compute/charges       SeesNetwork, or a Member's own (SeesMember); ?cursor=&limit=, as the device pages
 //	GET  /compute/statement     as charges
 //	GET  /compute/spend         as charges, and only from the person's consented device
 //	POST /compute/refund        an Owner or a Billing admin
@@ -190,7 +190,7 @@ func computeApiRouteTable(settings *ComputeApiSettings) []*ComputeApiRoute {
 		route(http.MethodPost, "/compute/checkout", computeApiMayBuy),
 		route(http.MethodGet, "/compute/auto-renew", computeApiMayBuy),
 		route(http.MethodPost, "/compute/auto-renew", computeApiMayBuy),
-		route(http.MethodGet, "/compute/charges", computeApiMaySee, "cursor"),
+		route(http.MethodGet, "/compute/charges", computeApiMaySee, "cursor", "limit"),
 		route(http.MethodGet, "/compute/statement", computeApiMaySee, "month"),
 		route(http.MethodGet, "/compute/spend", computeApiMaySeeFromConsentedDevice, "by"),
 		route(http.MethodPost, "/compute/refund", computeApiMayRefund),

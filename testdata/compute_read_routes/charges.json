@@ -1,0 +1,50 @@
+{
+  "charges": [
+    {
+      "charge_id": "01935f00-0000-7000-8000-000000000031",
+      "kind": 1,
+      "subject_ref": "01935f00-0000-7000-8000-000000000041",
+      "sidecar_id": "01935f00-0000-7000-8000-000000000051",
+      "agent_id": "01935f00-0000-7000-8000-00000000001a",
+      "member_id": "01935f00-0000-7000-8000-00000000000a",
+      "catalog_id": "chutes-qwen3.8-27b-tee-high",
+      "provider": 1,
+      "units": {
+        "input_tokens": 1200,
+        "output_tokens": 300,
+        "cached_tokens": 40,
+        "seconds": 0,
+        "egress_bytes": 0,
+        "searches": 0
+      },
+      "amount_nano_usd": 25000000,
+      "absorbed_nano_usd": 0,
+      "start_time_ms": 1795525200000,
+      "end_time_ms": 1795525204000,
+      "settle_time_ms": 1795525205000
+    },
+    {
+      "charge_id": "01935f00-0000-7000-8000-000000000032",
+      "kind": 2,
+      "subject_ref": "01935f00-0000-7000-8000-00000000002e",
+      "sidecar_id": "01935f00-0000-7000-8000-000000000051",
+      "member_id": "01935f00-0000-7000-8000-00000000000a",
+      "enclave_id": "01935f00-0000-7000-8000-00000000002e",
+      "provider": 9,
+      "units": {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cached_tokens": 0,
+        "seconds": 600,
+        "egress_bytes": 0,
+        "searches": 0
+      },
+      "amount_nano_usd": 200000000,
+      "absorbed_nano_usd": 0,
+      "start_time_ms": 1795524600000,
+      "end_time_ms": 1795525200000,
+      "settle_time_ms": 1795525201000
+    }
+  ],
+  "next_cursor": "AAZhBSX37gABk18AAABwAIAAAAAAAAAy"
+}

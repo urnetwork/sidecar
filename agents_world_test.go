@@ -28,6 +28,10 @@ type testAgentsVersion struct {
 	removed bool
 	created bool
 	data    []byte
+	// the push's sealed provenance: the run's bit and the agent it names; noProvenance where evs gives none
+	tainted      bool
+	agentId      *Id
+	noProvenance bool
 }
 
 // One repo's paths, each path's versions oldest first.
@@ -48,15 +52,26 @@ func (self *testAgentsRepo) newest(path string) *testAgentsVersion {
 
 // Appends a version signed by signer: data, or a removal for nil.
 func (self *testAgentsRepo) put(signer Id, path string, data []byte) uint64 {
+	return self.putAs(signer, path, data, false, nil)
+}
+
+// Appends a version signed by signer whose push seals tainted and agentId.
+func (self *testAgentsRepo) putAs(signer Id, path string, data []byte, tainted bool, agentId *Id) uint64 {
 	newest := self.newest(path)
 	version := uint64(1)
 	if newest != nil {
 		version = newest.version + 1
 	}
+	var agent *Id
+	if agentId != nil {
+		copied := *agentId
+		agent = &copied
+	}
 	self.paths[path] = append(self.paths[path], &testAgentsVersion{
-		version: version, pushId: NewId(), signer: signer, time: self.world.clock.Now(), removed: data == nil,
-		created: newest == nil || newest.removed, data: bytes.Clone(data),
+		version: version, pushId: NewId(), signer: signer, time: self.world.now(), removed: data == nil,
+		created: newest == nil || newest.removed, data: bytes.Clone(data), tainted: tainted, agentId: agent,
 	})
+	self.world.notifyWithLock(self.repoId, path)
 	return version
 }
 
@@ -104,8 +119,16 @@ func (self *testAgentsRepoAs) ReadHead(ctx context.Context, args *EvsReadArgs, o
 	if _, err := out.Write(version.data); err != nil {
 		return nil, err
 	}
-	return &EvsFileInfo{Path: args.Path, Version: version.version, SignerSidecarId: version.signer, Time: version.time,
-		Size: uint64(len(version.data)), Provenance: &EvsPushProvenance{State: EvsProvenanceUnattributed}}, nil
+	info := &EvsFileInfo{Path: args.Path, Version: version.version, PushId: version.pushId, SignerSidecarId: version.signer,
+		Time: version.time, Size: uint64(len(version.data))}
+	if !version.noProvenance {
+		info.Provenance = &EvsPushProvenance{State: EvsProvenanceUnattributed, Tainted: version.tainted}
+		if version.agentId != nil {
+			agentId := *version.agentId
+			info.Provenance.State, info.Provenance.AgentId = EvsProvenanceVerified, &agentId
+		}
+	}
+	return info, nil
 }
 
 func (self *testAgentsRepoAs) WritePaths(ctx context.Context, args *EvsWritePathsArgs) (*EvsWritePathsResult, error) {
@@ -136,7 +159,7 @@ func (self *testAgentsRepoAs) WritePaths(ctx context.Context, args *EvsWritePath
 				return nil, err
 			}
 		}
-		result.PathVersions = append(result.PathVersions, self.repo.put(self.signer, write.Path, data))
+		result.PathVersions = append(result.PathVersions, self.repo.putAs(self.signer, write.Path, data, args.Tainted, args.AgentId))
 	}
 	self.repo.world.writeCount += 1
 	return result, nil
@@ -264,6 +287,51 @@ type testAgentCardsWorld struct {
 	agentIds map[Id]map[string]Id
 	revoked  map[Id]bool
 	alarms   []*RecordAlarm
+	// a clock a test moves, whose timers fire, in place of clock; nil for clock
+	timers *harnessTestClock
+	// each repo's subscriptions: called with each path a version lands at
+	watchers map[Id][]*testAgentsWatcher
+	// the store each device's outbox seals into
+	stores map[Id]SidecarStore
+}
+
+// A subscription of a repo's paths under its prefixes.
+type testAgentsWatcher struct {
+	prefixes []string
+	changes  EvsRepoChangeFunction
+	closed   bool
+}
+
+// The world's time: the test's movable clock where it set one.
+func (self *testAgentCardsWorld) now() time.Time {
+	if self.timers != nil {
+		return self.timers.Now()
+	}
+	return self.clock.Now()
+}
+
+// The clock each client reads.
+func (self *testAgentCardsWorld) clientClock() Clock {
+	if self.timers != nil {
+		return self.timers
+	}
+	return self.clock
+}
+
+// Calls each subscription of repoId whose prefixes hold path, with the world's lock held, so a callback must not
+// block or take it: as evs's do, it only queues.
+func (self *testAgentCardsWorld) notifyWithLock(repoId Id, path string) {
+	for _, watcher := range self.watchers[repoId] {
+		if watcher.closed {
+			continue
+		}
+		for _, prefix := range watcher.prefixes {
+			if prefix == "" || path == prefix || strings.HasPrefix(path, prefix+"/") {
+				watcher.changes(&EvsRepoChange{RepoId: repoId, Paths: []string{prefix}})
+				break
+			}
+		}
+	}
 }
 
 func newTestAgentCardsWorld(t *testing.T) *testAgentCardsWorld {
@@ -285,6 +353,8 @@ func newTestAgentCardsWorld(t *testing.T) *testAgentCardsWorld {
 		writeRefused: map[Id]bool{},
 		agentIds:     map[Id]map[string]Id{},
 		revoked:      map[Id]bool{},
+		watchers:     map[Id][]*testAgentsWatcher{},
+		stores:       map[Id]SidecarStore{},
 	}
 	world.members = map[Id]Id{world.laptop: world.member, world.phone: world.member, world.cloud: world.member, world.otherDevice: world.otherMember}
 	world.consented = map[Id]bool{world.laptop: true, world.phone: true, world.otherDevice: true}
@@ -401,8 +471,18 @@ func (self *testAgentCardsWorld) client(sidecarId Id) *AgentsClient {
 			defer self.stateLock.Unlock()
 			self.alarms = append(self.alarms, alarm)
 		},
-		Clock:    self.clock,
+		Clock:    self.clientClock(),
 		Settings: self.settings,
+		Store: func() (SidecarStore, error) {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			store := self.stores[sidecarId]
+			if store == nil {
+				store = newTestAgentsStore()
+				self.stores[sidecarId] = store
+			}
+			return store, nil
+		},
 	})
 	if err != nil {
 		self.t.Fatal(err)
@@ -429,4 +509,116 @@ func (self *testAgentCardsWorld) alarmCount() int {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	return len(self.alarms)
+}
+
+// A device's sealed store in memory, one map for the store and every directory under it.
+type testAgentsStore struct {
+	prefix string
+	shared *testAgentsStoreFiles
+}
+
+// The files every directory of one store shares.
+type testAgentsStoreFiles struct {
+	stateLock sync.Mutex
+	files     map[string][]byte
+	// how many commits the store took
+	commitCount int
+}
+
+func newTestAgentsStore() *testAgentsStore {
+	return &testAgentsStore{shared: &testAgentsStoreFiles{files: map[string][]byte{}}}
+}
+
+func (self *testAgentsStore) Open(name string) (io.ReadCloser, error) {
+	self.shared.stateLock.Lock()
+	defer self.shared.stateLock.Unlock()
+	value, ok := self.shared.files[self.prefix+name]
+	if !ok {
+		return nil, ErrSidecarStoreAbsent
+	}
+	return io.NopCloser(bytes.NewReader(bytes.Clone(value))), nil
+}
+
+// One file on its way in.
+type testAgentsStoreWriter struct {
+	store  *testAgentsStore
+	name   string
+	buffer bytes.Buffer
+}
+
+func (self *testAgentsStoreWriter) Write(data []byte) (int, error) {
+	return self.buffer.Write(data)
+}
+
+func (self *testAgentsStoreWriter) Commit() error {
+	self.store.shared.stateLock.Lock()
+	defer self.store.shared.stateLock.Unlock()
+	self.store.shared.files[self.store.prefix+self.name] = bytes.Clone(self.buffer.Bytes())
+	self.store.shared.commitCount += 1
+	return nil
+}
+
+func (self *testAgentsStoreWriter) Close() error {
+	return nil
+}
+
+func (self *testAgentsStore) Create(name string) (SidecarStoreWriter, error) {
+	return &testAgentsStoreWriter{store: self, name: name}, nil
+}
+
+func (self *testAgentsStore) Remove(name string) error {
+	self.shared.stateLock.Lock()
+	defer self.shared.stateLock.Unlock()
+	delete(self.shared.files, self.prefix+name)
+	return nil
+}
+
+func (self *testAgentsStore) List(prefix string) ([]SidecarStoreEntry, error) {
+	self.shared.stateLock.Lock()
+	defer self.shared.stateLock.Unlock()
+	entries := []SidecarStoreEntry{}
+	for name, value := range self.shared.files {
+		if relative, found := strings.CutPrefix(name, self.prefix); found && strings.HasPrefix(relative, prefix) && !strings.Contains(relative, "/") {
+			entries = append(entries, SidecarStoreEntry{Name: relative, ByteCount: int64(len(value))})
+		}
+	}
+	slices.SortFunc(entries, func(a SidecarStoreEntry, b SidecarStoreEntry) int { return strings.Compare(a.Name, b.Name) })
+	return entries, nil
+}
+
+func (self *testAgentsStore) Directory(name string, class string) (SidecarStore, error) {
+	if name == "" {
+		return self, nil
+	}
+	return &testAgentsStore{prefix: self.prefix + name + "/", shared: self.shared}, nil
+}
+
+// The subscription of a repo as one device leases it: each version that lands under its paths calls Changes.
+func (self *testAgentsRepoAs) Subscribe(ctx context.Context, args *EvsSubscribeArgs) (*EvsSubscription, error) {
+	world := self.repo.world
+	world.stateLock.Lock()
+	defer world.stateLock.Unlock()
+	watcher := &testAgentsWatcher{prefixes: slices.Clone(args.Paths), changes: args.Changes}
+	if len(watcher.prefixes) == 0 {
+		watcher.prefixes = []string{""}
+	}
+	world.watchers[self.repo.repoId] = append(world.watchers[self.repo.repoId], watcher)
+	return &EvsSubscription{cancel: func() {
+		world.stateLock.Lock()
+		defer world.stateLock.Unlock()
+		watcher.closed = true
+	}}, nil
+}
+
+// How many live subscriptions repoId holds.
+func (self *testAgentCardsWorld) watcherCount(repoId Id) int {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	count := 0
+	for _, watcher := range self.watchers[repoId] {
+		if !watcher.closed {
+			count += 1
+		}
+	}
+	return count
 }
