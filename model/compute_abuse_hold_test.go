@@ -18,22 +18,19 @@ import (
 	"github.com/urnetwork/sidecar"
 )
 
-// CARCH owns MG-C1's second part, which stays unregistered until question carch-m12-01-compute-hold-row's answer
-// gives compute-3 its words (I-18): the change that carries the answer registers it, and turns this test's first check
-// around. Its one table holds no content, no money and no transfer balance, its times keep their zone, and server
+// CARCH's part of MG-C1 is ComputeAbuseHoldMigrations, registered at init after BAL's, compute-3 naming its table
+// (QD-1438); its one table holds no content, no money and no transfer balance, its times keep their zone, and server
 // reads it as creating compute_abuse_hold.
-func TestComputeAbuseHoldMigrationsWaitForTheirRow(t *testing.T) {
+func TestComputeAbuseHoldMigrationsRegisterAsCarchsPart(t *testing.T) {
 	if owners := ComputeMigrationGroupOwners(ComputeMigrationGroupC1); !slices.Equal(owners, []string{ComputeMigrationOwnerBal, ComputeMigrationOwnerCarch}) {
 		t.Fatalf("MG-C1's owners are %v", owners)
 	}
-	if part := ComputeMigrationPart(ComputeMigrationGroupC1, ComputeMigrationOwnerCarch); len(part) != 0 {
-		t.Fatalf("CARCH's part registered before compute-3 names its table: %v", part)
-	}
+	part := ComputeMigrationPart(ComputeMigrationGroupC1, ComputeMigrationOwnerCarch)
 	built := ComputeAbuseHoldMigrations()
-	if len(built) != 1 || built[0].Code != nil {
-		t.Fatalf("the hold's part builds %v", built)
+	if len(part) != len(built) || len(part) != 1 || part[0].Id != built[0].Id || part[0].Sql != built[0].Sql || part[0].Code != nil {
+		t.Fatalf("CARCH's part reads %v", part)
 	}
-	step := built[0]
+	step := part[0]
 	if regexp.MustCompile(`(?i)\b(DROP|RENAME|TRUNCATE)\b`).MatchString(step.Sql) {
 		t.Errorf("the step %s names a word server's additivity check refuses", step.Id)
 	}

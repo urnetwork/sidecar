@@ -1015,10 +1015,10 @@ compute-2:
   owner: DESIGN-COMPUTE §14.6 (§9.4, §9.11, §21.9)
 compute-3:
   service: compute (the broker) and taskworker (compute_settle, compute_rollup_day); api (the charges, statement and spend routes)
-  store: compute_charge (daily partitions), compute_charge_lot, compute_charge_day, compute_charge_total, compute_charge_pruned and compute_account (MG-C1)
-  sees: "per charge: kind, subject ids, the member it counts to, model or shape, units, amount, cost and what URnetwork absorbed of it (DESIGN-COMPUTE §9.7), times; daily and monthly totals, a day's by sidecar, member, agent, model or shape, provider and enclave; lifetime totals by kind, member, model or shape, provider and enclave, with no day, sidecar or agent; per kind, the sums of day rows dropped past 400 days; and the network's first charge day (§9.13); per network, its account: the settled balance, its state (§9.9), the floor settlement may reach, the indexer enclave's reserve (§9.9) and any override of its search cap (§9.11)"
+  store: compute_charge (daily partitions), compute_charge_lot, compute_charge_day, compute_charge_total, compute_charge_pruned, compute_account and compute_abuse_hold (MG-C1); Redis {cmp_<network_id>}:a (an operator's hold's projection)
+  sees: "per charge: kind, subject ids, the member it counts to, model or shape, units, amount, cost and what URnetwork absorbed of it (DESIGN-COMPUTE §9.7), times; daily and monthly totals, a day's by sidecar, member, agent, model or shape, provider and enclave; lifetime totals by kind, member, model or shape, provider and enclave, with no day, sidecar or agent; per kind, the sums of day rows dropped past 400 days; and the network's first charge day (§9.13); per network, its account: the settled balance, its state (§9.9), the floor settlement may reach, the indexer enclave's reserve (§9.9) and any override of its search cap (§9.11); per network, an operator's suspension of its compute (DESIGN-COMPUTE §17.2): its reason class, when it was placed and resumed, and the staff members' opaque reviewer ids; the broker's projection of it, the version and class alone"
   why: statements, the spend view's totals and last 7 UTC days, refunds and the balance the states read (DESIGN-COMPUTE §9.4, §9.9, §9.13)
-  ttl: "as compute-1; lifetime totals, the dropped rows' sums and the first charge day for the account's life, deleted with the network; the account for the network's life"
+  ttl: "as compute-1; lifetime totals, the dropped rows' sums and the first charge day for the account's life, deleted with the network; the account for the network's life; a hold for the network's life, as the account"
   owner: DESIGN-COMPUTE §14.6 (§9.4, §9.13)
 compute-4:
   service: compute (the orchestrator) and taskworker (compute_enclave_meter, compute_suspend)
@@ -1030,7 +1030,7 @@ compute-4:
 compute-5:
   service: compute (the broker's evidence tunnel and provisioning relay)
   store: memory only, in transit
-  sees: "in transit only: evidence bytes, nonces, sealed provisioning bundles; for the tunnel, the host, sizes and times (its contents are the device's TLS, or its SSH at an enclave's setup); the bootstrap B the broker carries to an enclave's VM, which reads it from the host, and the per-VM token the VM uses from the host (DESIGN-COMPUTE §11.7, §14.3; QD-1243)"
+  sees: "in transit only: evidence bytes, nonces, sealed provisioning bundles; for the tunnel, the host, sizes and times (its contents are the device's TLS, or its SSH at an enclave's setup); the bootstrap B the broker carries to an enclave's VM, which reads it from the host, and the per-VM token the VM uses from the host (DESIGN-COMPUTE §11.7, §14.3; QD-1243); each admission's address, read in memory, mapped to its country and subdivision against the refused regions, and kept nowhere (I-13)"
   why: a device verifies a TEE's evidence and provisions an enclave itself, through the broker, which reads none of it (DESIGN-COMPUTE §5.7, §11.7)
   ttl: "not stored; relayed within 10 minutes; tunnel counts in metrics only"
   owner: DESIGN-COMPUTE §14.6 (§5.7, §11.7)

@@ -1,6 +1,6 @@
 // The compute migration groups' parts (DESIGN-COMPUTE §14.4; CONTRACTS C-30): MG-C1, the ledger, BAL's, then CARCH's
-// operator hold (§17.2, compute_abuse_hold.go, which registers once its metadata row's answer lands); MG-C2, the
-// providers, PROV's, GAMMA's and SRCH's, in §14.4's order; MG-C3, the enclaves, ENC's. Each owner registers its part from its own file in this package, at init, through
+// operator hold (§17.2, compute_abuse_hold.go); MG-C2, the providers, PROV's, GAMMA's and SRCH's, in §14.4's order;
+// MG-C3, the enclaves, ENC's. Each owner registers its part from its own file in this package, at init, through
 // RegisterComputeMigrationPart, and server's migration groups (server/db_migrations_sidecar_pending.go, CSRV-M12-02)
 // read every part through ComputeMigrationPart, so no owner edits server's group files beyond its part's one slot.
 // server imports this package, so every registration has run before server's migrations slice is built: a part

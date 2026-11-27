@@ -18,13 +18,9 @@
 // its state from the balance each minute, so a top-up would lift a hold kept there, and its move back to active would
 // ask ENC to restart what the suspension stopped, where a resume restarts nothing on its own.
 //
-// No row of §2.8's list names the table or the key yet: question carch-m12-01-compute-hold-row asks compute-3's words
-// for them (I-18), and the list, server's column map and both guards take them only with the owner's answer. Until
-// then CARCH's part of MG-C1, ComputeAbuseHoldMigrations, is not registered and no database holds the table, so every
-// read of it fails: every broker admission refuses, unavailable, and every staff act answers 503. Failing closed is
-// the hold's own rule, an admission that cannot read the hold refusing; and no admission route has a handler before
-// M12b's. The change that carries the answer registers the part at init, beside its lines in metadata_list.yml and
-// server's local/sidecar-columns.yml.
+// compute-3 names the table and the key, and compute-5 the address the region check reads, by the owner's answer to
+// question carch-m12-01-compute-hold-row (QD-1438), which metadata_list.yml carries through check's additions until
+// design-records folds it into §2.8 (I-18); server's local/sidecar-columns.yml maps the table's columns to compute-3.
 //
 // The staff ids are the opaque reviewer ids of api's abuse-staff.yml, as §21.10's rows keep theirs (I-13). Every
 // statement runs in the caller's transaction or on one connection; the projection is written only after the
@@ -43,9 +39,12 @@ import (
 	operator "github.com/urnetwork/operator-core"
 )
 
-// MG-C1's hold part, in order: what CSRV's group registration takes after BAL's ledger (CONTRACTS C-30), once the
-// owner's answer to question carch-m12-01-compute-hold-row lets it register (see the file header): until then this
-// package registers nothing for CARCH, and server's slot for the part reads it empty.
+// CARCH's part of MG-C1, registered once at init after BAL's, before server builds its migrations slice.
+func init() {
+	RegisterComputeMigrationPart(ComputeMigrationGroupC1, ComputeMigrationOwnerCarch, ComputeAbuseHoldMigrations())
+}
+
+// MG-C1's hold part, in order: what CSRV's group registration takes after BAL's ledger (CONTRACTS C-30).
 func ComputeAbuseHoldMigrations() []*operator.Migration {
 	return []*operator.Migration{
 		{
