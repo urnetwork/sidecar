@@ -85,7 +85,7 @@ type listenersLinuxDiscoverer struct {
 	// one dump or owner call at a time, as the poller makes them
 	dumpLock sync.Mutex
 	sequence uint32
-	scanner  *listenersProcScanner
+	scanner  *listenersOwnerScanner
 
 	stateLock sync.Mutex
 	// the cookies of the last dump's sockets, which a notice is matched to
@@ -265,7 +265,7 @@ func listenersReadNetlink(conn syscall.RawConn, buffer []byte) ([]byte, error) {
 func (self *listenersLinuxDiscoverer) Owners(ctx context.Context, sockets []*ListenersSocket) error {
 	self.dumpLock.Lock()
 	defer self.dumpLock.Unlock()
-	self.scanner.owners(sockets)
+	self.scanner.owners(sockets, nil)
 	return ctx.Err()
 }
 

@@ -66,7 +66,7 @@ func TestListenersProcOwners(t *testing.T) {
 	node := testProcSocket(3000, 1002, 1000)
 	other := testProcSocket(22, 1003, 0)
 	orphan := testProcSocket(2049, 1009, 1000)
-	scanner.owners([]*ListenersSocket{ours, node, other, orphan})
+	scanner.owners([]*ListenersSocket{ours, node, other, orphan}, nil)
 	if ours.Owner != ListenersOwnerProgram || ours.Program != "postgres" || ours.Pid != 100 {
 		t.Errorf("ours: %+v", *ours)
 	}
@@ -84,7 +84,7 @@ func TestListenersProcOwners(t *testing.T) {
 	superuser := newListenersProcScanner(root, 0, 4096)
 	other = testProcSocket(22, 1003, 0)
 	otherUser := testProcSocket(5432, 1001, 1000)
-	superuser.owners([]*ListenersSocket{other, otherUser})
+	superuser.owners([]*ListenersSocket{other, otherUser}, nil)
 	if other.Owner != ListenersOwnerProgram || other.Program != "sshd" || otherUser.Program != "postgres" {
 		t.Errorf("as root: %+v, %+v", *other, *otherUser)
 	}
@@ -102,7 +102,7 @@ func TestListenersProcOwnersPassesARefusedDirectory(t *testing.T) {
 	scanner := newListenersProcScanner(root, 1000, 4096)
 	hidden := testProcSocket(8080, 1001, 1000)
 	node := testProcSocket(3000, 1002, 1000)
-	scanner.owners([]*ListenersSocket{hidden, node})
+	scanner.owners([]*ListenersSocket{hidden, node}, nil)
 	if hidden.Owner != ListenersOwnerSystem || node.Program != "node" {
 		t.Errorf("%+v, %+v", *hidden, *node)
 	}
@@ -120,29 +120,29 @@ func TestListenersProcOwnersBudgetResumes(t *testing.T) {
 	scanner := newListenersProcScanner(root, 1000, 2)
 	b := testProcSocket(80, 2001, 1000)
 	c := testProcSocket(81, 3001, 1000)
-	scanner.owners([]*ListenersSocket{b, c})
+	scanner.owners([]*ListenersSocket{b, c}, nil)
 	if b.Owner != ListenersOwnerUnknown || c.Owner != ListenersOwnerUnknown {
 		t.Fatalf("two links named %+v, %+v", *b, *c)
 	}
-	scanner.owners([]*ListenersSocket{b, c})
+	scanner.owners([]*ListenersSocket{b, c}, nil)
 	if b.Owner != ListenersOwnerUnknown {
 		t.Fatalf("four links: %+v", *b)
 	}
 	// the third call reaches both, and asks besides for a socket mid-pass, behind the scan's place
 	late := testProcSocket(82, 1009, 1000)
-	scanner.owners([]*ListenersSocket{b, c, late})
+	scanner.owners([]*ListenersSocket{b, c, late}, nil)
 	if b.Owner != ListenersOwnerProgram || b.Program != "b" || c.Owner != ListenersOwnerProgram || c.Program != "c" {
 		t.Fatalf("six links: %+v, %+v", *b, *c)
 	}
 	// the pass in progress ends, then a whole pass runs over its six links, two a call: only its end names late's
 	// socket one no process holds
 	for call := range 3 {
-		scanner.owners([]*ListenersSocket{late})
+		scanner.owners([]*ListenersSocket{late}, nil)
 		if late.Owner != ListenersOwnerUnknown {
 			t.Fatalf("late named at call %d, before a whole pass: %+v", call, *late)
 		}
 	}
-	scanner.owners([]*ListenersSocket{late})
+	scanner.owners([]*ListenersSocket{late}, nil)
 	if late.Owner != ListenersOwnerSystem {
 		t.Errorf("late after a whole pass: %+v", *late)
 	}
