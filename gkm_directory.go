@@ -130,7 +130,8 @@ func (self *gkmGroupManager) directoryRotationDue(ctx context.Context, take bool
 
 // The unhinted row's wait, before EnsureWritable's flow and outside it: see the file header. Nil at once for a repo
 // that is no directory, for a device that is no writer of it, and while no rotation is due by what this device and
-// gkm hold.
+// gkm hold. ctx's error once it has ended, the wait's end or a held generation's signal taken as it ended included, so
+// no flow rotates on the dead context.
 func (self *gkmGroupManager) directoryRotateWait(ctx context.Context) error {
 	client := self.client
 	if !self.directoryWriter() {
@@ -153,12 +154,16 @@ func (self *gkmGroupManager) directoryRotateWait(ctx context.Context) error {
 	}
 	timer := client.clock.After(wait)
 	for {
+		// select takes any of its ready cases at random: the wait's end or a signal taken as ctx ended answers the end
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-timer:
-			return nil
+			return ctx.Err()
 		case <-signal:
+		}
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 		// a generation was held: a covering one ends the wait
 		signal = client.generationWaits.signal(self.repoId)

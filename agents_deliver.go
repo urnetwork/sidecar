@@ -303,18 +303,28 @@ func (self *AgentInboxWatch) Poke() {
 	self.signal()
 }
 
-// The watch's rounds: a pass at each signal, at most once a WatchPassMinInterval, WatchRetryWait after a failure.
+// The watch's rounds: a pass at each signal, at most once a WatchPassMinInterval, WatchRetryWait after a failure. No
+// pass starts once the watch has ended, a signal or a pause's end taken as it ended included, so nothing is handed to
+// an agent or taken past the end, and an ended watch asks the clock for nothing.
 func (self *AgentInboxWatch) run() {
 	defer close(self.done)
-	for {
+	// select takes either of its ready cases at random: a signal or a pause's end taken as the watch ended reads as the
+	// end
+	for self.ctx.Err() == nil {
 		select {
 		case <-self.ctx.Done():
-			return
 		case <-self.wake:
+		}
+		if self.ctx.Err() != nil {
+			return
 		}
 		err := self.pass()
 		if self.args.Passed != nil {
 			self.args.Passed(err)
+		}
+		if self.ctx.Err() != nil {
+			// a watch that ended as the pass ran asks the clock for nothing
+			return
 		}
 		wait := self.settings.WatchPassMinInterval
 		if err != nil {
@@ -327,10 +337,9 @@ func (self *AgentInboxWatch) run() {
 			stop := self.clock.AfterFunc(wait, func() { close(paused) })
 			select {
 			case <-self.ctx.Done():
-				stop()
-				return
 			case <-paused:
 			}
+			stop()
 		}
 	}
 }

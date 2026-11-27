@@ -274,21 +274,29 @@ func (self *QuotaUsageBatcher) signalWake() {
 	}
 }
 
-// Each round cuts a window that is due, sends what is due, and waits for the next of the two.
+// Each round cuts a window that is due, sends what is due, and waits for the next of the two. No round starts once the
+// batcher has ended, a wake taken as it ended included, so nothing is sent, failed or dropped past the end, and no
+// failure or drop is counted then, which would alert for bytes Close loses by design; an ended batcher asks the clock
+// for nothing.
 func (self *QuotaUsageBatcher) run() {
 	defer close(self.done)
-	for {
+	// select takes either of its ready cases at random: a wake taken as the batcher ended reads as the end
+	for self.ctx.Err() == nil {
 		self.cutDue()
 		self.sendDue()
+		// the round's end tells a drain, the last round's too
+		wakeAt := self.finishRound()
+		if self.ctx.Err() != nil {
+			// a batcher that ended as the round sent asks the clock for nothing
+			return
+		}
 		// signalWake never blocks, so a time already reached may signal here
-		stop := ClockAfterFuncAt(self.clock, self.finishRound(), self.signalWake)
+		stop := ClockAfterFuncAt(self.clock, wakeAt, self.signalWake)
 		select {
 		case <-self.ctx.Done():
-			stop()
-			return
 		case <-self.wake:
-			stop()
 		}
+		stop()
 	}
 }
 

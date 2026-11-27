@@ -14,17 +14,26 @@ import (
 
 // Watches the verified ACL installation, including changes at the same log position
 // when the local policy finishes compiling. A missing follower can start after this component.
+// No refresh runs once the component has ended, a change or the retry taken as it ended
+// included, so no key path is withdrawn and no live stream rechecked past the end, and an
+// ended component asks the clock for nothing.
 func (self *SocketComponent) followSocketConfig() {
 	defer close(self.configDone)
-	for {
+	ctx := self.registrar.ctx
+	// select takes any of its ready cases at random: a change or the retry taken as the
+	// component ended reads as the end
+	for ctx.Err() == nil {
 		state, local, grants := self.refreshSocketConfig()
+		if ctx.Err() != nil {
+			// a component that ended as the refresh ran asks the clock for nothing
+			return
+		}
 		var retry <-chan time.Time
 		if state == nil {
 			retry = self.clock.After(self.settings.RetryInterval)
 		}
 		select {
-		case <-self.registrar.ctx.Done():
-			return
+		case <-ctx.Done():
 		case <-retry:
 		case <-state:
 		case <-local:

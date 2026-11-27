@@ -67,13 +67,3 @@ func ClockAfterFuncAtAsync(clock Clock, at time.Time, function func()) (stop fun
 	set.Store(true)
 	return stop
 }
-
-// ClockAfterAt, by the name the stream deadlines (stream_conn.go) first took it by.
-func clockAfterAt(clock Clock, at time.Time) <-chan time.Time {
-	return ClockAfterAt(clock, at)
-}
-
-// ClockAfterFuncAt, by the name the stream deadlines (stream_conn.go) first took it by.
-func clockAfterFuncAt(clock Clock, at time.Time, function func()) (stop func() bool) {
-	return ClockAfterFuncAt(clock, at, function)
-}

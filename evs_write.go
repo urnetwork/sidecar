@@ -324,8 +324,13 @@ func (self *EvsRepo) writeOnce(ctx context.Context, args *EvsWritePathsArgs, ref
 
 // Waits out a creation a mapper's block holds: its retry_after_ms, else PathEpochDueWait, at most PushRetryMaxWait, or
 // the ref's next verified head, whichever comes first (DESIGN-DETAILS 9.2.5's 412 PATH_EPOCH_DUE row). A mapper on
-// this device maps meanwhile on its own ticks (evs_epoch_map.go).
+// this device maps meanwhile on its own ticks (evs_epoch_map.go). ctx's error once it has ended, a move or the wait
+// taken as it ended included, so the caller plans no push again on the dead context, and an ended ctx asks the clock
+// for nothing.
 func (self *EvsRepo) waitPathEpoch(ctx context.Context, refId Id, refusal error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	wait := self.client.settings.PathEpochDueWait
 	if evsError, ok := EvsErrorOf(refusal); ok && 0 < evsError.RetryAfter {
 		wait = evsError.RetryAfter
@@ -333,9 +338,9 @@ func (self *EvsRepo) waitPathEpoch(ctx context.Context, refId Id, refusal error)
 	moved := self.client.epochs.moved(self.repoId, refId)
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
 	case <-moved:
 	case <-self.client.clock.After(min(wait, self.client.settings.PushRetryMaxWait)):
 	}
-	return nil
+	// select takes any of its ready cases at random: a move or the wait taken as ctx ended answers the end
+	return ctx.Err()
 }
