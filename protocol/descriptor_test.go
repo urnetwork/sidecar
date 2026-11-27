@@ -40,6 +40,7 @@ var testProtoFiles = []string{
 	"protocol/acl.proto",
 	"protocol/attest.proto",
 	"protocol/compute.proto",
+	"protocol/compute_disclosure.proto",
 	"protocol/config.proto",
 	"protocol/core.proto",
 	"protocol/directory.proto",
