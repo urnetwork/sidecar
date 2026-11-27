@@ -177,6 +177,10 @@ func (self *harnessAgent) turns(ctx context.Context, newMessages *[]*HarnessPiMe
 			if err := ctx.Err(); err != nil {
 				return self.aborted()
 			}
+			if paused != nil && paused.message == nil {
+				// paused before its model call: the turn starts again
+				paused = nil
+			}
 			resuming := paused != nil
 			if !resuming {
 				if 0 < self.maxTurns && self.maxTurns <= turnCount {
@@ -202,6 +206,8 @@ func (self *harnessAgent) turns(ctx context.Context, newMessages *[]*HarnessPiMe
 				turnCount += 1
 				self.hooks(func(hook HarnessTurnHook) { hook.TurnStart(self) })
 				if !self.foreground() {
+					// the item boundary before the model call: Resume starts the turn again from here
+					self.pause(nil, nil, nil)
 					return &harnessRunEnd{stopReason: HarnessStopBackgrounded}
 				}
 				var end *harnessRunEnd
@@ -463,18 +469,20 @@ func (self *harnessAgent) callOnce(ctx context.Context) (*HarnessPiMessage, *Inf
 		defer self.stateLock.Unlock()
 		return self.systemNodeId, self.leafNodeId
 	}()
-	request, err := self.harness.journal.Render(ctx, &HarnessRenderArgs{RunId: self.run.Id(), InputNodeId: leafNodeId,
-		SystemNodeId: systemNodeId, Model: model})
+	runId, agentId := self.run.Id(), self.id
+	var budget *InferBudgetRef
+	if self.spec.Budget != nil {
+		budget = &InferBudgetRef{Kind: InferBudgetHarness, Id: self.spec.Budget.Id}
+	}
+	request, err := self.harness.journal.Render(ctx, &HarnessRenderArgs{RunId: runId, InputNodeId: leafNodeId,
+		SystemNodeId: systemNodeId, Model: model, AgentId: &agentId, Budget: budget})
 	if err != nil {
 		return nil, nil, fmt.Errorf("the context did not render, so nothing was sent: %w", err)
 	}
-	runId, agentId := self.run.Id(), self.id
 	request.Model = model
 	request.RunId = &runId
 	request.AgentId = &agentId
-	if self.spec.Budget != nil {
-		request.Budget = &InferBudgetRef{Kind: InferBudgetHarness, Id: self.spec.Budget.Id}
-	}
+	request.Budget = budget
 	maxOutput := int64(request.MaxOutput)
 	if maxOutput == 0 {
 		maxOutput = resolution.Entry.MaxOutput

@@ -267,7 +267,7 @@ func (self *Harness) startAgent(ctx context.Context, spec *HarnessAgentSpec, sta
 	if err != nil {
 		return nil, err
 	}
-	workspace, err := newHarnessWorkspace(&harnessWorkspaceArgs{Parent: self.workspaceParent, CapByteCount: self.workspaceCap})
+	workspace, err := newHarnessWorkspace(self.workspaceArgs())
 	if err != nil {
 		return nil, err
 	}
@@ -306,6 +306,8 @@ func (self *Harness) startAgent(ctx context.Context, spec *HarnessAgentSpec, sta
 		defer self.stateLock.Unlock()
 		self.agents[agentId] = agent
 	}()
+	// a restart takes the run up again (harness_reopen.go)
+	self.openRunStarted(agent)
 	// support_update reaches its agents once the client can be reached (harness_support.go)
 	self.listenSupport()
 	return agent, nil
@@ -368,6 +370,11 @@ func (self *harnessAgent) entryTokens(entry *HarnessPiEntry) int64 {
 
 // Journals entry as the run's next node, hanging from the leaf (its parent set at its build), and makes it the leaf.
 func (self *harnessAgent) journalWith(ctx context.Context, entry *HarnessPiEntry, parentRunId *Id, untrusted bool, sender string) error {
+	return self.journalNode(ctx, entry, parentRunId, untrusted, sender, nil)
+}
+
+// journalWith, for a tool result naming its tool.
+func (self *harnessAgent) journalNode(ctx context.Context, entry *HarnessPiEntry, parentRunId *Id, untrusted bool, sender string, tool *HarnessJournalTool) error {
 	marks, err := self.run.Marks()
 	if err != nil {
 		// a run whose marks do not read journals every mark
@@ -382,6 +389,7 @@ func (self *harnessAgent) journalWith(ctx context.Context, entry *HarnessPiEntry
 		Marks:       marks,
 		Untrusted:   untrusted,
 		Sender:      sender,
+		Tool:        tool,
 	}
 	if err := self.harness.journal.Journal(ctx, node); err != nil {
 		return fmt.Errorf("the context did not journal, so nothing is sent: %w", err)
@@ -396,13 +404,18 @@ func (self *harnessAgent) journalWith(ctx context.Context, entry *HarnessPiEntry
 
 // Journals a message as the next node and puts it in the context.
 func (self *harnessAgent) journalMessage(ctx context.Context, message *HarnessPiMessage, untrusted bool, sender string) (*HarnessPiEntry, error) {
+	return self.journalMessageOf(ctx, message, untrusted, sender, nil)
+}
+
+// journalMessage, for a tool result naming its tool, which the record's exceptions read (§24.9).
+func (self *harnessAgent) journalMessageOf(ctx context.Context, message *HarnessPiMessage, untrusted bool, sender string, tool *HarnessJournalTool) (*HarnessPiEntry, error) {
 	leaf := func() string {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		return self.leafNodeId
 	}()
 	entry := NewHarnessPiMessageEntry(NewHarnessPiEntryId(), leaf, self.harness.clock.Now(), message)
-	if err := self.journalWith(ctx, entry, nil, untrusted, sender); err != nil {
+	if err := self.journalNode(ctx, entry, nil, untrusted, sender, tool); err != nil {
 		return nil, err
 	}
 	func() {
@@ -743,6 +756,8 @@ func (self *harnessAgent) Close() {
 	self.harness.viewClosed(self.id)
 	// a launched child's parent hears it exited (harness_launch.go)
 	self.harness.childClosed(self)
+	// a closed run is not reopened (harness_reopen.go)
+	self.harness.openRunClosed(self)
 }
 
 // What a run was started on, and where it came from.
@@ -761,7 +776,7 @@ type harnessPause struct {
 
 // Whether the loop may start an item now: always on a desktop, on a phone only in the foreground.
 func (self *harnessAgent) foreground() bool {
-	return self.harness.foreground == nil || self.harness.foreground.Foreground()
+	return self.harness.inForeground()
 }
 
 var errHarnessBackgrounded = errors.New("the app left the foreground")
