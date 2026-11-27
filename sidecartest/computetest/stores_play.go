@@ -74,6 +74,10 @@ func DefaultFakePlaySettings() *FakePlaySettings {
 	}
 }
 
+// The issuer a push's id token names, Google's, which server's push verifier requires (controller's verifyPlayAuth):
+// an identifier of Google's token format, never a host the fake reaches.
+const FakePlayIdTokenIssuer = "https://accounts.google.com"
+
 // Play's notification types the fake sends (RTDN's): identifiers.
 const (
 	FakePlayOneTimePurchased       = 1
@@ -300,7 +304,7 @@ func (self *FakePlay) pushWithLock(kind string, notificationType int, notificati
 // tokeninfo. Called with the lock.
 func (self *FakePlay) idTokenWithLock(now time.Time) (string, error) {
 	claims := map[string]any{
-		"iss":            "https://accounts.google.com",
+		"iss":            FakePlayIdTokenIssuer,
 		"aud":            self.play.Audience,
 		"azp":            self.play.PublisherEmail,
 		"email":          self.play.PublisherEmail,

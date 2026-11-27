@@ -618,7 +618,7 @@ func TestFakePlayRenewalsCarryNewOrderIds(t *testing.T) {
 		json.NewDecoder(response.Body).Decode(&claims)
 		response.Body.Close()
 		if response.StatusCode != http.StatusOK || claims["email"] != DefaultFakePlaySettings().PublisherEmail || claims["aud"] != DefaultFakePlaySettings().Audience ||
-			claims["email_verified"] != "true" || claims["iss"] != "https://accounts.google.com" {
+			claims["email_verified"] != "true" || claims["iss"] != FakePlayIdTokenIssuer {
 			t.Fatalf("tokeninfo answered %d %v", response.StatusCode, claims)
 		}
 	}

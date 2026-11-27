@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -276,6 +277,9 @@ func TestConformanceLiveReadsOpenWithoutABinary(t *testing.T) {
 	}
 }
 
+// A dotted name under a top-level domain real hosts are found under: what no synthetic transcript holds.
+var testRealHostPattern = regexp.MustCompile(`(?i)\b[a-z0-9-]+(\.[a-z0-9-]+)*\.(com|net|org|io|ai|dev|app|co)\b`)
+
 // Every Codex transcript is Codex's shape at its pin: both pins present, the current and the previous; every request
 // a stateless full history, store false and include reasoning.encrypted_content, but those that ask what the gateway
 // refuses; its version in its path; every host synthetic.
@@ -318,10 +322,13 @@ func TestConformanceCodexTranscriptsAreCodexShaped(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		for _, needle := range []string{"openai.com", "chatgpt.com", "anthropic.com", "https://", "sk-", "Bearer "} {
+		for _, needle := range []string{"://", "sk-", "Bearer "} {
 			if strings.Contains(string(data), needle) {
 				t.Errorf("%s holds %q", path, needle)
 			}
+		}
+		if host := testRealHostPattern.Find(data); host != nil {
+			t.Errorf("%s names %q, a name under a real top-level domain", path, host)
 		}
 		return nil
 	})
