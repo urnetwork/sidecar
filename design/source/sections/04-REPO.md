@@ -145,10 +145,12 @@ type Env interface { // each accessor answers its service or a typed not-granted
 }
 
 // The injected clock, on every leg. ServiceHost.Clock and SidecarSettings.Clock hold it, nil meaning real
-// time; the root's Clock and sidecartest.Clock alias it. The root waits for a time through clockAfterAt and
-// clockAfterFuncAt, which take a clock's own AfterAt and AfterFuncAt where it offers them (the root's ClockAt,
-// as sidecartest's FakeClock does under its own lock) and otherwise the timeout from a reading, so a fake
-// clock moved between the reading and the wait never sets it late (owner decision 801).
+// time; the root's Clock and sidecartest.Clock alias it. The root and the engines wait for a time through
+// ClockAfterAt and ClockAfterFuncAt, which take a clock's own AfterAt and AfterFuncAt where it offers them (the
+// root's ClockAt, as sidecartest's FakeClock does under its own lock) and otherwise the timeout from a reading,
+// so a fake clock moved between the reading and the wait never sets it late, and a waiter holding a lock its
+// function takes through ClockAfterFuncAtAsync, which calls a time the clock has reached on a goroutine of its
+// own; sidecar/device, which may not import the root, declares the two again (owner decision 801).
 type Clock interface {
 	Now() time.Time
 	After(timeout time.Duration) <-chan time.Time
