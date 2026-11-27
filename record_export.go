@@ -148,10 +148,25 @@ type RecordExported struct {
 	ReceiptsOnly bool
 }
 
+// What an export runs by: RECORD.md section 9's limits that are no SidecarRecordSettings field, which section 18 holds to
+// its own struct.
+type RecordExportSettings struct {
+	// The most of a follow job's state file read back: 1 MiB.
+	JobByteCount int64
+}
+
+// The defaults, a fresh value each call.
+func DefaultRecordExportSettings() *RecordExportSettings {
+	return &RecordExportSettings{
+		JobByteCount: 1024 * 1024,
+	}
+}
+
 // Exports what this device reads.
 type RecordExport struct {
-	record *SidecarRecord
-	sink   func(path string) (io.WriteCloser, error)
+	record   *SidecarRecord
+	settings *RecordExportSettings
+	sink     func(path string) (io.WriteCloser, error)
 
 	stateLock sync.Mutex
 	// the follow jobs, once loaded
@@ -168,7 +183,7 @@ func (self *SidecarRecord) Export() *RecordExport {
 
 // An export over record. A follow job has no sink until SetExportSink gives one.
 func newRecordExport(record *SidecarRecord) *RecordExport {
-	return &RecordExport{record: record, due: true}
+	return &RecordExport{record: record, settings: DefaultRecordExportSettings(), due: true}
 }
 
 // Gives the follow jobs where their lines go: sink opens the file at path to append to, and each batch of lines is
@@ -615,7 +630,7 @@ func (self *RecordExport) loadJobs() error {
 		if err != nil {
 			return err
 		}
-		content, err := io.ReadAll(io.LimitReader(reader, self.record.writer.settings.ExportJobByteCount))
+		content, err := io.ReadAll(io.LimitReader(reader, self.settings.JobByteCount))
 		reader.Close()
 		if err != nil {
 			return err

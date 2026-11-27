@@ -300,8 +300,6 @@ type SidecarRecordSettings struct {
 	ExpiryDelay time.Duration
 	// An admin BASE re-lists a log's live set this often: 7 d (section 8).
 	BaseInterval time.Duration
-	// The most of an export follow job's state file read back: 1 MiB (section 9).
-	ExportJobByteCount int64
 	// A checkpoint batch is cut this often, interval_seconds' default: 1 h (section 10.1).
 	CheckpointInterval time.Duration
 	// How long a witness has to cosign: 60 s (section 10.2).
@@ -438,7 +436,6 @@ func defaultSidecarRecordSettings() *SidecarRecordSettings {
 		ExpiryInterval:           24 * time.Hour,
 		ExpiryDelay:              10 * time.Minute,
 		BaseInterval:             7 * 24 * time.Hour,
-		ExportJobByteCount:       1024 * 1024,
 		CheckpointInterval:       1 * time.Hour,
 		WitnessTimeout:           60 * time.Second,
 		WitnessFreshInterval:     24 * time.Hour,

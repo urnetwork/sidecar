@@ -196,7 +196,6 @@ func TestDefaultSidecarSettingsMatchDesign(t *testing.T) {
 				ExpiryInterval:       24 * time.Hour,
 				ExpiryDelay:          10 * time.Minute,
 				BaseInterval:         7 * 24 * time.Hour,
-				ExportJobByteCount:   1024 * 1024,
 				CheckpointInterval:   1 * time.Hour,
 				WitnessTimeout:       60 * time.Second,
 				WitnessFreshInterval: 24 * time.Hour,
