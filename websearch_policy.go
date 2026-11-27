@@ -114,6 +114,7 @@ func (self *WebSearchError) Is(target error) bool {
 	return ok && other.Code == self.Code
 }
 
+// The refusal beneath, where one is.
 func (self *WebSearchError) Unwrap() error {
 	return self.cause
 }
@@ -162,6 +163,7 @@ type webSearchPolicyLineJson struct {
 	PayeeFresh    *bool                         `json:"payee_fresh,omitempty"`
 }
 
+// The line's asset: its CAIP-2 network, its contract and its EIP-712 domain's name and version.
 type webSearchPolicyLineAssetJson struct {
 	Network  *string `json:"network"`
 	Contract *string `json:"contract"`
@@ -369,6 +371,7 @@ func webSearchReadCatalogSection(body []byte, settings *InferSettings) ([]*Infer
 	return entries, nil
 }
 
+// Registers the catalog's search section reader with INFER.
 func init() {
 	registerInferCatalogSection(webSearchCatalogSection, webSearchReadCatalogSection)
 }
