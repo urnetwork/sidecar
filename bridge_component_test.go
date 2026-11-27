@@ -282,6 +282,16 @@ func (self *testBridgeComponentWorld) generation() (*SidecarEnv, func()) {
 	return &SidecarEnv{Ctx: ctx, Log: NewNoopLogger()}, cancel
 }
 
+// Waits for the turn of component's run goroutine under way to end. A compile hands the sink its state and then records
+// itself, which Status and Compiled read, within one turn of that goroutine, and onRun's work runs only between turns,
+// so once a test has seen the sink take a state, this returns after the compile that handed it is recorded.
+func (self *testBridgeComponentWorld) awaitRunTurn(component *BridgeComponent) {
+	self.t.Helper()
+	if err := component.onRun(func() {}); err != nil {
+		self.t.Fatal(err)
+	}
+}
+
 // A device role set before its first state is anchored pending at the network, then takes a state at the client's tip
 // with the log run from its base; an entry after it rises to a state at the new tip, and no state is ever handed below
 // one in force.
@@ -303,6 +313,8 @@ func TestTheComponentAnchorsThenCompilesARisingState(t *testing.T) {
 
 	n := world.post(world.peer, bridge.SignedType_SIGNED_BRIDGE_EGRESS, world.net.bridgeEgress(world.peer.sidecarId, bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_AUTO, nil))
 	world.events.waitFor(t, "a state at the new tip", func(event string) bool { return strings.HasPrefix(event, fmt.Sprintf("state %d ", n)) })
+	// the sink's event comes as the compile hands it the state, before the compile is recorded, which Status reads
+	world.awaitRunTurn(component)
 	if status := component.Status(); status.CompiledPin.GetVersion() != n || !status.DeviceRole || status.CompileCount < 2 {
 		t.Errorf("status %+v", status)
 	}
