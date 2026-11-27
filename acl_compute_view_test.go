@@ -10,6 +10,9 @@ import (
 	"errors"
 	"slices"
 	"testing"
+
+	"github.com/urnetwork/sidecar/protocol"
+	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
 // With no block, and with a block naming nothing, every read is §16.5's default.
@@ -140,5 +143,40 @@ func TestComputePolicyUnreadFailsClosed(t *testing.T) {
 		return registration.name == "cacl-compute-block"
 	}) {
 		t.Error("the compute block is not among the router's sources")
+	}
+}
+
+// A model: grant never passes the floor (R1-56): a glob naming SayGM's -tee names grants them by their name, while the
+// network's floor of AP refuses them at their label, none, in ComputeModelGate, which holds every remote call apart.
+func TestAclComputeModelGrantNeverPassesTheFloor(t *testing.T) {
+	world := newAclCompileWorld("glob floor")
+	owner := world.member("owner@example.com", bridge.MemberRole_MEMBER_ROLE_OWNER)
+	laptop := world.device("laptop", owner)
+	world.setPolicy(t, `{"grants": [{"src": ["autogroup:member"], "dst": ["model:*-tee-*"], "allow": ["infer"]}], "compute": {"assurance_floor": "AP"}}`)
+	input := world.input()
+	input.AuthFeatures = AuthFeatureComputePolicy
+	rows, err := CompileAcl(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := NewAclState(rows, world.view())
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := "saygm-llama-4-tee-high"
+	if decision := state.ComputeAllows(AclSidecarSubject(laptop), AclComputeTarget{Model: name}, protocol.AclAction_ACL_ACTION_INFER, aclTestNow); !decision.Allowed {
+		t.Fatalf("the glob does not grant %s", name)
+	}
+	local, err := CompileAclLocal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gate := NewComputeModelGate(NewComputePolicyView(local.Compute, true).NetworkModels(), nil, nil)
+	var refused *ComputeModelRefusedError
+	if err := gate.Allows(name, ComputeLabelNone); !errors.As(err, &refused) || refused.Rule != ComputeModelRuleFloor {
+		t.Errorf("the floor let %s's grant through: %v", name, err)
+	}
+	if err := gate.Allows("chutes-qwen3.8-27b-tee-high", ComputeLabelA1); err != nil {
+		t.Errorf("a TEE model above the floor: %v", err)
 	}
 }
