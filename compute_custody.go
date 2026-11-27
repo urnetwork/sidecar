@@ -1,4 +1,4 @@
-//go:build !ios_extension
+//go:build !ios_extension && !sidecar_http
 
 // Key custody on the device (DESIGN-COMPUTE §2.5; CTRUST-M13-01, CONTRACTS C-41): the compute credentials a device
 // holds join the daemon's secret matcher (record_secret_match.go). DESIGN §16.6's secrets row (I-7) reads a credential
@@ -19,6 +19,9 @@
 // Gateway tokens are kept as hashes (§2.5), so a leaked one is matched by its token form, the redactor's rule, never by
 // this registry; keys URnetwork's servers hold are no device's. compute_custody_table.go holds §2.5's rows and where
 // each is held. The registrations live on their Sidecar (Sidecar.computeCustody), so they end with it.
+//
+// Off the page Worker's leg, as every compute family's file is (DESIGN-COMPUTE §15.4, §1.2): it runs no compute, so
+// nothing registers there, and its matcher reads no source (record_secret_match_custody_http.go).
 
 package sidecar
 
