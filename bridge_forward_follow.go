@@ -43,6 +43,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -355,15 +356,16 @@ type forwarderPageEntry struct {
 }
 
 // Follows once and sets when the next follow is due: FollowInterval after one that reached api, FollowRetryInterval
-// doubling to FollowInterval after one that did not. On run's goroutine.
+// doubling to FollowInterval after one that did not, both from the follow's end, read before Status counts it
+// (wantCompileAt's reason). On run's goroutine.
 func (self *Forwarder) followNow() {
 	err := self.follow()
+	now := self.clock.Now()
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		self.followCount += 1
 	}()
-	now := self.clock.Now()
 	if err == nil {
 		self.followRetryCount = 0
 		self.followAt = now.Add(self.settings.FollowInterval)
@@ -395,8 +397,11 @@ func (self *Forwarder) followNow() {
 	self.followAt = now.Add(min(timeout, self.settings.FollowInterval))
 }
 
-// DESIGN-DETAILS 4.2.5's Follow (the file's comment). On run's goroutine.
+// DESIGN-DETAILS 4.2.5's Follow (the file's comment). A compile a page wants is wanted from a reading taken before its
+// tip or the sink's take of it can be seen, and one the follow wants at its end from the follow's start
+// (wantCompileAt). On run's goroutine.
 func (self *Forwarder) follow() error {
+	startedAt := self.clock.Now()
 	ctx, cancel := context.WithTimeout(self.ctx, self.settings.FollowTimeout)
 	defer cancel()
 	from, through, err := self.records.logRange()
@@ -455,20 +460,22 @@ func (self *Forwarder) follow() error {
 		last := entries[len(entries)-1]
 		through = last.entry.GetN()
 		tip = &bridge.AuthPin{Version: through, Chain: bytes.Clone(last.chain[:])}
+		pageAt := self.clock.Now()
 		func() {
 			self.stateLock.Lock()
 			defer self.stateLock.Unlock()
 			self.tip = tip
 		}()
-		self.handDeltas(from, through)
+		self.handDeltas(from, through, pageAt)
 		if !projection.More {
 			break
 		}
 	}
-	// 4.2.5's table: pending on its anchor, or narrowing entries waiting
+	// 4.2.5's table: pending on its anchor, or narrowing entries waiting, each standing from before this follow or
+	// wanted by its page already
 	decision := self.readDecision()
 	if 0 < through && !decision.Fork && (decision.State == BridgeSinkPending || 0 < decision.WaitingCount) {
-		self.wantCompile()
+		self.wantCompileAt(startedAt)
 	}
 	return nil
 }
@@ -561,8 +568,10 @@ func (self *Forwarder) keepPageRows(entries []*forwarderPageEntry, pageRows [][]
 
 // Tier 1: hands the sink, while it is enforcing, every stored entry above its pin, and wants a compile when it took
 // one it did not apply as a denial, refused the run, or the store no longer reaches back to its pin. from and through
-// are the store's range.
-func (self *Forwarder) handDeltas(from uint64, through uint64) {
+// are the store's range, and the compile is wanted from at, read before the page's tip or the sink's take of it could
+// be seen: the sink shows its new pin before ApplyDeltas returns, so a reading after it would be later than a clock
+// moved by whoever saw the pin (wantCompileAt).
+func (self *Forwarder) handDeltas(from uint64, through uint64, at time.Time) {
 	decision := self.readDecision()
 	if decision.State != BridgeSinkEnforcing {
 		return
@@ -572,22 +581,22 @@ func (self *Forwarder) handDeltas(from uint64, through uint64) {
 		return
 	}
 	if next < from {
-		self.wantCompile()
+		self.wantCompileAt(at)
 		return
 	}
 	entries, err := self.records.entries(next, through)
 	if err != nil {
 		self.log.Warningf("[forward]%s the stored entries from %d did not read: %v", self.args.NetworkId, next, err)
-		self.wantCompile()
+		self.wantCompileAt(at)
 		return
 	}
 	testHookBarrier("bridge_forward.deltas.before", self.args.NetworkId.String())
 	if err := self.args.Sink.ApplyDeltas(&BridgeStateLog{Entries: entries, OpenRows: self.records.openRows}); err != nil {
 		self.log.Warningf("[forward]%s the device role refused entries from %d: %v", self.args.NetworkId, next, err)
-		self.wantCompile()
+		self.wantCompileAt(at)
 	}
 	if self.readDecision().CompileWanted {
-		self.wantCompile()
+		self.wantCompileAt(at)
 	}
 }
 
@@ -625,12 +634,14 @@ func (self *Forwarder) witness(pin *bridge.AuthPin, fork bool) {
 	if decision.Fork == fork {
 		return
 	}
+	// the sink shows the fork's end before SetFork returns (wantCompileAt)
+	forkAt := self.clock.Now()
 	testHookBarrier("bridge_forward.fork.before", self.args.NetworkId.String())
 	if err := self.args.Sink.SetFork(fork); err != nil {
 		self.log.Warningf("[forward]%s the device role refused the fork report: %v", self.args.NetworkId, err)
 	}
 	if decision = self.readDecision(); !decision.Fork {
 		// the compile a fork held back
-		self.wantCompile()
+		self.wantCompileAt(forkAt)
 	}
 }

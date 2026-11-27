@@ -25,6 +25,13 @@
 // at each wake and clock change, and on a desktop at the bridges' ClockCheckInterval (the sdk's forwarding roles). A
 // revocation needs none: the posture applies what it can check as a denial as each page arrives.
 //
+// Each of those times is dated by a reading of the clock taken before what caused it could be seen, never after: a
+// compile a page wants before the sink takes the page, which shows its new pin before ApplyDeltas returns; one a
+// fork's end wants before SetFork; a retry, or the compile one more wants, before the compile's outcome is counted
+// or handed; the next follow before Status counts the last. Whoever sees the cause may move a test's clock at once,
+// and a reading after that move would date the time past it by the move, which a clock moved once to the time it
+// expects never reaches (wantCompileAt; QD-1425's race one step earlier).
+//
 // head_alarm is raised once per condition (§17.8; owner decision 716): each is keyed by what it is about, a generation
 // gkm lists off the held chain, a GroupForm, a GenRotate or a DelegationWrap pinned off the judged one, a head served for
 // a base that names another, a genesis or a page api serves off the anchored chain, a pin the app's sidecar role
@@ -562,6 +569,9 @@ type Forwarder struct {
 	compileLastAt     time.Time
 	compileRetryAt    time.Time
 	compileRetryCount int
+	// what follows a compile is dated by, its retry or the compile it wants again: a reading of the clock taken before
+	// the compile's outcome could first be seen (markCompileOutcome), zero until then
+	compileOutcomeAt time.Time
 	// when the heap ceiling first deferred the compile now wanted, zero while none is deferred
 	deferredSince time.Time
 	keyWaits      map[uint64]*forwarderKeyWait
@@ -802,8 +812,10 @@ func earlierTime(a time.Time, b time.Time) time.Time {
 }
 
 // Before the first follow: the sink anchored while it is legacy, and the last compile the store records, which a
-// restart signs by once the sink shows its state in force.
+// restart signs by once the sink shows its state in force. A compile it wants is wanted from its start, before Status
+// shows what the store records.
 func (self *Forwarder) start() {
+	startedAt := self.clock.Now()
 	if decision := self.readDecision(); decision.State == BridgeSinkLegacy {
 		testHookBarrier("bridge_forward.pending.before", self.args.NetworkId.String())
 		if err := self.args.Sink.SetPending(self.args.Pending); err != nil {
@@ -831,18 +843,18 @@ func (self *Forwarder) start() {
 		self.generations = len(generations)
 	}()
 	self.followWanted = true
-	self.followAt = self.clock.Now().Add(self.settings.FollowInterval)
+	self.followAt = startedAt.Add(self.settings.FollowInterval)
 	decision := self.readDecision()
 	switch {
 	case decision.State == BridgeSinkEnforcing && !self.compiledInForce():
 		// a state in force with no record of its compile, as a kill between the two leaves: compiled again, so the
 		// signer has a state to sign by
-		self.wantCompile()
+		self.wantCompileAt(startedAt)
 	case decision.State == BridgeSinkEnforcing && decision.StatePin.GetVersion() < decision.Pin.GetVersion():
 		// entries the sink took past its state before the restart: whether one wanted a compile went with the
 		// process, and the next follow hands the sink nothing it holds, so an opening among them would wait for the
 		// next entry that wants one (BRIDGE-M8-07's schedules found a grant waiting so)
-		self.wantCompile()
+		self.wantCompileAt(startedAt)
 	}
 }
 
@@ -883,11 +895,15 @@ func (self *Forwarder) readDecision() BridgeSinkDecision {
 	return decision
 }
 
-// Marks a compile wanted, coalescing with one already wanted. On run's goroutine.
-func (self *Forwarder) wantCompile() {
+// Marks a compile wanted from at, coalescing with one already wanted. at is a reading of the clock taken before
+// anything that caused the want could be seen: the sink's take of a page, the store's tip, a fork's end. Whoever saw
+// it may move a test's clock next, and a reading taken after that move would put the compile CompileDelay past the
+// move rather than past the want, a time a clock moved once to the want's due time never reaches (QD-1425's race, one
+// step earlier). On run's goroutine.
+func (self *Forwarder) wantCompileAt(at time.Time) {
 	if !self.compileWanted {
 		self.compileWanted = true
-		self.compileWantedAt = self.clock.Now()
+		self.compileWantedAt = at
 	}
 }
 

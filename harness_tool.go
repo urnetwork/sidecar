@@ -61,12 +61,22 @@ type HarnessToolResult struct {
 	Details []byte
 	// trusted or untrusted (§7.8).
 	Trust string
+	// A built-in tool's record stub where its details say keep: false: SRCH's web search stub (§21.6, §24.9), which the
+	// journal keeps in place of the result. Nil for every other tool.
+	SearchStub []byte
 }
 
 // A call's partial result so far, which the loop emits as tool_execution_update.
 type HarnessToolUpdate struct {
 	Text    string
 	Details []byte
+}
+
+// Beside HarnessTool: a tool offered only while what the device holds allows it, web_search while the signed policy
+// carries a search line (§21.11): an agent's tool set leaves it out while Available answers false, whether the agent
+// named it or took its profile's whole set. Read as the set is built, so it reads nothing remote.
+type HarnessToolAvailable interface {
+	Available(ctx context.Context) bool
 }
 
 // Beside HarnessTool: a tool whose tier turns on its run, W in an untainted run and O in a tainted one (§7.5's
