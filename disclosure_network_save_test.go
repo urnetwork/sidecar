@@ -192,10 +192,14 @@ func TestNetworkDisclosureNoDocument(t *testing.T) {
 		entry.PinVersion != signedAt.GetVersion() || entry.Version != 1 || entry.Locale != "en" || entry.SignedAtMs == 0 {
 		t.Fatalf("the entry %+v", entry)
 	}
-	// the text shown in another locale is recorded as shown
+	// a second id beside it, and support's, whose family the block takes (§28.13)
 	world.ack("search:parallel")
-	if entry := world.judged()["search:parallel"]; entry == nil || !entry.Taken {
-		t.Fatalf("a second entry %+v", entry)
+	world.ack("support:urnetwork")
+	judged := world.judged()
+	for _, id := range []string{"inference:engy", "search:parallel", "support:urnetwork"} {
+		if entry := judged[id]; entry == nil || !entry.Taken || !entry.Stands {
+			t.Fatalf("%s: %+v", id, entry)
+		}
 	}
 }
 
