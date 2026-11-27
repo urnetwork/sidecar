@@ -198,6 +198,9 @@ type HarnessArgs struct {
 	// constructs after the Harness. Nil while the release's support switch is off, which leaves the support tools,
 	// their skill and support_update out (§28.21; harness_support.go).
 	Support func() (*SupportClient, error)
+	// The network the in-process DESIGN tools act on (harness_tool_design.go): on a Sidecar its own, read at each
+	// call. Nil leaves evs_*, search, record_query and record_append out.
+	Network harnessDesignNetwork
 }
 
 // One subscriber: its queue and its goroutine.
@@ -344,6 +347,7 @@ type Harness struct {
 	stamper         *harnessEventStamper
 	subscribers     *harnessSubscribers
 	support         func() (*SupportClient, error)
+	network         harnessDesignNetwork
 	// the events a view reads after the fact, nil until a view first asks (harness_view_log.go)
 	view atomic.Pointer[harnessViewLog]
 	// held across one emission: never stateLock
@@ -398,6 +402,7 @@ func NewHarness(args *HarnessArgs) (*Harness, error) {
 		workspaceCap:    workspaceCap,
 		observer:        args.Observer,
 		support:         args.Support,
+		network:         args.Network,
 		stamper:         newHarnessEventStamper(),
 		subscribers:     newHarnessSubscribers(settings, log),
 		agents:          map[Id]*harnessAgent{},
