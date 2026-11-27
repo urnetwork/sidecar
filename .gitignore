@@ -4,6 +4,8 @@
 **/profile
 .direnv
 
-# go build ./... in cli/ writes its lone main package here
+# go build ./... in cli/ writes its lone main package here, as cli.exe when GOOS is windows, so a
+# cross build for a check leaves the tree clean; release binaries go to cli/Makefile's OUT
 cli/cli
+cli/cli.exe
 cli/ur
