@@ -813,10 +813,12 @@ type sessionGatewayRunStore struct {
 	runs *RunStore
 }
 
+// RunStore.Tainted: true for a run with no readable file.
 func (self sessionGatewayRunStore) RunTainted(runId Id) bool {
 	return self.runs.Tainted(runId)
 }
 
+// RunStore.Taint: fsynced before it returns.
 func (self sessionGatewayRunStore) TaintRun(ctx context.Context, runId Id, reason RunTaintReason) error {
 	return self.runs.Taint(ctx, runId, reason)
 }
