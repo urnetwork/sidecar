@@ -157,6 +157,118 @@ type EvsPathWrite struct {
 	// import's. The in-ref index's rows of its documents carry the outside bit (§11.14's row, bit 1), so a search hit
 	// on them reads untrusted (§16.10). Only the index writer reads it; nothing of it reaches evs.
 	Outside bool
+	// The inbox guard's grant: an agents client's create-only message write (agents_thread.go), the one write that
+	// passes the inbox refusal (EvsWriteGuardCheck). Nil for every other write; no other package can make one.
+	inboxMessage *evsInboxMessageGrant
+}
+
+// The inbox guard's grant (DESIGN-COMPUTE §20.4's inboxes row, D-SKILL-7): what an agents client's message write
+// carries, for its one path. An unexported type, so no other package can mint one.
+type evsInboxMessageGrant struct {
+	path string
+}
+
+// A write or a delete under inbox/ in an agent repo, the agents repo or the Team inbox that is not an agents client's
+// create-only message write (DESIGN-COMPUTE §20.4, D-SKILL-7): nothing planned, sealed or sent.
+var ErrEvsInboxMessagesOnly = errors.New("evs: an agents' inbox takes messages only, through agent_send, agent_broadcast and agent_close")
+
+// The directory an agents' inbox holds its threads in.
+const evsAgentsInboxDirectory = "inbox"
+
+// Whether repo's inbox/ takes messages only (DESIGN-COMPUTE §20.4): an agents or agent repo, or the Team inbox.
+func EvsRepoInboxMessagesOnly(repo *protocol.AclRepo) bool {
+	return repo != nil && (aclRepoKindAgentRepos(repo.GetKind()) || AclRepoIsTeamInbox(repo))
+}
+
+// Whether path is inbox itself or under it, raw names joined by /.
+func evsInboxPath(path string) bool {
+	return path == evsAgentsInboxDirectory || strings.HasPrefix(path, evsAgentsInboxDirectory+"/")
+}
+
+// Whether path is a message's, inbox/<32 hex>/<32 hex>.json, its two names lowercase hex.
+func evsInboxMessagePath(path string) bool {
+	names := strings.Split(path, "/")
+	if len(names) != 3 || names[0] != evsAgentsInboxDirectory {
+		return false
+	}
+	id, found := strings.CutSuffix(names[2], ".json")
+	for _, name := range []string{names[1], id} {
+		if !found || len(name) != 32 {
+			return false
+		}
+		for i := 0; i < len(name); i += 1 {
+			if c := name[i]; !('0' <= c && c <= '9' || 'a' <= c && c <= 'f') {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// What a write guard judges of one plan, before anything is read for it, sealed or sent: the repo as the verified state
+// holds it, the ref, and each path the plan writes or removes. A file-mode write's and a git-mode update's alike.
+type EvsWriteGuardCheck struct {
+	RepoId  Id
+	Repo    *protocol.AclRepo
+	RefName []byte
+	// A git ref update's net change, else a file-mode write's.
+	Git    bool
+	Writes []*EvsWriteGuardWrite
+}
+
+// One path a plan writes or removes.
+type EvsWriteGuardWrite struct {
+	Path   string
+	Remove bool
+	// Held to the path's absence (EvsPathWrite.IfVersion 0).
+	CreateOnly bool
+	// the agents client's grant, nil for every other write
+	inboxMessage *evsInboxMessageGrant
+}
+
+// A guard every plan passes beside the inbox refusal, which always runs (EvsClient.SetWriteGuard).
+type EvsWriteGuard func(ctx context.Context, check *EvsWriteGuardCheck) error
+
+// The inbox refusal (agents_inbox_guard.go): in a repo whose inbox/ takes messages only, every write and delete there
+// refused but an agents client's create-only write of the message path its grant names.
+func evsInboxGuard(check *EvsWriteGuardCheck) error {
+	if !EvsRepoInboxMessagesOnly(check.Repo) {
+		return nil
+	}
+	for _, write := range check.Writes {
+		if !evsInboxPath(write.Path) {
+			continue
+		}
+		granted := !check.Git && write.inboxMessage != nil && write.inboxMessage.path == write.Path && write.CreateOnly &&
+			!write.Remove && evsInboxMessagePath(write.Path)
+		if !granted {
+			return ErrEvsInboxMessagesOnly
+		}
+	}
+	return nil
+}
+
+// Sets a guard every plan passes after the inbox refusal; nil removes it. The inbox refusal cannot be removed.
+func (self *EvsClient) SetWriteGuard(guard EvsWriteGuard) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.writeGuard = guard
+}
+
+// The inbox refusal, then the guard SetWriteGuard set.
+func (self *EvsClient) checkWriteGuards(ctx context.Context, check *EvsWriteGuardCheck) error {
+	if err := evsInboxGuard(check); err != nil {
+		return err
+	}
+	guard := func() EvsWriteGuard {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		return self.writeGuard
+	}()
+	if guard == nil {
+		return nil
+	}
+	return guard(ctx, check)
 }
 
 // What decides a written version's versioning on a plan's own read of its path: *EvsWriteOptions, on every leg that
@@ -489,6 +601,17 @@ func (self *EvsRepo) PlanWrite(ctx context.Context, args *EvsPlanArgs) (*EvsWrit
 	}
 	repo, err := self.repoRow()
 	if err != nil {
+		return nil, err
+	}
+	// the write guards, before anything is read: the inbox refusal and the client's own (DESIGN-COMPUTE §20.4)
+	guardCheck := &EvsWriteGuardCheck{RepoId: self.repoId, Repo: repo, RefName: args.RefName}
+	for _, write := range args.Writes {
+		guardCheck.Writes = append(guardCheck.Writes, &EvsWriteGuardWrite{
+			Path: write.Path, Remove: write.Remove, CreateOnly: write.IfVersion != nil && *write.IfVersion == 0,
+			inboxMessage: write.inboxMessage,
+		})
+	}
+	if err := self.client.checkWriteGuards(ctx, guardCheck); err != nil {
 		return nil, err
 	}
 	// every write a rekey write: the one write a git-mode ref takes here (DESIGN-DETAILS 8.2.10)
@@ -1576,6 +1699,14 @@ func (self *EvsRepo) PlanGitUpdate(ctx context.Context, args *EvsGitPlanArgs) (*
 	}
 	repo, err := self.repoRow()
 	if err != nil {
+		return nil, err
+	}
+	// the write guards, before anything is read: a git update writes no message, so nothing under an agents' inbox/
+	guardCheck := &EvsWriteGuardCheck{RepoId: self.repoId, Repo: repo, RefName: args.RefName, Git: true}
+	for _, change := range args.Changes {
+		guardCheck.Writes = append(guardCheck.Writes, &EvsWriteGuardWrite{Path: change.Path, Remove: change.removes()})
+	}
+	if err := self.client.checkWriteGuards(ctx, guardCheck); err != nil {
 		return nil, err
 	}
 	if evsRepoSlotKeyed(repo) {

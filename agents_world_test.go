@@ -8,6 +8,7 @@ package sidecar
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"slices"
@@ -162,17 +163,34 @@ func (self *testAgentsRepoAs) WritePaths(ctx context.Context, args *EvsWritePath
 		result.PathVersions = append(result.PathVersions, self.repo.putAs(self.signer, write.Path, data, args.Tainted, args.AgentId))
 	}
 	self.repo.world.writeCount += 1
+	if 0 < self.repo.world.loseAnswers {
+		// the write landed and its answer is lost on the way back
+		self.repo.world.loseAnswers -= 1
+		return nil, errTestAgentsAnswerLost
+	}
 	return result, nil
 }
+
+// A write's answer lost after the write landed.
+var errTestAgentsAnswerLost = errors.New("the connection reset before the answer")
 
 func (self *testAgentsRepoAs) List(ctx context.Context, args *EvsReadArgs) (*EvsListing, error) {
 	self.repo.world.stateLock.Lock()
 	defer self.repo.world.stateLock.Unlock()
 	listing := &EvsListing{Path: args.Path}
 	prefix := args.Path + "/"
+	directories := map[string]bool{}
 	for path := range self.repo.paths {
 		name, found := strings.CutPrefix(path, prefix)
-		if !found || strings.Contains(name, "/") || self.repo.newest(path).removed {
+		if !found || self.repo.newest(path).removed {
+			continue
+		}
+		if directory, _, below := strings.Cut(name, "/"); below {
+			// a directory standing while a file stands under it
+			if !directories[directory] {
+				directories[directory] = true
+				listing.Entries = append(listing.Entries, &EvsListEntry{Name: []byte(directory), Kind: protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY})
+			}
 			continue
 		}
 		listing.Entries = append(listing.Entries, &EvsListEntry{Name: []byte(name), Kind: protocol.EvsEntryKind_EVS_ENTRY_FILE})
@@ -282,7 +300,9 @@ type testAgentCardsWorld struct {
 	labelKey        *AgentRepoLabelKey
 	writeRefused    map[Id]bool
 	writeCount      int
-	beforeWrite     func()
+	// how many of the next writes land and lose their answers
+	loseAnswers int
+	beforeWrite func()
 	// each device's agent ids by label, as its keychain keeps them
 	agentIds map[Id]map[string]Id
 	revoked  map[Id]bool
