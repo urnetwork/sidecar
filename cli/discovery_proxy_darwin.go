@@ -363,10 +363,15 @@ func (self *urDarwinDiscoveryProxy) apply() {
 		wantedServices[service] = true
 	}
 	for key, held := range self.services {
-		if held.refused.Load() {
+		// read once: a refusal landing between two reads would withdraw the instance without counting it refused, and
+		// this apply would register it again under the same set. One landing after the read is the next apply's, which
+		// its wake brings.
+		refused := held.refused.Load()
+		testHookBarrier("discovery_proxy.refused.after", "")
+		if refused {
 			self.refused[key] = true
 		}
-		if !wantedServices[key] || held.refused.Load() {
+		if !wantedServices[key] || refused {
 			connection.Cancel(held.operation)
 			delete(self.services, key)
 		}

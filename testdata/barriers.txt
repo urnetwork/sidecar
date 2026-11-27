@@ -236,6 +236,7 @@ barrier directory.worker.before directory_worker.go
 barrier disclosure.ack.write.after disclosure_ack.go
 barrier disclosure.ack.write.before disclosure_ack.go
 barrier disclosure.await.read disclosure_ack.go
+barrier discovery_proxy.refused.after cli/discovery_proxy_darwin.go
 barrier dns.label_refresh.after dns_label_refresh.go
 barrier dns.label_refresh.before dns_label_refresh.go
 barrier dnsservice.edge_publish dnsservice/edge.go
