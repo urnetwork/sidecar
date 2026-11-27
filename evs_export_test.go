@@ -770,3 +770,242 @@ func TestEvsExportReadsAPushInParts(t *testing.T) {
 		t.Fatalf("%s commits", count)
 	}
 }
+
+// Every loose object under a repository's objects directory, by oid.
+func evsTestLooseOids(t *testing.T, objectsDir string) []EvsGitOid {
+	t.Helper()
+	oids := []EvsGitOid{}
+	fans, err := os.ReadDir(objectsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fan := range fans {
+		if !fan.IsDir() || len(fan.Name()) != 2 {
+			continue
+		}
+		files, err := os.ReadDir(filepath.Join(objectsDir, fan.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, file := range files {
+			decoded, err := hex.DecodeString(fan.Name() + file.Name())
+			if err != nil || len(decoded) != len(EvsGitOid{}) {
+				continue
+			}
+			oids = append(oids, EvsGitOid(decoded))
+		}
+	}
+	return oids
+}
+
+// Replays a git-mode ref of repo into objects with options, to upTo (0: its head), its sources read to their heads,
+// answering the replayer and the ref's state.
+func evsTestReplay(t *testing.T, repo *EvsRepo, objects evsGitReplayStore, options *evsGitReplayOptions, refName []byte, upTo uint64) (*evsGitExport, *evsGitExportRef) {
+	t.Helper()
+	ctx := context.Background()
+	refId, err := repo.RefIdOf(ctx, refName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayer := newEvsGitReplayerWith(repo, objects, options)
+	t.Cleanup(replayer.release)
+	done := repo.client.pins.beginRead(repo.repoId, refId)
+	head, err := repo.pinnedHead(ctx, refId)
+	if err != nil {
+		done()
+		t.Fatal(err)
+	}
+	replayer.reading(done)
+	ref := replayer.ref(head)
+	ref.name = refName
+	if upTo == 0 {
+		upTo = head.Version
+	}
+	if err := replayer.replay(ctx, ref, upTo); err != nil {
+		t.Fatal(err)
+	}
+	if upTo == head.Version {
+		if err := replayer.finish(ctx, ref); err != nil {
+			t.Fatal(err)
+		}
+		if err := replayer.finishSources(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return replayer, ref
+}
+
+// GIT-M13-02's two options and its provenance hook leave export as it was: a replay that sets every option but
+// deferral writes export's objects byte for byte and sees each version's push once; one that defers writes export's
+// trees, commits and tags and promises every blob; one resumed from a kept state reaches the same tip applying each
+// version once; and export, run again, writes what it wrote.
+func TestExportUnchangedByReplayerOptions(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no system git")
+	}
+	world := newEvsTestWorld(t)
+	world.config.repo.Admins = []*protocol.AclRepoAdminRow{{SidecarId: world.signer.sidecarId.Bytes()}}
+	email := evsTestId("world client").String() + evsCommitterDomain
+	history := &evsTestGitHistory{t: t, store: newEvsTestGitStore(), email: email}
+	readme := history.blob("hello\n")
+	c1, sealed1 := history.commit(history.tree(map[string]EvsGitOid{"README": readme, "plan.md": history.blob("plan one\n")}, nil), email)
+	c2, sealed2 := history.commit(history.tree(map[string]EvsGitOid{"README": readme, "plan.md": history.blob("plan two\n")}, nil), email, c1)
+	world.pushGitUpdate(&evsTestGitUpdate{
+		refName: EvsMainRefName, newTip: &c2, commits: []*protocol.EvsSealedCommit{sealed1, sealed2},
+		history: []*evsTestHistoryBlob{{content: []byte("plan one\n")}},
+		changes: []*evsTestChange{{path: "README", content: []byte("hello\n")}, {path: "plan.md", content: []byte("plan two\n")}},
+	})
+	c3a, sealed3a := history.commit(history.tree(map[string]EvsGitOid{"README": readme, "plan.md": history.blob("plan two, and a half\n")}, nil), email, c2)
+	c3, sealed3 := history.commit(history.tree(map[string]EvsGitOid{"README": readme, "plan.md": history.blob("plan three\n")}, nil), email, c3a)
+	mainAtC3 := world.pushGitUpdate(&evsTestGitUpdate{
+		oldTip: &c2, newTip: &c3, commits: []*protocol.EvsSealedCommit{sealed3a, sealed3},
+		history: []*evsTestHistoryBlob{{content: []byte("plan two, and a half\n"), base: []byte("plan two\n")}},
+		changes: []*evsTestChange{{path: "plan.md", content: []byte("plan three\n")}},
+	})
+	feature := world.otherRef([]byte("feature"))
+	featureBlob := history.blob("a feature\n")
+	f1, sealedF1 := history.commit(history.tree(map[string]EvsGitOid{"README": readme, "plan.md": history.blob("plan three\n"), "feature.txt": featureBlob}, nil), email, c3)
+	featureVersion := feature.pushGitUpdate(&evsTestGitUpdate{
+		refName: []byte("feature"), newTip: &f1, commits: []*protocol.EvsSealedCommit{sealedF1},
+		sources: []*protocol.EvsOverlay{{RefId: world.refId.Bytes(), Version: mainAtC3}},
+		changes: []*evsTestChange{{path: "README", content: []byte("hello\n")}, {path: "plan.md", content: []byte("plan three\n")}, {path: "feature.txt", content: []byte("a feature\n")}},
+	})
+	m, sealedM := history.commit(history.tree(map[string]EvsGitOid{"README": readme, "plan.md": history.blob("plan three\n"), "feature.txt": featureBlob}, nil), email, c3, f1)
+	world.pushGitUpdate(&evsTestGitUpdate{
+		oldTip: &c3, newTip: &m, commits: []*protocol.EvsSealedCommit{sealedM},
+		sources: []*protocol.EvsOverlay{{RefId: feature.refId.Bytes(), Version: featureVersion}},
+		changes: []*evsTestChange{{path: "feature.txt", content: []byte("a feature\n")}},
+	})
+	reader := world.reader(t, evsTestId("replayer"))
+	repo := reader.client.Repo(world.repoId)
+	ctx := context.Background()
+	exportOnce := func() (string, []EvsGitOid) {
+		dir := filepath.Join(t.TempDir(), "export.git")
+		result, err := repo.Export(ctx, &EvsExportArgs{Dir: dir, RefNames: [][]byte{EvsMainRefName}})
+		if err != nil || len(result.Refs) != 1 || result.Refs[0].Tip != m {
+			t.Fatalf("export: %v", err)
+		}
+		return dir, evsTestLooseOids(t, filepath.Join(dir, "objects"))
+	}
+	exportDir, allExportOids := exportOnce()
+	exported := &evsGitObjectWriter{dir: exportDir}
+	// what main reaches, which a replay of main writes; export's notes (refs/notes/ur) are export's alone
+	exportOids := []EvsGitOid{}
+	for _, line := range strings.Split(strings.TrimSpace(evsTestGit(t, exportDir, "rev-list", "--objects", "refs/heads/main")), "\n") {
+		hexOid, _, _ := strings.Cut(line, " ")
+		decoded, err := hex.DecodeString(hexOid)
+		if err != nil || len(decoded) != len(EvsGitOid{}) {
+			t.Fatalf("rev-list gave %q", line)
+		}
+		exportOids = append(exportOids, EvsGitOid(decoded))
+	}
+	exportObject := func(oid EvsGitOid) (string, []byte) {
+		kind, content, err := exported.ReadGitObject(ctx, oid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return kind, content
+	}
+	// every option but deferral: export's objects byte for byte, each version's push seen once
+	fullDir := t.TempDir()
+	fullFileSystem, closeFull, err := NewGitOsFileSystem(fullDir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeFull()
+	full := newGitObjectStore(fullFileSystem, DefaultGitSettings())
+	type pushKey struct {
+		refId   Id
+		version uint64
+	}
+	seen := map[pushKey]int{}
+	_, ref := evsTestReplay(t, repo, full, &evsGitReplayOptions{
+		resume: map[Id]*EvsGitReplayState{},
+		provenance: func(ctx context.Context, refId Id, statement *EvsVerifiedStatement, metadata *protocol.EvsSealedMetadata) error {
+			seen[pushKey{refId: refId, version: statement.Version}] += 1
+			return nil
+		},
+	}, EvsMainRefName, 0)
+	if ref.tip == nil || *ref.tip != m {
+		t.Fatalf("the replay's tip %v, export's %x", ref.tip, m[:])
+	}
+	for key, count := range seen {
+		if count != 1 {
+			t.Fatalf("version %d seen %d times", key.version, count)
+		}
+	}
+	if len(seen) != 4 {
+		t.Fatalf("%d pushes seen, want main's three and feature's one", len(seen))
+	}
+	fullOids := evsTestLooseOids(t, filepath.Join(fullDir, filepath.FromSlash(gitObjectsDirectory)))
+	if len(fullOids) != len(exportOids) {
+		t.Fatalf("the replay holds %d objects, main reaches %d", len(fullOids), len(exportOids))
+	}
+	for _, oid := range exportOids {
+		wantKind, wantContent := exportObject(oid)
+		kind, content, err := full.ReadGitObject(ctx, oid)
+		if err != nil || kind != wantKind || !bytes.Equal(content, wantContent) {
+			t.Fatalf("%x reads differently: %v", oid[:], err)
+		}
+	}
+	// deferral: trees, commits and tags as export wrote them, every blob promised and none written
+	lazy, err := InitGitRepository(ctx, &GitInitArgs{FileSystem: newGitFakeFileSystem(gitFakeHabits{execBit: true, symlinks: true}), Sparse: "docs"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	evsTestReplay(t, repo, lazy.Objects(), &evsGitReplayOptions{resume: map[Id]*EvsGitReplayState{}, deferBlob: lazy.promisorTable().record}, EvsMainRefName, 0)
+	for _, oid := range exportOids {
+		wantKind, wantContent := exportObject(oid)
+		if wantKind == evsGitBlobKind {
+			if lazy.Objects().Local(oid) || !lazy.Objects().Promised(oid) {
+				t.Fatalf("blob %x held %v, promised %v", oid[:], lazy.Objects().Local(oid), lazy.Objects().Promised(oid))
+			}
+			locator, err := lazy.promisorTable().read(oid)
+			if err != nil || locator == nil || locator.Version == 0 || locator.Size != uint64(len(wantContent)) {
+				t.Fatalf("blob %x's locator %+v, %v", oid[:], locator, err)
+			}
+			continue
+		}
+		kind, content, err := lazy.Objects().ReadGitObject(ctx, oid)
+		if err != nil || kind != wantKind || !bytes.Equal(content, wantContent) {
+			t.Fatalf("%s %x reads differently under deferral: %v", wantKind, oid[:], err)
+		}
+	}
+	// resume: main to its second version, kept, then a second replay to the head from there
+	resumedDir := t.TempDir()
+	resumedFileSystem, closeResumed, err := NewGitOsFileSystem(resumedDir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeResumed()
+	resumed := newGitObjectStore(resumedFileSystem, DefaultGitSettings())
+	first, firstRef := evsTestReplay(t, repo, resumed, &evsGitReplayOptions{resume: map[Id]*EvsGitReplayState{}}, EvsMainRefName, mainAtC3)
+	states := map[Id]*EvsGitReplayState{}
+	for _, held := range first.refs {
+		states[held.refId] = held.kept()
+	}
+	if kept := states[firstRef.refId]; kept.Passed != mainAtC3 || kept.Tip == nil || *kept.Tip != c3 {
+		t.Fatalf("the kept state %+v", kept)
+	}
+	appliedAgain := 0
+	_, secondRef := evsTestReplay(t, repo, resumed, &evsGitReplayOptions{
+		resume: states,
+		provenance: func(ctx context.Context, refId Id, statement *EvsVerifiedStatement, metadata *protocol.EvsSealedMetadata) error {
+			if refId == firstRef.refId && statement.Version <= mainAtC3 {
+				appliedAgain += 1
+			}
+			return nil
+		},
+	}, EvsMainRefName, 0)
+	if appliedAgain != 0 || secondRef.tip == nil || *secondRef.tip != m {
+		t.Fatalf("the resumed replay applied %d versions again and reached %v", appliedAgain, secondRef.tip)
+	}
+	if got := evsTestLooseOids(t, filepath.Join(resumedDir, filepath.FromSlash(gitObjectsDirectory))); len(got) != len(exportOids) {
+		t.Fatalf("the resumed replay holds %d objects, main reaches %d", len(got), len(exportOids))
+	}
+	// export once more: what it wrote before
+	againDir, againOids := exportOnce()
+	if len(againOids) != len(allExportOids) || evsTestGit(t, againDir, "show-ref") != evsTestGit(t, exportDir, "show-ref") {
+		t.Fatal("a second export differs from the first")
+	}
+}

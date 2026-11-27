@@ -35,6 +35,14 @@
 // Refs are named by the names the caller holds: nil exports main. A source a push names is replayed for its objects
 // whether or not the caller named it, and a cycle of sources refuses the version that closes it.
 //
+// The bundled git's store asks the replayer for what export never does (GIT-M13-02, evsGitReplayOptions): resuming a
+// ref from the state its worktree kept (.git/ur/refs: the version passed, its chain, tip, last tip, kind, stopped spans
+// and each tip move), so a fetch replays only from its last pin; deferring a blob, its locator (the version that carries
+// it, the chains around that version, whether it is an entry or a history record) recorded in the promisor table in
+// place of its bytes, so trees and commits are built from the changes' modes and oids while content waits; and seeing
+// each version's push's provenance before any of its objects is written, so the run is tainted first (§13.6). Export
+// and the local tier set none of them, so their output does not change by a byte.
+//
 // On every leg but the forwarding role's; only a desktop host runs it. Safe for concurrent use with other calls; one
 // export at a time per target.
 
@@ -216,10 +224,12 @@ type evsGitReplayStore interface {
 	EvsGitObjectSink
 }
 
-// One file a version's entry rebuilt: its sealed mode and blob oid, which the local tier holds to the tree (G4).
+// One file a version's entry rebuilt: its sealed mode and blob oid, which the local tier holds to the tree (G4), and,
+// where its fields were opened without a read (GIT-M13-02's deferral), its size.
 type evsGitWrittenFile struct {
 	mode uint32
 	oid  EvsGitOid
+	size uint64
 }
 
 // One export's git-mode replays: its repository, the tree builder over it, and each ref replayed so far, sources
@@ -243,6 +253,68 @@ type evsGitExport struct {
 	replaying map[Id]bool
 	// each ref's read in flight from its head's ask to its pin, ended with the export (EvsPinStore.beginRead)
 	dones []func()
+	// what the bundled git's store asks beyond export (GIT-M13-02); nil for export and the local tier
+	options *evsGitReplayOptions
+	// the ref and the chains around the version applyUpdate writes, for a deferred blob's locator; nil between them
+	applying *evsGitApplying
+}
+
+// What a replay's store may ask beyond export's (GIT-M13-02; see the file header): export and the local tier ask
+// none, so neither's output changes.
+type evsGitReplayOptions struct {
+	// The states a store kept of the refs it replayed before, by ref id: a ref found here resumes from its version
+	// passed, its walk from its chain.
+	resume map[Id]*EvsGitReplayState
+	// Records a blob's locator in place of reading it; nil reads every blob, as export does.
+	deferBlob func(locator *EvsGitBlobLocator) error
+	// Sees each version's push, its sealed metadata opened, before any of its objects is written; an error ends the
+	// replay there.
+	provenance func(ctx context.Context, refId Id, statement *EvsVerifiedStatement, metadata *protocol.EvsSealedMetadata) error
+}
+
+// A version applyUpdate writes: its ref, its number and the chains before and at it.
+type evsGitApplying struct {
+	refId       Id
+	version     uint64
+	chainBefore [sha256.Size]byte
+	chain       [sha256.Size]byte
+}
+
+// A git-mode ref's replay as a store keeps it between replays, so the next resumes where it stopped (GIT-M13-02's
+// .git/ur/refs): the version passed and its chain, the tip, whether the ref stands, the tip at its last DELETE, the kind
+// its pushes carry, the version a refusal stopped it at and every stopped span, and each version that moved its tip, which
+// a source naming one of its versions is read against.
+type EvsGitReplayState struct {
+	RefId     Id
+	Name      []byte
+	Passed    uint64
+	Chain     [sha256.Size]byte
+	Tip       *EvsGitOid
+	Exists    bool
+	LastTip   *EvsGitOid
+	Kind      protocol.EvsRefKind
+	StoppedAt uint64
+	Stopped   [][2]uint64
+	Tips      []EvsGitReplayTip
+}
+
+// A version that moved a ref's tip, and the tip it left, nil for none.
+type EvsGitReplayTip struct {
+	Version uint64
+	Tip     *EvsGitOid
+}
+
+// Where a deferred blob's bytes are: the ref and version whose push carries it, the chains before and at that
+// version, which a lazy fetch walks the statement from and holds it to, and whether it is one of the push's history
+// records or one of its entries (GIT-M13-02's promisor table).
+type EvsGitBlobLocator struct {
+	Oid         EvsGitOid
+	Size        uint64
+	RefId       Id
+	Version     uint64
+	ChainBefore [sha256.Size]byte
+	Chain       [sha256.Size]byte
+	History     bool
 }
 
 // One git-mode ref as export has replayed it. Its history is read a page at a time from the log, each page walked
@@ -258,6 +330,10 @@ type evsGitExportRef struct {
 	passed uint64
 	chain  [sha256.Size]byte
 	page   []*EvsVerifiedStatement
+	// the last version applied and the chain there, which finish's walk to the head passes without applying: where a
+	// kept state resumes (GIT-M13-02), so a source replayed part way is applied from there, never skipped
+	applied      uint64
+	appliedChain [sha256.Size]byte
 	// the chain was held to the head and pinned; the walk's chains from the pin its head's read asked at, which the
 	// pin's raise judges
 	pinned bool
@@ -403,15 +479,46 @@ func newEvsGitReplayer(repo *EvsRepo, objects evsGitReplayStore) *evsGitExport {
 	}
 }
 
-// The ref's export state, made on first use from its pinned head.
+// A replay over objects with what the bundled git's store asks (GIT-M13-02).
+func newEvsGitReplayerWith(repo *EvsRepo, objects evsGitReplayStore, options *evsGitReplayOptions) *evsGitExport {
+	replayer := newEvsGitReplayer(repo, objects)
+	replayer.options = options
+	return replayer
+}
+
+// The ref's export state, made on first use from its pinned head, or resumed from the state the store kept of it.
 func (self *evsGitExport) ref(head *EvsVerifiedHead) *evsGitExportRef {
 	ref := self.refs[head.RefId]
 	if ref == nil {
 		ref = &evsGitExportRef{refId: head.RefId, head: head, chain: EvsChainStart(self.repo.repoId, head.RefId), trail: newEvsWalkTrail(head.ask)}
-		ref.trail.start(0, ref.chain)
+		if self.options != nil {
+			if kept := self.options.resume[head.RefId]; kept != nil && kept.RefId == head.RefId {
+				ref.name, ref.passed, ref.chain = kept.Name, kept.Passed, kept.Chain
+				ref.tip, ref.exists, ref.lastTip, ref.kind = kept.Tip, kept.Exists, kept.LastTip, kept.Kind
+				ref.stoppedAt, ref.stopped = kept.StoppedAt, kept.Stopped
+				for _, moved := range kept.Tips {
+					ref.tips = append(ref.tips, evsGitExportTip{version: moved.Version, tip: moved.Tip})
+				}
+			}
+		}
+		ref.applied, ref.appliedChain = ref.passed, ref.chain
+		ref.trail.start(ref.passed, ref.chain)
 		self.refs[head.RefId] = ref
 	}
 	return ref
+}
+
+// A ref's state as a store keeps it for the next replay to resume from: at the last version applied, which every
+// other field holds to.
+func (self *evsGitExportRef) kept() *EvsGitReplayState {
+	state := &EvsGitReplayState{
+		RefId: self.refId, Name: self.name, Passed: self.applied, Chain: self.appliedChain, Tip: self.tip, Exists: self.exists,
+		LastTip: self.lastTip, Kind: self.kind, StoppedAt: self.stoppedAt, Stopped: self.stopped,
+	}
+	for _, moved := range self.tips {
+		state.Tips = append(state.Tips, EvsGitReplayTip{Version: moved.version, Tip: moved.tip})
+	}
+	return state
 }
 
 // A git-mode ref's whole history replayed, its tip set as gitRef.
@@ -467,6 +574,7 @@ func (self *evsGitExport) replay(ctx context.Context, ref *evsGitExportRef, upTo
 			return err
 		}
 		ref.pass(statement)
+		ref.applied, ref.appliedChain = ref.passed, ref.chain
 	}
 	return nil
 }
@@ -534,6 +642,12 @@ func (self *evsGitExport) apply(ctx context.Context, ref *evsGitExportRef, state
 	if err != nil {
 		self.repo.client.alarm(self.repo.repoId, ref.refId, SidecarEvsAlarmTamper, "", nil)
 		return self.refuse(ref, statement, err)
+	}
+	if self.options != nil && self.options.provenance != nil {
+		// the push is seen before any of its objects is written (GIT-M13-02's taint)
+		if err := self.options.provenance(ctx, ref.refId, statement, metadata); err != nil {
+			return err
+		}
 	}
 	// a creating push's section 15, opened as the head's copy of it is, and the ref id its sealed name gives
 	creating := !ref.exists
@@ -607,7 +721,10 @@ func (self *evsGitExport) apply(ctx context.Context, ref *evsGitExportRef, state
 	case protocol.EvsGitShape_EVS_GIT_REKEY:
 		return nil
 	}
-	if _, err := self.applyUpdate(ctx, ref.head, statement, payload, metadata, checked); err != nil {
+	self.applying = &evsGitApplying{refId: ref.refId, version: statement.Version, chainBefore: ref.chain, chain: statement.Chain}
+	_, err = self.applyUpdate(ctx, ref.head, statement, payload, metadata, checked)
+	self.applying = nil
+	if err != nil {
 		if evsExportRefusesVersion(err) {
 			return self.refuse(ref, statement, err)
 		}
@@ -727,8 +844,19 @@ func (self *evsGitExport) applyUpdate(ctx context.Context, head *EvsVerifiedHead
 		self.store.beginPush()
 	}
 	written := map[string]*evsGitWrittenFile{}
+	deferring := self.options != nil && self.options.deferBlob != nil && self.applying != nil
 	for _, change := range payload.Changes {
 		if !change.WritesEntry() {
+			continue
+		}
+		if deferring {
+			file, err := self.deferEntry(ctx, statement, change)
+			if err != nil {
+				return nil, err
+			}
+			if file != nil {
+				written[change.TokenPath.KeyString()] = file
+			}
 			continue
 		}
 		file, err := self.repo.exportBlob(ctx, self.objects, head, self.keys, statement, change, "")
@@ -742,7 +870,17 @@ func (self *evsGitExport) applyUpdate(ctx context.Context, head *EvsVerifiedHead
 			written[change.TokenPath.KeyString()] = file
 		}
 	}
-	if err := self.historyBlobs(ctx, head, statement, git); err != nil {
+	if deferring {
+		for _, blob := range git.GetBlobs() {
+			oid := EvsGitOid(blob.GetGitOid())
+			if self.objects.HasGitObject(oid) {
+				continue
+			}
+			if err := self.options.deferBlob(self.locator(oid, blob.GetSize(), true)); err != nil {
+				return nil, err
+			}
+		}
+	} else if err := self.historyBlobs(ctx, head, statement, git); err != nil {
 		return nil, err
 	}
 	if self.store == nil {
@@ -800,6 +938,60 @@ func (self *evsGitExport) applyUpdate(ctx context.Context, head *EvsVerifiedHead
 		}
 	}
 	return written, nil
+}
+
+// A deferred blob's locator at the version applyUpdate writes.
+func (self *evsGitExport) locator(oid EvsGitOid, size uint64, history bool) *EvsGitBlobLocator {
+	return &EvsGitBlobLocator{
+		Oid: oid, Size: size, RefId: self.applying.refId, Version: self.applying.version, ChainBefore: self.applying.chainBefore,
+		Chain: self.applying.chain, History: history,
+	}
+}
+
+// One entry of a version deferred (GIT-M13-02): its file as its sealed fields state it, its locator recorded where the
+// store holds no blob of that oid; nil for an entry that is no file's. A gitlink holds no blob and records nothing.
+func (self *evsGitExport) deferEntry(ctx context.Context, statement *EvsVerifiedStatement, change *EvsCheckedChange) (*evsGitWrittenFile, error) {
+	file, err := self.entryFields(ctx, self.applying.refId, statement, change)
+	if err != nil || file == nil {
+		return nil, err
+	}
+	if file.mode == EvsGitModeGitlink || self.objects.HasGitObject(file.oid) {
+		return file, nil
+	}
+	if err := self.options.deferBlob(self.locator(file.oid, file.size, false)); err != nil {
+		return nil, err
+	}
+	return file, nil
+}
+
+// An entry's file as its sealed fields state it, opened under manifest_g with no record read: its mode, SHA-1 oid and
+// size; nil for an entry that is no file's. Fields that do not open alarm tamper on the ref, as reconstruction's do.
+func (self *evsGitExport) entryFields(ctx context.Context, refId Id, statement *EvsVerifiedStatement, change *EvsCheckedChange) (*evsGitWrittenFile, error) {
+	entry := &protocol.EvsEntryVersion{}
+	if err := proto.Unmarshal(change.EntryVersion, entry); err != nil {
+		return nil, fmt.Errorf("%w: an entry that does not parse", ErrEvsEntryRefused)
+	}
+	if entry.GetKind() != uint32(protocol.EvsEntryKind_EVS_ENTRY_FILE) {
+		return nil, nil
+	}
+	manifest, err := self.keys.manifest(ctx, statement.Statement.Push.GetGeneration())
+	if err != nil {
+		return nil, err
+	}
+	var fields *protocol.EvsSealedFields
+	if entry.GetVersioning() == 0 {
+		fields, err = EvsOpenFields(manifest, entry.GetSealedFields())
+	} else {
+		fields, err = EvsOpenFieldsFormat2(manifest, entry.GetSealedFields(), entry.GetVersioning())
+	}
+	if err != nil {
+		self.repo.client.alarm(self.repo.repoId, refId, SidecarEvsAlarmTamper, "", nil)
+		return nil, err
+	}
+	if len(fields.GetGitOid()) != len(EvsGitOid{}) || fields.GetOidKind() != protocol.EvsOidKind_EVS_OID_SHA1 {
+		return nil, fmt.Errorf("%w: a git-mode file of no SHA-1 blob", ErrEvsSealInvalid)
+	}
+	return &evsGitWrittenFile{mode: fields.GetMode(), oid: EvsGitOid(fields.GetGitOid()), size: fields.GetSize()}, nil
 }
 
 // Export's reading of a git-mode version's blob a committed ERASE destroyed (evs_export_erased.go): its stub in the
