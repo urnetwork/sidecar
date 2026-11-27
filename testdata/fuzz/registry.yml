@@ -425,3 +425,10 @@ rows:
       - {name: FuzzPostureNeverOpens, package: device, owner: SDK-M8-17, milestone: M8, seeds: [testdata/fuzz/FuzzPostureNeverOpens]}
       - {name: FuzzParseBridgeRules, package: device, owner: BRIDGE-M4-06}
       - {name: FuzzBridgeResolver, package: device, owner: BRIDGE-M4-14}
+
+  - id: safety-classifier
+    spec: "SAFE-M13-01's and SAFE-M13-02's Tests lines (DESIGN-COMPUTE §27.5, §27.6): the classifier's tokenizer over any text and any vocabulary file, total, bounded and deterministic, and the normalized view, total, idempotent and of bounded growth"
+    owner: SAFE-M13-01
+    milestone: M13
+    targets:
+      - {name: FuzzSafetyTokenizer, package: "."}
