@@ -601,7 +601,7 @@ func (self *fakeRecordStreamsClient) Append(ctx context.Context, repoId sidecar.
 		pathBodies := map[string][]byte{}
 		for _, body := range push.Bodies {
 			stream.paths[body.Path] = true
-			version.Bodies = append(version.Bodies, &sidecar.RecordStreamBodyFile{Path: body.Path})
+			version.Bodies = append(version.Bodies, &sidecar.RecordStreamBodyFile{Path: body.Path, PaddedByteCount: sidecar.EvsPadme(uint64(len(body.Body)))})
 			pathBodies[body.Path] = bytes.Clone(body.Body)
 		}
 		stream.versionPathBodies[version.Version] = pathBodies
@@ -660,7 +660,7 @@ func (self *fakeRecordStreamsClient) ReadStream(ctx context.Context, repoId side
 				copied.Entries = append(copied.Entries, &sidecar.RecordStreamEntry{Path: entry.Path, Entry: bytes.Clone(entry.Entry)})
 			}
 			for _, body := range version.Bodies {
-				copied.Bodies = append(copied.Bodies, &sidecar.RecordStreamBodyFile{Path: body.Path})
+				copied.Bodies = append(copied.Bodies, &sidecar.RecordStreamBodyFile{Path: body.Path, PaddedByteCount: body.PaddedByteCount})
 			}
 			versions = append(versions, copied)
 		}

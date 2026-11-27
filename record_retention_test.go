@@ -323,7 +323,8 @@ func TestRecordRetentionTeamRecordFloor(t *testing.T) {
 		t.Fatal(err)
 	}
 	policies := retention.Policies(world.teamRecordId)
-	if len(policies) != 6 {
+	// classes 1 to 6, and 8, bulk (DESIGN-COMPUTE §24.10)
+	if len(policies) != 7 {
 		t.Fatalf("%d classes", len(policies))
 	}
 	for _, policy := range policies {

@@ -57,6 +57,36 @@ func HarnessExportReplyOf(exported *SessionPiExported) *HarnessExportReply {
 	return reply
 }
 
+// The run view's methods (CTXH-M11-06): `ur harness runs` and the sdk's Runs, ExpireOldestBlobs and SetAutoExpire.
+//
+//	harness.runs              SessionSizesFilter: the storage view (session_storage.go), nothing of a run's text
+//	harness.runs_expire       {cap?}: the warning's one tap, the person's confirmed act with no harness among the
+//	                          caller's ancestors
+//	harness.runs_auto_expire  {on}: the switch that expires again at each cap, the person's act likewise
+const (
+	HarnessDaemonMethodRuns           = "harness.runs"
+	HarnessDaemonMethodRunsExpire     = "harness.runs_expire"
+	HarnessDaemonMethodRunsAutoExpire = "harness.runs_auto_expire"
+)
+
+// harness.runs' params.
+type HarnessRunsParams struct {
+	Network string `json:"network,omitempty"`
+	SessionSizesFilter
+}
+
+// harness.runs_expire's params: the cap warned at, network or member; empty takes the warning's.
+type HarnessRunsExpireParams struct {
+	Network string `json:"network,omitempty"`
+	Cap     string `json:"cap,omitempty"`
+}
+
+// harness.runs_auto_expire's params.
+type HarnessRunsAutoExpireParams struct {
+	Network string `json:"network,omitempty"`
+	On      bool   `json:"on"`
+}
+
 // Opens the view log of a continued agent, as harness.agent opens a new one's, so `ur harness --agent` and
 // harness.events watch it.
 func (self *Harness) OpenView(agentId Id) {

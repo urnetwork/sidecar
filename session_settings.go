@@ -46,6 +46,13 @@ type SessionSettings struct {
 	// member and 2/n for one of n.
 	MemberShareMin float64
 	MemberShareMax float64
+	// The largest runs the storage view's warning names (§24.10's see row): 5.
+	WarningRunCount int
+	// How long the caps take the network's storage limit as last read before they read GET /sidecar/limits again: 1 h.
+	LimitReadInterval time.Duration
+	// How often a Sidecar checks the caps, and expires at a cap where the person's switch is on (session_component.go):
+	// 5 min. 0 checks only at a storage view, an expiry and a prune.
+	CapCheckInterval time.Duration
 	// The fewest hex characters of a node's id that name it, where a person gives a prefix of one (`ur harness continue
 	// --at`, CTXH-M11-05): 8, the short form `ur harness show` prints.
 	NodePrefixMinCount int
@@ -66,6 +73,9 @@ func DefaultSessionSettings() *SessionSettings {
 		ExpiryTargetFraction: 0.7,
 		MemberShareMin:       0.05,
 		MemberShareMax:       1,
+		WarningRunCount:      5,
+		CapCheckInterval:     5 * time.Minute,
+		LimitReadInterval:    1 * time.Hour,
 		NodePrefixMinCount:   8,
 		Body:                 DefaultRecordBodySettings(),
 	}
