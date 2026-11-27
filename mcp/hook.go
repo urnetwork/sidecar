@@ -350,11 +350,13 @@ type HookEventParams struct {
 // preconditions, and its error is its own: the hook is acked whatever it answers.
 type HookCapture func(ctx context.Context, captured *HookCaptured) error
 
-// The daemon's hook state: the holds and capture seams, under its own lock.
+// The daemon's hook state: the holds and capture seams, and where status notes go, under its own lock.
 type mcpHooks struct {
 	stateLock sync.Mutex
 	holds     HookHolds
 	capture   HookCapture
+	// the network's status writer, nil for hookStatusWriterOf
+	statusWriterOf func(network McpNetwork) (HookStatusWriter, bool)
 }
 
 // Sets what holds a PreToolUse's paths (MCP-M3-20).
@@ -415,5 +417,138 @@ func (self *McpServer) HandleHook(ctx context.Context, hello *sidecar.DaemonHell
 		return err
 	}
 	// the caller's hello rides with the event: the directory lifecycle reads the session's claims from it
-	return self.binder.ingestEvent(withHookHello(ctx, hello), network, networkId, adapter, caller, event, params.Payload)
+	if err := self.binder.ingestEvent(withHookHello(ctx, hello), network, networkId, adapter, caller, event, params.Payload); err != nil {
+		return err
+	}
+	self.noteHookStatus(network, hello, adapter, event)
+	return nil
+}
+
+// A network that writes its agents' status lines (DESIGN-COMPUTE §20.6): *sidecar.Sidecar is one, and so is each tool
+// view over one, which embeds it.
+type HookStatusNetwork interface {
+	AgentStatus() (*sidecar.AgentStatusWriter, error)
+}
+
+// Where a hook's status notes go: an *sidecar.AgentStatusWriter, which writes them at its own pace.
+type HookStatusWriter interface {
+	Note(note *sidecar.AgentStatusNote)
+	Settings() *sidecar.SkillSettings
+}
+
+// The network's status writer, false for a network that writes none.
+func hookStatusWriterOf(network McpNetwork) (HookStatusWriter, bool) {
+	statusNetwork, ok := network.(HookStatusNetwork)
+	if !ok {
+		return nil, false
+	}
+	writer, err := statusNetwork.AgentStatus()
+	if err != nil {
+		return nil, false
+	}
+	return writer, true
+}
+
+// The status writer of network the server notes into.
+func (self *McpServer) hookStatusWriter(network McpNetwork) (HookStatusWriter, bool) {
+	statusWriterOf := func() func(network McpNetwork) (HookStatusWriter, bool) {
+		self.hooks.stateLock.Lock()
+		defer self.hooks.stateLock.Unlock()
+		return self.hooks.statusWriterOf
+	}()
+	if statusWriterOf == nil {
+		statusWriterOf = hookStatusWriterOf
+	}
+	return statusWriterOf(network)
+}
+
+// The status an event sets, and whether it sets one: SessionStart and Stop waiting for the person, PreToolUse working
+// on its tool, SessionEnd offline (§20.6's external harnesses row).
+func hookStatusOf(event *HookEvent) (sidecar.AgentState, string, bool) {
+	switch event.Kind {
+	case HookEventSessionStart:
+		return sidecar.AgentStateWaiting, "session started", true
+	case HookEventPreToolUse:
+		return sidecar.AgentStateWorking, "running " + event.ToolName, true
+	case HookEventStop:
+		return sidecar.AgentStateWaiting, "waiting for the person", true
+	case HookEventSessionEnd:
+		return sidecar.AgentStateOffline, "session ended", true
+	}
+	return "", "", false
+}
+
+// The session agent's label for a hook: the hello's, else the project's `.ur` default, as a session's agent is
+// (session.go); "" for none.
+func hookAgentLabel(hello *sidecar.DaemonHello, event *HookEvent) string {
+	if hello != nil && hello.Agent != "" {
+		return hello.Agent
+	}
+	cwd := event.Cwd
+	if cwd == "" && hello != nil {
+		cwd = hello.Cwd
+	}
+	found, err := sidecar.FindSidecarProject(cwd, "")
+	if err != nil || found == nil {
+		return ""
+	}
+	return found.Agent
+}
+
+// The run the event's session is bound to, zero for none.
+func (self *RunBinder) sessionRunId(runs *sidecar.RunStore, event *HookEvent) sidecar.Id {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	index, ok := self.storeIndexes[runs]
+	if !ok {
+		return sidecar.Id{}
+	}
+	return index.sessionRunIds[runSessionKey{harness: event.Harness, sessionId: event.SessionId}]
+}
+
+// Notes the session agent's status line at a hook event (§20.6; SKILL-M11-03): at SessionStart, PreToolUse and Stop,
+// and offline at SessionEnd, into the network's status writer, which writes at most once a StatusMinInterval, the push
+// sealing the run's taint, and registers the agent first where it has no card. A session with no agent, or one whose
+// label is no agent name, a Locked network and a network that writes no status lines note nothing. It never waits on a
+// write and never fails the ack: hooks fail open (D-MCP-5).
+func (self *McpServer) noteHookStatus(network McpNetwork, hello *sidecar.DaemonHello, adapter HookAdapter, event *HookEvent) {
+	state, activity, sets := hookStatusOf(event)
+	if !sets || network.Status().State == sidecar.SidecarStateLocked {
+		return
+	}
+	writer, ok := self.hookStatusWriter(network)
+	if !ok {
+		return
+	}
+	label := hookAgentLabel(hello, event)
+	if label == "" {
+		return
+	}
+	name, err := sidecar.ParseAgentName(label, writer.Settings())
+	if err != nil {
+		return
+	}
+	runId, tainted := sidecar.Id{}, true
+	if runs, err := network.Runs(); err == nil {
+		runId = self.binder.sessionRunId(runs, event)
+		if runId != (sidecar.Id{}) {
+			tainted = runs.Tainted(runId)
+		}
+	}
+	settings := writer.Settings()
+	writer.Note(&sidecar.AgentStatusNote{
+		Name: name,
+		Status: &sidecar.AgentStatus{
+			State:    state,
+			Activity: sidecar.AgentStatusText(activity, settings.StatusActivityCharCount),
+			Updated:  self.clock.Now(),
+			RunId:    runId,
+		},
+		Tainted: tainted,
+		Register: &sidecar.AgentRegisterArgs{
+			Name:    string(name),
+			Harness: sidecar.AgentCardFieldText(adapter.Harness(), settings),
+			Model:   sidecar.AgentCardFieldText(event.Model, settings),
+		},
+	})
 }

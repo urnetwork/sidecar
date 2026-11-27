@@ -694,3 +694,79 @@ func TestNestedHarnessTaintFlowsUp(t *testing.T) {
 		t.Error("a nested session's untrusted read did not reach both harnesses' runs")
 	}
 }
+
+// A status writer that records what a hook notes.
+type hookTestStatusWriter struct {
+	settings *sidecar.SkillSettings
+	notes    []*sidecar.AgentStatusNote
+}
+
+func (self *hookTestStatusWriter) Note(note *sidecar.AgentStatusNote) {
+	self.notes = append(self.notes, note)
+}
+
+func (self *hookTestStatusWriter) Settings() *sidecar.SkillSettings {
+	return self.settings
+}
+
+// ur hook writes the session agent's status line (DESIGN-COMPUTE §20.6): waiting at SessionStart, working at a
+// PreToolUse naming its tool, waiting at Stop and offline at SessionEnd, each noted with the bound run and its taint
+// and with the registration that makes the agent's card where it has none; a PostToolUse notes nothing, and a session
+// with no agent label notes nothing.
+func TestHookWritesStatusAtSessionStartPreToolUseStop(t *testing.T) {
+	env := newHookTestEnv(t)
+	writer := &hookTestStatusWriter{settings: sidecar.DefaultSkillSettings()}
+	env.server.hooks.statusWriterOf = func(network McpNetwork) (HookStatusWriter, bool) {
+		return writer, true
+	}
+	labeled := func(hello *sidecar.DaemonHello, payload []byte) error {
+		hello.Agent = "fix"
+		return env.sink(hello, payload)
+	}
+	claude := sidecartest.NewFakeHarness(env.table, env.terminal.Identity.Pid, sidecartest.FakeHarnessClaudeCode, hookTestCwd, labeled)
+	if err := claude.SessionStart("s1", "startup"); err != nil {
+		t.Fatal(err)
+	}
+	if err := claude.ToolCall("s1", true, "Bash", map[string]any{"command": "go test ./..."}); err != nil {
+		t.Fatal(err)
+	}
+	if err := claude.ToolCall("s1", false, "Bash", map[string]any{"command": "go test ./..."}); err != nil {
+		t.Fatal(err)
+	}
+	if err := claude.Hook(claude.Payload("s1", "Stop", map[string]any{"stop_hook_active": false})); err != nil {
+		t.Fatal(err)
+	}
+	if err := claude.SessionEnd("s1", "exit"); err != nil {
+		t.Fatal(err)
+	}
+	runId := env.runOf("claude-code", "s1")
+	want := []struct {
+		state    sidecar.AgentState
+		activity string
+	}{
+		{state: sidecar.AgentStateWaiting, activity: "session started"},
+		{state: sidecar.AgentStateWorking, activity: "running Bash"},
+		{state: sidecar.AgentStateWaiting, activity: "waiting for the person"},
+		{state: sidecar.AgentStateOffline, activity: "session ended"},
+	}
+	if len(writer.notes) != len(want) {
+		t.Fatalf("%d notes, want %d", len(writer.notes), len(want))
+	}
+	for i, note := range writer.notes {
+		if note.Name != "fix" || note.Status.State != want[i].state || note.Status.Activity != want[i].activity || note.Status.RunId != runId {
+			t.Errorf("note %d: %+v, %+v", i, note, note.Status)
+		}
+		if note.Tainted || note.Register == nil || note.Register.Name != "fix" || note.Register.Harness != "claude-code" {
+			t.Errorf("note %d's run and registration: tainted %t, %+v", i, note.Tainted, note.Register)
+		}
+	}
+	// a session whose hello names no agent, in a project with no .ur, notes nothing
+	writer.notes = nil
+	unlabeled := env.harness(sidecartest.FakeHarnessClaudeCode)
+	if err := unlabeled.SessionStart("s2", "startup"); err != nil {
+		t.Fatal(err)
+	}
+	if len(writer.notes) != 0 {
+		t.Fatalf("%d notes for a session with no agent", len(writer.notes))
+	}
+}

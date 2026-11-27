@@ -428,8 +428,9 @@ func ComputeAccountBookInTx(env operator.Env, ctx context.Context, tx operator.D
 	return accounts[0], nil
 }
 
-// compute_account's columns, in the order computeAccountScan reads them.
-const computeAccountColumns = `network_id, settled_nano_usd, state, negative_floor_nano_usd, first_charge_day::text,
+// compute_account's columns, in the order computeAccountScan reads them; the first charge day written as YYYY-MM-DD
+// whatever the session's date style.
+const computeAccountColumns = `network_id, settled_nano_usd, state, negative_floor_nano_usd, to_char(first_charge_day, 'YYYY-MM-DD'),
 	indexer_reserve_nano_usd, search_cap_override, version, update_time`
 
 func computeAccountQuery(ctx context.Context, querier operator.DbQuerier, sql string, args ...any) ([]*ComputeAccount, error) {
