@@ -636,6 +636,14 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) (runErr e
 			settings.Connect.SmtpProver = newSmtpProver(filepath.Join(stateDirectory, "smtp-proof"), hosts.SmtpProofKeysUrl())
 		}
 	}
+	// DESIGN-COMPUTE §8.4's gateway: built first, so the sockets the daemon's unit hands over are taken before anything
+	// starts a child, and before the daemon, whose busy rule its standing grants are; it holds its port only once the
+	// daemon holds the instance's lock (cmd_gateway_daemon.go). An ephemeral daemon runs none.
+	var gateway *sidecar.GatewayServer
+	if !ephemeral {
+		gateway = newUrDaemonGateway(stateDirectory, settings, log)
+		defer gateway.Close()
+	}
 
 	var keyStore sidecar.SidecarKeyStore
 	keyStoreKind := osKeyStorePass
@@ -682,13 +690,21 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) (runErr e
 		// §12's labels: with no resolver given, each hosted network's own label table, under the user root the
 		// settings name, which each network's label refresh files its label under too (daemon_labels.go)
 		LabelRoot: settings.UserRoot,
-		Log:       log,
+		// a daemon holding a gateway grant never idles out (DESIGN-COMPUTE §8.4)
+		Busy: urDaemonGatewayBusy(gateway),
+		Log:  log,
 	})
 	if err != nil {
 		if errors.Is(err, sidecar.ErrDaemonRunning) {
 			return fmt.Errorf("a daemon already runs for instance %s", cli.instance)
 		}
 		return err
+	}
+	if gateway != nil {
+		if err := startUrDaemonGateway(daemon, gateway, log); err != nil {
+			daemon.Close()
+			return err
+		}
 	}
 	// §28.7's support log: this process's ring under <state>/support-log, which every Sidecar the daemon hosts writes
 	// through; its stop is recorded last, after every Sidecar has closed (cmd_support.go)

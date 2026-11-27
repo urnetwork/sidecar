@@ -1035,6 +1035,7 @@ secret evs_git_tls_key evs_local_http.go
 secret evs_receipt_key evsservice/upload_keys.go
 secret forward_store_record_key device/posture_seal.go
 secret forward_store_root_key device/posture_seal.go
+secret gateway_listener_key gateway_proof.go
 secret identity_key identity_keys.go
 secret init_secret mls_keyschedule.go
 secret invite_join_secret config_invite.go
