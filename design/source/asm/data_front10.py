@@ -3116,3 +3116,21 @@ _S805 = "and the answers recorded after them, owner decisions 797 to 805. "
 assert STATUS.count(_S805) == 1, 'status moved'
 STATUS = STATUS.replace(_S805, "and the answers recorded after them, owner decisions 797 to 805, and the answer recorded "
                         "after the fifteenth fold, 806. ")
+
+# Owner decision 807 (2026-11-26): the answer recorded while the sixteenth fold ran (QD-1437), numbered by it after
+# its first piece's 806.
+INDEX += [
+    (807, "Status reads tell the listeners nothing",
+     "A read of a forwarding role's posture does not settle it, and holdBridge tells the listeners only of a change."),
+]
+assert [r[0] for r in INDEX] == list(range(1, 808))
+DATES.update({807: '2026-11-26'})
+_D806 = "(806), extending @@OD:106@@. "
+assert DECISIONS_INTRO.count(_D806) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D806, _D806 + "It then numbers the build's answer recorded while it ran: a read of a forwarding role's posture telling "
+    "the bridge status listeners nothing, the device telling them only of a change, so a status no longer asks for the "
+    "next (807). ")
+_S806 = "and the answer recorded after the fifteenth fold, 806. "
+assert STATUS.count(_S806) == 1, 'status moved'
+STATUS = STATUS.replace(_S806, "and the answers recorded after the fifteenth fold, 806 and 807. ")

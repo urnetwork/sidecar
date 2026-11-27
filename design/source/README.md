@@ -1811,3 +1811,23 @@ The fifteenth fold left kind 57 `enclave` and `ReachReceipt`'s kind 7 `ssh`, whi
 - **DESIGN-DEFER.md.** 106 entries and 172 pointers, unchanged.
 
 Outside this folder the fold touched DESIGN.md (rebuilt); RECORD.md (sections 6.2 to 6.4, 7.2, 8 and 21); DESIGN-AMENDMENTS.md's lead and its two "Later decisions" items' lines; DESIGN-COMPUTE-AMENDMENTS.md (its lead and index, QD-1433 to QD-1436, the lines of QD-1378, QD-1366 and QD-1243, and QD-1430's and QD-1431's hashes); metadata_list.yml (v74) with check/metadata_list_test.go's additions list, now empty; protocol/design_unfenced_test.go (eight `testFenceAdditions` lines and `EnclaveEntryBody`); and record_kind_test.go and record_md_test.go (the additions lines and the block check); outside git, .stack/decisions/folded.txt. Left for the tracks that own them: owner decision 797's code (fetch-m13-01, not started), QD-1436's (a follow-up of bal-m12-15, with CACL's detail check) and 801's last site, the `Forwarder`'s wait (forward-lapse-decision-race); kind 56 with SAFE-M13-08; the two code headers above; and QD-024 and QD-1086, as before.
+
+### Owner decision 807: the answer recorded while this fold ran
+
+The owner answered QD-1437, which forward-lapse-decision-race raised while this fold ran, on 2026-11-26, one at a time, accepting the recommendation, both of its parts, under the owner's standing acceptance of recommended options; it takes the number after the first piece's:
+
+| Ledger id | Owner decision | What it settles |
+|---|---|---|
+| QD-1437 | 807 | A read of a forwarding role's posture tells the bridge status listeners nothing, and the device tells them only of a change, so a status no longer asks for the next. |
+
+- **Status reads (807).** Decided ahead of its code, which forward-lapse-decision-race builds in sdk/device_sidecar.go, not landed when this piece was written: §17.8's forwarding roles paragraph says that a read of a role's posture holds no bridge again and that the component tells its listeners only of a change, and §18.6's mirror that a bridge status crosses the device RPC only on a change. Until it lands, with one forwarding role and one listener attached each status asks for the next, 8,663 in 500 ms at sdk 4f7ec51c.
+
+`build.sh` on this folder reproduces DESIGN.md (SHA-256 `1a2b9a2abe6cb0079c2c0464d8cd68fa8a114a6c565d89aff323f3c394d34eaf`) and DESIGN-DEFER.md (SHA-256 `3af6b10c35e06eaa2230e6232dc953d77f4539fe4065623950425ebab41895a6`, unchanged), and the validation shows:
+
+- **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item and no §2.8 row, so no guard line.
+- **Owner decisions.** All 807 rows are present and cited; APPLY.md's section pairs hold. `MAXD`, the two range checks and `LATE_DATES` take 807, dated 2026-11-26. One open owner question, Q-REPO-6.
+- **Superseded options.** A fresh grep finds 320 hits, none on a line this piece changed, every reading carried to its line; none live.
+- **Text.** No bare placeholders or HTML tags; the one research-sheet id stands; 12,934 section references, with the one unresolved as before. `v7/words.json` was regenerated, and `v7/text_checks.json` regenerated unchanged.
+- **DESIGN-DEFER.md.** 106 entries and 172 pointers, unchanged.
+
+The fold numbered owner decisions 806 and 807 (QD-1432, QD-1437) and filed QD-1433 to QD-1436 in DESIGN-COMPUTE-AMENDMENTS.md with no number; what it left is as the third piece lists, with 807's code (forward-lapse-decision-race) beside it.
