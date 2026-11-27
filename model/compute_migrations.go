@@ -1,9 +1,10 @@
-// The compute migration groups' parts (DESIGN-COMPUTE §14.4; CONTRACTS C-30): MG-C1, the ledger, BAL's; MG-C2, the
-// providers, PROV's, GAMMA's and SRCH's, in §14.4's order; MG-C3, the enclaves, ENC's. Each owner registers its part
-// from its own file in this package, at init, through RegisterComputeMigrationPart, and server's migration groups
-// (server/db_migrations_sidecar_pending.go, CSRV-M12-02) read every part through ComputeMigrationPart, so no owner
-// edits server's group files. server imports this package, so every registration has run before server's migrations
-// slice is built: a part registered from any other package would not be, and is refused nowhere but in its absence.
+// The compute migration groups' parts (DESIGN-COMPUTE §14.4; CONTRACTS C-30): MG-C1, the ledger, BAL's, then CARCH's
+// operator hold (§17.2, compute_abuse_hold.go); MG-C2, the providers, PROV's, GAMMA's and SRCH's, in §14.4's order;
+// MG-C3, the enclaves, ENC's. Each owner registers its part from its own file in this package, at init, through
+// RegisterComputeMigrationPart, and server's migration groups (server/db_migrations_sidecar_pending.go, CSRV-M12-02)
+// read every part through ComputeMigrationPart, so no owner edits server's group files beyond its part's one slot.
+// server imports this package, so every registration has run before server's migrations slice is built: a part
+// registered from any other package would not be, and is refused nowhere but in its absence.
 //
 // A part's steps are statements alone, each an operator-core Migration with an id and Sql: server's runner applies a
 // statement as its own, one transaction each, and a data step waits for the review phase's move of sidecar's schema to
@@ -32,6 +33,7 @@ const (
 // The areas that own a part, by their plan's code.
 const (
 	ComputeMigrationOwnerBal   = "BAL"
+	ComputeMigrationOwnerCarch = "CARCH"
 	ComputeMigrationOwnerProv  = "PROV"
 	ComputeMigrationOwnerInfer = "INFER"
 	ComputeMigrationOwnerGamma = "GAMMA"
@@ -41,7 +43,7 @@ const (
 
 // Each group's owners, in the order their parts apply.
 var computeMigrationGroupOwners = map[string][]string{
-	ComputeMigrationGroupC1: {ComputeMigrationOwnerBal},
+	ComputeMigrationGroupC1: {ComputeMigrationOwnerBal, ComputeMigrationOwnerCarch},
 	ComputeMigrationGroupC2: {ComputeMigrationOwnerProv, ComputeMigrationOwnerInfer, ComputeMigrationOwnerGamma, ComputeMigrationOwnerSrch},
 	ComputeMigrationGroupC3: {ComputeMigrationOwnerEnc},
 }
