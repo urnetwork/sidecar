@@ -425,3 +425,10 @@ rows:
       - {name: FuzzPostureNeverOpens, package: device, owner: SDK-M8-17, milestone: M8, seeds: [testdata/fuzz/FuzzPostureNeverOpens]}
       - {name: FuzzParseBridgeRules, package: device, owner: BRIDGE-M4-06}
       - {name: FuzzBridgeResolver, package: device, owner: BRIDGE-M4-14}
+
+  - id: listeners-file
+    spec: "LSTN-M13-01's Tests line (DESIGN-COMPUTE §26.6): FuzzListenersFile, the listeners file's parser total and bounded, what it takes marshalling again to the same bytes"
+    owner: LSTN-M13-01
+    milestone: M13
+    targets:
+      - {name: FuzzListenersFile, package: ".", seeds: [testdata/listeners/file]}
