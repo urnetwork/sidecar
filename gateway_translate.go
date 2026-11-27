@@ -110,8 +110,9 @@ func gatewayMemberSet(object map[string]any, member string) bool {
 	return true
 }
 
-// The image parts of a content array re-encoded to the input size, and every part refused that the gateway cannot
-// send: an image that is no data URL, a file id, an input file or audio. changed says whether any part changed.
+// The image parts of a content array re-encoded to the input size, Responses' input_image and Chat Completions'
+// image_url alike, and every part refused that the gateway cannot send: an image that is no data URL, a file id, an
+// input file or audio. changed says whether any part changed.
 func gatewayRoutedParts(settings *GatewaySettings, parts []any, param string) (bool, *gatewayError) {
 	changed := false
 	for _, element := range parts {
@@ -121,8 +122,22 @@ func gatewayRoutedParts(settings *GatewaySettings, parts []any, param string) (b
 		}
 		partType, _ := part["type"].(string)
 		switch partType {
-		case gatewayPartTypeInputFile, gatewayPartTypeInputAudio:
+		case gatewayPartTypeInputFile, gatewayPartTypeInputAudio, gatewayChatPartFile:
 			return false, gatewayInvalidRequest(GatewayErrorCodeUnsupportedParameter, param, "the gateway takes text and images; %s is not sent to a model", partType)
+		case gatewayChatPartImageUrl:
+			image, ok := part["image_url"].(map[string]any)
+			if !ok {
+				return false, gatewayInvalidRequest(GatewayErrorCodeInvalidImage, param, "an image_url part names its url")
+			}
+			url, _ := image["url"].(string)
+			changedImage, routedUrl, err := gatewayRoutedImageUrl(settings, url, param)
+			if err != nil {
+				return false, err
+			}
+			if changedImage {
+				image["url"] = routedUrl
+				changed = true
+			}
 		case gatewayPartTypeInputImage:
 			if gatewayMemberSet(part, "file_id") {
 				return false, gatewayUnsupportedParameter(param+".file_id", "the gateway keeps no files")
