@@ -56,6 +56,8 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -519,6 +521,53 @@ func tlsCertsRenewingCall[T any](ctx context.Context, serviceToken string, renew
 // The certificate manager.
 func (self *TlsComponent) CertManager() *TlsCertManager {
 	return self.manager
+}
+
+// One live publish as DESIGN-COMPUTE §26.4's tls row reads it (LSTN-M13-04): its host label, "@" for the network's own
+// name, its port at the edge, the local address its visitors' connections reach, its audience's words and when its
+// grant ends, zero for a standing name.
+type TlsPublishListing struct {
+	Host         string
+	Port         int
+	LocalAddress netip.AddrPort
+	Audience     string
+	Expires      time.Time
+}
+
+// The component's live publishes (ur bridge public-tls, §13.10), by host then port: read only, for the listeners list
+// (LSTN-M13-04). None for a component made without its Sidecar.
+func (self *TlsComponent) Publishes() []*TlsPublishListing {
+	if self.publisher == nil {
+		return []*TlsPublishListing{}
+	}
+	return self.publisher.listings()
+}
+
+// The live publishes as the listeners list reads them, by host then port.
+func (self *tlsPublisher) listings() []*TlsPublishListing {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	listings := []*TlsPublishListing{}
+	for _, publish := range self.publishes {
+		if publish == nil {
+			// on its way, not yet live
+			continue
+		}
+		listings = append(listings, &TlsPublishListing{
+			Host:         publish.host,
+			Port:         publish.port,
+			LocalAddress: publish.localAddress,
+			Audience:     publish.result.Audience,
+			Expires:      publish.result.Expires,
+		})
+	}
+	slices.SortFunc(listings, func(a *TlsPublishListing, b *TlsPublishListing) int {
+		if order := strings.Compare(a.Host, b.Host); order != 0 {
+			return order
+		}
+		return a.Port - b.Port
+	})
+	return listings
 }
 
 // GET /sidecar/limits on the newest generation's api: the network's tier, which an app listener's front reads for

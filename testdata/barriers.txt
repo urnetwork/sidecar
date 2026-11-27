@@ -451,6 +451,8 @@ barrier evs.subscribe.pin_held evs_subscribe_pin_wait.go
 barrier evs.subscribe.pin_released evs_subscribe_pin_wait.go
 barrier evs.sweep.delete.after evsservice/sweep.go
 barrier evs.sweep.delete.before evsservice/sweep.go
+barrier git.fetch_taint git_fetch.go
+barrier git.worktree_write git_worktree.go
 barrier gkm.ack_write.after gkmservice/acks.go
 barrier gkm.ack_write.before gkmservice/acks.go
 barrier gkm.commit.epoch.after gkm_members.go
@@ -1021,6 +1023,7 @@ secret delegation_reader_seed identity_admission.go
 secret delegation_reader_seed record_secret_match.go
 secret delegation_signing_seed config_authkey.go
 secret delegation_signing_seed identity_admission.go
+secret dkim_private_key record_secret_match_components.go
 secret dkim_private_key smtp_dkim_keys.go
 secret dkim_private_key smtp_dkim_rotate.go
 secret dns_internal_credential dnsservice/api.go
@@ -1112,6 +1115,7 @@ secret tls_ecdhe_shared smtpproof/tls_client.go
 secret tls_front_pre_login_key tls_session.go
 secret tls_front_reach_key tls_reach_receipt.go
 secret tls_front_session_key tls_session.go
+secret tls_front_session_root record_secret_match_components.go
 secret tls_front_session_root tls_session.go
 secret tls_link_client_key tls_publish.go
 secret tls_visitor_affinity tlsedgeservice/visitor_key.go

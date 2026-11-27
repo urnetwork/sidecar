@@ -1,0 +1,80 @@
+# The bundled git's path safety corpus (DESIGN-COMPUTE §13.7; GIT-M13-01's TestPathSafetyCorpus).
+#
+# Each line: a verdict, a Go-quoted path, and optionally the entry's octal mode (100644 when left out), then a comment.
+#   refuse    gitCheckPath refuses it, and stock git's fsck --strict refuses a tree holding it
+#   stricter  gitCheckPath refuses it while stock git's fsck passes it (the bundled git refuses more)
+#   allow     both pass it
+# A path no tree can hold (absolute, an empty name) is held to gitCheckPath alone. Grouped by the advisory or rule:
+#   CVE-2014-9390 (.git in any case, HFS+'s ignorable code points, NTFS's 8.3 name), CVE-2019-1352 and CVE-2019-1353
+#   (NTFS alternate data streams, trailing dots and spaces on .git), CVE-2018-11235 and CVE-2019-1354 (.gitmodules as a
+#   link, backslashes as separators on Windows), CVE-2024-32002 and CVE-2024-32004 (case-folding names and links, a path
+#   through a link, which the worktree refuses as it writes: TestCaseFoldCollision), CVE-2025-48384 (a CR at a path's
+#   end, which reached .git/config unquoted through a submodule's path: the bundled git writes no submodule's path,
+#   and its config writer refuses a CR in any value, so the path itself is passed as fsck passes it).
+
+refuse ".."
+refuse "../outside"
+refuse "a/../b"
+refuse "."
+refuse "a/./b"
+refuse ".git"
+refuse ".git/config"
+refuse ".GIT/config"
+refuse ".Git/hooks/pre-commit"
+refuse "sub/.git/config"
+refuse "sub/.gIt"
+refuse ".git."
+refuse ".git..."
+refuse ".git . ."
+refuse ".git::$INDEX_ALLOCATION/config"
+refuse ".git:stream"
+refuse "git~1/config"
+refuse "GIT~1"
+refuse "sub/Git~1/hooks"
+refuse ".g\u200cit/config"
+refuse "\u200c.git"
+refuse ".git\u200d"
+refuse ".gi\u202et/config"
+refuse ".g\u206ait"
+refuse ".git\ufeff/config"
+refuse ".gitmodules" 120000 a link named .gitmodules
+refuse ".GITMODULES" 120000 in another case
+refuse "sub/.gitmodules" 120000 in a subdirectory
+refuse "sub\\.git\\config" .git after a backslash, which fsck reads as NTFS's separator
+refuse "gitmod~1" 120000 NTFS's 8.3 name of .gitmodules
+refuse "GI7EBA~1" 120000 NTFS's fallback 8.3 name of .gitmodules
+refuse ".gitmodules. " 120000 trailing dot and space
+
+stricter "\uff0e\uff47\uff49\uff54/config" a fullwidth .git
+stricter ".g\u0130t" a dotted capital I
+stricter ".gi\u0074\u0301" a combining acute on the t
+stricter "a\\..\\b" backslashes, separators on Windows
+stricter "C:" a drive prefix
+stricter "C:/x"
+stricter "z:file"
+
+refuse "" no path at all
+refuse "/etc/passwd" absolute
+refuse "a//b" an empty name
+refuse "a/" a trailing slash
+refuse "a/\x00/b" a NUL
+
+allow "README.md"
+allow ".gitignore"
+allow ".gitattributes"
+allow ".gitmodules" a regular .gitmodules
+allow ".github/workflows/ci.yml"
+allow "dir.git/x"
+allow "x.git"
+allow ".gitx"
+allow "git"
+allow "git~2"
+allow "git~10"
+allow "foo:bar"
+allow "a b/c d.txt"
+allow "\u00fcnic\u00f6de/\u0444\u0430\u0439\u043b.txt"
+allow "sub\r" a CR at the end, passed as fsck passes it (CVE-2025-48384)
+allow "...txt"
+allow "..txt"
+allow ".hidden"
+allow "a/b/c/d/e/f/g.txt"

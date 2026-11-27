@@ -526,6 +526,45 @@ message AgentCert { bytes sidecar_id = 1; bytes agent_id = 2; bytes public_key =
 // numbered in the order written, as question support-push-topic-hint-bytes recommends (support-push-topic).
 message SupportHint { string product = 1; string entry = 2; uint32 seq = 3; }
 
+// sidecar/protocol/listeners.proto
+// DESIGN-COMPUTE.md §26.6's file, which it writes as JSON whose fields are listeners.proto's, and §26.8's live ask,
+// LISTENERS {device_scope, include_own_view} and LISTENERS_RESULT {file, own_view_entries}, written without numbers:
+// compute-plan-lstn-file-fields' answer (QD-1249), desc_by an enum of every source §26.4 names and v4_uncertain §26.5's
+// Windows mark, numbered in the order written, the file's in its example's key order (LSTN-M13-01).
+enum ListenersEntryKind {
+  LISTENERS_ENTRY_KIND_UNSPECIFIED = 0; LISTENERS_ENTRY_KIND_SOCKET = 1; LISTENERS_ENTRY_KIND_MAP = 2;
+  LISTENERS_ENTRY_KIND_FORWARD = 3; LISTENERS_ENTRY_KIND_SOCK = 4; LISTENERS_ENTRY_KIND_TLS = 5;
+  LISTENERS_ENTRY_KIND_SSH = 6;
+}
+enum ListenersProtocol { LISTENERS_PROTOCOL_UNSPECIFIED = 0; LISTENERS_PROTOCOL_TCP = 1; LISTENERS_PROTOCOL_UDP = 2; }
+enum ListenersDescriptionSource {
+  LISTENERS_DESCRIPTION_SOURCE_UNSPECIFIED = 0; LISTENERS_DESCRIPTION_SOURCE_LABEL = 1;
+  LISTENERS_DESCRIPTION_SOURCE_PROGRAM = 2; LISTENERS_DESCRIPTION_SOURCE_OTHER_USER = 3;
+  LISTENERS_DESCRIPTION_SOURCE_SYSTEM = 4; LISTENERS_DESCRIPTION_SOURCE_TARGET_PROGRAM = 5;
+  LISTENERS_DESCRIPTION_SOURCE_TARGET = 6; LISTENERS_DESCRIPTION_SOURCE_FIXED = 7;
+}
+enum ListenersWithheld {
+  LISTENERS_WITHHELD_UNSPECIFIED = 0; LISTENERS_WITHHELD_DISCLOSURE = 1; LISTENERS_WITHHELD_DEVICE = 2;
+  LISTENERS_WITHHELD_NETWORK_ACK = 3; LISTENERS_WITHHELD_HIDDEN = 4; LISTENERS_WITHHELD_NETWORK = 5;
+}
+enum ListenersOwnView {
+  LISTENERS_OWN_VIEW_UNSPECIFIED = 0; LISTENERS_OWN_VIEW_LOOPBACK = 1; LISTENERS_OWN_VIEW_ONE_ADDRESS = 2;
+  LISTENERS_OWN_VIEW_IPV6_ONLY = 3; LISTENERS_OWN_VIEW_DAEMON = 4; LISTENERS_OWN_VIEW_HIDDEN = 5;
+  LISTENERS_OWN_VIEW_CONTAINER = 6;
+}
+message ListenersEntry {
+  ListenersEntryKind kind = 1; ListenersProtocol proto = 2; uint32 port = 3; string bind = 4; string target = 5;
+  string to = 6; string desc = 7; ListenersDescriptionSource desc_by = 8; int64 until = 9; bool shared = 10;
+  bool v4_uncertain = 11; string name = 12; AclAudience audience = 13; bool shadowed = 14;
+  ListenersOwnView own_view = 15;
+}
+message ListenersFile {
+  uint32 v = 1; bytes sidecar = 2; int64 updated = 3; ListenersWithheld withheld = 4; bool truncated = 5;
+  repeated ListenersEntry entries = 6;
+}
+message ListenersRequest { bytes device_scope = 1; bool include_own_view = 2; }
+message ListenersResult { bytes file = 1; repeated ListenersEntry own_view_entries = 2; }
+
 // sidecar/protocol/compute.proto
 // DESIGN-COMPUTE.md §14.3's POST compute/v1/budget/raise, §16.3's kind 21, whose bodies the design gives no fence:
 // deterministic protobuf by compute-plan-infer-wire-format's answer (QD-1246), in compute.proto, which BAL holds

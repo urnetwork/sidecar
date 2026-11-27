@@ -3,30 +3,37 @@
 // Sidecar.SecretMatcher (I-7, R-MCP-9): what no tool result may carry. MCP's tool framework refuses a result that
 // matches, and its errors never echo an input that does (mcp/tool.go). A SecretMatcher matches two things:
 //
-//	credentials  the values the daemon holds that grant something: the client's bearer token (by_jwt), the identity
-//	             key's and the ClientKey's seeds and their Ed25519 private keys, the X-Wing seeds of the reader keys
-//	             the keychain keeps (§5.9's keychain.ur, QD-1444), whose private keys' bytes they are: enrollment's
-//	             first ReaderKey, every generation gkm's upkeep keeps, a replaced or lapsed one until 30 days past its
-//	             not_after (§10.5), and a Delegation's reader seed (§7.8), the connect identity a client generation
-//	             keeps (§5.9's connect_identity): its seed and the keys that derive from it, the sequence
-//	             certificate's key and each provide secret key (record_secret_match_connect.go), and, on a leg that runs
-//	             compute, the compute credentials each area registers for this Sidecar (DESIGN-COMPUTE §2.5,
-//	             compute_custody.go, record_secret_match_custody.go; none on the page Worker's leg): the cache secret,
-//	             SSH keys, calendar links' secrets, connections' OAuth credentials and access tokens, and an
-//	             incarnation's provisioning key, each raw, as hex in either case and as base64 in the standard and URL
-//	             alphabets, padded and not
+//	credentials  the values the daemon holds that grant something, read from the network's keychain.ur (§5.9): the
+//	             client's bearer token (by_jwt); the identity key's and the ClientKey's seeds and their Ed25519 private
+//	             keys; the X-Wing seeds of the reader keys it keeps, whose private keys' bytes they are (QD-1444):
+//	             enrollment's first ReaderKey, every generation gkm's upkeep keeps, a replaced or lapsed one until 30
+//	             days past its not_after (§10.5), and a Delegation's reader seed (§7.8); each live agent subkey's
+//	             Ed25519 seed and private key (identity_agent.go, QD-1449); on a leg that runs them, the tls
+//	             component's device key, its pending successor and the front's session root, and every DKIM key smtp
+//	             keeps (record_secret_match_components.go, QD-1449); the connect identity a client generation keeps
+//	             (§5.9's connect_identity): its seed and the keys that derive from it, the sequence certificate's key
+//	             and each provide secret key (record_secret_match_connect.go); and, on a leg that runs compute, the
+//	             compute credentials each area registers for this Sidecar (DESIGN-COMPUTE §2.5, compute_custody.go,
+//	             record_secret_match_custody.go): the cache secret, SSH keys, calendar links' secrets, connections'
+//	             OAuth credentials and access tokens, and an incarnation's provisioning key. Each matches raw, as hex in
+//	             either case and as base64 in the standard and URL alphabets, padded and not
 //	token forms  every rule of the redactor's (record_redact_rules.go), PII aside, which is no credential: the shapes a
 //	             leaked token of any service takes, the daemon's own or not
 //
 // A credential shorter than SecretMatchSettings.CredentialMinByteCount (settings_mcp.go) is skipped, so a short or empty value never
 // matches everything. A match reports the class that matched, "credential" or the redactor's rule, and its offset,
-// never the bytes. What is public is no credential: no public key, no signed ReaderKey, and not the connect identity's
-// sequence certificate, which every peer the client reaches is shown.
+// never the bytes. What is public is no credential: no public key, no signed ReaderKey or AgentCert, no published DKIM
+// key, and not the connect identity's sequence certificate, which every peer the client reaches is shown.
+//
+// Not held yet: §10's key cache, each RK_g a device reads a repo with, whose count grows with the repos and generations
+// it keeps, waits for a one-pass search or a matcher cached until the keychain changes to bound a build and a check
+// (QD-1449). Until then an RK_g in a tool result or an error passes unchecked.
 //
 // The keys are read where they are made, so each read reaches testHookSecret (identity_keys.go, api_token_manager.go,
-// identity_connect.go, sidecar_new_connect.go, the reader keys' reads below, under their makers' kinds, and each compute
-// source's own file), and a matcher holds copies of them in memory for its life: build one per call, or per credential
-// change. A SecretMatcher is immutable and safe for concurrent use.
+// identity_connect.go, sidecar_new_connect.go, identity_agent.go, tls_key.go, the reads here and in
+// record_secret_match_components.go under their makers' kinds, and each compute source's own file), and a matcher holds
+// copies of them in memory for its life: build one per call, or per credential change. A SecretMatcher is immutable
+// and safe for concurrent use.
 
 package sidecar
 
@@ -45,8 +52,8 @@ const SecretMatchCredential = "credential"
 var (
 	// A ReaderKey record gkm's upkeep keeps did not decode, so no matcher can hold its seed.
 	errSidecarReaderKeyRecordFormat = fmt.Errorf("%w: a ReaderKey record does not decode", ErrSidecarStoreFailed)
-	// The core's view of the keychain reaches none of its other namespaces, so gkm's ReaderKeys cannot be read.
-	errSidecarReaderKeysUnreachable = fmt.Errorf("%w: the keychain's ReaderKeys cannot be reached", ErrSidecarStoreFailed)
+	// The core's view of the keychain reaches none of its other namespaces, so the keys kept there cannot be read.
+	errSidecarKeychainUnreachable = fmt.Errorf("%w: the keychain's other namespaces cannot be reached", ErrSidecarStoreFailed)
 )
 
 // Where a secret is in a text: the class that matched and its offset, never its bytes.
@@ -129,15 +136,14 @@ func (self *SecretMatcher) FormCount() int {
 	return len(self.forms)
 }
 
-// The credentials this sidecar holds now, as a matcher (I-7): its bearer token, its keys, the reader keys and the
-// connect identity its keychain keeps, read from the network's keychain, and the compute credentials its registered
-// sources hold (compute_custody.go). ErrSidecarStoreLocked's error while Locked, ErrSidecarNoIdentity before
-// enrollment, ErrSidecarStoreFailed's for a connect identity or ReaderKey record that does not decode and for a
-// keychain whose ReaderKeys cannot be reached, the keychain's own error where a read fails, and
+// The credentials this sidecar holds now, as a matcher (I-7): its bearer token, its keys, the reader keys, agent
+// subkeys, components' keys and connect identity its keychain keeps, read from the network's keychain, and the compute
+// credentials its registered sources hold (compute_custody.go). ErrSidecarStoreLocked's error while Locked,
+// ErrSidecarNoIdentity before enrollment, ErrSidecarStoreFailed's for a record of any of them that does not decode and
+// for a keychain whose other namespaces cannot be reached, the keychain's own error where a read fails, and
 // ErrComputeCustodyUnavailable's, naming the kind, where a compute source fails, so a caller that cannot build one
 // refuses rather than answers unchecked. A sidecar holding a key but no token matches the keys, and one whose keychain
-// keeps no reader key or no connect identity yet, as before upkeep's first pass or its generation's first start,
-// matches the rest.
+// keeps none of some kind yet, as before upkeep's first pass or its generation's first start, matches the rest.
 func (self *Sidecar) SecretMatcher() (*SecretMatcher, error) {
 	var state SidecarState
 	var secrets SidecarSecrets
@@ -176,6 +182,16 @@ func (self *Sidecar) SecretMatcher() (*SecretMatcher, error) {
 	}
 	readerKeyCredentials, err := loadSidecarReaderKeyCredentials(secrets, gkmSettings)
 	credentials = append(credentials, readerKeyCredentials...)
+	if err != nil {
+		return nil, fmt.Errorf("secret matcher: %w", err)
+	}
+	agentCredentials, err := loadSidecarAgentSubkeyCredentials(secrets)
+	credentials = append(credentials, agentCredentials...)
+	if err != nil {
+		return nil, fmt.Errorf("secret matcher: %w", err)
+	}
+	componentCredentials, err := loadSidecarComponentKeyCredentials(secrets)
+	credentials = append(credentials, componentCredentials...)
 	if err != nil {
 		return nil, fmt.Errorf("secret matcher: %w", err)
 	}
@@ -223,7 +239,7 @@ func loadSidecarConnectIdentityCredentials(secrets SidecarSecrets) ([][]byte, er
 }
 
 // A view of a network's keychain that reaches the same keychain under another of §5.9's namespaces, as the matcher reads
-// gkm's ReaderKeys beside the core's records from the one view it holds: keychainSecrets, and a test's.
+// gkm's, tls's and smtp's keys beside the core's records from the one view it holds: keychainSecrets, and a test's.
 type sidecarKeychainNamespaces interface {
 	// The same keychain's view under namespace, nil for none.
 	keychainNamespace(namespace string) SidecarSecrets
@@ -232,6 +248,49 @@ type sidecarKeychainNamespaces interface {
 // See sidecarKeychainNamespaces.
 func (self *keychainSecrets) keychainNamespace(namespace string) SidecarSecrets {
 	return self.instance.secrets(self.networkId, namespace)
+}
+
+// The same keychain as secrets under namespace, or errSidecarKeychainUnreachable where secrets reaches no other
+// namespace, so no key kept there is passed over unread.
+func sidecarKeychainNamespace(secrets SidecarSecrets, namespace string) (SidecarSecrets, error) {
+	if namespaces, ok := secrets.(sidecarKeychainNamespaces); ok {
+		if view := namespaces.keychainNamespace(namespace); view != nil {
+			return view, nil
+		}
+	}
+	return nil, errSidecarKeychainUnreachable
+}
+
+// Each live agent subkey's Ed25519 seed and private key the core's namespace secrets keeps (identity_agent.go,
+// QD-1449), as the identity key's are held, each a copy the caller clears, also where the error is set; a revoked
+// agent's tombstone holds none, and its certificate is public. The records decode as the subkey's own reads decode them,
+// reaching testHookSecret there. None where the keychain keeps none, the keychain's own errors as they are, and
+// errSidecarAgentRecordFormat for a record that does not decode, whose seed no matcher could then hold.
+func loadSidecarAgentSubkeyCredentials(secrets SidecarSecrets) ([][]byte, error) {
+	names, err := secrets.List(sidecarAgentRecordPrefix)
+	if err != nil {
+		return nil, err
+	}
+	credentials := [][]byte{}
+	for _, name := range names {
+		encoded, err := secrets.Get(name)
+		if errors.Is(err, ErrSidecarStoreAbsent) {
+			continue
+		}
+		if err != nil {
+			return credentials, err
+		}
+		record, err := decodeSidecarAgentRecord(encoded)
+		clear(encoded)
+		if err != nil {
+			return credentials, err
+		}
+		if record.revoked {
+			continue
+		}
+		credentials = append(credentials, record.seed, []byte(ed25519.NewKeyFromSeed(record.seed)))
+	}
+	return credentials, nil
 }
 
 // The reader keys' X-Wing seeds the keychain secrets views keeps (§5.9's keychain.ur), each a copy the caller clears,
@@ -245,7 +304,7 @@ func (self *keychainSecrets) keychainNamespace(namespace string) SidecarSecrets 
 //
 // Each reaches testHookSecret under its maker's kind. None where the keychain keeps none; the keychain's own errors as
 // they are; errSidecarReaderKeyRecordFormat for a generation's record that does not decode, whose seed no matcher could
-// then hold; and errSidecarReaderKeysUnreachable where secrets reaches no gkm namespace. settings nil is the defaults.
+// then hold; and errSidecarKeychainUnreachable where secrets reaches no gkm namespace. settings nil is the defaults.
 func loadSidecarReaderKeyCredentials(secrets SidecarSecrets, settings *GkmSettings) ([][]byte, error) {
 	if settings == nil {
 		settings = DefaultGkmSettings()
@@ -275,12 +334,9 @@ func loadSidecarReaderKeyCredentials(secrets SidecarSecrets, settings *GkmSettin
 		testHookSecret("delegation_reader_seed", delegationSeed)
 		credentials = append(credentials, delegationSeed)
 	}
-	var gkmSecrets SidecarSecrets
-	if namespaces, ok := secrets.(sidecarKeychainNamespaces); ok {
-		gkmSecrets = namespaces.keychainNamespace(gkmUpkeepSecretsNamespace)
-	}
-	if gkmSecrets == nil {
-		return credentials, errSidecarReaderKeysUnreachable
+	gkmSecrets, err := sidecarKeychainNamespace(secrets, gkmUpkeepSecretsNamespace)
+	if err != nil {
+		return credentials, err
 	}
 	names, err := gkmSecrets.List(gkmUpkeepReaderKeyPrefix)
 	if err != nil {

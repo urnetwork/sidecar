@@ -126,7 +126,8 @@ type WorldEvsHost struct {
 	Cluster sidecar.BlobCluster
 }
 
-// The world: one network, one member, one repo, and its devices.
+// The world: one network, its member, one repo, and its devices; a device may be another member's or a tagged
+// sidecar's, whose pushes a reader takes as untrusted (DESIGN-COMPUTE IC-12; the bundled git's taint tests).
 type World struct {
 	t        testing.TB
 	ctx      context.Context
@@ -153,6 +154,9 @@ type World struct {
 	writers    []sidecar.Id
 	admins     []sidecar.Id
 	devices    []*Device
+	// each device of another member, by its sidecar; each tagged device
+	otherMembers map[sidecar.Id]sidecar.Id
+	tagged       map[sidecar.Id]bool
 	// called with each request before the engine serves it, and after, nil for none: an error loses the request, or
 	// its answer, as a crash or a dropped connection would, and a response before answers in the engine's place
 	before func(request *http.Request) (*http.Response, error)
@@ -253,6 +257,7 @@ func NewWorld(t testing.TB, settings *WorldSettings) *World {
 		t: t, ctx: ctx, settings: settings, clock: clock, networkId: sidecar.NewId(), memberId: sidecar.NewId(),
 		repoId: sidecar.NewId(), authLog: sidecartest.NewFakeGkmAuthLog(), gitPath: gitPath,
 		signers: map[sidecar.Id]*sidecartest.FakeGkmSigner{}, gkmClients: map[sidecar.Id]sidecar.GkmClient{},
+		otherMembers: map[sidecar.Id]sidecar.Id{}, tagged: map[sidecar.Id]bool{},
 	}
 	if settings.Evs != nil {
 		world.hostEvs(settings.Evs)
@@ -400,9 +405,36 @@ func (self *World) publishWithLock() {
 		devices = append(devices, sidecarId)
 	}
 	slices.SortFunc(devices, sidecar.Id.Cmp)
-	sidecarRows, member := sidecartest.FakeGkmAuthMemberDevices(self.memberId, devices...)
+	// the world's member's devices, then each other member's, then the tagged sidecars, which no member's row names
+	own := []sidecar.Id{}
+	others := map[sidecar.Id][]sidecar.Id{}
+	otherMemberIds := []sidecar.Id{}
+	tagged := []sidecar.Id{}
+	for _, sidecarId := range devices {
+		switch otherMemberId, other := self.otherMembers[sidecarId]; {
+		case self.tagged[sidecarId]:
+			tagged = append(tagged, sidecarId)
+		case other:
+			if _, seen := others[otherMemberId]; !seen {
+				otherMemberIds = append(otherMemberIds, otherMemberId)
+			}
+			others[otherMemberId] = append(others[otherMemberId], sidecarId)
+		default:
+			own = append(own, sidecarId)
+		}
+	}
+	sidecarRows, member := sidecartest.FakeGkmAuthMemberDevices(self.memberId, own...)
 	rows.Sidecars = sidecarRows
 	rows.Members = []*bridge.MemberRow{member}
+	for _, otherMemberId := range otherMemberIds {
+		otherRows, otherMember := sidecartest.FakeGkmAuthMemberDevices(otherMemberId, others[otherMemberId]...)
+		otherMember.Role = bridge.MemberRole_MEMBER_ROLE_MEMBER
+		rows.Sidecars = append(rows.Sidecars, otherRows...)
+		rows.Members = append(rows.Members, otherMember)
+	}
+	for _, sidecarId := range tagged {
+		rows.Sidecars = append(rows.Sidecars, &bridge.SidecarRow{SidecarId: sidecarId.Bytes(), TagIds: [][]byte{sidecarId.Bytes()}, AdmittedAt: 1})
+	}
 	writers := slices.Clone(self.writers)
 	slices.SortFunc(writers, sidecar.Id.Cmp)
 	view := self.authLog.Append(&sidecartest.FakeGkmAuthFixture{
@@ -493,6 +525,10 @@ type DeviceSettings struct {
 	Admin bool
 	// The client's evs settings beside the world's, nil for those.
 	Client *sidecar.EvsSettings
+	// A device of another member of the network, which the world makes for it, not of the world's own member.
+	OtherMember bool
+	// A tagged sidecar, a cloud agent's or an enclave's, which no member's row names.
+	Tagged bool
 }
 
 // A new device of the world's member that writes the repo, its mount made and running.
@@ -514,6 +550,12 @@ func (self *World) Device(label string, settings *DeviceSettings) *Device {
 		defer self.stateLock.Unlock()
 		first = len(self.signers) == 0
 		self.signers[sidecarId] = signer
+		if settings.OtherMember {
+			self.otherMembers[sidecarId] = sidecar.NewId()
+		}
+		if settings.Tagged {
+			self.tagged[sidecarId] = true
+		}
 		self.writers = append(self.writers, sidecarId)
 		if settings.Admin || first {
 			self.admins = append(self.admins, sidecarId)

@@ -2,10 +2,10 @@
 
 // Sidecar.SecretMatcher (I-7): each credential matches raw, as hex in either case and as base64 in both alphabets,
 // padded and not; a value under the settings' bound and ordinary text match nothing; the redactor's token forms match
-// with no credential; a match names its class and offset, never the bytes; and on every leg the connect identity seed
-// and every reader key a keychain keeps are credentials, a reader key the keychain cannot give failing the read.
-// record_secret_match_sidecar_test.go holds a sidecar's own matcher, and record_secret_match_connect_test.go a connect
-// leg's connect identity.
+// with no credential; a match names its class and offset, never the bytes; and on every leg the connect identity seed,
+// every reader key and every live agent subkey a keychain keeps are credentials, one the keychain cannot give failing
+// the read. record_secret_match_sidecar_test.go holds a sidecar's own matcher, record_secret_match_components_test.go
+// the tls and smtp components' keys, and record_secret_match_connect_test.go a connect leg's connect identity.
 
 package sidecar
 
@@ -226,6 +226,28 @@ func (self *testSecretMatchFailingSecrets) keychainNamespace(namespace string) S
 	return &failing
 }
 
+// A keychain read failing on purpose, told apart from every error the store answers itself.
+var errTestSecretMatchReadFailure = errors.New("synthetic keychain read failure")
+
+// Mints agentId's subkey as the daemon does (Sidecar.AgentSubkey), and its seed, read back from the record secrets,
+// the sidecar's core namespace, keeps, with its certificate, which is public.
+func testSecretMatchAgentSubkey(t *testing.T, sidecar *Sidecar, secrets SidecarSecrets, agentId Id) ([]byte, *AgentSubkeyCert) {
+	t.Helper()
+	cert, err := sidecar.AgentSubkey(agentId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := secrets.Get(sidecarAgentRecordName(agentId))
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := decodeSidecarAgentRecord(encoded)
+	if err != nil || record.revoked {
+		t.Fatalf("the minted record does not hold a live subkey: %v", err)
+	}
+	return record.seed, cert
+}
+
 // Each encoding of a credential matches inside ordinary text, at its offset.
 func TestSecretMatcherMatchesEveryEncoding(t *testing.T) {
 	credential := []byte("a synthetic credential of forty bytes!!!")
@@ -339,7 +361,7 @@ func TestReaderKeyCredentialsHoldEveryKeptSeed(t *testing.T) {
 // A reader key the keychain keeps but cannot give fails the read, so no matcher is built without it: a read the keychain
 // fails, of a core record, of gkm's list or of a generation's record, is the keychain's error as it is, the seeds read
 // before it returned beside it for the caller to clear; a view reaching no gkm namespace is
-// errSidecarReaderKeysUnreachable; and a generation's record that does not decode is errSidecarReaderKeyRecordFormat,
+// errSidecarKeychainUnreachable; and a generation's record that does not decode is errSidecarReaderKeyRecordFormat,
 // repeating none of the record. On every leg.
 func TestReaderKeyCredentialsFailClosed(t *testing.T) {
 	networkId := NewId()
@@ -373,7 +395,7 @@ func TestReaderKeyCredentialsFailClosed(t *testing.T) {
 	}
 
 	credentials, err := loadSidecarReaderKeyCredentials(&testSecretMatchOneNamespace{SidecarSecrets: secrets}, nil)
-	if !errors.Is(err, errSidecarReaderKeysUnreachable) || !errors.Is(err, ErrSidecarStoreFailed) || len(credentials) != 2 {
+	if !errors.Is(err, errSidecarKeychainUnreachable) || !errors.Is(err, ErrSidecarStoreFailed) || len(credentials) != 2 {
 		t.Errorf("a view reaching no gkm namespace: %d read, %v", len(credentials), err)
 	}
 
@@ -383,6 +405,67 @@ func TestReaderKeyCredentialsFailClosed(t *testing.T) {
 	}
 	_, err = loadSidecarReaderKeyCredentials(secrets, nil)
 	if !errors.Is(err, errSidecarReaderKeyRecordFormat) || !errors.Is(err, ErrSidecarStoreFailed) {
+		t.Fatalf("a record that does not decode: %v", err)
+	}
+	if strings.Contains(err.Error(), string(damaged)) || strings.Contains(err.Error(), hex.EncodeToString(damaged)) {
+		t.Error("the error repeats the record")
+	}
+}
+
+// Every live agent subkey a keychain keeps is listed, its seed with its Ed25519 private key, as the identity key's are
+// held, and nothing else: minted and revoked as the daemon mints and revokes them, a revoked agent's tombstone holds no
+// seed, and a keychain keeping none lists nothing. On every leg.
+func TestAgentSubkeyCredentialsHoldEveryLiveSubkey(t *testing.T) {
+	sidecar, instance, _ := newIdentityTestSidecar(t)
+	secrets := instance.secrets(sidecar.currentIdentity().NetworkId, sidecarCoreSecretsNamespace)
+	if credentials, err := loadSidecarAgentSubkeyCredentials(secrets); err != nil || len(credentials) != 0 {
+		t.Fatalf("a keychain keeping no agent subkey listed %d credentials, %v", len(credentials), err)
+	}
+	liveAgentId, revokedAgentId := NewId(), NewId()
+	liveSeed, _ := testSecretMatchAgentSubkey(t, sidecar, secrets, liveAgentId)
+	testSecretMatchAgentSubkey(t, sidecar, secrets, revokedAgentId)
+	if err := sidecar.AgentRevoke(revokedAgentId); err != nil {
+		t.Fatal(err)
+	}
+	credentials, err := loadSidecarAgentSubkeyCredentials(secrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testSecretMatchSameSet(t, credentials, [][]byte{liveSeed, []byte(ed25519.NewKeyFromSeed(liveSeed))})
+}
+
+// An agent subkey record the keychain keeps but cannot give fails the read: a list or a read the keychain fails is its
+// error as it is, and a record that does not decode is errSidecarAgentRecordFormat, repeating none of the record. On
+// every leg.
+func TestAgentSubkeyCredentialsFailClosed(t *testing.T) {
+	_, secrets := newIdentityTestSecrets(t, NewId())
+	agentId := NewId()
+	seed := make([]byte, ed25519.SeedSize)
+	rand.Read(seed)
+	live := &sidecarAgentRecord{seed: seed, cert: []byte("a synthetic certificate")}
+	if err := secrets.Put(sidecarAgentRecordName(agentId), live.encode()); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name     string
+		failName string
+		failList bool
+	}{
+		{name: "the list", failList: true},
+		{name: "the record's read", failName: sidecarAgentRecordName(agentId)},
+	} {
+		failing := &testSecretMatchFailingSecrets{SidecarSecrets: secrets, failName: c.failName, failList: c.failList, err: errTestSecretMatchReadFailure}
+		if _, err := loadSidecarAgentSubkeyCredentials(failing); !errors.Is(err, errTestSecretMatchReadFailure) {
+			t.Errorf("%s failing: %v", c.name, err)
+		}
+	}
+
+	damaged := []byte("synthetic damage, no agent subkey record")
+	if err := secrets.Put(sidecarAgentRecordName(NewId()), damaged); err != nil {
+		t.Fatal(err)
+	}
+	_, err := loadSidecarAgentSubkeyCredentials(secrets)
+	if !errors.Is(err, errSidecarAgentRecordFormat) || !errors.Is(err, ErrSidecarStoreFailed) {
 		t.Fatalf("a record that does not decode: %v", err)
 	}
 	if strings.Contains(err.Error(), string(damaged)) || strings.Contains(err.Error(), hex.EncodeToString(damaged)) {

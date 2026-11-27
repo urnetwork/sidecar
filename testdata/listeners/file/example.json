@@ -1,0 +1,7 @@
+{"v": 1, "sidecar": "019a7c2e-5b1d-7f3a-9c4e-0d2b8a6f1e30", "updated": "2026-11-23T14:05Z", "withheld": null, "truncated": false,
+ "entries": [
+  {"kind": "socket", "proto": "tcp", "port": 5432, "bind": "0.0.0.0", "desc": "postgres", "desc_by": "program"},
+  {"kind": "map", "proto": "tcp", "port": 8000, "target": "192.0.2.20:8000", "desc": "nas admin",
+   "desc_by": "label", "until": "2026-12-01T00:00Z"},
+  {"kind": "forward", "proto": "tcp", "port": 15432, "bind": "0.0.0.0", "to": "db1:5432",
+   "until": "2026-11-23T15:00Z"}]}
