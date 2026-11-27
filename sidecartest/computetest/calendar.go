@@ -171,6 +171,9 @@ type FakeCalendarAccountArgs struct {
 	PartitionHost string
 	// caldav: /.well-known/caldav's redirect status, 301 as Nextcloud answers when 0; 308 keeps a PROPFIND's method.
 	WellKnownStatus int
+	// caldav: where /.well-known/caldav redirects: empty takes /dav/ on the same host; a test may name another host,
+	// another registrable domain, an overlay address or http, for a client's redirect checks.
+	WellKnownLocation string
 }
 
 // How a calendar's sharing or publishing reads (identifiers).
@@ -386,6 +389,8 @@ type FakeCalendarFailure struct {
 	Reason string
 	// Sent as Retry-After in whole seconds where positive.
 	RetryAfter time.Duration
+	// Sent as Location where set: with a 3xx status, a scripted redirect, for a client's redirect checks.
+	Location string
 	// How many requests it answers; under one counts as one.
 	Count int
 }
@@ -993,6 +998,9 @@ func (self *FakeCalendarServer) front(protocol FakeCalendarProtocol, serve func(
 func (self *FakeCalendarServer) serveFailure(w http.ResponseWriter, protocol FakeCalendarProtocol, failure *FakeCalendarFailure) {
 	if failure.RetryAfter > 0 {
 		w.Header().Set("Retry-After", strconv.FormatInt(int64((failure.RetryAfter+time.Second-1)/time.Second), 10))
+	}
+	if failure.Location != "" {
+		w.Header().Set("Location", failure.Location)
 	}
 	switch protocol {
 	case FakeCalendarGoogle:

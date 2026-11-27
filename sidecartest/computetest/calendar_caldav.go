@@ -164,17 +164,21 @@ func (self *FakeCalendarServer) serveCaldav(w *fakeCalendarWriter, r *http.Reque
 	}
 	if r.URL.Path == "/.well-known/caldav" {
 		status := http.StatusMovedPermanently
+		location := fakeCaldavPathPrefix + "/"
 		func() {
 			self.stateLock.Lock()
 			defer self.stateLock.Unlock()
 			for _, account := range self.accounts {
 				if account.args.Protocol == FakeCalendarCaldav && (account.args.Host == host || account.args.PartitionHost == host) {
 					status = account.args.WellKnownStatus
+					if account.args.WellKnownLocation != "" {
+						location = account.args.WellKnownLocation
+					}
 					return
 				}
 			}
 		}()
-		w.Header().Set("Location", fakeCaldavPathPrefix+"/")
+		w.Header().Set("Location", location)
 		w.WriteHeader(status)
 		return
 	}
