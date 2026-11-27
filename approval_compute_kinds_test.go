@@ -8,8 +8,7 @@ package sidecar
 // field 70 on kinds 23 to 26 alone; no template; the server paths that take kinds 19 and 21 alone; and a build that
 // predates version 5, whose known set is 1 to 4, refusing it whole as an approver, a spender and a gate. Until each
 // filing area registers its effect lookup the real gate files a version-5 action's request and spends nothing, and an
-// approver's device shows version 5's nested fields unshown and takes no approval until their render lands
-// (CACL-M12-02). Synthetic values only.
+// approver's device shows version 5's nested fields through version 5's render (CACL-M12-02). Synthetic values only.
 
 import (
 	"bytes"
@@ -651,43 +650,44 @@ func TestVersion5ServerColumns(t *testing.T) {
 	}
 }
 
-// Until version 5's render lands (CACL-M12-02), an approver's device names each nested field unshown, lists deny
-// alone and signs no approval of a version-5 action; a denial it signs. No render panics on a message field.
-func TestVersion5RequestTakesNoApprovalUntilItsRender(t *testing.T) {
+// Version 5's render (CACL-M12-02) shows a fetch's nested fields field by field, and an approver's device takes an
+// approval of it; kind 25, whose per-event cards are MAILCAL-M13-06's, still lists deny alone and takes none, a denial
+// still filing. No render panics on a message field, and every kind's render is version 5's.
+func TestVersion5RequestTakesApprovalOnceItsRenderShowsIt(t *testing.T) {
 	world := newTestApproverWorld(t)
 	stored := testComputeStored(t, SidecarActionFetchUnlistedUrl)
 	request := world.put(world.requesterId, stored, "fetch the page")
 	item := world.item(request.ApprovalId())
-	if item.Render == nil || !item.Render.Unshown || !slices.Equal(item.Decisions, []string{SidecarDecisionDeny}) {
+	if item.Render == nil || item.Render.Unshown || !slices.Equal(item.Decisions, []string{SidecarDecisionApprove, SidecarDecisionDeny}) {
 		t.Fatalf("the item: %+v", item)
-	}
-	if !strings.Contains(item.Render.Text(), "this build cannot show every field of the action") {
-		t.Errorf("the text: %s", item.Render.Text())
 	}
 	shown := map[string]string{}
 	for _, field := range item.Render.Fields {
 		shown[field.Name] = field.Value
 	}
-	if shown["auto"] != approvalRenderUnshownValue || shown["url"] != "https://xn--bcher-kva.example/a?b=1" {
+	if shown["auto.basis"] != "1 (taint)" || shown["url"] != "https://xn--bcher-kva.example/a?b=1" {
 		t.Errorf("the fields: %v", shown)
 	}
-	if err := world.approver.Decide(t.Context(), request.ApprovalId(), &SidecarRequestDecision{Decision: SidecarDecisionApprove}, SidecarActConfirmed, nil); !errors.Is(err, ErrApprovalUnshown) {
-		t.Errorf("an approval: %v", err)
+	calendar := world.put(world.requesterId, testComputeStored(t, SidecarActionCalendarWrite), "add lunch")
+	if item := world.item(calendar.ApprovalId()); !item.Render.Unshown || !slices.Equal(item.Decisions, []string{SidecarDecisionDeny}) {
+		t.Errorf("kind 25's item: %v", item.Decisions)
+	}
+	if err := world.approver.Decide(t.Context(), calendar.ApprovalId(), &SidecarRequestDecision{Decision: SidecarDecisionApprove}, SidecarActConfirmed, nil); !errors.Is(err, ErrApprovalUnshown) {
+		t.Errorf("kind 25's approval: %v", err)
 	}
 	if world.decisionCount() != 0 {
-		t.Error("an approval was filed")
+		t.Error("an approval of kind 25 was filed")
 	}
-	if err := world.approver.Decide(t.Context(), request.ApprovalId(), &SidecarRequestDecision{Decision: SidecarDecisionDeny}, SidecarActConfirmed, nil); err != nil {
-		t.Errorf("a denial: %v", err)
+	if err := world.approver.Decide(t.Context(), request.ApprovalId(), &SidecarRequestDecision{Decision: SidecarDecisionApprove}, SidecarActConfirmed, nil); err != nil {
+		t.Errorf("an approval: %v", err)
 	}
 	for kind := range testComputeActions(t) {
 		parsed, err := ParseStoredApprovalRequest(testRecordStored(t, testRecordRequest(t, testComputeStored(t, kind).Bytes)))
 		if err != nil {
 			t.Fatal(err)
 		}
-		render := RenderApprovalRequest(parsed)
-		if render.Unshown != !approvalRenderShowsWhole(parsed.Action.Action) {
-			t.Errorf("kind %d's render: unshown %v", kind, render.Unshown)
+		if render := RenderApprovalRequest(parsed); render.Compute == nil {
+			t.Errorf("kind %d's render is not version 5's", kind)
 		}
 	}
 	// versions 1 to 4 hold no nested field, and show whole as before

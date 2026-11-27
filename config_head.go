@@ -20,6 +20,8 @@
 //	bridge/ledger/rules/<xx>[/<yy>]
 //	socket/key                       K_sock's SocketKeyFile (plan-SOCK-ksock-rotation)
 //	policy.hujson                    the policy's source bytes (§8)
+//	compute.hujson                   a network with no document's compute block alone (DESIGN-COMPUTE §16.4), which
+//	                                 sets no reach; never beside policy.hujson, which holds its own
 //	tags groups rules names labels resolve
 //	                                 one deterministically encoded protobuf each
 //
@@ -112,6 +114,7 @@ var configHeadFilePaths = map[string]bool{
 	ConfigHeadBridgeBlockPath:     true,
 	ConfigHeadSocketKeyPath:       true,
 	ConfigHeadPolicyPath:          true,
+	ConfigHeadComputePath:         true,
 	ConfigHeadTagsPath:            true,
 	ConfigHeadGroupsPath:          true,
 	ConfigHeadRulesPath:           true,

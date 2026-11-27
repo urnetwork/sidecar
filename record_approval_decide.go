@@ -30,9 +30,10 @@
 //	         keys under the context the action's own clear fields derive (QD-771), never one a caller makes; where the
 //	         device has no opener or the detail does not open, the render says so, the request lists deny alone, and
 //	         an approval is refused, so no prefix or port is approved unseen (D-MCP-17)
-//	unshown  an action holding a field the render cannot show as one value, version 5's nested messages (DESIGN-COMPUTE
-//	         §16.3), renders it named and unshown, lists deny alone and takes no approval, until version 5's render
-//	         lands (CACL-M12-02)
+//	version5 an action at version 5 (DESIGN-COMPUTE §16.3) renders through RenderApprovalRequestCompute, its sealed
+//	         detail opened by Sidecar.OpenActionDetail5 and kind 19's disclosure line from CTRUST's registry; what that
+//	         render could not show whole or check (ApprovalComputeRender.Withheld) lists deny alone and takes no
+//	         approval, a detail that did not open as version 4's (ErrApprovalDetailSealed), the rest ErrApprovalUnshown
 //	listen   a listen's request names its socket in socket_name (QD-772), which the render shows from the opened
 //	         request, and which this device reads against the action's grant_dst before it approves: a tls/ or smtp/
 //	         name is its sock: entry itself, an application name its token path under the network's K_sock as this
@@ -158,16 +159,22 @@ type ApprovalApprover struct {
 	sidecar *Sidecar
 	log     ApproverLog
 	details CanonicalActionDetailOpener
-	sockets ApprovalSocketKeys
-	host    ApprovalHost
+	// a version-5 action's sealed detail's opener, and kind 19's disclosure lines (approval_compute_render.go)
+	details5    CanonicalActionDetail5Opener
+	disclosures ApprovalComputeDisclosureLines
+	sockets     ApprovalSocketKeys
+	host        ApprovalHost
 }
 
-// The approver side of sidecar over log, opening each action's sealed_detail on sidecar (Sidecar.OpenActionDetail)
+// The approver side of sidecar over log, opening each action's sealed_detail on sidecar (Sidecar.OpenActionDetail,
+// and Sidecar.OpenActionDetail5 at version 5), rendering kind 19's disclosure line from the registry CTRUST registers,
 // and reading a listen's application name with its K_sock ring where its leg runs sockets (Sidecar.SocketKeyRing).
 func NewApprovalApprover(sidecar *Sidecar, log ApproverLog) *ApprovalApprover {
 	approver := &ApprovalApprover{sidecar: sidecar, log: log}
 	if sidecar != nil {
 		approver.details = sidecar
+		approver.details5 = sidecar
+		approver.disclosures = sidecar.approvalComputeDisclosureLines()
 		if sockets, ok := any(sidecar).(ApprovalSocketKeys); ok {
 			approver.sockets = sockets
 		}
@@ -175,16 +182,42 @@ func NewApprovalApprover(sidecar *Sidecar, log ApproverLog) *ApprovalApprover {
 	return approver
 }
 
+// A copy of the approver side, sharing everything.
+func (self *ApprovalApprover) clone() *ApprovalApprover {
+	clone := *self
+	return &clone
+}
+
 // The same approver side, opening each action's sealed_detail with opener before it renders or approves it, nil
 // opening none. The receiver is not changed.
 func (self *ApprovalApprover) WithDetailOpener(opener CanonicalActionDetailOpener) *ApprovalApprover {
-	return &ApprovalApprover{sidecar: self.sidecar, log: self.log, details: opener, sockets: self.sockets, host: self.host}
+	clone := self.clone()
+	clone.details = opener
+	return clone
+}
+
+// The same approver side, opening a version-5 action's sealed_detail with opener, nil opening none. The receiver is
+// not changed.
+func (self *ApprovalApprover) WithDetailOpener5(opener CanonicalActionDetail5Opener) *ApprovalApprover {
+	clone := self.clone()
+	clone.details5 = opener
+	return clone
+}
+
+// The same approver side, rendering kind 19's disclosure line from lines, nil rendering none. The receiver is not
+// changed.
+func (self *ApprovalApprover) WithDisclosureLines(lines ApprovalComputeDisclosureLines) *ApprovalApprover {
+	clone := self.clone()
+	clone.disclosures = lines
+	return clone
 }
 
 // The same approver side, reading a listen's application name with sockets' K_sock ring before it approves it, nil
 // reading none. The receiver is not changed.
 func (self *ApprovalApprover) WithSocketKeys(sockets ApprovalSocketKeys) *ApprovalApprover {
-	return &ApprovalApprover{sidecar: self.sidecar, log: self.log, details: self.details, sockets: sockets, host: self.host}
+	clone := self.clone()
+	clone.sockets = sockets
+	return clone
 }
 
 // Whether request's socket_name reads as its action's grant_dst on this device (QD-772): nil for a request of a kind
@@ -215,10 +248,43 @@ func (self *ApprovalApprover) readListenName(request *StoredApprovalRequest) err
 	return nil
 }
 
+// What a version-5 request's action's sealed_detail opens to on this device: nil with no error for an action that
+// carries none or is at another version, and ErrApprovalDetailSealed for one this device has no opener for or cannot
+// open.
+func (self *ApprovalApprover) openDetail5(request *StoredApprovalRequest) (*protocol.CanonicalActionDetail5, error) {
+	action := request.Action.Action
+	if action.GetVersion() != canonicalActionVersionCompute || len(action.GetSealedDetail()) == 0 {
+		return nil, nil
+	}
+	if self.details5 == nil {
+		return nil, ErrApprovalDetailSealed
+	}
+	detail, err := self.details5.OpenActionDetail5(request.Action)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrApprovalDetailSealed, err)
+	}
+	if detail == nil {
+		return nil, ErrApprovalDetailSealed
+	}
+	return detail, nil
+}
+
+// The render of request on this device, and why its sealed detail did not open, nil where it opened or there is none:
+// a version-5 action's through RenderApprovalRequestCompute, every other through RenderApprovalRequestDetail.
+func (self *ApprovalApprover) render(request *StoredApprovalRequest) (*ApprovalRender, error) {
+	if request.Action.Action.GetVersion() == canonicalActionVersionCompute {
+		detail, err := self.openDetail5(request)
+		return RenderApprovalRequestCompute(&ApprovalComputeRenderArgs{Request: request, Detail: detail, Disclosures: self.disclosures}), err
+	}
+	detail, err := self.openDetail(request)
+	return RenderApprovalRequestDetail(request, detail), err
+}
+
 // What request's action's sealed_detail opens to on this device: nil with no error for an action that carries none,
-// and ErrApprovalDetailSealed for one this device has no opener for or cannot open.
+// and ErrApprovalDetailSealed for one this device has no opener for or cannot open. A version-5 action's detail is
+// openDetail5's.
 func (self *ApprovalApprover) openDetail(request *StoredApprovalRequest) (*protocol.CanonicalActionDetail, error) {
-	if len(request.Action.Action.GetSealedDetail()) == 0 {
+	if len(request.Action.Action.GetSealedDetail()) == 0 || request.Action.Action.GetVersion() == canonicalActionVersionCompute {
 		return nil, nil
 	}
 	if self.details == nil {
@@ -312,9 +378,9 @@ func (self *ApprovalApprover) Pending(ctx context.Context) ([]*SidecarRequestIte
 			continue
 		}
 		item.ApprovalId = waiting.Request.ApprovalId()
-		detail, detailErr := self.openDetail(waiting.Request)
+		render, detailErr := self.render(waiting.Request)
 		nameErr := self.readListenName(waiting.Request)
-		item.Render = RenderApprovalRequestDetail(waiting.Request, detail)
+		item.Render = render
 		item.Render.Flagged = waiting.Flagged
 		item.Render.NameUnread = nameErr != nil
 		item.Channel, item.Decisions = approverChannel(self.host, waiting.Request, identity, own)
@@ -381,12 +447,12 @@ func (self *ApprovalApprover) Decide(ctx context.Context, approvalId Id, decisio
 		verdict = protocol.ApprovalVerdict_APPROVAL_VERDICT_DENY
 	} else if uses, err = approvalDecisionUses(request, decision.Uses); err != nil {
 		return err
-	} else if !approvalRenderShowsWhole(request.Action.Action) {
-		// an approval signs only what this device showed whole: version 5's nested fields wait for its render
-		return ErrApprovalUnshown
-	} else if _, err := self.openDetail(request); err != nil {
+	} else if render, err := self.render(request); err != nil {
 		// an approval signs only what this device opened and showed
 		return err
+	} else if !render.Whole() || (render.Compute == nil && !approvalRenderShowsWhole(request.Action.Action)) {
+		// an approval signs only what this device showed whole
+		return ErrApprovalUnshown
 	} else if err := self.readListenName(request); err != nil {
 		// and only a listen whose name it read as the socket grant_dst names
 		return err

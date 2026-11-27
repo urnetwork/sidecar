@@ -1,0 +1,13 @@
+request 22222222-2222-2222-2222-222222222222: enclave_egress_direct. Turn off enclave builder's default egress: its traffic leaves through the provider, and the miner sees its traffic's metadata. The action, as this daemon built it:
+  subject: 54545454545454545454545454545454
+  enclave.enclave_id: 51515151515151515151515151515151
+  enclave.name: builder
+  enclave.shape: cpu-2
+  enclave.provider: hippius
+  enclave.label: AP
+  enclave.price_per_hour: $0.12 (120000000 nano-USD)
+  enclave.incarnation: 2
+asked by sidecar 55555555-5555-5555-5555-555555555555, run 77777777-7777-7777-7777-777777777777, agent 88888888-8888-8888-8888-888888888888
+expires 2025-11-06T00:00:00Z
+untrusted text the agent wrote, which is not the action:
+  summary: point www at the new host

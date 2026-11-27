@@ -13,7 +13,11 @@ acl_audit.go
 acl_compile.go
 acl_compile_atoms.go
 acl_compile_targets.go
+acl_compute_block.go
+acl_compute_block_compile.go
+acl_compute_eval.go
 acl_compute_features.go
+acl_compute_resources.go
 acl_consent.go
 acl_eval.go
 acl_evs.go
