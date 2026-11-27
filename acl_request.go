@@ -242,7 +242,8 @@ func aclActionName(action protocol.AclAction) string {
 	case protocol.AclAction_ACL_ACTION_SEND:
 		return "send"
 	}
-	return ""
+	// DESIGN-COMPUTE §16.2's, "" for none
+	return aclComputeActionName(action)
 }
 
 // The grant a CanonicalAction carries (QD-064's fields 8, 10, 11, 28 and 29): subject, destinations, actions, expiry

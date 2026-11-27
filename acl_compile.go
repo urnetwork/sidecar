@@ -385,6 +385,10 @@ type AclLocalRule struct {
 	BoundSocket string
 	// The mail: aliases, which rows carry only as mail_send (D-ACL-12).
 	Aliases []string
+	// An ssh grant's users and check period, nil for any other rule (DESIGN-COMPUTE §16.2).
+	Ssh *AclLocalSsh
+	// A compute:enclave rule's shapes, nil for every shape (§16.2).
+	Shapes []string
 }
 
 // One requests rule's detail.
@@ -821,9 +825,13 @@ func (self *aclCompiler) compileGrant(ruleId Id, grant *AclGrant) (*protocol.Acl
 	if !grant.Expires.IsZero() {
 		rule.Expires = grant.Expires.UnixMilli()
 	}
-	local := AclLocalRule{RuleId: ruleId, DocumentId: grant.Id, Note: grant.Note, Ports: slices.Clone(grant.Ip)}
+	local := AclLocalRule{RuleId: ruleId, DocumentId: grant.Id, Note: grant.Note, Ports: slices.Clone(grant.Ip),
+		Ssh: grant.Ssh, Shapes: slices.Clone(grant.Shapes)}
 	if grant.Sock != nil {
 		local.BoundSocket = grant.Sock.Name
+	}
+	if err := self.checkComputeActions(grant.Allow); err != nil {
+		return nil, local, err
 	}
 	var err error
 	if rule.SrcAtoms, err = self.atomList(grant.Src); err != nil {
@@ -871,6 +879,9 @@ func (self *aclCompiler) compileRequest(ruleId Id, request *AclRequest) (*protoc
 		DocumentId:   request.Id,
 		Note:         request.Note,
 		NamesHarness: slices.Contains(request.Evidence, AclEvidenceHarness),
+	}
+	if err := self.checkComputeActions(request.Allow); err != nil {
+		return nil, local, err
 	}
 	var err error
 	if row.SrcAtoms, err = self.atomList(request.Src); err != nil {

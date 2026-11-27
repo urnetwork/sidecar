@@ -144,6 +144,11 @@ type AclGrant struct {
 	LinkSpkiSha256 []byte
 	// Member-chosen text for people. It stays on devices.
 	Note string
+	// An ssh grant's users and check period (DESIGN-COMPUTE §16.2, §12.5), nil for any other grant. They stay on
+	// devices, as ports do.
+	Ssh *AclLocalSsh
+	// A compute:enclave rule's shapes (§16.2), nil for every shape. They stay on devices.
+	Shapes []string
 }
 
 // One requests rule (§8.5, §8.6): what a subject may ask for, and who answers. Unlike a grant it holds
@@ -760,8 +765,12 @@ func (self *aclPolicyReader) checkRepoKindDestinations(rule *aclPolicyRule, requ
 func (self *aclPolicyReader) readGrant() (AclGrant, error) {
 	grant := AclGrant{}
 	rule := aclPolicyRule{}
+	computeKeys := aclComputeRuleKeys{}
 	err := self.readFields(func(key string) func() error {
 		if read := self.readRuleField(key, &rule); read != nil {
+			return read
+		}
+		if read := self.readComputeRuleField(key, &computeKeys); read != nil {
 			return read
 		}
 		switch key {
@@ -857,7 +866,14 @@ func (self *aclPolicyReader) readGrant() (AclGrant, error) {
 	if err := self.checkRepoKindDestinations(&rule, false); err != nil {
 		return AclGrant{}, err
 	}
+	if err := self.checkComputeDestinations(&rule, &computeKeys, false); err != nil {
+		return AclGrant{}, err
+	}
 	grant.Id, grant.Src, grant.Dst, grant.Allow, grant.Note = rule.id, rule.src, rule.dst, rule.allow, rule.note
+	if computeKeys.hasUsers {
+		grant.Ssh = &AclLocalSsh{Users: computeKeys.users, Check: computeKeys.check}
+	}
+	grant.Shapes = computeKeys.shapes
 	return grant, nil
 }
 
@@ -914,6 +930,9 @@ func (self *aclPolicyReader) readRequest() (AclRequest, error) {
 		return AclRequest{}, err
 	}
 	if err := self.checkRepoKindDestinations(&rule, true); err != nil {
+		return AclRequest{}, err
+	}
+	if err := self.checkComputeDestinations(&rule, &aclComputeRuleKeys{}, true); err != nil {
 		return AclRequest{}, err
 	}
 	request.Id, request.Src, request.Dst, request.Allow, request.Note = rule.id, rule.src, rule.dst, rule.allow, rule.note
@@ -1054,13 +1073,16 @@ var aclNameRepoKinds = map[string]protocol.RepoKind{
 	"secret":      protocol.RepoKind_REPO_KIND_SECRET,
 }
 
-// One action's name, which §8.5's allow and a check's #action both write.
+// One action's name, which §8.5's allow and a check's #action both write: §8.4's, or DESIGN-COMPUTE §16.2's, which `*`
+// does not take.
 func parseAclAction(text string) (protocol.AclAction, error) {
-	action, known := aclNameActions[text]
-	if !known {
-		return 0, aclPolicyRefusal("an unknown action")
+	if action, known := aclNameActions[text]; known {
+		return action, nil
 	}
-	return action, nil
+	if action, known := aclComputeNameActions[text]; known {
+		return action, nil
+	}
+	return 0, aclPolicyRefusal("an unknown action")
 }
 
 // One channel's name.

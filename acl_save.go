@@ -201,7 +201,11 @@ func aclSaveNamesOf(policy *AclPolicy) *aclSaveNames {
 	}
 	addResources := func(resources []AclResource) {
 		for _, resource := range resources {
-			if resource.Kind == AclResourceSubject {
+			switch resource.Kind {
+			case AclResourceSubject:
+				add(resource.Subject)
+			case AclResourceListener:
+				// DESIGN-COMPUTE §26.7's listener:<selector>
 				add(resource.Subject)
 			}
 		}
