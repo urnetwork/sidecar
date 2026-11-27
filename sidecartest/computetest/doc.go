@@ -17,6 +17,14 @@
 //     policy_testhooks.go, under sidecar_testhooks, gives the verifier that pins the test release key
 //     (sidecar.NewComputePolicyVerifierForTest) and a device's policy store, gate and fetcher over it; the untagged
 //     build's answer ErrFakeComputePolicyUnlinked.
+//   - calendar*.go, FakeCalendarServer: the calendars a calendar link reaches (§23.7), one loopback HTTPS listener
+//     serving CalDAV (go-webdav's server over the fake's store, with discovery, privileges, sharing, expanded
+//     recurrences, ETag preconditions and RFC 6638's scheduling beside it), ICS feeds by secret address, and Google
+//     Calendar's and Microsoft Graph's calendar endpoints; every write logged with its precondition and what the
+//     provider mailed (FakeCalendarWrite), and a stop after a write applied and before its answer leaves
+//     (FakeCalendarStop) for §23.9's recovery.
+//   - fake_https.go: the loopback HTTPS server the network fakes share, named .example hosts under a test authority
+//     drawn from the seed, reached through each fake's dialer and trusted by its pool alone.
 //
 // Its rules, as sidecartest's:
 //
