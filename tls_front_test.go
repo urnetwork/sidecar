@@ -1522,29 +1522,23 @@ func newTlsFrontHeldMarginFixture(t *testing.T, hold tlsFrontTestLoopHold) (*tls
 	return fixture, notAfter.Add(-fixture.settings.CertifiedMargin), release
 }
 
-// QD-1002's race, forced: a look of runUpdates reads the clock, sends its update if it has one, and only then arms the
-// next margin's timer, from that reading. A move to the margin between the reading and the arming, as
-// TestTlsFrontKeepsItsRegistrationsListsInStep made before it waited, finds no timer of the loop's, and the loop arms
-// the margin's timer from the moved clock, a whole distance late: no update comes at the margin, and the name stays
-// listed past its not_after.
-func TestTlsFrontMarginMovedBeforeItsTimerComesLate(t *testing.T) {
+// QD-1002's race, forced, as QD-1425 leaves it: a look of runUpdates reads the clock, sends its update if it has one,
+// and only then sets the next margin's wait, now for the margin itself (sidecar.ClockAfterAt). A move to the margin
+// between the reading and the wait, as TestTlsFrontKeepsItsRegistrationsListsInStep made before it waited, finds the
+// margin reached as the wait is set, on this clock too, which takes the timeout from its reading as the wait is set:
+// the wait fires at once and the next look lists the name no longer, at the margin, though nothing moves the clock
+// again. The wait once took its timeout from the look's reading, and stood a whole distance past the margin.
+func TestTlsFrontMarginMovedBeforeItsTimerStillComesAtTheMargin(t *testing.T) {
 	for _, hold := range []tlsFrontTestLoopHold{tlsFrontTestHeldAfterSend, tlsFrontTestHeldInQuietLook} {
 		fixture, margin, release := newTlsFrontHeldMarginFixture(t, hold)
 		distance := margin.Sub(fixture.clock.Now())
 		fixture.clock.advance(distance)
 		close(release)
-		if at := fixture.clock.waitLoopTimer(t); !at.Equal(margin.Add(distance)) {
-			t.Fatalf("held %s: the margin's timer is due %s past the margin, not %s", hold, at.Sub(margin), distance)
-		}
-		// the loop waits on that timer alone, so nothing comes before it
-		select {
-		case update := <-fixture.updates:
-			t.Fatalf("held %s: an update at the margin %+v", hold, update)
-		default:
-		}
-		fixture.clock.advanceToLoopTimer(t, margin.Add(distance))
 		if update := fixture.nextUpdate(); len(update.CertifiedNames) != 0 {
-			t.Fatalf("held %s: the name is still listed a distance past the margin: %+v", hold, update)
+			t.Fatalf("held %s: at the margin the name is still listed: %+v", hold, update)
+		}
+		if now := fixture.clock.Now(); !now.Equal(margin) {
+			t.Fatalf("held %s: the clock is %s past the margin", hold, now.Sub(margin))
 		}
 	}
 }

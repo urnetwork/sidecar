@@ -506,8 +506,8 @@ func (self *GkmGroupClient) wait(ctx context.Context, delay time.Duration) error
 	}
 }
 
-// wait's for a time: until the clock reaches at, the wait set for that time itself (QD-1425), or ctx ends. A time
-// already reached waits for nothing.
+// Waits until the clock reaches at, the wait set for that time itself (QD-1425), or until ctx ends. A time already
+// reached waits for nothing.
 func (self *GkmGroupClient) waitUntil(ctx context.Context, at time.Time) error {
 	if !self.clock.Now().Before(at) {
 		return ctx.Err()
