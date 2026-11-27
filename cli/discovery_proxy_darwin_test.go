@@ -237,6 +237,8 @@ type testDarwinProxyConnection struct {
 	records   map[*darwinDnsSdRecord]string
 	taken     map[string]bool
 	registers map[string]int
+	// each name's latest registration's handler, which refuse calls
+	nameHandles map[string]func(reply *darwinDnsSdRegisterReply)
 	// hears each registration and withdrawal of a service by its name, "register <name>" and "cancel <name>"; nil hears
 	// none
 	events chan string
@@ -244,12 +246,24 @@ type testDarwinProxyConnection struct {
 
 func newTestDarwinProxyConnection() *testDarwinProxyConnection {
 	return &testDarwinProxyConnection{
-		done:      make(chan struct{}),
-		services:  map[*darwinDnsSdOperation]string{},
-		records:   map[*darwinDnsSdRecord]string{},
-		taken:     map[string]bool{},
-		registers: map[string]int{},
+		done:        make(chan struct{}),
+		services:    map[*darwinDnsSdOperation]string{},
+		records:     map[*darwinDnsSdRecord]string{},
+		taken:       map[string]bool{},
+		registers:   map[string]int{},
+		nameHandles: map[string]func(reply *darwinDnsSdRegisterReply){},
 	}
+}
+
+// Refuses name's latest registration on the calling goroutine, at the moment a test chooses, as mDNSResponder's reader
+// would when another registration took the name.
+func (self *testDarwinProxyConnection) refuse(name string) {
+	handle := func() func(reply *darwinDnsSdRegisterReply) {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		return self.nameHandles[name]
+	}()
+	handle(&darwinDnsSdRegisterReply{Err: darwinDnsSdError(darwinDnsSdErrNameConflict), Name: name})
 }
 
 // How many times name was registered.
@@ -279,6 +293,7 @@ func (self *testDarwinProxyConnection) Register(flags uint32, index uint32, name
 	operation := &darwinDnsSdOperation{}
 	self.services[operation] = name
 	self.registers[name] += 1
+	self.nameHandles[name] = handle
 	if self.events != nil {
 		self.events <- "register " + name
 	}
