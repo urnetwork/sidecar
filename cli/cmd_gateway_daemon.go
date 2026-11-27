@@ -27,9 +27,10 @@ func newUrDaemonGateway(stateDirectory string, settings *sidecar.SidecarSettings
 	})
 }
 
-// Registers gateway's control methods on daemon and holds its port where a grant stands. A port it could not bind is
-// logged and named by ur status; nothing here fails the daemon's start.
+// Registers gateway's control methods on daemon, over the networks it hosts, and holds its port where a grant stands. A
+// port it could not bind is logged and named by ur status; nothing here fails the daemon's start.
 func startUrDaemonGateway(daemon *sidecar.Daemon, gateway *sidecar.GatewayServer, log sidecar.Logger) error {
+	gateway.SetHosts(sidecar.GatewayDaemonHosts(daemon))
 	for _, method := range gateway.DaemonMethods() {
 		if err := daemon.RegisterMethod(method); err != nil {
 			return err

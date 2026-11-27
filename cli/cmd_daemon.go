@@ -960,6 +960,10 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) (runErr e
 		// while a hosted network's record_required is set, a fail-open install reads changed (status_settings.go)
 		RecordRequired: func() bool { return urDaemonRecordRequired(daemon.Sidecars()) },
 	}).Check)
+	// the gateway's run handles bind through the same run bindings (DESIGN-COMPUTE §8.9; mcp's hook_bind_gateway.go)
+	if gateway != nil {
+		gateway.SetRunBinder(mcpServer.Binder().GatewayRunBinder())
+	}
 	// ur hook's hook.event, which shares the server's run bindings (§16.7)
 	for _, method := range mcpServer.DaemonMethods() {
 		if err := daemon.RegisterMethod(method); err != nil {

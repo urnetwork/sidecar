@@ -52,6 +52,53 @@ var (
 	ErrGatewayClosed = errors.New("the gateway has closed")
 )
 
+// What the gateway reads of the daemon: the networks it hosts, and how a call's network argument names one (§5.8).
+// GatewayDaemonHosts gives a *Daemon's.
+type GatewayHosts interface {
+	GatewayNetworks() []GatewayHostedNetwork
+	ResolveNetwork(hello *DaemonHello, network string) (Id, error)
+}
+
+// One hosted network as the gateway reads it.
+type GatewayHostedNetwork struct {
+	NetworkId Id
+	Network   GatewayNetwork
+}
+
+// What the gateway reads of one network: its run files, its grants and its agents' ids. *Sidecar is one.
+type GatewayNetwork interface {
+	Runs() (*RunStore, error)
+	GatewayGrants() (*GatewayGrantStore, error)
+	ResolveAgentId(label string) (Id, error)
+}
+
+// A daemon's hosted Sidecars as the gateway's hosts.
+func GatewayDaemonHosts(daemon *Daemon) GatewayHosts {
+	return &gatewayDaemonHosts{daemon: daemon}
+}
+
+// GatewayHosts over a *Daemon.
+type gatewayDaemonHosts struct {
+	daemon *Daemon
+}
+
+// See GatewayHosts.
+func (self *gatewayDaemonHosts) GatewayNetworks() []GatewayHostedNetwork {
+	networks := []GatewayHostedNetwork{}
+	for _, hosted := range self.daemon.Sidecars() {
+		networks = append(networks, GatewayHostedNetwork{NetworkId: hosted.NetworkId, Network: hosted.Sidecar})
+	}
+	return networks
+}
+
+// See GatewayHosts.
+func (self *gatewayDaemonHosts) ResolveNetwork(hello *DaemonHello, network string) (Id, error) {
+	if hello == nil {
+		hello = &DaemonHello{Mode: DaemonModeControl}
+	}
+	return self.daemon.ResolveNetwork(hello, network)
+}
+
 // What a GatewayServer runs on.
 type GatewayServerArgs struct {
 	// The instance's <state>, whose gateway/gateway.json holds the port and the hold.
@@ -68,8 +115,18 @@ type GatewayServerArgs struct {
 	Clock Clock
 	// Nil is no logging.
 	Log Logger
-	// Where keys are drawn from: crypto/rand's reader when nil.
+	// Where keys and tokens are drawn from: crypto/rand's reader when nil.
 	Random io.Reader
+	// The process table a run handle's liveness reads: the system's when nil.
+	Processes ProcessTable
+	// The server's default budgets for an agent (§16.4), CACL's view; nil until it lands, and until then a grant names
+	// no budget of its own (gateway_grant.go).
+	BudgetDefaults func(ctx context.Context, network GatewayNetwork, agentId Id) (*GatewayBudgetCaps, error)
+	// Files kind 21 for a grant's raise (§16.3): nil is the network's compute client's RaiseBudget.
+	RaiseBudget func(ctx context.Context, network GatewayNetwork, args *ComputeBudgetRaiseArgs) (*ComputeBudgetRaiseResult, error)
+	// What a grant's model globs are held to (§16.4): the defaults when nil.
+	ModelsKey *ModelsKeySettings
+	Infer     *InferSettings
 }
 
 // What `ur status` reads of the gateway: the port, whether it holds it, and each address, never a key or a token.
@@ -99,9 +156,18 @@ type GatewayServer struct {
 	random         io.Reader
 	proof          *GatewayListenerProof
 	// the routes behind the guard; registration is safe while it serves
-	mux *http.ServeMux
+	mux            *http.ServeMux
+	processes      ProcessTable
+	budgetDefaults func(ctx context.Context, network GatewayNetwork, agentId Id) (*GatewayBudgetCaps, error)
+	raiser         func(ctx context.Context, network GatewayNetwork, args *ComputeBudgetRaiseArgs) (*ComputeBudgetRaiseResult, error)
+	modelsKey      *ModelsKeySettings
+	infer          *InferSettings
 
 	reloadLock sync.Mutex
+	// one writer of the state file at a time, a make's or a revoke's, taken before reloadLock
+	stateWriteLock sync.Mutex
+	// one unbound call at a time makes a grant's run of unbound calls (gateway_bind.go)
+	unboundLock sync.Mutex
 
 	stateLock sync.Mutex
 	// the state read last; nil where it did not read
@@ -118,6 +184,10 @@ type GatewayServer struct {
 	// the unit's listeners that could not be kept, each closed
 	refusedInherited int
 	closed           bool
+	// the daemon's networks, set once it is built; nil serves no token
+	hosts GatewayHosts
+	// mcp's run index, set once the MCP server is built; nil binds no call (gateway_bind.go)
+	binder GatewayRunBinder
 }
 
 // A server over args. It serves nothing until Start.
@@ -131,6 +201,18 @@ func NewGatewayServer(args *GatewayServerArgs) *GatewayServer {
 		log = NewNoopLogger()
 	}
 	clock := clockOrReal(args.Clock)
+	processes := args.Processes
+	if processes == nil {
+		processes = SystemProcessTable()
+	}
+	modelsKey := args.ModelsKey
+	if modelsKey == nil {
+		modelsKey = DefaultModelsKeySettings()
+	}
+	infer := args.Infer
+	if infer == nil {
+		infer = DefaultInferSettings()
+	}
 	self := &GatewayServer{
 		stateDirectory: args.StateDirectory,
 		settings:       settings,
@@ -141,6 +223,11 @@ func NewGatewayServer(args *GatewayServerArgs) *GatewayServer {
 		random:         args.Random,
 		proof:          NewGatewayListenerProof(settings, clock, args.Random),
 		mux:            http.NewServeMux(),
+		processes:      processes,
+		budgetDefaults: args.BudgetDefaults,
+		raiser:         args.RaiseBudget,
+		modelsKey:      modelsKey,
+		infer:          infer,
 	}
 	for _, inherited := range args.Inherited {
 		// a copy of the socket the server keeps, and from which each listener is made again
@@ -207,7 +294,8 @@ func (self *GatewayServer) Reload() GatewayServerStatus {
 		if self.closed {
 			return true
 		}
-		same := self.listener != nil && state.Holds() && self.listener.Port() == state.Port
+		// a listener that serves nothing binds again, as another process may have let the port go since
+		same := self.listener != nil && state.Holds() && self.listener.Port() == state.Port && 0 < len(self.listener.Listeners())
 		self.state, self.stateReason = state, stateReason
 		if same {
 			return true
@@ -334,6 +422,10 @@ func (self *GatewayServer) Status() GatewayServerStatus {
 // holds. ErrGatewayNotServing where nothing is served.
 func (self *GatewayServer) ListenerKey() (*GatewayListenerKey, error) {
 	status := self.Status()
+	if !status.Serving && status.Hold {
+		// the port may have been let go since: bind again before refusing
+		status = self.Reload()
+	}
 	if !status.Serving {
 		return nil, fmt.Errorf("%w: %s", ErrGatewayNotServing, status.Reason)
 	}
@@ -354,13 +446,23 @@ func (self *GatewayServer) ListenerKey() (*GatewayListenerKey, error) {
 	return reply, nil
 }
 
-// Registers a route behind the guard, for the gateway's own routes and a test's. A front registers through Handle,
-// which takes a grant's token first.
-func (self *GatewayServer) handleRaw(pattern string, handler http.Handler) {
-	self.mux.Handle(pattern, handler)
+// Sets the daemon's networks, which the daemon builds after the gateway.
+func (self *GatewayServer) SetHosts(hosts GatewayHosts) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.hosts = hosts
 }
 
-// The control methods the gateway serves: gateway.key and gateway.status here, and those gateway_token.go adds.
+// The daemon's networks, nil while none are set.
+func (self *GatewayServer) gatewayHosts() GatewayHosts {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.hosts
+}
+
+// The control methods the gateway serves: gateway.key and gateway.status (§8.4); gateway.token, which mints for the
+// caller the daemon reads from its socket's peer (gateway_token.go); and gateway.grants, which lists, makes and revokes
+// (gateway_grant.go). None is a Confirm method: a grant above the agent's default waits on kind 21's approval instead.
 func (self *GatewayServer) DaemonMethods() []*DaemonMethod {
 	return []*DaemonMethod{
 		{
@@ -374,6 +476,37 @@ func (self *GatewayServer) DaemonMethods() []*DaemonMethod {
 			Handler: func(ctx context.Context, call *DaemonCall) (any, error) {
 				status := self.Status()
 				return &status, nil
+			},
+		},
+		{
+			Name: DaemonMethodGatewayToken,
+			Handler: func(ctx context.Context, call *DaemonCall) (any, error) {
+				params := &GatewayTokenParams{}
+				if err := decodeGatewayParams(call, params); err != nil {
+					return nil, fmt.Errorf("%w: gateway.token's params do not read", ErrGatewayGrantInvalid)
+				}
+				return self.MintToken(ctx, call.Hello, params)
+			},
+		},
+		{
+			Name: DaemonMethodGatewayGrants,
+			Handler: func(ctx context.Context, call *DaemonCall) (any, error) {
+				params := &GatewayGrantsParams{}
+				if err := decodeGatewayParams(call, params); err != nil {
+					return nil, fmt.Errorf("%w: gateway.grants' params do not read", ErrGatewayGrantInvalid)
+				}
+				switch params.Action {
+				case "", GatewayGrantsActionList:
+					return self.ListGrants(params.Network, call.Hello)
+				case GatewayGrantsActionMake:
+					return self.MakeGrant(ctx, call.Hello, params)
+				case GatewayGrantsActionRevoke:
+					if params.GrantId == nil {
+						return nil, fmt.Errorf("%w: a revoke names its grant", ErrGatewayGrantInvalid)
+					}
+					return self.RevokeGrant(ctx, *params.GrantId)
+				}
+				return nil, fmt.Errorf("%w: no action %q", ErrGatewayGrantInvalid, params.Action)
 			},
 		},
 	}

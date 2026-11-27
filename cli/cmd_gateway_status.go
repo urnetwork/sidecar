@@ -1,7 +1,8 @@
-// The gateway's lines in `ur status` (DESIGN-COMPUTE §8.4, GW-M12-01): the port and, for each loopback address, whether
-// this daemon holds it, from its unit or by its own bind, or who else does where the OS shows it, since a token goes
-// only to a port the daemon is shown to hold (`ur gateway token` refuses otherwise). Nothing is printed for an instance
-// with no gateway port. The daemon's reply names no key and no token.
+// The gateway's lines in `ur status` (DESIGN-COMPUTE §8.4, §8.9; GW-M12-01, GW-M12-02): the port and, for each loopback
+// address, whether this daemon holds it, from its unit or by its own bind, or who else does where the OS shows it, since
+// a token goes only to a port the daemon is shown to hold (`ur gateway token` refuses otherwise); and each grant with
+// unbound tokens, with the command that binds a token to its harness (§8.9). Nothing is printed for an instance with no
+// gateway port. The daemon's replies name no key and no token.
 
 package main
 
@@ -25,6 +26,19 @@ func printUrGatewayStatus(ctx context.Context, cli *urCli) {
 	}
 	for _, line := range urGatewayStatusLines(status) {
 		fmt.Fprintf(cli.stdout, "%s\n", line)
+	}
+	grants := &sidecar.GatewayGrantsReply{}
+	if err := cli.callDaemon(ctx, sidecar.DaemonMethodGatewayGrants, &sidecar.GatewayGrantsParams{Action: sidecar.GatewayGrantsActionList}, false, grants); err != nil {
+		return
+	}
+	for _, view := range grants.Grants {
+		if unbound := view.LiveTokenCount - view.BoundTokenCount; 0 < unbound {
+			fmt.Fprintf(cli.stdout, "gateway:    grant %s (%s, agent %s) has %d unbound token(s): a token binds its harness when the harness's credential command runs `%s`\n",
+				view.Grant.GrantId, view.Grant.Harness, view.Grant.AgentLabel, unbound, view.BindCommand)
+		}
+	}
+	for _, unread := range grants.Unread {
+		fmt.Fprintf(cli.stdout, "gateway:    grants do not read: %s\n", unread)
 	}
 }
 
