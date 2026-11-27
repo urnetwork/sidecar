@@ -33,11 +33,21 @@
 //     secp256k1 signatures made and recovered with decred's library and Keccak-256.
 //   - fake_https.go: the loopback HTTPS server the network fakes share, named .example hosts under a test authority
 //     drawn from the seed, reached through each fake's dialer and trusted by its pool alone.
+//   - broker.go, Broker: the broker in process, CSRV-M12-01's real engine (computeservice.ComputeEngine) on an
+//     httptest server over FakeRedis twice (the main instance and {cmpa}'s), FakeAuthenticator, FakeServiceGates and
+//     FakeAbuseGate on one clock, every handler the linked areas registered and not_built for the rest; test sidecars
+//     (AddNetwork, AddSidecar) mint audience-compute tokens; the same broker takes real stores from its caller on the
+//     local stack. broker_auth.go is FakeComputeAuthState, the newest verified state a test sets (networks, members,
+//     roles, tags, consent, the admission flags, revocations, the compute block and its budgets); broker_stores.go the
+//     tables' stand-ins the guard reads (compute_abuse_hold, compute_catalog_version, the region lookup);
+//     broker_testhooks.go plants a test's handlers and the stand-ins through computeservice's sidecar_testhooks seam,
+//     which the untagged build refuses (ErrBrokerPlantUnlinked).
 //
 // Its rules, as sidecartest's:
 //
-//   - It imports the root, computeservice and searchsigner, and sidecartest, its parent, and no server package; server
-//     imports it for T3, as it imports sidecartest.
+//   - It imports the root, computeservice and searchsigner, owner decision 594's model and controller, operator-core's
+//     interfaces, and sidecartest, its parent, and no server package; server imports it for T3, as it imports
+//     sidecartest.
 //   - A test that uses it is an external test package: an internal test of the root or of computeservice cannot import
 //     it without a cycle, so a root test that drives these fakes declares package sidecar_test.
 //   - What reaches past a format's public surface into a test's seam needs sidecar_testhooks, which no shipped build
