@@ -430,10 +430,19 @@ func (self *tlsCtWatch) judge(certificate *TlsCtAlarm, rows []*TlsCertRecord, id
 	return &alarm
 }
 
-// Runs one pass now and answers how many alarms stand. A sidecar that is not listening watches nothing.
+// Runs one pass now and answers how many alarms stand. A sidecar that is not listening watches nothing. A ctx that has
+// ended, before the pass or while it waited for the one running, runs none and leaves the status as it stood, so no
+// pass on a dead context reads the names or rows and marks the watch degraded; one that ends partway is degraded
+// ("ended"), its sources not all read.
 func (self *tlsCtWatch) Pass(ctx context.Context) int {
+	if ctx.Err() != nil {
+		return self.standingCount()
+	}
 	self.passLock.Lock()
 	defer self.passLock.Unlock()
+	if ctx.Err() != nil {
+		return self.standingCount()
+	}
 	now := self.clock.Now()
 	if self.listening != nil && !self.listening() {
 		self.endPass(now, false, nil)
@@ -570,6 +579,13 @@ func (self *tlsCtWatch) Pass(ctx context.Context) int {
 		return degraded("state")
 	}
 	return self.endPass(now, sourceFailed, alarms)
+}
+
+// How many alarms stand, the status left as it is.
+func (self *tlsCtWatch) standingCount() int {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return len(self.status.Alarms)
 }
 
 // Ends a pass: its status, and an event for each alarm this process has not raised. alarms nil leaves the standing

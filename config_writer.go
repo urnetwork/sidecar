@@ -259,6 +259,8 @@ type ConfigWriter struct {
 	// an entry landing, which may make a fold due
 	entryLanded    chan struct{}
 	removeCallback func()
+	// closed once the fold loop has returned; a writer newConfigWriter makes alone runs none, and it stays open
+	runDone chan struct{}
 
 	stateLock sync.Mutex
 	// the newest head the store held with no base naming it, and since when this writer saw it
@@ -308,6 +310,7 @@ func newConfigWriter(ctx context.Context, args *ConfigWriterArgs) *ConfigWriter 
 		cancel:      cancel,
 		baseLanded:  make(chan struct{}, 1),
 		entryLanded: make(chan struct{}, 1),
+		runDone:     make(chan struct{}),
 	}
 }
 
@@ -378,10 +381,17 @@ func (self *ConfigWriter) SaveBridgeBlock(ctx context.Context) (*bridge.AuthPin,
 			}
 		case errors.As(err, &transient) && transient.RefusesNothing(), errors.Is(err, ErrGkmWait), errors.Is(err, ErrGkmAuthAhead):
 			last = err
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			select {
 			case <-ctx.Done():
-				return nil, ctx.Err()
 			case <-self.clock.After(self.settings.BridgeBlockRetryWait):
+			}
+			// select takes either of two ready cases at random: a wait that ended as ctx did tries nothing more, so no
+			// attempt plans, pushes or signs on the dead context
+			if err := ctx.Err(); err != nil {
+				return nil, err
 			}
 		default:
 			return nil, err
@@ -792,9 +802,12 @@ func configSignRecord(sign ConfigSignFunction, signedType bridge.SignedType, bod
 
 // The fold loop: a fold due now waits its random delay, which another base cancels, then publishes; a pending head
 // past its timeout gets its base; otherwise the loop waits for an entry, a base, CheckInterval or the time age makes a
-// fold due, whichever comes first, that time waited for itself (QD-1425).
+// fold due, whichever comes first, that time waited for itself (QD-1425). No publish starts once the writer has closed,
+// a delay, an entry or a timer taken as it closed included, so no base is signed on its dead context.
 func (self *ConfigWriter) run() {
-	for {
+	defer close(self.runDone)
+	// select takes any of its ready cases at random: a case taken as the writer closed reads as the end
+	for self.ctx.Err() == nil {
 		var foldAt time.Time
 		if due, dueAt := self.foldDue(); due {
 			delay := time.Duration(self.random() * float64(self.settings.FoldDelayMax))
@@ -805,6 +818,9 @@ func (self *ConfigWriter) run() {
 				// another writer's base: look again, the fold most likely done
 				continue
 			case <-self.clock.After(delay):
+			}
+			if self.ctx.Err() != nil {
+				return
 			}
 			if due, _ := self.foldDue(); due {
 				self.publishWithTimeout(true)
@@ -823,7 +839,6 @@ func (self *ConfigWriter) run() {
 		}
 		select {
 		case <-self.ctx.Done():
-			return
 		case <-self.entryLanded:
 		case <-ClockAfterAt(self.clock, waitAt):
 		}
