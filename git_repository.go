@@ -48,6 +48,8 @@ type gitRepositoryState struct {
 	Branches []GitConfigBranch `json:"branches,omitempty"`
 	// The sparse prefix the worktree checks out (GIT-M13-02), "" for every path.
 	Sparse string `json:"sparse,omitempty"`
+	// Whether the worktree defers blobs to the promisor (GIT-M13-02): set by a sparse clone, never cleared.
+	Lazy bool `json:"lazy,omitempty"`
 }
 
 // The state's one version.
@@ -63,6 +65,10 @@ type GitRepository struct {
 	state      *gitRepositoryState
 	userName   string
 	userEmail  string
+	// the remote's evs for this command's fetches and lazy blobs (GIT-M13-02), nil until Connect
+	evs *GitEvsArgs
+	// the judge and taint every fetch of this command shares, so one taint covers them all
+	fetchGate *gitFetchGate
 }
 
 // What a new repository is made with.
@@ -120,7 +126,9 @@ func InitGitRepository(ctx context.Context, args *GitInitArgs) (*GitRepository, 
 	}
 	repository := &GitRepository{
 		fileSystem: fileSystem, settings: settings,
-		state: &gitRepositoryState{Version: gitRepositoryStateVersion, Remote: args.Remote, Sparse: gitSparsePrefix(args.Sparse)},
+		state: &gitRepositoryState{
+			Version: gitRepositoryStateVersion, Remote: args.Remote, Sparse: gitSparsePrefix(args.Sparse), Lazy: args.Sparse != "",
+		},
 	}
 	repository.wire(habits)
 	if err := repository.refs.SetHead(&GitHead{Symbolic: GitBranchPrefix + branch}); err != nil {
@@ -210,9 +218,10 @@ func OpenGitRepository(ctx context.Context, args *GitOpenArgs) (*GitRepository, 
 	return repository, nil
 }
 
-// Builds the store, refs and worktree over the file system.
+// Builds the store, its promisor, the refs and the worktree over the file system.
 func (self *GitRepository) wire(habits *GitWorktreeHabits) {
 	self.objects = newGitObjectStore(self.fileSystem, self.settings)
+	self.objects.promisor = &gitEvsPromisor{repository: self, table: self.promisorTable()}
 	self.refs = newGitRefs(self.fileSystem, self.settings)
 	self.worktree = newGitWorktree(self.fileSystem, self.settings, self.objects, habits)
 }
