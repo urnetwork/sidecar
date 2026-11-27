@@ -626,7 +626,8 @@ func (self *OrphanGc) busy(ctx context.Context, clusterId string) bool {
 }
 
 // Waits until the segment cluster may take its next DELETE: DeleteRate a second. A busy cluster ends the run's
-// deletes there (errOrphanClusterBusy), as it pauses a drop job's, and the next night tries again.
+// deletes there (errOrphanClusterBusy), as it pauses a drop job's, and the next night tries again. ctx's error once it
+// has ended, the cluster's turn taken as it ended included.
 func (self *OrphanGc) pace(ctx context.Context, clusterId string) error {
 	if self.busy(ctx, clusterId) {
 		return errOrphanClusterBusy
@@ -657,7 +658,11 @@ func (self *OrphanGc) pace(ctx context.Context, clusterId string) error {
 		select {
 		case <-sidecar.ClockAfterAt(self.clock, nextDelete):
 		case <-ctx.Done():
-			return ctx.Err()
+		}
+		// select takes either of its ready cases at random: the cluster's turn taken as ctx ended answers the end, so
+		// no DELETE goes on the dead context to be counted failed
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 	}
 }

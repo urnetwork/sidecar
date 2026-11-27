@@ -944,10 +944,14 @@ func (self *SupportClient) hostAndToken(ctx context.Context) (string, string, er
 }
 
 // The loop: posts what is due, spends decisions on what awaits one, reads the member's events, and prunes, each wake or
-// interval, counting each pass as it begins and ends for Wake.
+// interval, counting each pass as it begins and ends for Wake. No pass starts once the client has closed, a wake or the
+// interval's end taken as it closed included, since a pass whose outbox holds nothing reads the member's events, and on
+// the dead context logs its token's failure to the support log; a closed client asks the clock for nothing.
 func (self *SupportClient) run() {
 	defer close(self.runDone)
-	for {
+	// select takes any of its ready cases at random: a wake or the interval's end taken as the client closed reads as
+	// the end
+	for self.ctx.Err() == nil {
 		self.passes.Update(func(passes supportPasses) supportPasses {
 			passes.begun += 1
 			return passes
@@ -962,9 +966,12 @@ func (self *SupportClient) run() {
 			passes.ended += 1
 			return passes
 		})
+		if self.ctx.Err() != nil {
+			// a client that closed as the pass ran asks the clock for nothing
+			return
+		}
 		select {
 		case <-self.ctx.Done():
-			return
 		case <-self.wake:
 		case <-self.clock.After(self.settings.LoopInterval):
 		}

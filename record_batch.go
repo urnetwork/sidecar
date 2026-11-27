@@ -278,11 +278,13 @@ func (self *recordWriter) queueLogIds() []Id {
 }
 
 // Carries journaled entries to evs until ctx ends, calling tend, when given, at each pass before it pumps. See the
-// file's header.
+// file's header. No pass starts once ctx has ended, a wake taken as it ended included, so nothing is tended, drained
+// from the spool or planned past the end, and an ended ctx asks the clock for nothing.
 func (self *recordWriter) run(ctx context.Context, tend func(ctx context.Context)) {
 	self.runLock.Lock()
 	defer self.runLock.Unlock()
-	for {
+	// select takes either of its ready cases at random: a wake taken as ctx ended reads as the end
+	for ctx.Err() == nil {
 		if tend != nil {
 			tend(ctx)
 		}
@@ -294,6 +296,10 @@ func (self *recordWriter) run(ctx context.Context, tend func(ctx context.Context
 		if err := self.pump(ctx, false); err != nil && self.log.V(1).Enabled() {
 			self.log.Infof("[record]a push did not commit: %s", err)
 		}
+		if ctx.Err() != nil {
+			// a writer that ended as the pass ran asks the clock for nothing
+			return
+		}
 		stop := func() bool { return false }
 		if wakeAt, ok := self.nextWake(); ok {
 			// for that time itself (QD-1425); signal never blocks, so a time already reached may signal here
@@ -301,8 +307,6 @@ func (self *recordWriter) run(ctx context.Context, tend func(ctx context.Context
 		}
 		select {
 		case <-ctx.Done():
-			stop()
-			return
 		case <-self.wake:
 		}
 		stop()

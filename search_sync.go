@@ -553,7 +553,9 @@ func (self *SearchSync) RunRound(ctx context.Context, repoId Id, refId Id, more 
 	return self.round(ctx, ref, more)
 }
 
-// Runs rounds in the background as they come due, until Close.
+// Runs rounds in the background as they come due, until Close. No round starts once ctx has ended, a wake or a due
+// time taken as it ended included, since a round claims its ref and begins a non-writer's receipt round before its
+// reads meet the dead context, and an ended ctx asks the clock for nothing.
 func (self *SearchSync) Start(ctx context.Context) {
 	self.stateLock.Lock()
 	if self.closed || self.cancel != nil {
@@ -567,15 +569,19 @@ func (self *SearchSync) Start(ctx context.Context) {
 	self.stateLock.Unlock()
 	go func() {
 		defer close(done)
-		for {
+		// select takes any of its ready cases at random: a wake or a due time taken as ctx ended reads as the end
+		for runCtx.Err() == nil {
 			next := self.RunDue(runCtx)
+			if runCtx.Err() != nil {
+				// rounds that ended as these ran ask the clock for nothing
+				return
+			}
 			var timer <-chan time.Time
 			if !next.IsZero() {
 				timer = ClockAfterAt(self.args.clock, next)
 			}
 			select {
 			case <-runCtx.Done():
-				return
 			case <-self.wake:
 			case <-timer:
 			}

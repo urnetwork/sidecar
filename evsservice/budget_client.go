@@ -204,16 +204,22 @@ func (self *WriteBudgetClient) Close() {
 	})
 }
 
-// Ticks each account at once, then every Interval.
+// Ticks each account at once, then every Interval. No tick starts once the budget has ended, the interval's end taken
+// as it ended included, since a tick lapses the shares, dispatches the waiters and moves the totals that Close's last
+// reports then write, whatever its reads meet, and an ended budget asks the clock for nothing.
 func (self *WriteBudgetClient) runAccounts() {
 	clusterIds := slices.Sorted(maps.Keys(self.clusterIdAccounts))
-	for {
+	// select takes either of its ready cases at random: the interval's end taken as the budget ended reads as the end
+	for self.ctx.Err() == nil {
 		for _, clusterId := range clusterIds {
 			self.clusterIdAccounts[clusterId].tick(self.ctx)
 		}
+		if self.ctx.Err() != nil {
+			// a budget that ended as the accounts ticked asks the clock for nothing
+			return
+		}
 		select {
 		case <-self.ctx.Done():
-			return
 		case <-self.clock.After(self.settings.Interval):
 		}
 	}
