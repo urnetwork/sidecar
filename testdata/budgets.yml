@@ -192,9 +192,9 @@ budgets:
     package: "."
     name: BenchmarkSubprotocolReceive
     settings: "envelopeCodec and the real handler, production settings"
-    limits: {allocs_per_op: 19}
+    limits: {allocs_per_op: 18}
     reviewed: ""
-    note: "the gate is no regression from PROTO-M1-11's recorded baseline, 18 a request by testing.AllocsPerRun's least of three (testdata/receive_allocs.json, which TestReceiveAllocsHoldTheBaseline holds); this benchmark's one 100-iteration run counts the process's allocations, the fixture's background goroutines' among them, and reads 19 run after run, so 19 is that baseline here (PROTO-M5-05, 2026-11-11)"
+    note: "the gate is no regression from PROTO-M1-11's recorded baseline, 18 a request by testing.AllocsPerRun's least of three (testdata/receive_allocs.json, which TestReceiveAllocsHoldTheBaseline holds). This benchmark's one 100-iteration run counts the process's allocations, so it opens its window only once every other goroutine is parked (envelope_bench_test.go): before that, its fixture's connect client's start, the key publish through ControlSync and the send sequence to ControlId it opens, fell in the window as far as load delayed it, up to about 200 allocations, which read 19 and at tip-check fcd6fd90 20 while the receive path's own count stayed 18. Settled, it reads 18 run after run, 1,790 to 1,813 allocations a run under load and beside 28 busy loops, so 18 is that baseline here too (receive-allocs-under-load, 2026-11-26; 19 from PROTO-M5-05, 2026-11-11)"
   - id: ios-extension-device-role
     spec: "§18.10 and DESIGN-DETAILS 4.2.3 (D-SDK-20, Q-SDK-7; owner decisions 215 and 491): what the forwarding leg, device and protocol/bridge with the root and protocol files on check/testdata/ios_extension_leg.txt, adds to the ios_extension leg, 7.5 MiB stripped"
     kind: size
