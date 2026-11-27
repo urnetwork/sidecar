@@ -225,6 +225,14 @@ var failsOnRows = []failsOnRow{
 		plantedTests: []string{"TestLegsFailsOnASearchRemoteFileOnTheWorkerLeg"},
 	},
 	{
+		row: "legs", item: "DESIGN-COMPUTE §15.4's browser legs: a root compute family's file on the sidecar_http leg, or an sdk file declaring §15.3's surface on sdk.wasm's js leg",
+		rule:         (*repository).computeBrowserLegFindings,
+		checkoutTest: "TestComputeStaysOffTheSidecarHttpLeg",
+		plantedTests: []string{
+			"TestComputeBrowserLegFailsOnAComputeFileWithoutTheTag", "TestComputeBrowserLegFailsOnAnSdkComputeShellOnTheJsLeg",
+		},
+	},
+	{
 		row: "legs", item: "from M10, the ios_extension legs compiling an index or search file, or evsindex.proto's or search.proto's descriptors (§18.10, §22.5's §18 row; QD-988)",
 		rule: func(self *repository, t testing.TB) []string {
 			return rowOff(self.report, self.settings.switches.iosExtensionLinksNoIndex, "iosExtensionLinksNoIndex", self.iosExtensionIndexFindings(t))
