@@ -20,8 +20,8 @@
 //	          the gateway stays stateless), or one whose items are not objects, records nothing: a call whose context
 //	          cannot be journaled is not made (IC-19)
 //
-// The Messages front's items are CTXH-M13-01's; until they land a Messages call is refused, recording nothing.
-// Package-level functions are safe for concurrent use.
+// The Messages front's items are session_gateway_messages.go's (CTXH-M13-01). Package-level functions are safe for
+// concurrent use.
 
 package sidecar
 
@@ -41,6 +41,8 @@ const (
 	SessionGatewayApiResponses SessionGatewayApi = "responses"
 	// POST /v1/chat/completions: OpenCode's, Goose's, Aider's and the other open harnesses'.
 	SessionGatewayApiChatCompletions SessionGatewayApi = "chat_completions"
+	// POST /v1/messages: Claude Code's (session_gateway_messages.go).
+	SessionGatewayApiMessages SessionGatewayApi = "messages"
 )
 
 // The members and values of the fronts' request bodies the recorder reads: format values.
@@ -112,6 +114,8 @@ func sessionGatewayItemsOf(api SessionGatewayApi, body []byte) (*sessionGatewayI
 		return sessionResponsesItems(request)
 	case SessionGatewayApiChatCompletions:
 		return sessionChatCompletionsItems(request)
+	case SessionGatewayApiMessages:
+		return sessionMessagesItems(request)
 	}
 	return nil, fmt.Errorf("%w: front %q", ErrSessionGatewayRefused, api)
 }
@@ -129,6 +133,8 @@ func sessionGatewayOutputOf(api SessionGatewayApi, item []byte, first bool) (map
 		return sessionResponsesNormalize(object), nil
 	case SessionGatewayApiChatCompletions:
 		return sessionChatNormalize(object), nil
+	case SessionGatewayApiMessages:
+		return sessionMessagesOutput(object, first), nil
 	}
 	return nil, fmt.Errorf("%w: front %q", ErrSessionGatewayRefused, api)
 }

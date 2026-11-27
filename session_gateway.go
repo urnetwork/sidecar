@@ -34,6 +34,10 @@
 //	           exact where nothing in the request was redacted, stubbed or kept by hash alone, and request_sha256 by
 //	           the renderer GW names where this build holds it (session_render.go); a renderer it does not hold
 //	           records none, so a rebuild reads the call unverifiable, never verified, and never alarms on it
+//	search     a harness's own copies of the MCP web_search tool's results in its requests are §21.6's stub before
+//	           their forms are taken (session_stub.go: by the call that carried them, then by the hashes the tool
+//	           served in the call's run or a run it continues), counted in the node's stubs, so the call reads inexact
+//	           (§24.9, CTXH-M13-01)
 //	coverage   a run the gateway recorded a call in has source gateway (Recorded); a hook's or telemetry's model_call
 //	           whose request id no call here answered counts the run's gap context_partial (HookModelCall), and the
 //	           harness it came from is named until the window passes, for ur status (Q-CTXH-14)
@@ -128,6 +132,9 @@ type SessionGatewayRecorderArgs struct {
 	Store SidecarStore
 	// The index over Store, where the caller holds one already; nil builds it.
 	Index *SessionGatewayIndex
+	// The hashes the MCP web_search tool served, run by run, which a harness's copies of its results are matched
+	// against (§24.9); nil matches them by the calls that carried them alone.
+	Served *SessionServedHashes
 	// The journal's when nil.
 	Settings *SessionSettings
 	Clock    Clock
@@ -152,6 +159,7 @@ type SessionGatewayRecorder struct {
 	settings *SessionSettings
 	clock    Clock
 	gap      func(runId Id, code string)
+	served   *SessionServedHashes
 
 	stateLock  sync.Mutex
 	runIdLocks map[Id]*sync.Mutex
@@ -196,6 +204,7 @@ func NewSessionGatewayRecorder(args *SessionGatewayRecorderArgs) (*SessionGatewa
 		settings:   settings,
 		clock:      clockOrReal(args.Clock),
 		gap:        args.Gap,
+		served:     args.Served,
 		runIdLocks: map[Id]*sync.Mutex{},
 		partials:   map[string]*SessionGatewayPartial{},
 	}, nil
@@ -283,6 +292,8 @@ type sessionGatewayCallNode struct {
 	form        *sessionGatewayForm
 	// a part kept by hash alone, or a node the index does not know, whose exactness is unknown
 	inexact bool
+	// the search copies the recorder stubbed in its item
+	stubs int
 }
 
 // The run and session_entry a call's first new node hangs from in another run: RECORD.md section 4.3's
@@ -507,18 +518,23 @@ func (self *SessionGatewayCall) heldInexact(runId Id, chainSha256 [sha256.Size]b
 func (self *SessionGatewayCall) takeInput(ctx context.Context, input []map[string]any) error {
 	recorder := self.recorder
 	runId := self.binding.RunId
+	runIds := recorder.index.candidates(runId, self.binding.GrantId, self.binding.Resumes)
+	// a harness's copies of web search results become their stubs before anything of them is hashed (§24.9)
+	stubs, err := NewSessionStubber(recorder.served, runIds...).StubItems(input)
+	if err != nil {
+		return err
+	}
 	nodes := []*sessionGatewayCallNode{}
 	var parentChain []byte
-	for _, object := range input {
-		form, err := recorder.formOf(runId, self.binding.GrantId, object, 0)
+	for i, object := range input {
+		form, err := recorder.formOf(runId, self.binding.GrantId, object, stubs[i])
 		if err != nil {
 			return err
 		}
 		chainSha256 := sessionChainSha256(parentChain, form.itemSha256[:])
-		nodes = append(nodes, &sessionGatewayCallNode{chainSha256: chainSha256, form: form})
+		nodes = append(nodes, &sessionGatewayCallNode{chainSha256: chainSha256, form: form, stubs: stubs[i]})
 		parentChain = chainSha256[:]
 	}
-	runIds := recorder.index.candidates(runId, self.binding.GrantId, self.binding.Resumes)
 	held := 0
 	for _, node := range nodes {
 		heldRunId, nodeId, ok := self.heldIn(runIds, node.chainSha256)
@@ -536,7 +552,7 @@ func (self *SessionGatewayCall) takeInput(ctx context.Context, input []map[strin
 	drafts := []*SessionNode{}
 	for i := held; i < len(nodes); i += 1 {
 		node := nodes[i]
-		draft := &SessionNode{Key: sessionGatewayChainKey(node.chainSha256), Type: SessionNodeMessage, Item: node.form.raw, FromHarness: true}
+		draft := &SessionNode{Key: sessionGatewayChainKey(node.chainSha256), Type: SessionNodeMessage, Item: node.form.raw, FromHarness: true, Stubs: node.stubs}
 		if 0 < i {
 			parent := nodes[i-1]
 			if i == held && parent.runId != runId {
@@ -888,8 +904,13 @@ func (self *Sidecar) SessionGatewayRecorder() (*SessionGatewayRecorder, error) {
 	if component.recorder != nil {
 		return component.recorder, nil
 	}
+	served, err := self.SessionServedHashes()
+	if err != nil {
+		return nil, err
+	}
 	recorder, err := NewSessionGatewayRecorder(&SessionGatewayRecorderArgs{
 		Journal:  journal,
+		Served:   served,
 		Runs:     sessionGatewayRunStore{runs: runs},
 		Index:    index,
 		Settings: index.settings,
@@ -905,6 +926,24 @@ func (self *Sidecar) SessionGatewayRecorder() (*SessionGatewayRecorder, error) {
 	}
 	component.recorder = recorder
 	return recorder, nil
+}
+
+// The harnesses whose model calls the network's gateway did not see (Q-CTXH-14), as its recorder holds them: nil where
+// no recorder is built, so ur status builds nothing.
+func (self *Sidecar) SessionGatewayContextPartial() []*SessionGatewayPartial {
+	component, err := sidecarComputeComponent[sidecarSessionGateway](self, sessionGatewayComponentName)
+	if err != nil {
+		return nil
+	}
+	recorder := func() *SessionGatewayRecorder {
+		component.stateLock.Lock()
+		defer component.stateLock.Unlock()
+		return component.recorder
+	}()
+	if recorder == nil {
+		return nil
+	}
+	return recorder.ContextPartial()
 }
 
 // Whether the gateway recorded a call in the run within the index's window: what a run's coverage reads to name source

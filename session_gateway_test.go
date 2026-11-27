@@ -97,6 +97,9 @@ type testSessionGatewayWorld struct {
 	store    sidecar.SidecarStore
 	recorder *sidecar.SessionGatewayRecorder
 	grantId  sidecar.Id
+	// the served set of web_search hashes and its store, nil until a test asks for them (session_stub_test.go)
+	servedHashes *sidecar.SessionServedHashes
+	servedStore  sidecar.SidecarStore
 
 	stateLock sync.Mutex
 	gaps      []string
@@ -121,7 +124,7 @@ func newTestSessionGatewayWorld(t *testing.T) *testSessionGatewayWorld {
 func (self *testSessionGatewayWorld) open() {
 	self.t.Helper()
 	recorder, err := sidecar.NewSessionGatewayRecorder(&sidecar.SessionGatewayRecorderArgs{
-		Journal: self.journal.journal, Runs: self.runs, Store: self.store, Clock: self.journal.world.clock,
+		Journal: self.journal.journal, Runs: self.runs, Store: self.store, Clock: self.journal.world.clock, Served: self.servedHashes,
 		Gap: func(runId sidecar.Id, code string) {
 			self.stateLock.Lock()
 			defer self.stateLock.Unlock()
