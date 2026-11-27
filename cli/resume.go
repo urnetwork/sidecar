@@ -87,14 +87,18 @@ func (self *urBridgeDaemon) runResumeWatch(watch urResumeWatchFunction) {
 }
 
 // The desktop's cap on the core's waits (the file's comment): every interval of the daemon's clock, the core's checks,
-// for the daemon's life, closing clockCapDone once it ends.
+// for the daemon's life, closing clockCapDone once it ends. No check runs once the daemon has ended, a timer taken as
+// it ended included.
 func (self *urBridgeDaemon) runClockCap(interval time.Duration) {
 	defer close(self.clockCapDone)
-	for {
+	// select takes either of its ready cases at random: a timer taken as the daemon ended reads as the end
+	for self.ctx.Err() == nil {
 		select {
 		case <-self.ctx.Done():
-			return
 		case <-self.clock.After(interval):
+		}
+		if self.ctx.Err() != nil {
+			return
 		}
 		self.checkCoreClocks()
 	}
