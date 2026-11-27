@@ -11,7 +11,9 @@
 // receipt round, the config follower anchored and bound the member record, the socket component withdrew key paths and
 // rechecked live streams, and the support client logged its token's failure to the support log. Each now answers the
 // end whatever else was ready, and an ended context asks the clock for nothing. The Forwarder's wait, which another
-// lane held when clock-wait-at-sweep ran, is set for its time itself (QD-1425).
+// lane held when clock-wait-at-sweep ran, is set for its time itself (QD-1425). The person's watch, the inbox watch's
+// shape in a file the later pass did not hold, told the person's view what it read past its end and recorded it seen;
+// it answers its end as the inbox watch does since sweep-later-followups.
 //
 // The proof is clockSelectEndingClock (clock_select_ctx_sweep_rest_test.go), sidecartest's EndingClock with its
 // AfterFunc's waits fired as FireAfterFuncs has them, which the root's own tests cannot import: it ends the context as
@@ -116,6 +118,39 @@ func TestAgentInboxWatchPassesNothingAfterItEnds(t *testing.T) {
 			done:          make(chan struct{}),
 			settings:      settings,
 			clock:         clock,
+			subscriptions: map[Id]*EvsSubscription{},
+		}
+		clock.arm(2, cancel)
+		clock.open()
+		watch.signal()
+		go watch.run()
+		clock.awaitDone(t, watch.done, "the watch")
+		if passes := passCount.Load(); passes != 2 || clock.waits() != 2 {
+			t.Fatalf("round %d: %d passes and %d pauses, want 2 of each", round, passes, clock.waits())
+		}
+	}
+}
+
+// The person's watch tells the person's view nothing once it has ended (sweep-later-followups): each pass refused, it
+// signals itself and pauses WatchRetryWait, and an end landing as the second pause's end fires ends the watch after the
+// two passes before it, in each of 64 rounds. A watch that took the pause's end and then its signal passed on the dead
+// watch, which tells the view each message it reads, with the notification another sender's message gives, and records
+// it seen.
+func TestAgentPersonWatchTellsNothingAfterItEnds(t *testing.T) {
+	settings := DefaultSkillSettings()
+	for round := range 64 {
+		clock := newClockSelectEndingClock(t, clockSelectTestStart(), false, settings.WatchRetryWait)
+		passCount := &atomic.Int64{}
+		ctx, cancel := context.WithCancel(context.Background())
+		watch := &AgentPersonWatch{
+			client: newClockSweepLaterAgentsClient(clock, settings),
+			args: &AgentPersonWatchArgs{Passed: func(err error) {
+				passCount.Add(1)
+			}},
+			ctx:           ctx,
+			cancel:        cancel,
+			wake:          make(chan struct{}, 1),
+			done:          make(chan struct{}),
 			subscriptions: map[Id]*EvsSubscription{},
 		}
 		clock.arm(2, cancel)

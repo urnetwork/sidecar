@@ -10,6 +10,7 @@ package main
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -190,13 +191,19 @@ func TestDaemonResumeChecksTheCoresClocksBesideTheBridges(t *testing.T) {
 }
 
 // The desktop's cap: every interval of the daemon's clock the core's checks run, never the bridges', which cap their
-// own waits; nothing runs a second short of the interval; and close waits for the cap.
+// own waits; nothing runs a second short of the interval; and close waits for the cap. The shared blocks' judgment
+// waits on the same clock, so the test knows the cap's wait by its time, the interval from the clock's reading, never
+// by a count of the clock's timers: a count the judgment's met before the cap armed its own let the test move the
+// clock first, which set the cap's wait from the moved time, past the test's next move.
 func TestDaemonClockCapChecksTheCoreEachInterval(t *testing.T) {
 	clock := sidecartest.NewFakeClock(sidecartest.DefaultClockStart())
 	interval := 30 * time.Second
+	settings := testUrTunSettings()
+	// the judgment's waits an hour apart, so none of its is due when the cap's is
+	settings.SharedBlockInterval = time.Hour
 	bridges := newUrBridgeDaemon(context.Background(), &urBridgeDaemonArgs{
 		Instance:           "test",
-		Settings:           testUrTunSettings(),
+		Settings:           settings,
 		ClockCheckInterval: interval,
 		Clock:              clock,
 	})
@@ -214,11 +221,21 @@ func TestDaemonClockCapChecksTheCoreEachInterval(t *testing.T) {
 	bridges.addClockCheck(func() {
 		coreChecked <- struct{}{}
 	})
+	// the cap's wait, set as the cap reaches it for the interval from where the clock stands, which only the test moves
 	awaitCapWait := func() {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-		defer cancel()
-		if err := clock.AwaitTimers(ctx, 1); err != nil {
-			t.Fatal("the cap armed no wait")
+		capAt := clock.Now().Add(interval)
+		guard := time.After(time.Minute)
+		for {
+			// read with the channel the next timer closes, so no timer set between the read and the wait goes unseen
+			pending, added := clock.WatchTimers()
+			if slices.ContainsFunc(pending, capAt.Equal) {
+				return
+			}
+			select {
+			case <-added:
+			case <-guard:
+				t.Fatalf("the cap armed no wait for %v, only %v", capAt, pending)
+			}
 		}
 	}
 	awaitCoreCheck := func() {

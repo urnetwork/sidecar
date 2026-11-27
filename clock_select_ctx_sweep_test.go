@@ -27,20 +27,21 @@
 //	every case ends the wait, or the timer's answers the call: the drains (daemon_socket.go's, dnsservice's api and
 //	  edge, evsservice/engine.go's two, gkmservice's, computeservice's waitInFlight, socket_listen.go's,
 //	  socket_platform_listen.go's, smtpedgeservice's drainConnections, tlsedgeservice's Drain, evsservice/purge.go's
-//	  Drain, mxedgeservice's Drain); the answers (daemon_events.go next, daemon_search_budget.go Admit,
-//	  harness_daemon.go's events, harness_ui.go Ask, mail_local_credential.go Check, pushservice's long poll,
-//	  stream_open.go OpenStream, rpc_call.go awaitPending, whose DEADLINE_EXCEEDED for CANCELLED comes only at the
-//	  call's own deadline, where the peer's timeout_ms ends the handler as Cancel would,
-//	  bridge_discovery_component.go handleWatch, search_limits.go admit, search_remote_search.go ask, search_more.go's
-//	  progress, evs_local_lock.go lockIn, dnsservice's journalAnswer, customHostMapAnswer and readyAnswer, and
-//	  computeservice/engine_stream.go run, whose comment goes to a request already ended); the clock contexts
-//	  (rpc_headcheck.go clockContext, stream_peer.go clockContextUntil); and those that already answer the end after
-//	  their select (api_service_token_retry.go, tls_custom_domain.go wait, gkm_rekey.go take, the CT watch's and the
-//	  certificate manager's loops)
+//	  Drain, mxedgeservice's Drain); the answers (daemon_events.go next, agents_daemon.go's hub wait, which answers
+//	  with what the watch holds, daemon_search_budget.go Admit, harness_daemon.go's events, harness_ui.go Ask,
+//	  mail_local_credential.go Check, pushservice's long poll, stream_open.go OpenStream, rpc_call.go awaitPending,
+//	  whose DEADLINE_EXCEEDED for CANCELLED comes only at the call's own deadline, where the peer's timeout_ms ends the
+//	  handler as Cancel would, bridge_discovery_component.go handleWatch, search_limits.go admit, mcp/session_search.go
+//	  admit's token wait (a token that comes as the wait ends admits the call at the wait's edge),
+//	  search_remote_search.go ask, search_more.go's progress, evs_local_lock.go lockIn, dnsservice's journalAnswer,
+//	  customHostMapAnswer and readyAnswer, and computeservice/engine_stream.go run, whose comment goes to a request
+//	  already ended); the clock contexts (rpc_headcheck.go clockContext, stream_peer.go clockContextUntil); and those
+//	  that already answer the end after their select (api_service_token_retry.go, tls_custom_domain.go wait,
+//	  gkm_rekey.go take, the CT watch's and the certificate manager's loops)
 //	no context case, or no timer: enclave_container.go kill, infer_engine_process.go Generate,
 //	  smtpedgeservice/connection.go watch, mxedgeservice/splice.go run, gkm_recovery.go followRecoveryBinding,
-//	  mcp/resources.go run, device/bridge_reach.go runReach, tlsedgeservice/splice.go admitChunk and splice (its done is
-//	  the copies'), pushservice's wake sender dispatcher, socketsservice's runRemovals
+//	  mcp/resources.go run, mcp/limits.go run, device/bridge_reach.go runReach, tlsedgeservice/splice.go admitChunk and
+//	  splice (its done is the copies'), pushservice's wake sender dispatcher, socketsservice's runRemovals
 //	the step past the end checks the context first: acl_gate.go's loader, evsservice/purge.go run (next answers
 //	  stop), bridge_forward.go's Forwarder run (the loop's top reads the hint and checks the context before any step,
 //	  and a request is handed only while the loop lives, onRun selecting on the same end), socket_registrar.go run
@@ -58,9 +59,12 @@
 //	  evs_component.go's mapper (TickMapper's first I/O is the head's read), mail_config.go run (Sync's fresh read,
 //	  after which the loop returns), infer_cache_secret.go enclaveWait (before its read the poll drops only the sync
 //	  it holds in memory, which costs the next call a read and changes no answer), smtp_prover_host.go Run (the
-//	  prover's PrepareKeys refuses it first), dns_hint.go runHints, dns_label_refresh.go run, acl_follow.go's ack,
-//	  daemon_socket.go probe (net.Dialer), evs_client.go awaitFirstGeneration, evs_deposit.go waitDropKey,
-//	  evs_drop_preview.go, evs_epoch_read.go, evs_http.go send, evs_repo.go callLifecycle, evs_reseed.go,
+//	  prover's PrepareKeys refuses it first), disclosure_ack.go Await (its read of the member's harness config takes
+//	  it, what that read can answer is the key's own value, and the vault watch it adds goes as it returns),
+//	  listeners_discover.go's poller (each platform's Dump checks it before reading a table, so a dump past the end
+//	  hands OnDump nothing and counts a failed dump on the ended poller), dns_hint.go runHints, dns_label_refresh.go
+//	  run, acl_follow.go's ack, daemon_socket.go probe (net.Dialer), evs_client.go awaitFirstGeneration, evs_deposit.go
+//	  waitDropKey, evs_drop_preview.go, evs_epoch_read.go, evs_http.go send, evs_repo.go callLifecycle, evs_reseed.go,
 //	  evs_upload.go retryRefusingNothing, gkm_api.go do, gkm_hints.go run (its handlers take the dead context),
 //	  record_evs.go post, record_vault.go awaitVault, mail_config_write.go createRecord, mail_send_result.go
 //	  runSendWatch, mail_component_receive.go's zone wait, record_approval_state.go Run, push_poll.go run and
@@ -111,6 +115,10 @@
 // retries, the socket component's config follow, the support client's loop, gkm's reconciler, and evsservice's write
 // budget ticks, drop pace and orphan GC pace; and the Forwarder's wait, which now waits for its time itself (QD-1425).
 //
+// Fixed after the later pass (sweep-later-followups), with its case: the person's watch (agents_person.go), the
+// inbox watch's shape, written after the sweep's scan in a file the later pass did not hold, whose pass past the end
+// told the person's view what it read and recorded it seen.
+//
 // Left for a later pass, the step past the end outward or durable and its fix not built here:
 //
 //	whose file brings a settings migration with it (QD-702): rpc_headcheck_stop.go run, whose alarm owner decision
@@ -120,8 +128,6 @@
 //	  the end goes to mDNSResponder or the LAN, and cli's darwin and mDNS gatherers (discovery_gather_darwin.go's
 //	  gatherOn and discovery_gather_mdns.go's Gather), whose report past the end the daemon may take; the core lane's
 //	  darwin-discovery-test-bound holds their tests
-//	written after the sweep's scan, in a file the later pass did not hold: agents_person.go's AgentPersonWatch.run,
-//	  the inbox watch's shape, whose pass past the end can notify the person's view
 
 package sidecar
 
