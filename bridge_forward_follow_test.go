@@ -273,8 +273,11 @@ type testForwarderWorld struct {
 	delegationId []byte
 	readerKey    hpke.PrivateKey
 	sink         *testForwarderSink
-	keys         *testForwarderKeys
-	gkm          *testForwarderGkm
+	// the sink and the log the Forwarder is built over, sink and a log that drops everything where nil
+	forwardSink ForwarderSink
+	forwardLog  Logger
+	keys        *testForwarderKeys
+	gkm         *testForwarderGkm
 	// the gkm the Forwarder is built over, gkm where nil
 	forwardGkm   ForwarderGkm
 	forwardHeads *testForwarderHeads
@@ -461,6 +464,14 @@ func (self *testForwarderWorld) forwarderIn(ctx context.Context) *Forwarder {
 	if self.forwardGkm != nil {
 		gkm = self.forwardGkm
 	}
+	var sink ForwarderSink = self.sink
+	if self.forwardSink != nil {
+		sink = self.forwardSink
+	}
+	log := NewNoopLogger()
+	if self.forwardLog != nil {
+		log = self.forwardLog
+	}
 	forwarder, err := NewForwarder(ctx, &ForwarderArgs{
 		NetworkId:     self.net.networkId,
 		SidecarId:     self.host.sidecarId,
@@ -481,7 +492,7 @@ func (self *testForwarderWorld) forwarderIn(ctx context.Context) *Forwarder {
 		ClientLapsed: self.lapsed.Load,
 		Store:        self.forwardStore,
 		Keys:         self.keys,
-		Sink:         self.sink,
+		Sink:         sink,
 		NameZones:    []string{"net.ur.example"},
 		HeapInUse:    self.heapInUse.Load,
 		Emit: func(event SidecarEvent) {
@@ -493,7 +504,7 @@ func (self *testForwarderWorld) forwarderIn(ctx context.Context) *Forwarder {
 			}
 		},
 		Clock:    self.clock,
-		Log:      NewNoopLogger(),
+		Log:      log,
 		Settings: self.settings,
 	})
 	if err != nil {

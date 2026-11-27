@@ -101,6 +101,8 @@ type GatewayFronts struct {
 	cancel context.CancelFunc
 	// each frame a caller wrote, for a test to steer; nil in a daemon
 	followWritten func(frame []byte)
+	// the calls, per network (gateway_retry.go)
+	tables gatewayCallTables
 
 	stateLock sync.Mutex
 	recorder  GatewayRecorder
@@ -113,37 +115,7 @@ type GatewayFronts struct {
 // Puts the fronts' routes on the server and answers them: POST /v1/responses here, and each later front's from its own
 // file (gatewayFrontRoutes).
 func (self *GatewayServer) MountFronts(args *GatewayFrontsArgs) *GatewayFronts {
-	if args == nil {
-		args = &GatewayFrontsArgs{}
-	}
-	clock := self.clock
-	if args.Clock != nil {
-		clock = args.Clock
-	}
-	random := args.Random
-	if random == nil {
-		random = self.random
-	}
-	if random == nil {
-		random = rand.Reader
-	}
-	hostedSearch := args.HostedSearch
-	if hostedSearch == nil {
-		hostedSearch = NewGatewayHostedSearch(&GatewayHostedSearchArgs{Settings: self.settings.HostedSearch, Clock: clock})
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	fronts := &GatewayFronts{
-		server:         self,
-		settings:       self.settings,
-		clock:          clock,
-		log:            self.log,
-		random:         random,
-		hostedSearch:   hostedSearch,
-		ctx:            ctx,
-		cancel:         cancel,
-		recorder:       args.Recorder,
-		runningChanged: make(chan struct{}),
-	}
+	fronts := newGatewayFronts(self, args)
 	self.Handle(GatewayRouteResponses, func(writer http.ResponseWriter, request *http.Request, caller *GatewayCaller) {
 		fronts.serve(writer, request, caller, gatewayResponsesFront{})
 	})
@@ -160,6 +132,42 @@ func (self *GatewayServer) MountFronts(args *GatewayFrontsArgs) *GatewayFronts {
 	return fronts
 }
 
+// The fronts over server, serving no route yet: MountFronts's.
+func newGatewayFronts(server *GatewayServer, args *GatewayFrontsArgs) *GatewayFronts {
+	if args == nil {
+		args = &GatewayFrontsArgs{}
+	}
+	clock := server.clock
+	if args.Clock != nil {
+		clock = args.Clock
+	}
+	random := args.Random
+	if random == nil {
+		random = server.random
+	}
+	if random == nil {
+		random = rand.Reader
+	}
+	hostedSearch := args.HostedSearch
+	if hostedSearch == nil {
+		hostedSearch = NewGatewayHostedSearch(&GatewayHostedSearchArgs{Settings: server.settings.HostedSearch, Clock: clock})
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	fronts := &GatewayFronts{
+		server:         server,
+		settings:       server.settings,
+		clock:          clock,
+		log:            server.log,
+		random:         random,
+		hostedSearch:   hostedSearch,
+		ctx:            ctx,
+		cancel:         cancel,
+		recorder:       args.Recorder,
+		runningChanged: make(chan struct{}),
+	}
+	return fronts
+}
+
 // A later front's route, registered from its own file at init (the Chat Completions front, the catalog's endpoints).
 type gatewayFrontRoute struct {
 	pattern string
@@ -169,11 +177,17 @@ type gatewayFrontRoute struct {
 // The later fronts' routes. Written only at init.
 var gatewayFrontRoutes = []*gatewayFrontRoute{}
 
-// Sets the recorder (GW-M12-06), which the daemon builds after the gateway; nil refuses every call again.
+// Sets the recorder (GW-M12-06), which the daemon builds after the gateway, and writes the Cut of each call a crash cut
+// on the networks that read now (gateway_kept.go); nil refuses every call again.
 func (self *GatewayFronts) SetRecorder(recorder GatewayRecorder) {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	self.recorder = recorder
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.recorder = recorder
+	}()
+	if recorder != nil {
+		self.Recover(self.ctx)
+	}
 }
 
 // The recorder, nil while none is set.
@@ -524,10 +538,12 @@ func (self *GatewayFronts) dispatch(ctx context.Context, prepared *gatewayPrepar
 		record.End(ctx, &GatewayRecordEnd{Outcome: GatewayRecordFailed, Error: inferError})
 		return nil, gatewayErrorOfInfer(ctx, inferError, caller.Network, self.clock.Now())
 	}
+	journaled := &gatewayJournaledRecord{inner: record}
 	run := &gatewayCallRun{
 		fronts:     self,
 		prepared:   prepared,
-		record:     record,
+		record:     journaled,
+		journaled:  journaled,
 		responseId: responseId,
 		createdAt:  self.clock.Now(),
 		ctx:        callCtx,
@@ -536,6 +552,15 @@ func (self *GatewayFronts) dispatch(ctx context.Context, prepared *gatewayPrepar
 	if entry != nil {
 		run.answer = entry.answer
 		run.entry = entry
+		entry.dispatched(&GatewayRecordCut{
+			NetworkId:   caller.NetworkId,
+			Harness:     caller.Grant.Harness,
+			Binding:     prepared.binding,
+			Api:         prepared.front.api(),
+			ResponseId:  responseId,
+			Model:       prepared.request.Model,
+			BeganMillis: run.createdAt.UnixMilli(),
+		})
 	} else {
 		run.answer = newGatewayAnswer()
 	}
@@ -550,9 +575,11 @@ func (self *GatewayFronts) dispatch(ctx context.Context, prepared *gatewayPrepar
 
 // One call's run: the router's stream through its front's producer onto its answer.
 type gatewayCallRun struct {
-	fronts     *GatewayFronts
-	prepared   *gatewayPreparedCall
+	fronts   *GatewayFronts
+	prepared *gatewayPreparedCall
+	// the recorder's call, through journaled, which keeps each item's node for the kept file
 	record     GatewayRecordCall
+	journaled  *gatewayJournaledRecord
 	answer     *gatewayAnswer
 	entry      *gatewayCallEntry
 	responseId string
@@ -600,11 +627,7 @@ func (self *gatewayCallRun) run(events <-chan *InferEvent, producer gatewayProdu
 				if !self.answer.isHeaded() {
 					self.answer.head(http.StatusOK, self.contentType(), "")
 				}
-				self.keep(frames)
-				self.answer.end()
-				if self.entry != nil {
-					self.fronts.kept(self.entry)
-				}
+				self.publishLast(frames, http.StatusOK)
 				return
 			}
 			if stream {
@@ -637,15 +660,47 @@ func (self *gatewayCallRun) open(producer gatewayProducer) {
 	self.keep(producer.open())
 }
 
-// Appends frames to the answer, which the table keeps while they fit (gateway_retry.go).
+// Appends frames to the answer, the table's kept file written with them first where an item was journaled since its
+// last write (gateway_retry.go).
 func (self *gatewayCallRun) keep(frames [][]byte) {
 	if len(frames) == 0 {
 		return
 	}
-	self.answer.append(frames...)
 	if self.entry != nil {
-		self.fronts.kept(self.entry)
+		self.entry.grew(self.journaled.nodeIds, frames)
 	}
+	self.answer.append(frames...)
+}
+
+// Appends the answer's last frames and ends it, the kept file written whole with them first, so a call whose terminal
+// reached anyone was kept whole (gateway_kept.go). status is the answer's.
+func (self *gatewayCallRun) publishLast(frames [][]byte, status int) {
+	if self.entry != nil {
+		self.entry.finish(self.journaled.nodeIds, frames, status, self.fronts.clock.Now())
+	}
+	self.answer.append(frames...)
+	self.answer.end()
+}
+
+// The recorder's call, keeping each journaled item's node, in order, for the kept file's Cut. Called from its call's
+// run alone.
+type gatewayJournaledRecord struct {
+	inner   GatewayRecordCall
+	nodeIds []Id
+}
+
+// See GatewayRecordCall.
+func (self *gatewayJournaledRecord) ResponseItem(ctx context.Context, item []byte) (Id, error) {
+	nodeId, err := self.inner.ResponseItem(ctx, item)
+	if err == nil {
+		self.nodeIds = append(self.nodeIds, nodeId)
+	}
+	return nodeId, err
+}
+
+// See GatewayRecordCall.
+func (self *gatewayJournaledRecord) End(ctx context.Context, end *GatewayRecordEnd) error {
+	return self.inner.End(ctx, end)
 }
 
 // Ends the call's record: its model_call's outcome and usage.
@@ -686,14 +741,10 @@ func (self *gatewayCallRun) finishFailed(producer gatewayProducer, refusal *gate
 			retryAfter = strconv.FormatInt(int64((refusal.RetryAfter+time.Second-1)/time.Second), 10)
 		}
 		self.answer.head(refusal.Status, gatewayContentTypeJson, retryAfter)
-		self.answer.append(refusal.body(self.prepared.front.api()))
-	} else {
-		self.keep(producer.fail(refusal, producer.began()))
+		self.publishLast([][]byte{refusal.body(self.prepared.front.api())}, refusal.Status)
+		return
 	}
-	self.answer.end()
-	if self.entry != nil {
-		self.fronts.kept(self.entry)
-	}
+	self.publishLast(producer.fail(refusal, producer.began()), http.StatusOK)
 }
 
 // An ordered JSON object, so an answer's members read in the APIs' own order.

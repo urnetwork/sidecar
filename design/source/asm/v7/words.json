@@ -12,7 +12,7 @@
   "num": 2,
   "code": "TRUST",
   "words": 11152,
-  "code_words": 24980,
+  "code_words": 25256,
   "ceiling": 3000,
   "over": 8152,
   "over_pct": 271.7
@@ -65,11 +65,11 @@
  {
   "num": 8,
   "code": "ACL",
-  "words": 14696,
+  "words": 14784,
   "code_words": 6168,
   "ceiling": 3800,
-  "over": 10896,
-  "over_pct": 286.7
+  "over": 10984,
+  "over_pct": 289.1
  },
  {
   "num": 9,
@@ -137,20 +137,20 @@
  {
   "num": 16,
   "code": "MCP",
-  "words": 17298,
+  "words": 17491,
   "code_words": 23902,
   "ceiling": 3500,
-  "over": 13798,
-  "over_pct": 394.2
+  "over": 13991,
+  "over_pct": 399.7
  },
  {
   "num": 17,
   "code": "BRIDGE",
-  "words": 16505,
+  "words": 16520,
   "code_words": 8417,
   "ceiling": 3800,
-  "over": 12705,
-  "over_pct": 334.3
+  "over": 12720,
+  "over_pct": 334.7
  },
  {
   "num": 18,

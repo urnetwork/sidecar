@@ -1,0 +1,16 @@
+data: {"id":"chatcmpl-000000000000000300000000000000040000000000000005","object":"chat.completion.chunk","created":1795770000,"model":"chutes-kimi-k3-tee-high","choices":[{"index":0,"delta":{"role":"assistant","content":""},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"chatcmpl-000000000000000300000000000000040000000000000005","object":"chat.completion.chunk","created":1795770000,"model":"chutes-kimi-k3-tee-high","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_a","type":"function","function":{"name":"bash","arguments":""}}]},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"chatcmpl-000000000000000300000000000000040000000000000005","object":"chat.completion.chunk","created":1795770000,"model":"chutes-kimi-k3-tee-high","choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"id":"call_b","type":"function","function":{"name":"bash","arguments":""}}]},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"chatcmpl-000000000000000300000000000000040000000000000005","object":"chat.completion.chunk","created":1795770000,"model":"chutes-kimi-k3-tee-high","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"command\":"}}]},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"chatcmpl-000000000000000300000000000000040000000000000005","object":"chat.completion.chunk","created":1795770000,"model":"chutes-kimi-k3-tee-high","choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"function":{"arguments":"{\"command\":\"pwd\"}"}}]},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"chatcmpl-000000000000000300000000000000040000000000000005","object":"chat.completion.chunk","created":1795770000,"model":"chutes-kimi-k3-tee-high","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"ls\"}"}}]},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"chatcmpl-000000000000000300000000000000040000000000000005","object":"chat.completion.chunk","created":1795770000,"model":"chutes-kimi-k3-tee-high","choices":[{"index":0,"delta":{},"logprobs":null,"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":60,"completion_tokens":14,"total_tokens":74,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}
+
+data: [DONE]
+

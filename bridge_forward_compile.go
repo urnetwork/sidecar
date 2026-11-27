@@ -109,11 +109,17 @@ const (
 	forwarderCompileRetry
 )
 
-// Runs one compile and schedules what follows it. On run's goroutine.
+// Runs one compile and schedules what follows it, from the reading taken before its outcome could be seen: a retry
+// waits from the failure, not from the compile's start, and a clock moved by whoever saw the failure counted or the
+// state handed cannot date it past the move (wantCompileAt). On run's goroutine.
 func (self *Forwarder) compileNow() {
 	self.compileWanted = false
 	self.compileLastAt = self.clock.Now()
+	self.compileOutcomeAt = time.Time{}
 	outcome, again := self.compile()
+	// an outcome nothing showed, the context's end or nothing to compile, is dated now
+	self.markCompileOutcome()
+	outcomeAt := self.compileOutcomeAt
 	if self.settings.FreeMemoryAfterCompile {
 		debug.FreeOSMemory()
 	}
@@ -124,12 +130,12 @@ func (self *Forwarder) compileNow() {
 		}
 		if again {
 			// what arrived during the compile is compiled at once, and the wait it left is retried from there
-			self.wantCompile()
+			self.wantCompileAt(outcomeAt)
 			return
 		}
 		self.compileWanted = true
-		self.compileWantedAt = self.clock.Now()
-		self.compileRetryAt = self.compileWantedAt.Add(self.settings.CompileRetryTimeout(self.compileRetryCount))
+		self.compileWantedAt = outcomeAt
+		self.compileRetryAt = outcomeAt.Add(self.settings.CompileRetryTimeout(self.compileRetryCount))
 		self.compileRetryCount += 1
 		return
 	case forwarderCompileHanded:
@@ -137,7 +143,17 @@ func (self *Forwarder) compileNow() {
 		self.compileRetryAt = time.Time{}
 	}
 	if again {
-		self.wantCompile()
+		self.wantCompileAt(outcomeAt)
+	}
+}
+
+// Reads the clock for what follows this compile, once, just before its outcome is first shown: its failure counted,
+// its admission refused or deferred, state_unverified, or its alarms and the state handed. Alarms a compile raises on
+// its way, config_key_waiting or head_alarm, stand for conditions rather than its outcome, and come before it. On run's
+// goroutine.
+func (self *Forwarder) markCompileOutcome() {
+	if self.compileOutcomeAt.IsZero() {
+		self.compileOutcomeAt = self.clock.Now()
 	}
 }
 
@@ -245,6 +261,7 @@ func (self *Forwarder) compile() (forwarderCompileOutcome, bool) {
 	testHookBarrier("bridge_forward.compile.judge", self.args.NetworkId.String())
 	log, anchor, err := self.judge(logSettings, signedGenesis, stored, baseIndex, previousIndex, rowsSource, decision.Pin)
 	if err != nil {
+		self.markCompileOutcome()
 		var runError *ConfigRunError
 		if errors.Is(err, ErrConfigFork) || errors.Is(err, ErrConfigEntryMalformed) || errors.Is(err, ErrConfigRowsUnavailable) || errors.As(err, &runError) {
 			// what the store holds is no log this network's rule table accepts: it starts again from api's retention
@@ -346,6 +363,7 @@ func (self *Forwarder) compile() (forwarderCompileOutcome, bool) {
 	}
 	testHookBarrier("bridge_forward.compile.state", self.args.NetworkId.String())
 	compiled, err := CompileBridgeState(view, local, self.settings.Ledger)
+	self.markCompileOutcome()
 	if compiled != nil {
 		self.raiseCompileAlarms(compiled.Alarms)
 	}
@@ -450,6 +468,9 @@ func (self *Forwarder) admit(through uint64, sizes ...ForwarderCompileSize) (int
 			chosen = index
 			break
 		}
+	}
+	if admission != ForwarderCompileAdmitted {
+		self.markCompileOutcome()
 	}
 	func() {
 		self.stateLock.Lock()
@@ -662,6 +683,7 @@ func (self *Forwarder) checkHead(state *ConfigState, head *ConfigHead) error {
 
 // Counts a compile that did not finish, and says to try it again.
 func (self *Forwarder) compileFailed(through uint64, err error) forwarderCompileOutcome {
+	self.markCompileOutcome()
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()

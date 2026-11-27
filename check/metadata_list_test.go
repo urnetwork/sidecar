@@ -74,51 +74,10 @@ type metadataListAddition struct {
 // sweep's (owner decisions 658, 656 and 655), QD-1165's with the fourth late fold's (owner decision 680),
 // QD-1186's with the sixth late fold's (owner decision 709), and DESIGN-COMPUTE.md's rows with the eighth late
 // fold's, which takes its Appendix D: compute-1 to compute-11 and api-7's and evs-1's compute words, which
-// CARCH-M11-03 published as v68 (QD-1252, QD-1367), and QD-1237's compute-7 words and QD-1434's api-7 words, which
-// INFER-M12-01 and SKILL-M11-01 published, with the sixteenth fold's (v74). Each entry here waits for the next fold.
+// CARCH-M11-03 published as v68 (QD-1252, QD-1367), QD-1237's compute-7 words and QD-1434's api-7 words, which
+// INFER-M12-01 and SKILL-M11-01 published, with the sixteenth fold's (v74), and QD-1438's compute-3 and compute-5
+// words, which CARCH-M12-01 published, with the seventeenth fold's (v75). Each entry here waits for the next fold.
 var metadataListAdditions = []metadataListAddition{
-	{
-		// carch-m12-01-compute-hold-row (QD-1438): an operator's suspension of a network's compute, compute_abuse_hold
-		// and its projection {cmp_<network_id>}:a, under compute-3 (CARCH-M12-01)
-		question: "carch-m12-01-compute-hold-row",
-		block: `compute-3:
-  service: compute (the broker) and taskworker (compute_settle, compute_rollup_day); api (the charges, statement and spend routes)
-  store: compute_charge (daily partitions), compute_charge_lot, compute_charge_day, compute_charge_total, compute_charge_pruned and compute_account (MG-C1)
-  sees: "per charge: kind, subject ids, the member it counts to, model or shape, units, amount, cost and what URnetwork absorbed of it (DESIGN-COMPUTE §9.7), times; daily and monthly totals, a day's by sidecar, member, agent, model or shape, provider and enclave; lifetime totals by kind, member, model or shape, provider and enclave, with no day, sidecar or agent; per kind, the sums of day rows dropped past 400 days; and the network's first charge day (§9.13); per network, its account: the settled balance, its state (§9.9), the floor settlement may reach, the indexer enclave's reserve (§9.9) and any override of its search cap (§9.11)"
-  why: statements, the spend view's totals and last 7 UTC days, refunds and the balance the states read (DESIGN-COMPUTE §9.4, §9.9, §9.13)
-  ttl: "as compute-1; lifetime totals, the dropped rows' sums and the first charge day for the account's life, deleted with the network; the account for the network's life"
-  owner: DESIGN-COMPUTE §14.6 (§9.4, §9.13)
-`,
-		list: `compute-3:
-  service: compute (the broker) and taskworker (compute_settle, compute_rollup_day); api (the charges, statement and spend routes)
-  store: compute_charge (daily partitions), compute_charge_lot, compute_charge_day, compute_charge_total, compute_charge_pruned, compute_account and compute_abuse_hold (MG-C1); Redis {cmp_<network_id>}:a (an operator's hold's projection)
-  sees: "per charge: kind, subject ids, the member it counts to, model or shape, units, amount, cost and what URnetwork absorbed of it (DESIGN-COMPUTE §9.7), times; daily and monthly totals, a day's by sidecar, member, agent, model or shape, provider and enclave; lifetime totals by kind, member, model or shape, provider and enclave, with no day, sidecar or agent; per kind, the sums of day rows dropped past 400 days; and the network's first charge day (§9.13); per network, its account: the settled balance, its state (§9.9), the floor settlement may reach, the indexer enclave's reserve (§9.9) and any override of its search cap (§9.11); per network, an operator's suspension of its compute (DESIGN-COMPUTE §17.2): its reason class, when it was placed and resumed, and the staff members' opaque reviewer ids; the broker's projection of it, the version and class alone"
-  why: statements, the spend view's totals and last 7 UTC days, refunds and the balance the states read (DESIGN-COMPUTE §9.4, §9.9, §9.13)
-  ttl: "as compute-1; lifetime totals, the dropped rows' sums and the first charge day for the account's life, deleted with the network; the account for the network's life; a hold for the network's life, as the account"
-  owner: DESIGN-COMPUTE §14.6 (§9.4, §9.13)
-`,
-	},
-	{
-		// carch-m12-01-compute-hold-row (QD-1438): the address each broker admission's region check reads in memory and
-		// keeps nowhere, under compute-5 (CARCH-M12-01)
-		question: "carch-m12-01-compute-hold-row",
-		block: `compute-5:
-  service: compute (the broker's evidence tunnel and provisioning relay)
-  store: memory only, in transit
-  sees: "in transit only: evidence bytes, nonces, sealed provisioning bundles; for the tunnel, the host, sizes and times (its contents are the device's TLS, or its SSH at an enclave's setup); the bootstrap B the broker carries to an enclave's VM, which reads it from the host, and the per-VM token the VM uses from the host (DESIGN-COMPUTE §11.7, §14.3; QD-1243)"
-  why: a device verifies a TEE's evidence and provisions an enclave itself, through the broker, which reads none of it (DESIGN-COMPUTE §5.7, §11.7)
-  ttl: "not stored; relayed within 10 minutes; tunnel counts in metrics only"
-  owner: DESIGN-COMPUTE §14.6 (§5.7, §11.7)
-`,
-		list: `compute-5:
-  service: compute (the broker's evidence tunnel and provisioning relay)
-  store: memory only, in transit
-  sees: "in transit only: evidence bytes, nonces, sealed provisioning bundles; for the tunnel, the host, sizes and times (its contents are the device's TLS, or its SSH at an enclave's setup); the bootstrap B the broker carries to an enclave's VM, which reads it from the host, and the per-VM token the VM uses from the host (DESIGN-COMPUTE §11.7, §14.3; QD-1243); each admission's address, read in memory, mapped to its country and subdivision against the refused regions, and kept nowhere (I-13)"
-  why: a device verifies a TEE's evidence and provisions an enclave itself, through the broker, which reads none of it (DESIGN-COMPUTE §5.7, §11.7)
-  ttl: "not stored; relayed within 10 minutes; tunnel counts in metrics only"
-  owner: DESIGN-COMPUTE §14.6 (§5.7, §11.7)
-`,
-	},
 }
 
 // §2.8's block with each addition in place, in order, and a finding for each that does not apply.

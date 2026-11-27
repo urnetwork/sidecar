@@ -938,9 +938,7 @@ func (self *BridgeNetHost) WaitApplied(n uint64) {
 	}
 }
 
-// WaitAdopted for an app host: hints the Forwarder, then waits until it has stored the log through n, the posture
-// enforces a state at or past every entry it wanted a compile for with every entry through n applied, and the
-// newest compile waited for no binding or generation.
+// WaitAdopted for an app host: hints the Forwarder, then waits until bridgeNetAppAdopted holds.
 func (self *BridgeNetHost) waitAppAdopted(n uint64) {
 	t := self.bridgeNet.t
 	t.Helper()
@@ -948,16 +946,10 @@ func (self *BridgeNetHost) waitAppAdopted(n uint64) {
 	deadline := time.After(self.bridgeNet.settings.WaitTimeout)
 	for {
 		_, changed := self.adoptedPin.Get()
-		forwarder := self.Forwarder()
-		status := forwarder.Status()
+		status := self.Forwarder().Status()
 		decision := self.Bridge.Decision()
-		statePin := uint64(0)
-		if decision.BridgeState != nil {
-			statePin = decision.BridgeState.GetAuth().GetVersion()
-		}
-		if n <= status.Tip.GetVersion() && decision.State.Enforcing() && !decision.Fork && n <= decision.Pin.GetVersion() &&
-			self.app.sink.compileWantedThrough() <= statePin && 0 < statePin && !self.bridgeNet.waitsForWhatIsServed(status.Waits) &&
-			status.CompiledPin.GetVersion() == statePin {
+		wantedThrough := self.app.sink.compileWantedThrough()
+		if bridgeNetAppAdopted(n, status, decision, wantedThrough, self.bridgeNet.waitsForWhatIsServed(status.Waits)) {
 			return
 		}
 		select {
@@ -966,9 +958,25 @@ func (self *BridgeNetHost) waitAppAdopted(n uint64) {
 			// a compile's waits and the store's tip move no monitor of the role's
 		case <-deadline:
 			t.Fatalf("%s did not adopt %d: posture %s at %d, state at %d, wanted through %d; forwarder %+v", self.Device.Name, n,
-				decision.State, decision.Pin.GetVersion(), statePin, self.app.sink.compileWantedThrough(), status)
+				decision.State, decision.Pin.GetVersion(), decision.BridgeState.GetAuth().GetVersion(), wantedThrough, status)
 		}
 	}
+}
+
+// Whether an app host has adopted n: its Forwarder has stored the log through n, the posture enforces a state at or
+// past every entry it wanted a compile for with every entry through n applied, and the newest compile waited for
+// nothing the world serves (waitsServed false). wantedThrough is the sink's record, read after decision: the posture
+// shows its new pin, and whether that call wanted a compile, before ApplyDeltas returns and the sink records it, so
+// the decision's own CompileWanted counts through its pin too, or a read between the two would take the state before
+// the compile for what was just applied (FS-38's app host rows found states lacking a forwarding Delegation just
+// filed so).
+func bridgeNetAppAdopted(n uint64, status sidecar.ForwarderStatus, decision device.PostureDecision, wantedThrough uint64, waitsServed bool) bool {
+	statePin := decision.BridgeState.GetAuth().GetVersion()
+	if decision.CompileWanted {
+		wantedThrough = max(wantedThrough, decision.Pin.GetVersion())
+	}
+	return n <= status.Tip.GetVersion() && decision.State.Enforcing() && !decision.Fork && n <= decision.Pin.GetVersion() &&
+		wantedThrough <= statePin && 0 < statePin && !waitsServed && status.CompiledPin.GetVersion() == statePin
 }
 
 // Ends an app host's Forwarder, provider and NAT, before BridgeNetHost.Close ends the rest.
