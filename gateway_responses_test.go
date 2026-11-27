@@ -163,9 +163,11 @@ type testGatewayTurn struct {
 	first     *InferError
 	reasoning []string
 	text      []string
-	tools     []*testGatewayToolCall
-	usage     *InferUsage
-	attest    *protocol.AttestationResult
+	// events played as they are after the text, each a delta where it is one
+	events []*InferEvent
+	tools  []*testGatewayToolCall
+	usage  *InferUsage
+	attest *protocol.AttestationResult
 	// fails after failAfter deltas where fail is set
 	fail      *InferError
 	failAfter int
@@ -288,6 +290,15 @@ func (self *testGatewayRouter) Infer(ctx context.Context, request *InferRequest)
 			if !delta(&InferEvent{Kind: InferEventText, Text: text}) {
 				return
 			}
+		}
+		for _, event := range turn.events {
+			if event.Kind == InferEventText || event.Kind == InferEventReasoning || event.Kind == InferEventToolCallArgs {
+				if !delta(event) {
+					return
+				}
+				continue
+			}
+			events <- event
 		}
 		for _, tool := range turn.tools {
 			events <- &InferEvent{Kind: InferEventToolCallStart, ToolCall: &InferToolCall{Id: tool.id, Name: tool.name}}
@@ -420,6 +431,10 @@ func (self *testGatewayFrontNetwork) InferRouter() (InferRouter, error) {
 	return self.router, nil
 }
 
+func (self *testGatewayFrontNetwork) GatewayKeptStore() (SidecarStore, error) {
+	return self.instance.Store(&testNetworkId).Directory(gatewayGrantDirectoryName, gatewayGrantClass)
+}
+
 func (self *testGatewayFrontNetwork) GatewayKey(purpose string) ([]byte, error) {
 	if self.key == nil {
 		return nil, ErrGatewayKeyUnavailable
@@ -521,8 +536,12 @@ func (self *testGatewayFrontWorld) callerOf(token string) *GatewayCaller {
 	return &GatewayCaller{NetworkId: testNetworkId, Network: self.front, Store: self.network.grants, Grant: grant, Token: record}
 }
 
-// A frame's event type and the item id it names, for the order log.
+// A frame's event type and the item id it names, for the order log; a Chat Completions chunk carrying its finish
+// reason is chat.finish.
 func testGatewayFrameKey(frame string) string {
+	if strings.Contains(frame, `"finish_reason":"`) {
+		return "chat.finish"
+	}
 	event := &struct {
 		Type   string `json:"type"`
 		ItemId string `json:"item_id"`
