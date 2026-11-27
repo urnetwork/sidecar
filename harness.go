@@ -80,6 +80,17 @@ type HarnessJournalNode struct {
 	// Text an untrusted writer wrote: a tool's untrusted result, a tainted run's prompt. Sender names the writer.
 	Untrusted bool
 	Sender    string
+	// A tool result's tool, for the form the record keeps it in (§24.9); nil for any other node.
+	Tool *HarnessJournalTool
+}
+
+// The tool a journaled tool result came from, as the record's exceptions read it (§24.9): its name, whether it is built
+// in, whether its details said keep: false, which only a built-in's honors, and SRCH's stub of a web search.
+type HarnessJournalTool struct {
+	Name       string
+	BuiltIn    bool
+	KeepFalse  bool
+	SearchStub []byte
 }
 
 // What a call's request is rendered from (§24.6): the context's last node and the system message in force, and the
@@ -92,6 +103,10 @@ type HarnessRenderArgs struct {
 	Model string
 	// The most tokens the answer may hold; 0 for the model's own maximum.
 	MaxOutput int
+	// The agent the call is made for, and the budget it spends from, nil for none: what the loop sets on the request,
+	// which the call's params carry so a rebuild equals what was sent (§24.6).
+	AgentId *Id
+	Budget  *InferBudgetRef
 }
 
 // The context journal and the request renderer the loop writes through (§24.4-§24.6, IC-19): CTXH's SessionJournal and
@@ -201,6 +216,12 @@ type HarnessArgs struct {
 	// The network the in-process DESIGN tools act on (harness_tool_design.go): on a Sidecar its own, read at each
 	// call. Nil leaves evs_*, search, record_query and record_append out.
 	Network harnessDesignNetwork
+	// The registry of open runs and the record a restart reads them back from (harness_reopen.go); nil for none,
+	// which reopens nothing.
+	OpenRuns  HarnessOpenRuns
+	RunReader HarnessRunReader
+	// SKILL's delivery of a reopened agent's untaken messages; nil leaves them waiting in its inbox.
+	Untaken HarnessUntaken
 }
 
 // One subscriber: its queue and its goroutine.
@@ -348,6 +369,11 @@ type Harness struct {
 	subscribers     *harnessSubscribers
 	support         func() (*SupportClient, error)
 	network         harnessDesignNetwork
+	openRuns        HarnessOpenRuns
+	runReader       HarnessRunReader
+	untaken         HarnessUntaken
+	// the app's host, nil for none (harness_host.go)
+	host atomic.Pointer[harnessHostSlot]
 	// the events a view reads after the fact, nil until a view first asks (harness_view_log.go)
 	view atomic.Pointer[harnessViewLog]
 	// held across one emission: never stateLock
@@ -405,6 +431,9 @@ func NewHarness(args *HarnessArgs) (*Harness, error) {
 		observer:        args.Observer,
 		support:         args.Support,
 		network:         args.Network,
+		openRuns:        args.OpenRuns,
+		runReader:       args.RunReader,
+		untaken:         args.Untaken,
 		workSlots:       make(chan struct{}, max(settings.AgentConcurrentCount, 0)),
 		stamper:         newHarnessEventStamper(),
 		subscribers:     newHarnessSubscribers(settings, log),
