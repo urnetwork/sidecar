@@ -33,6 +33,9 @@ type ListenersSettings struct {
 	// The most one dump may take before it is cut; a cut dump is no change, never every socket gone. 5 s, proposed: the
 	// design names none, and a dump of a few hundred sockets takes a few milliseconds. Positive.
 	DumpTimeout time.Duration
+	// The least time from one dump's start to the next: 1 s, proposed, so a run of live asks or destruction notices
+	// costs at most one dump a second, each answered within it (CODESTYLE's rate limit on a loop). Positive.
+	DumpMinInterval time.Duration
 	// The most owner lookups one dump makes: on Linux the /proc/<pid>/fd links read, on macOS the socket fds asked of
 	// libproc. 4,096, proposed: the design names none. A dump that spends it before every new socket has an owner
 	// resumes at the next, the rest unnamed until then. Positive.
@@ -109,6 +112,7 @@ func DefaultListenersSettings() *ListenersSettings {
 	return &ListenersSettings{
 		PollInterval:            15 * time.Second,
 		DumpTimeout:             5 * time.Second,
+		DumpMinInterval:         1 * time.Second,
 		OwnerScanMaxCount:       4096,
 		TableMaxByteCount:       16 * 1024 * 1024,
 		NetlinkReadByteCount:    64 * 1024,
@@ -147,6 +151,7 @@ func (self *ListenersSettings) validate() error {
 	}{
 		{name: "PollInterval", value: self.PollInterval},
 		{name: "DumpTimeout", value: self.DumpTimeout},
+		{name: "DumpMinInterval", value: self.DumpMinInterval},
 		{name: "PublishDelay", value: self.PublishDelay},
 		{name: "PublishMinInterval", value: self.PublishMinInterval},
 		{name: "PublishRefreshInterval", value: self.PublishRefreshInterval},

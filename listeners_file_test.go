@@ -338,6 +338,7 @@ func TestDefaultListenersSettings(t *testing.T) {
 	want := &ListenersSettings{
 		PollInterval:                 15 * time.Second,
 		DumpTimeout:                  5 * time.Second,
+		DumpMinInterval:              time.Second,
 		OwnerScanMaxCount:            4096,
 		TableMaxByteCount:            16 * 1024 * 1024,
 		NetlinkReadByteCount:         64 * 1024,
