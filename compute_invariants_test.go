@@ -1275,9 +1275,9 @@ var computeInvariantMatrix = []*computeInvariant{
 			},
 			{
 				area:      "CTRUST",
-				point:     "the secret scan's matcher holds the device's compute credentials",
+				point:     "the secret scan refuses a message holding a compute credential the device holds",
 				pkg:       ".",
-				tests:     []string{"TestComputeCustodyCredentialMatched"},
+				tests:     []string{"TestComputeCustodyInSupportScan", "TestComputeCustodyCredentialMatched"},
 				milestone: computeMilestoneM13a,
 				task:      "CTRUST-M13-01",
 			},
