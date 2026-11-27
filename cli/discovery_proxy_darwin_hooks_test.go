@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/urnetwork/sidecar"
+	"github.com/urnetwork/sidecar/sidecartest"
 )
 
 func TestDarwinDiscoveryProxyLeavesALateRefusalToTheNextApply(t *testing.T) {
@@ -47,12 +48,15 @@ func TestDarwinDiscoveryProxyLeavesALateRefusalToTheNextApply(t *testing.T) {
 	// the next apply reads that Files stands, and its refusal lands right after the read
 	var armed atomic.Bool
 	armed.Store(true)
-	sidecar.SetTestHooks(&sidecar.TestHooks{Barrier: func(name string, key string) {
+	remove, err := sidecartest.InstallTestHooks(nil, func(name string, key string) {
 		if name == "discovery_proxy.refused.after" && armed.Swap(false) {
 			connection.refuse("Files")
 		}
-	}})
-	defer sidecar.SetTestHooks(nil)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer remove()
 	proxy.poke()
 	// that apply keeps Files and registers nothing, publishing it refused; the refusal's wake brings the next, which
 	// withdraws it once and counts it
