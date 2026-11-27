@@ -12,10 +12,42 @@
 
 package sidecar
 
-// DESIGN-COMPUTE §2.8, the disclosures and their acknowledgments. Empty until CTRUST's tasks add their fields.
-type ComputeDisclosureSettings struct{}
+import (
+	"time"
+)
+
+// DESIGN-COMPUTE §2.8, the disclosures and their acknowledgments.
+type ComputeDisclosureSettings struct {
+	// The longest slug an id takes after its family's colon, in bytes: 63, a reading, a DNS label's bound, which a
+	// provider's or a service's slug fits with room (§2.8's ids, CTRUST-M11-01). The whole id stays within ATTEST's
+	// PolicyMaxIdByteCount, which the policy's parse holds it to. A longer slug is refused, never cut; non-positive
+	// refuses every id.
+	IdSlugMaxByteCount int
+	// The longest locale tag a person's locale is read from, in bytes: 35, RFC 5646's length every implementation
+	// keeps a tag to. A longer one, or one that is no tag, reads as none, so the English text shows.
+	LocaleMaxByteCount int
+
+	// The acknowledgment and the check (CTRUST-M12-01). How often a wait for an acknowledgment reads the member's
+	// harness config again while nothing on this device told it of a change: 15 s, a reading, so an acknowledgment
+	// made on another of the member's devices lands in a waiting run within a sync and a read; only the store's key
+	// ends a wait, never an answer to the request. Non-positive reads again only when told.
+	AwaitRecheckInterval time.Duration
+	// The most ids whose "changed" mark state the sidecar's own store keeps (§2.8's new version row): 256, a reading,
+	// some twenty times §2.8's ids. Past it, the ids the newest verified policy no longer carries go first, then the
+	// oldest; a forgotten id's lines show changed until opened again, the closed reading.
+	MarksMaxCount int
+	// The largest marks file the store reads back, in bytes: 64 KiB, room for MarksMaxCount ids with their versions.
+	// A larger one reads as no marks, so every changed line shows changed.
+	MarksMaxByteCount int
+}
 
 // The component's defaults, the only place one is set.
 func DefaultComputeDisclosureSettings() *ComputeDisclosureSettings {
-	return &ComputeDisclosureSettings{}
+	return &ComputeDisclosureSettings{
+		IdSlugMaxByteCount:   63,
+		LocaleMaxByteCount:   35,
+		AwaitRecheckInterval: 15 * time.Second,
+		MarksMaxCount:        256,
+		MarksMaxByteCount:    64 * 1024,
+	}
 }
