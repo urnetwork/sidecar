@@ -1,4 +1,4 @@
-//go:build !ios_extension
+//go:build !ios_extension && !sidecar_http
 
 // DESIGN-COMPUTE §2.5's key custody table as data (CTRUST-M13-01): each key, its holder and who can misuse it, in
 // §2.5's order, with where it is held as the daemon's matcher reads it. A row held on a device names the
