@@ -1,0 +1,2 @@
+# a line with two fields
+0456 ;	0069

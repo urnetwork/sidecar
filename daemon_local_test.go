@@ -111,23 +111,31 @@ func TestPlaintextOnlyOnLoopback(t *testing.T) {
 		if err := <-handshaken; err != nil {
 			t.Fatal(err)
 		}
-		client.Close()
+		// the client's pipe end closes first: each side's Close sends close_notify, which on a pipe the other side no
+		// longer reads waits out tls's five-second write deadline, and on a closed pipe fails at once
+		clientEnd.Close()
 		served.Close()
+		client.Close()
 
 		serverEnd, clientEnd = net.Pipe()
 		served = withTls.serveAs(&testAddressedConn{Conn: serverEnd, local: &net.TCPAddr{IP: net.ParseIP("2001:db8::7"), Port: 17002}})
 		go func() {
 			handshaken <- served.Conn.(*tls.Conn).Handshake()
 		}()
-		go func() {
-			clientEnd.Write([]byte("EHLO plaintext.example\r\n"))
-			io.Copy(io.Discard, clientEnd)
-		}()
+		// the plaintext client writes on its own end, taken as a value since the test gives clientEnd a new pipe below,
+		// and the test waits for it to stop before then
+		plaintextWritten := make(chan struct{})
+		go func(plaintextEnd net.Conn) {
+			defer close(plaintextWritten)
+			plaintextEnd.Write([]byte("EHLO plaintext.example\r\n"))
+			io.Copy(io.Discard, plaintextEnd)
+		}(clientEnd)
 		if err := <-handshaken; err == nil {
 			t.Errorf("%s took plaintext off loopback", service)
 		}
 		served.Close()
 		clientEnd.Close()
+		<-plaintextWritten
 
 		// on loopback the same listener speaks plaintext
 		serverEnd, clientEnd = net.Pipe()

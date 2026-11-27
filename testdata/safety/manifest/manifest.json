@@ -1,0 +1,99 @@
+{
+  "version": 1,
+  "release": "2026.11.27-test",
+  "confusables": {
+    "name": "confusables-16.0.0.txt",
+    "url": "https://release.example/ur/2026.11.27-test/confusables-16.0.0.txt",
+    "byte_count": 677000,
+    "sha256": "9df3733579769b268e1f8f7c7df7f2c2c4f1e7bf620c89f4aee5d843a4a96580"
+  },
+  "runtimes": [
+    {
+      "platform": "darwin/arm64",
+      "version": "1.22.0",
+      "api_version": 22,
+      "library": {
+        "name": "libonnxruntime.1.22.0.dylib",
+        "url": "https://release.example/ur/2026.11.27-test/libonnxruntime.1.22.0.dylib",
+        "byte_count": 31000000,
+        "sha256": "26ce1a1580f693873b6268fef54c5f0d0607f2896cad02ce2894c0c899a11575"
+      }
+    },
+    {
+      "platform": "linux/amd64",
+      "version": "1.22.0",
+      "api_version": 22,
+      "library": {
+        "name": "libonnxruntime.so.1.22.0",
+        "url": "https://release.example/ur/2026.11.27-test/libonnxruntime.so.1.22.0",
+        "byte_count": 21000000,
+        "sha256": "abb35c616421af72198ad7c2aeeef38516f08f6a7afb2a728cf0068a8a712ddc"
+      }
+    },
+    {
+      "platform": "linux/arm64",
+      "version": "1.22.0",
+      "api_version": 22,
+      "library": {
+        "name": "libonnxruntime-arm64.so.1.22.0",
+        "url": "https://release.example/ur/2026.11.27-test/libonnxruntime-arm64.so.1.22.0",
+        "byte_count": 19000000,
+        "sha256": "17d46d4991b2edd5e445342a72ba0cb7cf09e4849b5e98c16408ce11e05c7388"
+      }
+    },
+    {
+      "platform": "windows/amd64",
+      "version": "1.22.0",
+      "api_version": 22,
+      "library": {
+        "name": "onnxruntime.dll",
+        "url": "https://release.example/ur/2026.11.27-test/onnxruntime.dll",
+        "byte_count": 14000000,
+        "sha256": "340d600392818df2413382dc7d8325c360d83ea49a262d31760348484bbc10b5"
+      }
+    }
+  ],
+  "models": [
+    {
+      "name": "Llama-Prompt-Guard-2-22M-ur-int8",
+      "device_classes": [
+        "phone"
+      ],
+      "threshold_basis_points": 2000,
+      "auto": true,
+      "model": {
+        "name": "Llama-Prompt-Guard-2-22M-ur-int8.onnx",
+        "url": "https://release.example/ur/2026.11.27-test/Llama-Prompt-Guard-2-22M-ur-int8.onnx",
+        "byte_count": 71000000,
+        "sha256": "58ae5bbc1abcf2411c00c18724a8d2d740f471b2f57a77badcfeae2f4f4b4af9"
+      },
+      "vocabulary": {
+        "name": "Llama-Prompt-Guard-2-ur.spm.model",
+        "url": "https://release.example/ur/2026.11.27-test/Llama-Prompt-Guard-2-ur.spm.model",
+        "byte_count": 4305025,
+        "sha256": "0c7e0de28a70f3c4f8d98ff2d64cbfbbe4c49c80a79096f5edc783417d8edc27"
+      }
+    },
+    {
+      "name": "Llama-Prompt-Guard-2-86M-ur-int8",
+      "device_classes": [
+        "laptop",
+        "desktop"
+      ],
+      "threshold_basis_points": 1800,
+      "auto": false,
+      "model": {
+        "name": "Llama-Prompt-Guard-2-86M-ur-int8.onnx",
+        "url": "https://release.example/ur/2026.11.27-test/Llama-Prompt-Guard-2-86M-ur-int8.onnx",
+        "byte_count": 300000000,
+        "sha256": "55d0110245c5f39c097f27ad3c87a6980274ce10945204f347ff62561bcaf062"
+      },
+      "vocabulary": {
+        "name": "Llama-Prompt-Guard-2-ur.spm.model",
+        "url": "https://release.example/ur/2026.11.27-test/Llama-Prompt-Guard-2-ur.spm.model",
+        "byte_count": 4305025,
+        "sha256": "0c7e0de28a70f3c4f8d98ff2d64cbfbbe4c49c80a79096f5edc783417d8edc27"
+      }
+    }
+  ]
+}

@@ -40,6 +40,36 @@ func printUrGatewayStatus(ctx context.Context, cli *urCli) {
 	for _, unread := range grants.Unread {
 		fmt.Fprintf(cli.stdout, "gateway:    grants do not read: %s\n", unread)
 	}
+	fronts := &sidecar.GatewayFrontsStatus{}
+	if err := cli.callDaemon(ctx, sidecar.DaemonMethodGatewayFronts, struct{}{}, false, fronts); err != nil {
+		return
+	}
+	for _, line := range urGatewayFrontsLines(status, fronts) {
+		fmt.Fprintf(cli.stdout, "%s\n", line)
+	}
+}
+
+// What status says of the gateway's fronts (DESIGN-COMPUTE §8.5, §21.7; GW-M12-03): the calls running and kept for a
+// retry, that calls are refused while nothing records them (IC-19), and a warning for each harness that still sends
+// hosted web search, whose own settings turn it off (SRCH's notice). Nothing while no port is held.
+func urGatewayFrontsLines(listener *sidecar.GatewayServerStatus, fronts *sidecar.GatewayFrontsStatus) []string {
+	if !listener.Hold {
+		return nil
+	}
+	lines := []string{}
+	if !fronts.Recording {
+		lines = append(lines, "  warning:  model calls are refused: the gateway records each call before it goes upstream, and no recorder is set")
+	}
+	if fronts.Draining {
+		lines = append(lines, "gateway:    restarting: new calls are refused until the daemon is back")
+	}
+	if 0 < fronts.Running || 0 < fronts.Kept {
+		lines = append(lines, fmt.Sprintf("gateway:    %d call(s) running, %d answer(s) kept for a harness's retry", fronts.Running, fronts.Kept))
+	}
+	for _, warning := range fronts.HostedSearchWarnings {
+		lines = append(lines, "  warning:  "+warning)
+	}
+	return lines
 }
 
 // What status says of the gateway's port, a line each.
