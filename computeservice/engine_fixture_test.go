@@ -1,16 +1,20 @@
 package computeservice
 
 // The engine every computeservice test runs on (CSRV-M12-01): sidecartest's FakeRedis twice, the host's and the
-// admissions instance's, FakeAuthenticator, FakeServiceGates and FakeMetrics on one fake clock, a fake auth state the
-// test sets, a recording service log, and the groups the test links. Each area's internal tests build on it: they plant
-// their handlers through computeFixtureOptions.handlers, by route name, so the guard runs in front of them as it does in
-// a block, and set the state rather than bypass a step.
+// admissions instance's, FakeAuthenticator, FakeServiceGates, FakeMetrics and FakeAbuseGate on one fake clock, a fake
+// auth state the test sets, a region lookup and an abuse hold store the test sets (CARCH-M12-01), a recording service
+// log, and the groups the test links. Each area's internal tests build on it: they plant their handlers through
+// computeFixtureOptions.handlers, by route name, so the guard runs in front of them as it does in a block, and set the
+// state rather than bypass a step. A fixture sharedWith another is a second broker instance on the first one's world:
+// its clock, its stores, its gates and its state.
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http/httptest"
+	"net/netip"
 	"slices"
 	"strings"
 	"sync"
@@ -20,6 +24,7 @@ import (
 	"github.com/urnetwork/connect"
 
 	"github.com/urnetwork/sidecar"
+	"github.com/urnetwork/sidecar/model"
 	"github.com/urnetwork/sidecar/sidecartest"
 )
 
@@ -158,6 +163,101 @@ func (self *fakeComputeApprovalGate) Admit(request *ComputeRequest, kind Compute
 	return self.refusal
 }
 
+// Regions by address, as a test sets them: every other address is placed nowhere. Safe for concurrent use.
+type fakeComputeRegionLookup struct {
+	stateLock   sync.Mutex
+	addrRegions map[netip.Addr]*ComputeRegion
+	// the lookup cannot answer
+	failing bool
+	// every address asked, in order
+	asked []netip.Addr
+}
+
+func newFakeComputeRegionLookup() *fakeComputeRegionLookup {
+	return &fakeComputeRegionLookup{addrRegions: map[netip.Addr]*ComputeRegion{}}
+}
+
+// Places addr in region.
+func (self *fakeComputeRegionLookup) place(addr netip.Addr, region *ComputeRegion) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	copied := *region
+	self.addrRegions[addr] = &copied
+}
+
+func (self *fakeComputeRegionLookup) Region(addr netip.Addr) (*ComputeRegion, error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.asked = append(self.asked, addr)
+	if self.failing {
+		return nil, fmt.Errorf("the geo database did not answer")
+	}
+	if region, ok := self.addrRegions[addr]; ok {
+		copied := *region
+		return &copied, nil
+	}
+	return &ComputeRegion{}, nil
+}
+
+// The abuse holds as a test sets them, standing in for compute_abuse_hold. Safe for concurrent use.
+type fakeComputeAbuseHoldStore struct {
+	stateLock    sync.Mutex
+	networkHolds map[sidecar.Id]*model.ComputeAbuseHold
+	// the store cannot answer
+	failing bool
+	// how many rows were read
+	readCount int
+}
+
+func newFakeComputeAbuseHoldStore() *fakeComputeAbuseHoldStore {
+	return &fakeComputeAbuseHoldStore{networkHolds: map[sidecar.Id]*model.ComputeAbuseHold{}}
+}
+
+// Sets networkId's row, its version raised as each change raises it, and answers its state.
+func (self *fakeComputeAbuseHoldStore) set(networkId sidecar.Id, reason model.ComputeAbuseHoldReason, held bool, at time.Time) *model.ComputeAbuseHoldState {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	hold := self.networkHolds[networkId]
+	if hold == nil {
+		hold = &model.ComputeAbuseHold{NetworkId: networkId, HoldStaffId: testComputeId("staff-1"), HoldTime: at}
+	} else {
+		copied := *hold
+		hold = &copied
+	}
+	hold.Version += 1
+	hold.Reason = reason
+	hold.ResumeStaffId, hold.ResumeTime = nil, nil
+	if !held {
+		staffId := testComputeId("staff-2")
+		resumeTime := at
+		hold.ResumeStaffId, hold.ResumeTime = &staffId, &resumeTime
+	}
+	self.networkHolds[networkId] = hold
+	return model.ComputeAbuseHoldStateOf(hold)
+}
+
+func (self *fakeComputeAbuseHoldStore) Hold(ctx context.Context, networkId sidecar.Id) (*model.ComputeAbuseHold, error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.failing {
+		return nil, fmt.Errorf("compute_abuse_hold did not answer")
+	}
+	self.readCount += 1
+	hold := self.networkHolds[networkId]
+	if hold == nil {
+		return nil, nil
+	}
+	copied := *hold
+	return &copied, nil
+}
+
+// How many rows were read.
+func (self *fakeComputeAbuseHoldStore) reads() int {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.readCount
+}
+
 // What a fixture is built with beyond its defaults.
 type computeFixtureOptions struct {
 	// handlers by route name in place of the registered ones; nil serves the registered ones
@@ -174,6 +274,9 @@ type computeFixtureOptions struct {
 	serviceLog ComputeServiceLog
 	// the catalog's versions; nil reads compute_catalog_version, which a test engine has no database for
 	catalogStore computeCatalogVersionStore
+	// a second broker instance on this fixture's world: its clock, stores, gates, auth state, region lookup and
+	// abuse holds, and its network and sidecar
+	sharedWith *computeFixture
 }
 
 // One engine and the world it reads, with one admitted member device in one loaded network whose gate is open and
@@ -189,6 +292,9 @@ type computeFixture struct {
 	gates           *sidecartest.FakeServiceGates
 	metrics         *sidecartest.FakeMetrics
 	authState       *fakeComputeAuthState
+	abuse           *sidecartest.FakeAbuseGate
+	regions         *fakeComputeRegionLookup
+	abuseHolds      *fakeComputeAbuseHoldStore
 	serviceLog      *recordingComputeServiceLog
 	host            *sidecar.ServiceHost
 	engine          *ComputeEngine
@@ -208,47 +314,78 @@ func newComputeFixture(t testing.TB, options *computeFixtureOptions) *computeFix
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	clock := sidecartest.NewFakeClock(sidecartest.DefaultClockStart())
-	faults := sidecartest.NewFaultQueue()
-	redisSettings := sidecartest.DefaultFakeRedisSettings()
-	self := &computeFixture{
-		t:               t,
-		ctx:             ctx,
-		clock:           clock,
-		faults:          faults,
-		redis:           sidecartest.NewFakeRedis(ctx, clock, faults, nil, redisSettings),
-		admissionsRedis: sidecartest.NewFakeRedis(ctx, clock, faults, nil, redisSettings),
-		authenticator:   sidecartest.NewFakeAuthenticator(clock, faults),
-		gates:           sidecartest.NewFakeServiceGates(nil),
-		metrics:         sidecartest.NewFakeMetrics(nil),
-		authState:       newFakeComputeAuthState(),
-		serviceLog:      &recordingComputeServiceLog{},
-		groups: map[ComputeMigrationGroup]bool{
-			ComputeMigrationGroupC1: true,
-			ComputeMigrationGroupC2: true,
-			ComputeMigrationGroupC3: true,
-		},
-		networkId: testComputeId("network-a"),
-		clientId:  testComputeId("client-a"),
-		sidecarId: testComputeId("sidecar-a"),
-		memberId:  testComputeId("member-a"),
+	var self *computeFixture
+	if shared := options.sharedWith; shared != nil {
+		self = &computeFixture{
+			t:               t,
+			ctx:             ctx,
+			clock:           shared.clock,
+			faults:          shared.faults,
+			redis:           shared.redis,
+			admissionsRedis: shared.admissionsRedis,
+			authenticator:   shared.authenticator,
+			gates:           shared.gates,
+			metrics:         sidecartest.NewFakeMetrics(nil),
+			authState:       shared.authState,
+			abuse:           shared.abuse,
+			regions:         shared.regions,
+			abuseHolds:      shared.abuseHolds,
+			serviceLog:      &recordingComputeServiceLog{},
+			groups:          maps.Clone(shared.groups),
+			networkId:       shared.networkId,
+			clientId:        shared.clientId,
+			sidecarId:       shared.sidecarId,
+			memberId:        shared.memberId,
+		}
+	} else {
+		clock := sidecartest.NewFakeClock(sidecartest.DefaultClockStart())
+		faults := sidecartest.NewFaultQueue()
+		redisSettings := sidecartest.DefaultFakeRedisSettings()
+		self = &computeFixture{
+			t:               t,
+			ctx:             ctx,
+			clock:           clock,
+			faults:          faults,
+			redis:           sidecartest.NewFakeRedis(ctx, clock, faults, nil, redisSettings),
+			admissionsRedis: sidecartest.NewFakeRedis(ctx, clock, faults, nil, redisSettings),
+			authenticator:   sidecartest.NewFakeAuthenticator(clock, faults),
+			gates:           sidecartest.NewFakeServiceGates(nil),
+			metrics:         sidecartest.NewFakeMetrics(nil),
+			authState:       newFakeComputeAuthState(),
+			abuse:           sidecartest.NewFakeAbuseGate(),
+			regions:         newFakeComputeRegionLookup(),
+			abuseHolds:      newFakeComputeAbuseHoldStore(),
+			serviceLog:      &recordingComputeServiceLog{},
+			groups: map[ComputeMigrationGroup]bool{
+				ComputeMigrationGroupC1: true,
+				ComputeMigrationGroupC2: true,
+				ComputeMigrationGroupC3: true,
+			},
+			networkId: testComputeId("network-a"),
+			clientId:  testComputeId("client-a"),
+			sidecarId: testComputeId("sidecar-a"),
+			memberId:  testComputeId("member-a"),
+		}
+		self.authState.load(self.networkId, 0)
+		self.authState.admit(&ComputeCaller{
+			NetworkId: self.networkId,
+			ClientId:  self.clientId,
+			SidecarId: self.sidecarId,
+			MemberId:  self.memberId,
+			Consented: true,
+		})
+		self.gates.OpenService(sidecar.ServiceGateCompute, connect.Id(self.networkId))
+		// in standing with §21, from an address placed nowhere, with no hold: each test takes away what it refuses
+		self.abuse.Set(connect.Id(self.networkId), sidecar.AbuseStandingStandard, true)
 	}
 	self.host = &sidecar.ServiceHost{
 		Authenticator: self.authenticator,
 		Metrics:       self.metrics,
 		Redis:         self.redis,
-		Clock:         clock,
+		Clock:         self.clock,
 		Gates:         self.gates,
+		Abuse:         self.abuse,
 	}
-	self.authState.load(self.networkId, 0)
-	self.authState.admit(&ComputeCaller{
-		NetworkId: self.networkId,
-		ClientId:  self.clientId,
-		SidecarId: self.sidecarId,
-		MemberId:  self.memberId,
-		Consented: true,
-	})
-	self.gates.OpenService(sidecar.ServiceGateCompute, connect.Id(self.networkId))
 	var serviceLog ComputeServiceLog = self.serviceLog
 	if options.serviceLog != nil {
 		serviceLog = options.serviceLog
@@ -265,11 +402,13 @@ func newComputeFixture(t testing.TB, options *computeFixtureOptions) *computeFix
 		SecretFile: func(name string) ([]byte, error) {
 			return nil, fmt.Errorf("a test block holds no %s", name)
 		},
+		RegionLookup:        self.regions,
 		ServiceLog:          serviceLog,
 		Log:                 options.log,
 		testHandlers:        options.handlers,
 		testAdmissionChecks: options.admissionChecks,
 		testCatalogStore:    options.catalogStore,
+		testAbuseHoldStore:  self.abuseHolds,
 	}
 	if deps.testHandlers == nil {
 		// no test hands the registry over by accident: an empty map serves every route unbuilt

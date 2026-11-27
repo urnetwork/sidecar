@@ -49,6 +49,9 @@ type ComputeEngineSettings struct {
 	// The broker's settings (broker_settings.go): the catalog's version rule and price rule, and INFER's later routes'
 	// bounds. nil: DefaultComputeBrokerSettings.
 	Broker *ComputeBrokerSettings
+	// §17.2's controls (abuse_settings.go, CARCH-M12-01): the abuse hold's projection and the refused regions. nil:
+	// DefaultComputeAbuseSettings.
+	Abuse *ComputeAbuseSettings
 }
 
 // The defaults.
@@ -72,6 +75,7 @@ func DefaultComputeEngineSettings() *ComputeEngineSettings {
 		AclGate:                 sidecar.DefaultAclGateSettings(),
 		Providers:               DefaultComputeProviderSettings(),
 		Broker:                  DefaultComputeBrokerSettings(),
+		Abuse:                   DefaultComputeAbuseSettings(),
 	}
 }
 
@@ -84,7 +88,7 @@ func (self *ComputeEngineSettings) bodyMaxByteCount(route string) int64 {
 }
 
 // An error for settings no engine could serve under: a body bound that is not positive, one naming no route of the
-// design, or providers' settings that do not validate.
+// design, or providers', the broker's or the abuse controls' settings that do not validate.
 func (self *ComputeEngineSettings) Validate() error {
 	if self.RequestBodyMaxByteCount <= 0 {
 		return fmt.Errorf("compute engine: the request body bound %d is not positive", self.RequestBodyMaxByteCount)
@@ -108,6 +112,11 @@ func (self *ComputeEngineSettings) Validate() error {
 	}
 	if self.Providers != nil {
 		if err := self.Providers.Validate(); err != nil {
+			return fmt.Errorf("compute engine: %w", err)
+		}
+	}
+	if self.Abuse != nil {
+		if err := self.Abuse.Validate(); err != nil {
 			return fmt.Errorf("compute engine: %w", err)
 		}
 	}

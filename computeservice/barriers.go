@@ -39,3 +39,11 @@ const (
 	BarrierComputeCatalogPublishBefore = "compute.catalog.publish.before"
 	BarrierComputeCatalogPublishAfter  = "compute.catalog.publish.after"
 )
+
+// The abuse hold's steps (CARCH-M12-01), keyed by the network's id in sidecar.EvsKeyId's form.
+const (
+	// Around an admission's fill of a network's hold from Postgres, between the row's read and its projection: a staff
+	// act that commits and projects in between leaves a newer version the fill's write never replaces (abuse_hold.go).
+	BarrierComputeAbuseHoldFillBefore = "compute.abuse_hold.fill.before"
+	BarrierComputeAbuseHoldFillAfter  = "compute.abuse_hold.fill.after"
+)
