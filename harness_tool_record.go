@@ -445,7 +445,7 @@ func harnessRecordQueryCall(ctx context.Context, tool *harnessDesignTool, call *
 	return result.toolResult(network, out, nil)
 }
 
-// record_append's arguments and data, MCP's.
+// record_append's arguments, MCP's.
 type harnessRecordAppendIn struct {
 	Kind     string   `json:"kind"`
 	ActionId string   `json:"action_id,omitempty"`
@@ -454,6 +454,7 @@ type harnessRecordAppendIn struct {
 	Expires  string   `json:"expires,omitempty"`
 }
 
+// record_append's data, MCP's.
 type harnessRecordAppendOut struct {
 	EntryId        string `json:"entry_id,omitempty"`
 	Log            string `json:"log,omitempty"`

@@ -383,9 +383,9 @@ func TestHarnessEvsWriteUnderInboxRefused(t *testing.T) {
 	network.inboxRepos[teamRepoId] = true
 	for _, repoId := range []Id{agentRepoId, agentsRepoId, teamRepoId} {
 		for _, call := range []struct{ name, args string }{
-			{HarnessToolEvsWrite, `{"repo":"` + repoId.String() + `","path":"inbox/t1/m1.json","content":"{}","base_version":0}`},
-			{HarnessToolEvsWrite, `{"repo":"` + repoId.String() + `","path":"inbox","content":"x","base_version":0}`},
-			{HarnessToolEvsDelete, `{"repo":"` + repoId.String() + `","path":"inbox/t1/m1.json","base_version":3}`},
+			{name: HarnessToolEvsWrite, args: `{"repo":"` + repoId.String() + `","path":"inbox/t1/m1.json","content":"{}","base_version":0}`},
+			{name: HarnessToolEvsWrite, args: `{"repo":"` + repoId.String() + `","path":"inbox","content":"x","base_version":0}`},
+			{name: HarnessToolEvsDelete, args: `{"repo":"` + repoId.String() + `","path":"inbox/t1/m1.json","base_version":3}`},
 		} {
 			_, err := world.call(t, call.name, call.args)
 			if row := harnessDesignTestRow(t, err); row != harnessGuardRowAgentsInbox {
@@ -420,9 +420,9 @@ func TestHarnessEvsWriteHarnessConfigRefused(t *testing.T) {
 	world := newHarnessDesignTestWorld(t, network, nil, nil)
 	vaultId, vault := network.addRepo(protocol.RepoKind_REPO_KIND_VAULT)
 	for _, call := range []struct{ name, args string }{
-		{HarnessToolEvsWrite, `{"repo":"` + vaultId.String() + `","path":"harness/claude.json","content":"{}","base_version":0}`},
-		{HarnessToolEvsWrite, `{"repo":"` + vaultId.String() + `","path":"harness/x/y","content":"{}","base_version":2}`},
-		{HarnessToolEvsDelete, `{"repo":"` + vaultId.String() + `","path":"harness/claude.json","base_version":1}`},
+		{name: HarnessToolEvsWrite, args: `{"repo":"` + vaultId.String() + `","path":"harness/claude.json","content":"{}","base_version":0}`},
+		{name: HarnessToolEvsWrite, args: `{"repo":"` + vaultId.String() + `","path":"harness/x/y","content":"{}","base_version":2}`},
+		{name: HarnessToolEvsDelete, args: `{"repo":"` + vaultId.String() + `","path":"harness/claude.json","base_version":1}`},
 	} {
 		_, err := world.call(t, call.name, call.args)
 		if row := harnessDesignTestRow(t, err); row != harnessGuardRowHarnessConfig {
@@ -446,10 +446,10 @@ func TestHarnessEvsReadMailboxVaultRefused(t *testing.T) {
 	mailbox.put("vault/ab/entry1", "sealed", network.identity.SidecarId, &EvsPushProvenance{State: EvsProvenanceUnattributed})
 	mailbox.put("msg/1.eml", "hello", network.identity.SidecarId, &EvsPushProvenance{State: EvsProvenanceUnattributed})
 	for _, call := range []struct{ name, args string }{
-		{HarnessToolEvsRead, `{"repo":"` + mailboxId.String() + `","path":"vault/ab/entry1"}`},
-		{HarnessToolEvsRead, `{"repo":"` + mailboxId.String() + `","path":"vault"}`},
-		{HarnessToolEvsHistory, `{"repo":"` + mailboxId.String() + `","path":"vault/ab"}`},
-		{HarnessToolEvsList, `{"repo":"` + mailboxId.String() + `","path":"vault"}`},
+		{name: HarnessToolEvsRead, args: `{"repo":"` + mailboxId.String() + `","path":"vault/ab/entry1"}`},
+		{name: HarnessToolEvsRead, args: `{"repo":"` + mailboxId.String() + `","path":"vault"}`},
+		{name: HarnessToolEvsHistory, args: `{"repo":"` + mailboxId.String() + `","path":"vault/ab"}`},
+		{name: HarnessToolEvsList, args: `{"repo":"` + mailboxId.String() + `","path":"vault"}`},
 	} {
 		_, err := world.call(t, call.name, call.args)
 		if row := harnessDesignTestRow(t, err); row != harnessGuardRowMailboxVault {

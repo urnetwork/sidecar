@@ -314,42 +314,46 @@ func harnessEvsEntryKindName(kind protocol.EvsEntryKind) string {
 	return strings.TrimPrefix(strings.ToLower(kind.String()), "evs_entry_")
 }
 
-// evs_repos' data, MCP's.
+// One repo evs_repos names, MCP's.
 type harnessEvsRepoOut struct {
 	RepoId string `json:"repo_id"`
 	Kind   string `json:"kind"`
 	Write  bool   `json:"write"`
 }
 
+// evs_repos' data, MCP's.
 type harnessEvsReposOut struct {
 	Repos []*harnessEvsRepoOut `json:"repos"`
 }
 
-// evs_list's arguments and data, MCP's.
+// evs_list's arguments, MCP's.
 type harnessEvsListIn struct {
 	Repo         string `json:"repo"`
 	Path         string `json:"path,omitempty"`
 	IncludeIndex bool   `json:"include_index,omitempty"`
 }
 
+// One child a listing names, MCP's.
 type harnessEvsEntryOut struct {
 	Name       string `json:"name"`
 	Kind       string `json:"kind"`
 	Versioning string `json:"versioning,omitempty"`
 }
 
+// evs_list's data, MCP's.
 type harnessEvsListOut struct {
 	Path        string                `json:"path"`
 	HeadVersion uint64                `json:"head_version"`
 	Entries     []*harnessEvsEntryOut `json:"entries"`
 }
 
-// evs_history's arguments and data, MCP's.
+// evs_history's arguments, MCP's.
 type harnessEvsHistoryIn struct {
 	Repo string `json:"repo"`
 	Path string `json:"path"`
 }
 
+// One version of a path, MCP's.
 type harnessEvsVersionOut struct {
 	Version         uint64 `json:"version"`
 	CommitVersion   uint64 `json:"commit_version"`
@@ -364,13 +368,14 @@ type harnessEvsVersionOut struct {
 	NotBeforeMillis int64  `json:"not_before_millis,omitempty"`
 }
 
+// evs_history's data, MCP's.
 type harnessEvsHistoryOut struct {
 	Path        string                  `json:"path"`
 	HeadVersion uint64                  `json:"head_version"`
 	Versions    []*harnessEvsVersionOut `json:"versions"`
 }
 
-// evs_read's arguments and data, MCP's.
+// evs_read's arguments, MCP's: repo and path, or a search hit standing for them.
 type harnessEvsReadIn struct {
 	Repo    string `json:"repo,omitempty"`
 	Path    string `json:"path,omitempty"`
@@ -378,6 +383,7 @@ type harnessEvsReadIn struct {
 	Hit     string `json:"hit,omitempty"`
 }
 
+// evs_read's data, MCP's.
 type harnessEvsReadOut struct {
 	Path            string `json:"path"`
 	Version         uint64 `json:"version"`
@@ -395,7 +401,7 @@ type harnessEvsReadOut struct {
 	Warning         string `json:"warning,omitempty"`
 }
 
-// evs_write's and evs_delete's arguments and data, MCP's.
+// evs_write's arguments, MCP's.
 type harnessEvsWriteIn struct {
 	Repo        string `json:"repo"`
 	Path        string `json:"path"`
@@ -405,12 +411,14 @@ type harnessEvsWriteIn struct {
 	Versioning  string `json:"versioning,omitempty"`
 }
 
+// evs_delete's arguments, MCP's.
 type harnessEvsDeleteIn struct {
 	Repo        string `json:"repo"`
 	Path        string `json:"path"`
 	BaseVersion uint64 `json:"base_version"`
 }
 
+// evs_write's and evs_delete's data, MCP's.
 type harnessEvsWriteOut struct {
 	// written
 	Status  string `json:"status"`
@@ -599,6 +607,7 @@ type harnessLimitedBuffer struct {
 	over   bool
 }
 
+// Keeps p, or fails past the limit, keeping nothing of it.
 func (self *harnessLimitedBuffer) Write(p []byte) (int, error) {
 	if self.limit < int64(self.buffer.Len()+len(p)) {
 		self.over = true

@@ -138,8 +138,8 @@ func TestHarnessSearchGuardsNamedRepos(t *testing.T) {
 		args string
 		row  string
 	}{
-		{`{"query":"x","repos":["` + mailboxId.String() + `"],"filters":{"path_prefix":"vault/"}}`, harnessGuardRowMailboxVault},
-		{`{"query":"x","repos":["` + secretId.String() + `"]}`, harnessGuardRowSecret},
+		{args: `{"query":"x","repos":["` + mailboxId.String() + `"],"filters":{"path_prefix":"vault/"}}`, row: harnessGuardRowMailboxVault},
+		{args: `{"query":"x","repos":["` + secretId.String() + `"]}`, row: harnessGuardRowSecret},
 	} {
 		_, err := world.call(t, HarnessToolSearch, test.args)
 		if row := harnessDesignTestRow(t, err); row != test.row {

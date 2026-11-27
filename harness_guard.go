@@ -124,7 +124,7 @@ func (self *HarnessGuardError) Error() string {
 	return self.text
 }
 
-// Is ErrHarnessGuardRefused.
+// Matches ErrHarnessGuardRefused.
 func (self *HarnessGuardError) Is(target error) bool {
 	return target == ErrHarnessGuardRefused
 }
