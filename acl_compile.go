@@ -19,6 +19,8 @@
 //	service_settings  auth_features, the authorization features the head turns on, whose implicit fragments a network
 //	                  with no document compiles after the frozen implicit document (DESIGN-COMPUTE §16.6;
 //	                  aclImplicitFeatureRules), and nothing else of the record
+//	compute.hujson    a network with no document's compute block alone (DESIGN-COMPUTE §16.4; ConfigHeadComputePath),
+//	                  which compiles as a document's block does and sets no reach (acl_compute_block_compile.go)
 //
 // What it writes: has_document; evidence_default, the document's effective evidenceDefault as channel values, all
 // three where it names none, the implicit document's included, which every verifier reads for an action no requests
@@ -92,6 +94,9 @@ type AclCompileInput struct {
 	// network with no document compiles after the frozen implicit document (aclImplicitFeatureRules): a part of the
 	// head, so the compile stays a function of it.
 	AuthFeatures AuthFeature
+	// The head's block-alone compute record (ConfigHeadComputePath), nil when the head holds none: a network with no
+	// document keeps its compute block there (DESIGN-COMPUTE §16.4).
+	ComputeRecord []byte
 
 	// the head the input came from, nil for an input built by hand
 	head *ConfigHead
@@ -108,12 +113,13 @@ func NewAclCompileInput(head *ConfigHead, rows *ConfigCompileRows) (*AclCompileI
 		return nil, fmt.Errorf("%w: the genesis names no network", ErrAclCompile)
 	}
 	input := &AclCompileInput{
-		NetworkId:  networkId,
-		Policy:     head.File(ConfigHeadPolicyPath),
-		HeadTimeMs: aclHeadTimeMs(head),
-		Members:    rows.Members,
-		Sidecars:   rows.Sidecars,
-		Statements: rows.AclStatements,
+		NetworkId:     networkId,
+		Policy:        head.File(ConfigHeadPolicyPath),
+		ComputeRecord: head.File(ConfigHeadComputePath),
+		HeadTimeMs:    aclHeadTimeMs(head),
+		Members:       rows.Members,
+		Sidecars:      rows.Sidecars,
+		Statements:    rows.AclStatements,
 	}
 	if input.Statements == nil {
 		input.Statements = &protocol.AclRows{}
@@ -358,6 +364,9 @@ type AclLocalPolicy struct {
 	// The document's discovery block, nil with none or no document: what §17.7.1's effective list of service types
 	// reads (owner decision 778). It enters no row.
 	Discovery *AclDiscoveryBlock
+	// DESIGN-COMPUTE §16.4's compute block, the document's or a network with no document's record, as compiled under
+	// the compute_policy feature; nil with none. What ComputePolicyView reads; the caller must not change it.
+	Compute *AclComputeBlock
 }
 
 // One rule's detail.
@@ -444,6 +453,8 @@ type aclCompiler struct {
 	socketKeys []*SocketKeys
 	// the atoms compiled so far, by id
 	atoms map[Id]*protocol.AclAtom
+	// a network with no document's block-alone compute record, nil for none (acl_compute_block_compile.go)
+	computeRecord *AclComputeBlock
 	// the outputs
 	rows  *protocol.AclRows
 	local *AclLocalPolicy
@@ -490,6 +501,9 @@ func newAclCompilerTables(input *AclCompileInput) (*aclCompiler, error) {
 	}
 	if self.hasDocument {
 		self.local.Discovery = self.policy.Discovery
+	}
+	if err := self.readComputeRecord(); err != nil {
+		return nil, err
 	}
 	if err := self.indexTables(); err != nil {
 		return nil, err
@@ -772,6 +786,10 @@ func (self *aclCompiler) compile() error {
 	rows.Bridge = bytes.Clone(self.input.Bridge)
 	// owner decision 63's reader, under the opt-in record the log's rows hold (acl_audit.go)
 	if rows.Audit, err = self.compileAudit(); err != nil {
+		return err
+	}
+	// DESIGN-COMPUTE §16.4's compute block, under its feature, its budget subjects' atoms among the rows' atoms
+	if err := self.compileComputeBlock(rows); err != nil {
 		return err
 	}
 

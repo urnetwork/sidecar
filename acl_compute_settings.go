@@ -12,11 +12,16 @@
 
 package sidecar
 
-// DESIGN-COMPUTE §16, the compute policy's resources, actions, defaults and enforcement points. Empty until CACL's
-// tasks add their fields.
-type ComputePolicySettings struct{}
+// DESIGN-COMPUTE §16, the compute policy's resources, actions, defaults and enforcement points.
+type ComputePolicySettings struct {
+	// The compute block's and §16.2's resources' format bounds (AclComputeBlockSettings): every reader holds them alike,
+	// so the every-leg parse reads their default, which this instance carries for the device's own code (QD-702).
+	Block *AclComputeBlockSettings
+}
 
 // The component's defaults, the only place one is set.
 func DefaultComputePolicySettings() *ComputePolicySettings {
-	return &ComputePolicySettings{}
+	return &ComputePolicySettings{
+		Block: DefaultAclComputeBlockSettings(),
+	}
 }

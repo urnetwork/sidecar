@@ -84,6 +84,10 @@ type AclPolicy struct {
 	// The DNS-SD service types the network's hosts gather and publish beyond or short of §17.7.1's default list (owner
 	// decision 778). Nil without a discovery block. It stays on devices and enters no row, since no gate reads it.
 	Discovery *AclDiscoveryBlock
+	// DESIGN-COMPUTE §16.4's compute block (acl_compute_block.go), nil without one. Its floors, providers, shapes, search
+	// switch and cap and budgets compile into rows under the network's compute_policy feature, and a head naming it
+	// while that feature is off does not compile (acl_compute_block_compile.go); the rest stays on devices.
+	Compute *AclComputeBlock
 }
 
 // The discovery block (§8.5; owner decision 778): {"allow": [...], "deny": [...]}, each a service type, `_<name>._tcp`
@@ -531,6 +535,11 @@ func (self *aclPolicyReader) readPolicy(policy *AclPolicy) error {
 		case "discovery":
 			return func() (err error) {
 				policy.Discovery, err = self.readDiscovery()
+				return err
+			}
+		case "compute":
+			return func() (err error) {
+				policy.Compute, err = self.readComputeBlock()
 				return err
 			}
 		}

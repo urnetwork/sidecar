@@ -233,6 +233,10 @@ func aclSaveNamesOf(policy *AclPolicy) *aclSaveNames {
 	if policy.Audit != nil {
 		add(policy.Audit.Reader)
 	}
+	// the compute block's budget subjects and egress exits (DESIGN-COMPUTE §16.4)
+	for _, selector := range policy.Compute.selectors() {
+		add(selector)
+	}
 	for _, test := range policy.Tests {
 		add(test.Src)
 		for _, check := range slices.Concat(test.Accept, test.Deny) {
