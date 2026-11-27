@@ -351,8 +351,9 @@ type inferFetchResult struct {
 	data []byte
 	// ok: the index
 	index *InferModelIndex
-	// limited: the wait the source asked for, 0 for none given
+	// limited: the wait the source asked for, 0 for none given, and when its answer was read, which the wait runs from
 	retryAfter time.Duration
+	answeredAt time.Time
 	// what went wrong, in the download's words
 	why string
 	// corrupt: what refused it, where something did
@@ -425,16 +426,17 @@ func (self *InferModelDownload) statusResult(response *http.Response, source Inf
 	case response.StatusCode == want:
 		return nil
 	case response.StatusCode == http.StatusTooManyRequests:
-		return &inferFetchResult{outcome: inferFetchLimited, retryAfter: self.retryAfterOf(response), why: "its rate limit"}
+		answeredAt := self.clock.Now()
+		return &inferFetchResult{outcome: inferFetchLimited, retryAfter: self.retryAfterOf(response, answeredAt), answeredAt: answeredAt, why: "its rate limit"}
 	case http.StatusInternalServerError <= response.StatusCode:
 		return &inferFetchResult{outcome: inferFetchUnanswered, why: fmt.Sprintf("the %s answered %d", source, response.StatusCode)}
 	}
 	return &inferFetchResult{outcome: inferFetchRefused, why: fmt.Sprintf("the %s answered %d", source, response.StatusCode)}
 }
 
-// The wait a 429's Retry-After asks for, in seconds or as a date on this download's clock; 0 for none or one that does
-// not read.
-func (self *InferModelDownload) retryAfterOf(response *http.Response) time.Duration {
+// The wait a 429's Retry-After asks for, in seconds or as a date on this download's clock, read at now; 0 for none or
+// one that does not read.
+func (self *InferModelDownload) retryAfterOf(response *http.Response, now time.Time) time.Duration {
 	value := strings.TrimSpace(response.Header.Get("Retry-After"))
 	if value == "" {
 		return 0
@@ -446,7 +448,7 @@ func (self *InferModelDownload) retryAfterOf(response *http.Response) time.Durat
 		return time.Duration(min(seconds, int64(math.MaxInt64/time.Second))) * time.Second
 	}
 	if at, err := http.ParseTime(value); err == nil {
-		return max(0, at.Sub(self.clock.Now()))
+		return max(0, at.Sub(now))
 	}
 	return 0
 }
@@ -666,7 +668,7 @@ func (self *inferDownloadRun) fetchIndex(ctx context.Context) (*InferModelIndex,
 			if max(0, self.settings.ModelRateLimitedMaxCount) < limitedCount {
 				return nil, self.unavailable(-1, "the api kept refusing the index for its rate limit")
 			}
-			if err := self.wait(ctx, self.limitedWait(result)); err != nil {
+			if err := self.waitUntil(ctx, result.answeredAt.Add(self.limitedWait(result))); err != nil {
 				return nil, err
 			}
 		case inferFetchUnreachable:
@@ -694,6 +696,17 @@ func (self *inferDownloadRun) unavailable(chunk int, format string, a ...any) *I
 func (self *inferDownloadRun) wait(ctx context.Context, timeout time.Duration) error {
 	select {
 	case <-self.download.clock.After(timeout):
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// Waits until at on the download's clock, a wait for that time itself (QD-1425), or until ctx ends: a 429's wait,
+// which runs from when its answer was read.
+func (self *inferDownloadRun) waitUntil(ctx context.Context, at time.Time) error {
+	select {
+	case <-ClockAfterAt(self.download.clock, at):
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -800,7 +813,7 @@ func (self *inferDownloadRun) fetchChunk(ctx context.Context, chunk *InferModelC
 			if max(0, self.settings.ModelRateLimitedMaxCount) < limitedCount {
 				return self.unavailable(chunk.Number, "the %s kept refusing it for its rate limit", source)
 			}
-			if err := self.wait(ctx, self.limitedWait(result)); err != nil {
+			if err := self.waitUntil(ctx, result.answeredAt.Add(self.limitedWait(result))); err != nil {
 				return err
 			}
 		case inferFetchRefused:

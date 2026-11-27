@@ -330,3 +330,27 @@ func TestOffsetClockWaitsForATimeOnItsOwnReading(t *testing.T) {
 		t.Errorf("%d calls at the view's time", calls)
 	}
 }
+
+// A wait for a time built in another location, as time.UnixMilli builds one in the local zone, stands in the clock's
+// location, so PendingTimers reads it as an After of the same instant reads, and an Advance that stops at it leaves the
+// clock in its own location.
+func TestFakeClockWaitForATimeStandsInTheClocksLocation(t *testing.T) {
+	clock := NewFakeClock(DefaultClockStart())
+	elsewhere := time.FixedZone("elsewhere", 5*60*60)
+	at := clock.Now().Add(time.Second)
+	clock.AfterAt(at.In(elsewhere))
+	calls := 0
+	clock.AfterFuncAt(at.Add(time.Second).In(elsewhere), func() { calls += 1 })
+	pending := clock.PendingTimers()
+	if len(pending) != 2 || pending[0] != at || pending[1] != at.Add(time.Second) {
+		t.Fatalf("timers at %v, not at %v and a second on in the clock's location", pending, at)
+	}
+	clock.AdvanceTo(at)
+	if now := clock.Now(); now != at || now.Location() != DefaultClockStart().Location() {
+		t.Fatalf("the clock reads %v after stopping at the timer", now)
+	}
+	clock.Advance(time.Second)
+	if calls != 1 {
+		t.Fatalf("%d calls at the time", calls)
+	}
+}
