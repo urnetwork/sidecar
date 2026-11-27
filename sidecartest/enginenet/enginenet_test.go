@@ -63,6 +63,22 @@ func (self *enginesTestWorld) sync() {
 	}
 }
 
+// Waits until the gate has finished count loads since the world began, with no Sync to start one.
+func (self *enginesTestWorld) awaitLoads(count uint64) {
+	self.t.Helper()
+	for {
+		loadCount, changed := self.engines.loads.Get()
+		if count <= loadCount {
+			return
+		}
+		select {
+		case <-changed:
+		case <-self.ctx.Done():
+			self.t.Fatalf("%d of %d loads finished: %v", loadCount, count, self.ctx.Err())
+		}
+	}
+}
+
 // The source's answer to sidecarId, nil for a client bound to none, asking scopes at audience.
 func (self *enginesTestWorld) ask(sidecarId *sidecar.Id, audience string, scopes ...string) (*sidecartest.FakeApiScopeGrant, error) {
 	return self.engines.exchangeScopes(self.ctx, &sidecartest.FakeApiScopeRequest{
@@ -178,15 +194,36 @@ func (self *enginesTestClient) proof(htu string) string {
 }
 
 // The exchange's scopes for the owner's device: refused temporarily_unavailable until the gate holds the network, then
-// §8's table at the gate's state, which grants the config's r and leaves out a repo the state does not hold.
+// §8's table at the gate's state, which grants the config's r and leaves out a repo the state does not hold, and to an
+// ask of no scope a token naming the member. The first ask starts the gate's load of the network, which installs by
+// itself, so the asks before the gate holds the network are made with its loads held (holdGateLoads), the second with
+// that load parked at its first read. Before, nothing held it, and a load that installed between the two asks had the
+// second, of no scope at dns, granted a token at the tip: tip-check at c6552874 met it in one run of 107, and 2,000
+// runs beside a CPU burner in one.
 func TestEnginesScopesComeFromTheGatesState(t *testing.T) {
 	world := newEnginesTestWorld(t)
 	network := world.network
 	owner := network.Owner()
 	configScope := enginesTestScope(network.ConfigRepoId(), "r")
 	unknownScope := enginesTestScope(sidecar.NewId(), "r")
+	loadCount, _ := world.engines.loads.Get()
+	arrived, release := world.engines.holdGateLoads()
 	world.refused("scopes before the gate holds the network", sidecartest.ErrFakeApiExchangeUnavailable, &owner.SidecarId, "evs", configScope, unknownScope)
+	select {
+	case <-arrived:
+	case <-world.ctx.Done():
+		t.Fatal("the ask before the gate holds the network started no load")
+	}
 	world.refused("no scope before the gate holds the network", sidecartest.ErrFakeApiExchangeUnavailable, &owner.SidecarId, "dns")
+	if count, _ := world.engines.loads.Get(); count != loadCount {
+		t.Fatalf("%d loads finished with the gate's reads held", count-loadCount)
+	}
+
+	// released, the load the first ask started installs with no Sync, and the second ask is granted: what it met when
+	// that load ran unheld
+	release()
+	world.awaitLoads(loadCount + 1)
+	world.granted("no scope once the gate holds the network", []string{}, owner.MemberId, &owner.SidecarId, "dns")
 	world.sync()
 	world.granted("the gate's scopes", []string{configScope}, owner.MemberId, &owner.SidecarId, "evs", configScope, unknownScope)
 }
@@ -325,17 +362,7 @@ func TestEnginesExchangeAnswersTemporarilyUnavailableBeforeTheGateLoads(t *testi
 		t.Fatalf("the exchange before the gate holds the network: %d %v %q", status, scopes, code)
 	}
 	// the refusal asked the gate for the network: a load finishes with no Sync to start it
-	for {
-		count, changed := world.engines.loads.Get()
-		if loadCount < count {
-			break
-		}
-		select {
-		case <-changed:
-		case <-world.ctx.Done():
-			t.Fatal("the refusal did not start the network's load")
-		}
-	}
+	world.awaitLoads(loadCount + 1)
 	world.sync()
 	if status, scopes, code := ownerClient.exchange("evs", configRead); status != http.StatusOK || !slices.Equal(scopes, []string{configRead}) {
 		t.Errorf("the exchange once the gate holds the network: %d %v %q", status, scopes, code)

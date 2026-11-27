@@ -434,7 +434,9 @@ func (self *MailReceiver) listen(ctx context.Context) (MailReceiverListener, err
 	return listener, nil
 }
 
-// The receiver's loop: serves each listen until it ends, and asks again for one that waits, fails or ends.
+// The receiver's loop: serves each listen until it ends, and asks again for one that waits, fails or ends. No listen
+// starts once ctx has ended, a retry's timer that fired as it ended included, so the status keeps the problem or the
+// approval it showed, and an ended ctx asks the clock for nothing.
 func (self *MailReceiver) run(ctx context.Context, listener MailReceiverListener, listenErr error) {
 	defer close(self.done)
 	for {
@@ -443,6 +445,9 @@ func (self *MailReceiver) run(ctx context.Context, listener MailReceiverListener
 			listener = nil
 			listenErr = nil
 		}
+		if ctx.Err() != nil {
+			return
+		}
 		wait := self.settings.ListenRetryInterval
 		var pending *ApprovalPendingError
 		if errors.As(listenErr, &pending) {
@@ -450,8 +455,11 @@ func (self *MailReceiver) run(ctx context.Context, listener MailReceiverListener
 		}
 		select {
 		case <-ctx.Done():
-			return
 		case <-self.clock.After(wait):
+		}
+		// select takes either of two ready cases at random: a retry's timer taken as ctx ended reads as the end
+		if ctx.Err() != nil {
+			return
 		}
 		listener, listenErr = self.listen(ctx)
 	}
@@ -557,17 +565,22 @@ func (self *MailReceiver) wakeKeys() {
 }
 
 // The key pass, until ctx ends: at once, then when its pass says, or when woken. The pass's wait runs from its end,
-// cut at the time a key's TLSA goes live, which is waited for itself (QD-1425).
+// cut at the time a key's TLSA goes live, which is waited for itself (QD-1425). No pass starts once ctx has ended, a
+// timer or a wake taken as it ended included, so no key publishes, serves, rotates or retires on the dead context, and
+// an ended ctx asks the clock for nothing.
 func (self *MailReceiver) runKeys(ctx context.Context, listener MailReceiverListener) {
-	for {
+	// select takes any of its ready cases at random: a timer or a wake taken as ctx ended reads as the end
+	for ctx.Err() == nil {
 		wait, liveAt := self.keyPass(ctx, listener, false)
+		if ctx.Err() != nil {
+			return
+		}
 		passAt := self.clock.Now().Add(wait)
 		if !liveAt.IsZero() && liveAt.Before(passAt) {
 			passAt = liveAt
 		}
 		select {
 		case <-ctx.Done():
-			return
 		case <-ClockAfterAt(self.clock, passAt):
 		case <-self.keyWake:
 		}

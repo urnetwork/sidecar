@@ -921,6 +921,7 @@ barrier support_client.wake.after support_client.go
 barrier support_client.wake.before support_client.go
 barrier team_directory.file.after config_directory.go
 barrier team_directory.file.before config_directory.go
+barrier tls.cert_close tls_cert_manager.go
 barrier tls.cert_install.after tls_cert_manager.go
 barrier tls.cert_install.before tls_cert_manager.go
 barrier tls.cert_promote.after tls_cert_manager.go

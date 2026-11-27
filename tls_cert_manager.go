@@ -324,9 +324,14 @@ func NewTlsCertManager(ctx context.Context, args *TlsCertManagerArgs) (*TlsCertM
 	return manager, nil
 }
 
-// Ends the pass, without waiting for the loop: done closes once it has returned. What is installed stays in the store.
+// Ends the pass loop and waits for it to return, so no pass of the loop's runs on once Close has: each of its steps ends
+// with the manager's context, its callers (NewTlsComponent's refusal, TlsComponent.Close) hold no lock it takes, and
+// it calls back into nothing that closes it. A pass EnsureTlsCertificate runs on its own caller's goroutine is that
+// caller's to wait for. What is installed stays in the store. Safe more than once.
 func (self *TlsCertManager) Close() {
 	self.cancel()
+	testHookBarrier("tls.cert_close", "")
+	<-self.done
 }
 
 // Attaches api, one generation's, and asks for a pass; nil detaches it, and every route answers ErrTlsCertsOffline
