@@ -1334,7 +1334,7 @@ Feedback (sidecar/FEEDBACK-SYSTEM.md:11) is out of scope but for that conversati
 **The list** (the only TTL table; I-18):
 
 ```yaml
-# metadata_list.yml v74; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
+# metadata_list.yml v75; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
 # §7.9, §10, §11). v6 adds to v5 (2026-11-04) connect-1's ShareCert, api-6's push-token slot sentinels, api-7's
 # {acl_}q, cascade signers, recovery bindings, restored bindings' recovery windows and orphaned networks, api-13's
 # per-eraser closure counters, evs-1's secret kind and orphans, evs-3's creation block, fence time, deleted flag
@@ -1619,6 +1619,17 @@ Feedback (sidecar/FEEDBACK-SYSTEM.md:11) is out of scope but for that conversati
 # catalog route and compute_catalog_version, MG-C2's, each published version of the remote catalog and when it
 # was published (DESIGN-COMPUTE §6.3), which every device lists and every remote charge is priced from. No Redis
 # family or ttl changes.
+# v75, updated 2026-11-27 for the owner's answers QD-1438 (carch-m12-01-compute-hold-row), which CARCH-M12-01
+# published through check's additions, and QD-1452 (srch-m13-01-websearch-metadata-words), adds no row: compute-3
+# takes compute_abuse_hold, MG-C1's, and its projection {cmp_<network_id>}:a, an operator's suspension of a
+# network's compute every broker admission reads, with its reason class, when it was placed and resumed and the
+# staff members' opaque reviewer ids, the projection holding the version and class alone, kept for the network's
+# life as the account is (DESIGN-COMPUTE §17.2); compute-5 takes each admission's address, which the broker's region
+# check reads in memory and keeps nowhere (I-13); and compute-10 takes the catalog version a search names, the
+# payee and the authorization sealed between the device and the signer, ciphertext at the broker, and the asset,
+# its chain and URnetwork's payer address and signature, public on Base, which the broker and the signer already
+# handle (DESIGN-COMPUTE §21.5). One Redis family is added, {cmp_<network_id>}:a, and compute-3's ttl takes the
+# hold's; no other ttl changes.
 # Each row gives service, store (tables, Redis families, object families, logs or memory),
 # sees, why, ttl, and owner: the section that designs the value and states its ttl. Withdrawn rows keep
 # their ids so citations resolve. Public: this list ships in DESIGN.md on the public sidecar repo (owner
@@ -2351,10 +2362,10 @@ compute-2:
   owner: DESIGN-COMPUTE §14.6 (§9.4, §9.11, §21.9)
 compute-3:
   service: compute (the broker) and taskworker (compute_settle, compute_rollup_day); api (the charges, statement and spend routes)
-  store: compute_charge (daily partitions), compute_charge_lot, compute_charge_day, compute_charge_total, compute_charge_pruned and compute_account (MG-C1)
-  sees: "per charge: kind, subject ids, the member it counts to, model or shape, units, amount, cost and what URnetwork absorbed of it (DESIGN-COMPUTE §9.7), times; daily and monthly totals, a day's by sidecar, member, agent, model or shape, provider and enclave; lifetime totals by kind, member, model or shape, provider and enclave, with no day, sidecar or agent; per kind, the sums of day rows dropped past 400 days; and the network's first charge day (§9.13); per network, its account: the settled balance, its state (§9.9), the floor settlement may reach, the indexer enclave's reserve (§9.9) and any override of its search cap (§9.11)"
+  store: compute_charge (daily partitions), compute_charge_lot, compute_charge_day, compute_charge_total, compute_charge_pruned, compute_account and compute_abuse_hold (MG-C1); Redis {cmp_<network_id>}:a (an operator's hold's projection)
+  sees: "per charge: kind, subject ids, the member it counts to, model or shape, units, amount, cost and what URnetwork absorbed of it (DESIGN-COMPUTE §9.7), times; daily and monthly totals, a day's by sidecar, member, agent, model or shape, provider and enclave; lifetime totals by kind, member, model or shape, provider and enclave, with no day, sidecar or agent; per kind, the sums of day rows dropped past 400 days; and the network's first charge day (§9.13); per network, its account: the settled balance, its state (§9.9), the floor settlement may reach, the indexer enclave's reserve (§9.9) and any override of its search cap (§9.11); per network, an operator's suspension of its compute (DESIGN-COMPUTE §17.2): its reason class, when it was placed and resumed, and the staff members' opaque reviewer ids; the broker's projection of it, the version and class alone"
   why: statements, the spend view's totals and last 7 UTC days, refunds and the balance the states read (DESIGN-COMPUTE §9.4, §9.9, §9.13)
-  ttl: "as compute-1; lifetime totals, the dropped rows' sums and the first charge day for the account's life, deleted with the network; the account for the network's life"
+  ttl: "as compute-1; lifetime totals, the dropped rows' sums and the first charge day for the account's life, deleted with the network; the account for the network's life; a hold for the network's life, as the account"
   owner: DESIGN-COMPUTE §14.6 (§9.4, §9.13)
 compute-4:
   service: compute (the orchestrator) and taskworker (compute_enclave_meter, compute_suspend)
@@ -2366,7 +2377,7 @@ compute-4:
 compute-5:
   service: compute (the broker's evidence tunnel and provisioning relay)
   store: memory only, in transit
-  sees: "in transit only: evidence bytes, nonces, sealed provisioning bundles; for the tunnel, the host, sizes and times (its contents are the device's TLS, or its SSH at an enclave's setup); the bootstrap B the broker carries to an enclave's VM, which reads it from the host, and the per-VM token the VM uses from the host (DESIGN-COMPUTE §11.7, §14.3; QD-1243)"
+  sees: "in transit only: evidence bytes, nonces, sealed provisioning bundles; for the tunnel, the host, sizes and times (its contents are the device's TLS, or its SSH at an enclave's setup); the bootstrap B the broker carries to an enclave's VM, which reads it from the host, and the per-VM token the VM uses from the host (DESIGN-COMPUTE §11.7, §14.3; QD-1243); each admission's address, read in memory, mapped to its country and subdivision against the refused regions, and kept nowhere (I-13)"
   why: a device verifies a TEE's evidence and provisions an enclave itself, through the broker, which reads none of it (DESIGN-COMPUTE §5.7, §11.7)
   ttl: "not stored; relayed within 10 minutes; tunnel counts in metrics only"
   owner: DESIGN-COMPUTE §14.6 (§5.7, §11.7)
@@ -2401,7 +2412,7 @@ compute-9:
 compute-10:
   service: compute (the broker's search admissions) and searchsigner (the payer key, apart, on hosts of its own); taskworker (compute_search_tickets, compute_search_purge)
   store: compute_op, compute_charge and compute_search_flag (MG-C1, MG-C2); Redis {cmpr_<network_id>} (a network's search rate and its searches today), {cmps} (the global search limiter, no network) and {cmpa} (open search admissions, on an instance of its own); the signer's search_signer_nonce, search_signer_day, search_signer_cursor, search_signer_facilitator and search_signer_screen (MG-S1, in its own database) and its own Redis
-  sees: "per search: network, sidecar, opaque agent id, request id and attempt, authorization and settlement times to the minute, settled or lapsed, the charge, in its charge and operation rows (DESIGN-COMPUTE §9.7); the broker's ticket for it in memory until the signer reports, then only the answer it gave, with no network, an hour; the signer, apart, the authorization's nonce, payee and amount in memory until it settles or lapses on Base's finalized head, about 30 minutes, its issued nonces, with their values and windows and whether each settled and was attributed, and each UTC day's issued, settled, attributed and unattributed counts and values, all without a network; a sanctions record for a payee the screen refused or an authorization settled by a sender other than the facilitator: network, sidecar, payee, transaction and time (§21.5); a network's search rate and its searches this UTC day, against its day_max (§21.9); never the query, the mode or the results"
+  sees: "per search: network, sidecar, opaque agent id, request id and attempt, authorization and settlement times to the minute, settled or lapsed, the charge, in its charge and operation rows (DESIGN-COMPUTE §9.7); the broker's ticket for it in memory until the signer reports, then only the answer it gave, with no network, an hour; the signer, apart, the authorization's nonce, payee and amount in memory until it settles or lapses on Base's finalized head, about 30 minutes, its issued nonces, with their values and windows and whether each settled and was attributed, and each UTC day's issued, settled, attributed and unattributed counts and values, all without a network; a sanctions record for a payee the screen refused or an authorization settled by a sender other than the facilitator: network, sidecar, payee, transaction and time (§21.5); a network's search rate and its searches this UTC day, against its day_max (§21.9); the catalog version a search names; the payee sealed to the signer and the authorization sealed back, as ciphertext at the broker; the asset, its chain and URnetwork's payer address and signature, public on Base; never the query, the mode or the results"
   why: a search's admission, hold and charge, paid by a one-search authorization no one system joins to its network (DESIGN-COMPUTE §21.5, D-CSRV-1); sanctions screening (§21.5)
   ttl: "per-search rows at most 72 hours, deleted from 71 h 55 min (§14.5), then compute-3's day rows; issued nonces a day past their window; the signer's day totals 7 years; sanctions records for OFAC's recordkeeping period, which counsel confirms; a network's searches today a day"
   owner: DESIGN-COMPUTE §14.6 (§21.5)
@@ -28218,7 +28229,7 @@ Every statement in sidecar/design/PLAN.md (381 lines), traced to the sections th
 
 ## Appendix G. Server-visible metadata list
 
-§2.8 holds `metadata_list.yml` (v74, updated 2026-11-26 for the owner's answers QD-1434), the list the product promises: URnetwork's servers never receive plaintext content or keys, in any mode, and see only the values it names (D-TRUST-4), with two bounded exceptions, the platform report listener and the support conversation (§2.8). This appendix no longer copies it, so the two cannot drift. The list has 117 rows, 5 of them withdrawn: connect-1 to connect-5, api-1 to api-15, sock-1 to sock-5, evs-1 to evs-30, gkm-1 to gkm-10, tls-1 to tls-4, cert-1 and cert-2, dns-1 and dns-2, smtp-1 to smtp-7, mx-1 to mx-4, ops-1 to ops-3, ext-1 to ext-15, compute-1 to compute-12 and support-1 to support-3; api-12, evs-20, gkm-3, ext-2 and ext-9 are withdrawn and keep their ids, so citations resolve.
+§2.8 holds `metadata_list.yml` (v75, updated 2026-11-27 for the owner's answers QD-1438), the list the product promises: URnetwork's servers never receive plaintext content or keys, in any mode, and see only the values it names (D-TRUST-4), with two bounded exceptions, the platform report listener and the support conversation (§2.8). This appendix no longer copies it, so the two cannot drift. The list has 117 rows, 5 of them withdrawn: connect-1 to connect-5, api-1 to api-15, sock-1 to sock-5, evs-1 to evs-30, gkm-1 to gkm-10, tls-1 to tls-4, cert-1 and cert-2, dns-1 and dns-2, smtp-1 to smtp-7, mx-1 to mx-4, ops-1 to ops-3, ext-1 to ext-15, compute-1 to compute-12 and support-1 to support-3; api-12, evs-20, gkm-3, ext-2 and ext-9 are withdrawn and keep their ids, so citations resolve.
 
 ## Appendix H. Research sources
 
