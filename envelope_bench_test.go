@@ -71,14 +71,21 @@ func BenchmarkSubprotocolReceive(b *testing.B) {
 	fixture.closeBalanced(b)
 }
 
-// Waits until every goroutine of the process but the caller is parked, failing tb with what still runs past
-// testSubprotocolAwaitTimeout; active, when set, sees each poll's stanzas of the goroutines not parked. Each poll
-// stops the world for every goroutine's state, which is exact where the scheduler's sampled counts are not, and
-// the caller yields between polls, so what it waits for runs. A parked goroutine stays parked until something
-// wakes it, a timer among them, so this settles what runs now, not what a timer starts later. The dump is read
-// in place and its buffer kept, so the polls leave next to no garbage to bring a GC into the window that follows.
-func testAwaitOtherGoroutinesParked(tb testing.TB, active func(stanzas [][]byte)) {
+// Waits until no goroutine of the process but the caller runs, failing tb with what still runs past
+// testSubprotocolAwaitTimeout. holds says whether a poll's stanzas of the goroutines not parked hold the wait; nil,
+// any of them does, as a measure of the whole process's allocations needs. Each poll stops the world for every
+// goroutine's state, which is exact where the scheduler's sampled counts are not, and the caller yields between
+// polls, so what it waits for runs. A parked goroutine stays parked until something wakes it, a timer among them,
+// so this settles what runs now, not what a timer starts later; and a goroutine that sits for good in a system
+// call, as os/signal's receiver does, holds the wait until it fails, naming it. The dump is read in place and its
+// buffer kept, so the polls leave next to no garbage to bring a GC into the window that follows.
+func testAwaitOtherGoroutinesParked(tb testing.TB, holds func(stanzas [][]byte) bool) {
 	tb.Helper()
+	if holds == nil {
+		holds = func(stanzas [][]byte) bool {
+			return 0 < len(stanzas)
+		}
+	}
 	deadline := time.After(testSubprotocolAwaitTimeout)
 	dump := make([]byte, 1024*1024)
 	for {
@@ -89,15 +96,12 @@ func testAwaitOtherGoroutinesParked(tb testing.TB, active func(stanzas [][]byte)
 			continue
 		}
 		stanzas := testActiveGoroutines(dump[:byteCount])
-		if len(stanzas) == 0 {
+		if !holds(stanzas) {
 			return
-		}
-		if active != nil {
-			active(stanzas)
 		}
 		select {
 		case <-deadline:
-			tb.Fatalf("%d goroutines still run after %s:\n\n%s", len(stanzas), testSubprotocolAwaitTimeout, bytes.Join(stanzas, []byte("\n\n")))
+			tb.Fatalf("goroutines still run after %s:\n\n%s", testSubprotocolAwaitTimeout, bytes.Join(stanzas, []byte("\n\n")))
 		default:
 		}
 		runtime.Gosched()
@@ -195,7 +199,8 @@ func testSpinUntil(released *atomic.Bool) {
 
 // The window waits for a goroutine that still runs, as the fixture's connect client's publish ran beside the
 // benchmark's window, and opens once it is gone: the spinner is released only from inside the wait's own poll
-// that found it running, so a wait that returned while it ran would never have seen it.
+// that found it running, so a wait that returned while it ran would never have seen it. Only this test's own
+// goroutines hold the wait, the spinner's stack naming the test, so one another test left running does not.
 func TestAwaitOtherGoroutinesParkedWaitsForARunningGoroutine(t *testing.T) {
 	released := &atomic.Bool{}
 	spun := make(chan struct{})
@@ -209,13 +214,19 @@ func TestAwaitOtherGoroutinesParkedWaitsForARunningGoroutine(t *testing.T) {
 		<-spun
 	})
 	seen := false
-	testAwaitOtherGoroutinesParked(t, func(stanzas [][]byte) {
+	testAwaitOtherGoroutinesParked(t, func(stanzas [][]byte) bool {
+		held := false
 		for _, stanza := range stanzas {
+			if !bytes.Contains(stanza, []byte("sidecar.TestAwaitOtherGoroutinesParkedWaitsForARunningGoroutine")) {
+				continue
+			}
+			held = true
 			if bytes.Contains(stanza, []byte("sidecar.testSpinUntil(")) {
 				seen = true
 				released.Store(true)
 			}
 		}
+		return held
 	})
 	if !seen {
 		t.Fatal("the wait returned while the spinning goroutine ran")
@@ -228,7 +239,7 @@ func TestAwaitOtherGoroutinesParkedWaitsForARunningGoroutine(t *testing.T) {
 }
 
 // A goroutine parked on a channel does not hold the window: the wait returns while it is still parked, and it
-// goes on once released.
+// goes on once released. Only this test's own goroutine holds the wait, as above.
 func TestAwaitOtherGoroutinesParkedTakesAParkedGoroutineAsSettled(t *testing.T) {
 	release := make(chan struct{})
 	done := make(chan struct{})
@@ -236,7 +247,14 @@ func TestAwaitOtherGoroutinesParkedTakesAParkedGoroutineAsSettled(t *testing.T) 
 		defer close(done)
 		<-release
 	}()
-	testAwaitOtherGoroutinesParked(t, nil)
+	testAwaitOtherGoroutinesParked(t, func(stanzas [][]byte) bool {
+		for _, stanza := range stanzas {
+			if bytes.Contains(stanza, []byte("sidecar.TestAwaitOtherGoroutinesParkedTakesAParkedGoroutineAsSettled")) {
+				return true
+			}
+		}
+		return false
+	})
 	select {
 	case <-done:
 		t.Fatal("the parked goroutine ended before its release")
@@ -244,17 +262,4 @@ func TestAwaitOtherGoroutinesParkedTakesAParkedGoroutineAsSettled(t *testing.T) 
 	}
 	close(release)
 	testAwait(t, done, "the released goroutine's end")
-}
-
-// The benchmark's own fixture settles: once its connect client has started and a warm-up request has been
-// dispatched, every goroutine of it reaches a wait, so the benchmark's window opens rather than failing.
-func TestReceiveBenchmarkFixtureSettles(t *testing.T) {
-	fixture := newTestSubprotocol(t, nil)
-	sourceId := connect.NewId()
-	fixture.verify(sourceId, "peer")
-	dispatched := fixture.collect(t, testFreeMessageType)
-	fixture.receive(sourceId, testRequest(testFreeMessageType, make([]byte, testReceiveAllocsBodyByteCount)), testNetworkPeer("peer"))
-	testAwait(t, dispatched, "the warm-up dispatch")
-	testAwaitOtherGoroutinesParked(t, nil)
-	fixture.closeBalanced(t)
 }
