@@ -526,6 +526,16 @@ message AgentCert { bytes sidecar_id = 1; bytes agent_id = 2; bytes public_key =
 // numbered in the order written, as question support-push-topic-hint-bytes recommends (support-push-topic).
 message SupportHint { string product = 1; string entry = 2; uint32 seq = 3; }
 
+// sidecar/protocol/compute.proto
+// DESIGN-COMPUTE.md §14.3's POST compute/v1/budget/raise, §16.3's kind 21, whose bodies the design gives no fence:
+// deterministic protobuf by compute-plan-infer-wire-format's answer (QD-1246), in compute.proto, which BAL holds
+// (CONTRACTS C-36), numbered in the order written (BAL-M12-16).
+message ComputeBudgetRaiseRequest { repeated bytes decisions = 1; bytes action = 2; }
+message ComputeBudgetRaiseAnswer {
+  bytes approval_id = 1; uint32 use_index = 2; bytes subject_id = 3; uint32 period = 4; uint64 amount = 5;
+  int64 expire_ms = 6; bool device_only = 7;
+}
+
 // sidecar/protocol/infer.proto
 // DESIGN-COMPUTE.md §6.3's remote catalog, its fields, sources and version rows written as field lists without numbers:
 // GET compute/v1/catalog's deterministic protobuf answer by compute-plan-infer-wire-format's answer (QD-1246), kept per

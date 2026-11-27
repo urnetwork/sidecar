@@ -6,7 +6,8 @@
 //
 // The codes are evs's not_found, unauthenticated, scope and unavailable; §16.6's upgrade_required; this plan's
 // not_built, idempotency_key_required and invalid, which the design does not name; and the areas' own: capacity, held,
-// insufficient_quota, tee_unverified, disclosure_required, catalog_stale, rate_limited and suspended. The route bodies
+// insufficient_quota, tee_unverified, disclosure_required, catalog_stale, rate_limited and suspended, and kind 21's
+// approval_refused and spent (§16.6's gate: refused writing nothing, and 409 SPENT; BAL-M12-16). The route bodies
 // are protobuf (QD-1246); a refusal is JSON, so a client reads it before it knows which message a route answers with.
 
 package computeservice
@@ -56,6 +57,11 @@ const (
 	ComputeRefusalRateLimited ComputeRefusalCode = "rate_limited"
 	// The network's compute is suspended (§9.9, §17.2).
 	ComputeRefusalSuspended ComputeRefusalCode = "suspended"
+	// An approval route's decisions do not spend, or ask what no decision of the kind may (§16.6's gate step 1), its
+	// reason the spend check's code; nothing was written.
+	ComputeRefusalApprovalRefused ComputeRefusalCode = "approval_refused"
+	// Every use of the approval is taken (§16.6's gate step 2, 409 SPENT).
+	ComputeRefusalSpent ComputeRefusalCode = "spent"
 )
 
 // Each code's status.
@@ -76,6 +82,8 @@ var computeRefusalStatuses = map[ComputeRefusalCode]int{
 	ComputeRefusalCatalogStale:           http.StatusConflict,
 	ComputeRefusalRateLimited:            http.StatusTooManyRequests,
 	ComputeRefusalSuspended:              http.StatusForbidden,
+	ComputeRefusalApprovalRefused:        http.StatusForbidden,
+	ComputeRefusalSpent:                  http.StatusConflict,
 }
 
 // The status a code answers with, false for a code the table does not have.

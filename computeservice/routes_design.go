@@ -95,7 +95,6 @@ var computeRouteUnbuilt = []string{
 	ComputeRouteInferAuthorize,
 	ComputeRouteSearchAuthorize,
 	ComputeRouteSearchOutcomes,
-	ComputeRouteBudgetRaise,
 	ComputeRouteCollateral,
 	ComputeRouteEnclaveCreate,
 	ComputeRouteEnclaveList,

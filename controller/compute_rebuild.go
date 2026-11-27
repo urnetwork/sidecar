@@ -6,8 +6,9 @@
 //	the fence     the network's transaction-scoped advisory lock (compute-plan-settle-fence-pooling, QD-1376)
 //	the check     the projection read again under the fence: one present and unmarked was rebuilt by another caller
 //	the snapshot  the network's open and settled rows in one statement, so a row moving from open to settled is in one
-//	              and only one; then the account, its promotional credit, and this UTC month's booked charges of
-//	              calls and searches by subject, which change only under the fence
+//	              and only one; then the account, its promotional credit, this UTC month's booked charges of
+//	              calls and searches by subject, which change only under the fence, and the kind-21 raises in force
+//	              for today and this month (BAL-M12-16), each committed before its own script ran
 //	the script    the projection, its holds, unsettled charges and budget counters, written whole in one script, the
 //	              mark cleared, after which the network admits again
 //
@@ -87,6 +88,11 @@ func ComputeRebuild(env operator.Env, ctx context.Context, settings *model.Compu
 		if err != nil {
 			return err
 		}
+		raises, err := model.ComputeBudgetRaisesInForceInTx(env, ctx, tx, networkId, now)
+		if err != nil {
+			return err
+		}
+		snapshot.Raises = computeRebuildRaises(raises, now)
 		testHookBarrier("compute_rebuild.script.before", networkId.String())
 		if err := model.ComputeProjectionRebuild(env, ctx, settings, snapshot); err != nil {
 			return err
@@ -99,6 +105,33 @@ func ComputeRebuild(env operator.Env, ctx context.Context, settings *model.Compu
 		return false, err
 	}
 	return rebuilt, nil
+}
+
+// The raises a rebuild writes: each raise in force taken in today's UTC day or this UTC month, the periods a hold's
+// check reads, at the largest cap a subject's period was raised to.
+func computeRebuildRaises(raises []*model.ComputeBudgetRaise, now time.Time) []*model.ComputeProjectionRaisedCap {
+	today := model.ComputeUtcDay(now)
+	month := model.ComputeUtcMonth(now)
+	written := []*model.ComputeProjectionRaisedCap{}
+	for _, raise := range raises {
+		if !raise.AtBroker() {
+			continue
+		}
+		switch raise.Period {
+		case model.ComputeBudgetPeriodDay:
+			if !model.ComputeUtcDay(raise.CreateTime).Equal(today) {
+				continue
+			}
+		case model.ComputeBudgetPeriodMonth:
+			if !model.ComputeUtcMonth(raise.CreateTime).Equal(month) {
+				continue
+			}
+		}
+		written = append(written, &model.ComputeProjectionRaisedCap{
+			SubjectId: raise.SubjectId, Period: raise.Period, At: raise.CreateTime, CapNanoUsd: raise.AmountNanoUsd,
+		})
+	}
+	return written
 }
 
 // One counter a rebuild writes: a subject's budget for a UTC day or month.

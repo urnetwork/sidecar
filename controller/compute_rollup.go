@@ -147,6 +147,8 @@ type ComputeRollupResult struct {
 	// Payer day sums and payers deleted past their retention.
 	PrunedPayerDayCount int64
 	PrunedPayerCount    int64
+	// Kind 21's raises deleted past their expiry (compute-6's "a raise until its expiry"; BAL-M12-16).
+	PrunedBudgetRaiseCount int64
 }
 
 // Makes compute_charge's partitions for now's UTC day and the settings' days ahead where none stands, each bounded at
@@ -243,6 +245,10 @@ func ComputeRollupDay(env operator.Env, ctx context.Context, settings *model.Com
 			return result, err
 		}
 		result.PrunedPayerDayCount, result.PrunedPayerCount, err = computeRollupPayerPrune(env, ctx, settings, now)
+		if err != nil {
+			return result, err
+		}
+		result.PrunedBudgetRaiseCount, err = ComputeBudgetRaisePrune(env, ctx, now)
 		if err != nil {
 			return result, err
 		}
