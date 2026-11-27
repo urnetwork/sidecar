@@ -8,9 +8,14 @@
 //	           governs. A class's policy is the newest such entry by RECORD.md section 5.5's newest row: each admin's
 //	           newest by seq, no forked entry counting, then the latest push time, then the higher writer id. An entry
 //	           counts only from a writer that administered the log at the pin of the push that first held it, whose
-//	           identity key signed the policy inside it, and whose policy names this log and one of classes 1 to 6
+//	           identity key signed the policy inside it, and whose policy names this log and one of classes 1 to 6,
+//	           or 8, bulk, a run's session blobs (DESIGN-COMPUTE §24.10's retain row)
 //	defaults   T and R: every class keep_days 400, searchable_days 90 (SidecarRecordSettings); D: announce 30 days,
-//	           the rest 400 (§16.11); V: 0 and 0 until its owner sets them
+//	           the rest 400 (§16.11); V: 0 and 0 until its owner sets them, bulk among them: history is kept until erased
+//	           (Q-CTXH-7)
+//	hold       an expiry pass leaves what its caller holds, and with none what SetHold gives: on a Sidecar every node of
+//	           a live run's path (DESIGN-COMPUTE §24.10's retain row, session_storage.go's LiveHold); a hold that cannot
+//	           be read stops the pass, failing toward keeping
 //	floor      on T a keep_days of 1 to 364 or a searchable_days of 1 to 89 is refused at Set, and a reader ignores
 //	           such an entry and alarms bad_entry once; 0, which keeps or leaves searchable with no limit, meets the
 //	           floor (R-MCP-8)
@@ -172,6 +177,8 @@ type RecordRetention struct {
 
 	stateLock sync.Mutex
 	base      RecordRetentionBaseFunction
+	// what a pass with no hold of its own leaves (SetHold), nil for nothing
+	hold func(ctx context.Context) (func(entry *RecordReadEntry) bool, error)
 	// when each log's pass of the day goes, drawn at the first tick that found it due
 	logDueTimes map[Id]time.Time
 	// the floor-breaking entries already alarmed on
@@ -235,7 +242,21 @@ func (self *RecordRetentionSettings) meetsTeamFloor(keepDays uint32, searchableD
 	return searchableDays == 0 || self.TeamSearchableFloorDays <= searchableDays
 }
 
-// Whether a policy's numbers are ones a class takes: a class from 1 to 6, and a searchable_days at most keep_days
+// The classes a policy takes, in order: 1 to 6, and 8, bulk (DESIGN-COMPUTE §24.10). Class 7 takes none.
+var recordRetentionClasses = []RecordClass{
+	RecordClassCapture, RecordClassAction, RecordClassCoordination, RecordClassAnnounce, RecordClassRequest, RecordClassAccounting,
+	RecordClassBulk,
+}
+
+// Sets what an expiry pass with no hold of its own leaves: a function read at each pass, answering the hold. Nil holds
+// nothing.
+func (self *RecordRetention) SetHold(hold func(ctx context.Context) (func(entry *RecordReadEntry) bool, error)) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.hold = hold
+}
+
+// Whether a policy's numbers are ones a class takes: a class from 1 to 6 or 8, and a searchable_days at most keep_days
 // where keep_days is not 0.
 func recordRetentionWellFormed(class RecordClass, keepDays uint32, searchableDays uint32) bool {
 	if !class.Known() || class == RecordClassUnspecified || class == RecordClassLog {
@@ -334,7 +355,7 @@ func RecordRetentionGoverning(auth RecordAuthView, logId Id, entries []*RecordRe
 		}
 	}
 	policies := map[RecordClass]*RecordRetentionPolicy{}
-	for class := RecordClassCapture; class < RecordClassLog; class += 1 {
+	for _, class := range recordRetentionClasses {
 		var newest *standing
 		for _, held := range classWriterNewest[class] {
 			switch {
@@ -395,11 +416,11 @@ func (self *RecordRetention) Policy(logId Id, class RecordClass) *RecordRetentio
 	return self.governing(logId)[class]
 }
 
-// Every class's policy for a log, classes 1 to 6 in order: what `ur record retention show` prints.
+// Every class's policy for a log, classes 1 to 6 and 8 in order: what `ur record retention show` prints.
 func (self *RecordRetention) Policies(logId Id) []*RecordRetentionPolicy {
 	governing := self.governing(logId)
 	policies := []*RecordRetentionPolicy{}
-	for class := RecordClassCapture; class < RecordClassLog; class += 1 {
+	for _, class := range recordRetentionClasses {
 		policies = append(policies, governing[class])
 	}
 	return policies
@@ -484,7 +505,21 @@ func (self *RecordRetention) expire(ctx context.Context, args *RecordRetentionEx
 		return nil, err
 	}
 	pass := &RecordRetentionPass{LogId: args.LogId}
-	_, expired := self.due(args.LogId, args.Hold)
+	hold := args.Hold
+	if hold == nil {
+		installed := func() func(ctx context.Context) (func(entry *RecordReadEntry) bool, error) {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			return self.hold
+		}()
+		if installed != nil {
+			var err error
+			if hold, err = installed(ctx); err != nil {
+				return nil, fmt.Errorf("record retention: what the pass leaves did not read, so nothing expires: %w", err)
+			}
+		}
+	}
+	_, expired := self.due(args.LogId, hold)
 	eraser := self.record.Eraser()
 	batchCount := min(self.settings.ExpiryEntryCount, eraser.settings.EntryCount)
 	if batchCount <= 0 {

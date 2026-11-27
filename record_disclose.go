@@ -162,7 +162,8 @@ func recordDisclosureValidate(body *protocol.DisclosureBody) error {
 		recordBodyRule(len(body.GetEntryIds()) <= recordDisclosureEntryCount && (packetAct || len(body.GetEntryIds()) == 0), "%d entry ids for act %d", len(body.GetEntryIds()), body.GetAct()),
 		recordBodyRule(len(body.GetRecipient()) <= recordDisclosureRecipientByteCount, "recipient of %d bytes", len(body.GetRecipient())),
 		recordBodyRule(len(body.GetPurpose()) <= recordDisclosurePurposeByteCount, "purpose of %d bytes", len(body.GetPurpose())),
-		recordBodyRule((body.GetAct() == RecordDisclosureActExport) == (1 <= body.GetFormat() && body.GetFormat() <= 4), "format %d for act %d", body.GetFormat(), body.GetAct()),
+		// an export's format: RecordExportFormat's, format 5 pi among them (DESIGN-COMPUTE §24.6, CTXH-M11-05)
+		recordBodyRule((body.GetAct() == RecordDisclosureActExport) == (uint32(RecordExportFormatJsonl) <= body.GetFormat() && body.GetFormat() <= uint32(RecordExportFormatPi)), "format %d for act %d", body.GetFormat(), body.GetAct()),
 		recordBodyRule(recordBodyLength(body.GetRunId(), recordIdByteCount, true), "run_id of %d bytes", len(body.GetRunId())),
 	}
 	for _, entryId := range body.GetEntryIds() {
