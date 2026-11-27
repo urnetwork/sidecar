@@ -1,0 +1,400 @@
+[
+  {
+    "id": "inference:local",
+    "version": 1,
+    "revision": 0,
+    "grace_days": 14,
+    "since_ms": 1796083200000,
+    "locales": [
+      {
+        "locale": "en",
+        "summary": "On this device: the model runs here, and no server takes part in a call.",
+        "exposed": [
+          "Your conversation's history, kept in EVS so your devices can continue it. URnetwork's storage holds it encrypted, and sees its sizes and when it is written and read, so it can tell when this device is in a conversation and roughly how much is said, never what.",
+          "What the agent's tools send out: a web search, which has its own disclosure, a page fetch or a calendar call.",
+          "URnetwork's api, which serves the model file, sees the download and the address it came from, but no account.",
+          "Anyone who can use this device unlocked."
+        ],
+        "private": [
+          "What you and the model said: no server takes part in a call, which sends no request and makes no charge."
+        ]
+      },
+      {
+        "locale": "de",
+        "summary": "Auf diesem Gerät: Das Modell läuft hier, und kein Server ist an einem Aufruf beteiligt.",
+        "exposed": [
+          "Der Verlauf deines Gesprächs, in EVS gespeichert, damit deine Geräte ihn fortsetzen können. Der Speicher von URnetwork hält ihn verschlüsselt und sieht seine Größe und wann er geschrieben und gelesen wird, erkennt also, wann dieses Gerät in einem Gespräch ist und ungefähr wie viel gesagt wird, nie aber was.",
+          "Was die Werkzeuge des Agenten nach außen senden: eine Websuche, die ihre eigene Offenlegung hat, den Abruf einer Seite oder einen Kalenderaufruf.",
+          "Die API von URnetwork, die die Modelldatei bereitstellt, sieht den Download und die Adresse, von der er kam, aber kein Konto.",
+          "Jeder, der dieses Gerät entsperrt benutzen kann."
+        ],
+        "private": [
+          "Was du und das Modell gesagt haben: Kein Server ist an einem Aufruf beteiligt, der keine Anfrage sendet und nichts kostet."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "inference:chutes",
+    "version": 1,
+    "revision": 0,
+    "grace_days": 14,
+    "since_ms": 1796083200000,
+    "locales": [
+      {
+        "locale": "en",
+        "summary": "In a TEE that keeps Chutes' miners out, short of a physical attack; Chutes itself is trusted.",
+        "exposed": [
+          "Chutes itself. The check does not cover its code that reads your conversation inside the TEE, and its platform holds the disk keys, so Chutes could change what reads it without the check showing it.",
+          "Other customers' models can run in the same TEE, kept apart by Chutes' software alone.",
+          "Chutes' code reads a value fixed for you at the head of each request, which keeps others out of your cache and lets Chutes tell your requests from others', never who you are.",
+          "The machine's holder, by a physical attack on its memory that no check detects. Published attacks need under $1,000 in parts, and a holder who has done this once can fake the check on every machine they run.",
+          "URnetwork's servers see the model, the token counts, the sizes, the times and the charge."
+        ],
+        "private": [
+          "Your conversation is encrypted on this device to a key made inside a Chutes TEE whose evidence this device checked. URnetwork, Chutes' API and the miner who holds the machine see only ciphertext.",
+          "Chutes sees URnetwork's account, never you, your device or your address.",
+          "Other Chutes customers, and other members of your Team, cannot probe your prompts through its shared cache.",
+          "One-time codes and sign-in or password-reset links in your mail stay on this device, unless you turn that off in settings."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "inference:engy",
+    "version": 1,
+    "revision": 0,
+    "grace_days": 14,
+    "since_ms": 1796083200000,
+    "locales": [
+      {
+        "locale": "en",
+        "summary": "Not in a TEE: engy and the machines that serve its models can read everything in this conversation.",
+        "exposed": [
+          "Everything in the conversation, your prompts and files, the tools' results, and the mail and calendar items the agent reads, goes in plaintext to Cloudflare, where engy's TLS ends, to engy's gateway and to the machine that runs the model.",
+          "engy promises zero data retention and no training on what you send. No evidence of where a request ran reaches this device, so that is a promise, not a proof. This device checks engy's signed receipt for each call, which says whether every machine that received it keeps no data, and stops using a model whose receipt says otherwise.",
+          "One model, qwen3.6-35b-a3b, runs on independent operators' machines, whose retention engy cannot guarantee.",
+          "What the conversation itself says: your network's name in the addresses the agent's tools use, and your agents' and enclaves' names, so engy could tell your conversations apart and link them.",
+          "The exit that carries a call sees that it goes to engy, and its size and timing; with engy, it could link one client's calls to each other.",
+          "URnetwork's servers see the model, the token counts, the charge and the minute. If engy kept a conversation, its records and URnetwork's, both taken, could tie it to your network."
+        ],
+        "private": [
+          "Beside what the conversation says, engy sees only URnetwork's account, an exit's address and a random value per request: nothing this device adds names you, your device or your address.",
+          "URnetwork's servers never see the conversation.",
+          "One-time codes and sign-in or password-reset links in your mail stay on this device, unless you turn that off in settings."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "inference:saygm",
+    "version": 1,
+    "revision": 0,
+    "grace_days": 14,
+    "since_ms": 1796083200000,
+    "locales": [
+      {
+        "locale": "en",
+        "summary": "Not in a TEE: SayGM, its miners and the services they call can read everything in this conversation.",
+        "exposed": [
+          "Everything in the conversation, your prompts and files, the tools' results, and the mail and calendar items the agent reads, goes in plaintext to SayGM's gateway, to the miner that serves the model and to the upstream service that miner calls, which the signed policy names for each model.",
+          "Its \"-tee\" models too, named here without the mark: only SayGM's gateway can be checked, and nothing shows what reads a request behind it, or whether the request reaches a TEE at all.",
+          "SayGM's terms set no limit on what it keeps or trains on. An upstream may keep or train on what it is sent, as its terms allow: Moonshot's do.",
+          "SayGM's public records keep each request's model and token counts for good, naming no buyer.",
+          "What the conversation itself says: your network's name in the addresses the agent's tools use, and your agents' and enclaves' names, so SayGM, its miners and its upstreams could link your conversations.",
+          "The exit that carries a call sees that it goes to SayGM, and its size and timing. URnetwork's servers see the model, the token counts, the charge and the minute."
+        ],
+        "private": [
+          "Beside what the conversation says, SayGM sees only URnetwork's account, an exit's address and a random value per request: nothing this device adds names you, your device or your address.",
+          "URnetwork's servers never see the conversation.",
+          "One-time codes and sign-in or password-reset links in your mail stay on this device, unless you turn that off in settings."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "enclave:hippius",
+    "version": 1,
+    "revision": 0,
+    "grace_days": 14,
+    "since_ms": 1796083200000,
+    "locales": [
+      {
+        "locale": "en",
+        "summary": "A TEE on a machine a Hippius miner holds. Your own enclave is one of your devices and holds what they hold, so Hippius, a physical attack or a breach there could expose all of it.",
+        "exposed": [
+          "Everything your devices hold, while it runs: your vault and the record of every run, your mail, your calendar links and your connected accounts' tokens, and every repo you read. For now your enclave is one of your devices, with their access; a later version may narrow it.",
+          "Hippius itself: Hippius' image, its platform software and the key service that releases its image's disk keys sit inside the boundary and could read all of it.",
+          "The machine's holder, a miner you do not know, by a physical attack on its memory that no check detects, or anyone who breaks the TEE or escapes its agents' container: all of the above, and the keys to act as this device until it stops, reading and writing your repos and calling your accounts. Tokens taken then work until you replace them at their providers.",
+          "A holder who has done such an attack once can fake the check on every machine they run, this enclave's among them.",
+          "Agents you run in it act as root on the internet through its egress: the sites they reach see what they send, and the exit that carries it sees where it goes and anything not encrypted.",
+          "Its agents read every repo you read, and an agent in it that a page misleads can send out what it read. A run in it that reads your mail, calendars, accounts or vault uses none of its root tools unless you approve, and a run's writes after it read mail, a page or another outside source wait until you release them before its root tools see them.",
+          "Under the default egress its agents reach web, mail and DNS ports and ports from 1024 up, not SSH's port 22; an exit of your own network carries the rest.",
+          "If it is your network's mail indexer, it is no device of yours: it holds each member's incoming mail, in plaintext as it arrives, whether or not they granted it anything, and every mailbox a member grants it, which Hippius, or the machine's holder by a physical attack, could read. It then runs no agents and admits no login. If it was set up over SSH, your device cannot check what the setup installed and relies on the word of the Owner or Admin whose device did, whom your mail settings name. In a Team it starts taking mail a day after every member is told.",
+          "Services that listen in it on every interface are listed to every device of your network, which can connect to them unless its policy narrows that; its agents' own services stay in your view until you map one.",
+          "The machine's holder sees its traffic's size and timing, and, under direct egress, which you approve, where it goes and anything not encrypted.",
+          "URnetwork's servers see its shape, provider, state, times, charges and how much it sends through URnetwork's network."
+        ],
+        "private": [
+          "Its files, keys and agents' work are encrypted in memory and on disk: the machine's holder cannot read them short of that attack, and URnetwork's servers never see them or its commands.",
+          "Its keys are made inside it and never leave it; your device checked its evidence before admitting it as yours.",
+          "Its agents never hold your keys, tokens or links: its sidecar uses them for them, outside their container. It cannot add a device, consent, share, approve for you, or change your settings.",
+          "When it stops, its keys end with it, and your repos move to keys it never held.",
+          "By default its traffic leaves through URnetwork's network, so sites see an exit's address, not the machine's."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "enclave:lium",
+    "version": 1,
+    "revision": 0,
+    "grace_days": 14,
+    "since_ms": 1796083200000,
+    "locales": [
+      {
+        "locale": "en",
+        "summary": "A TEE on a machine a Lium miner holds. Your own enclave is one of your devices and holds what they hold, so Lium, a physical attack or a breach there could expose all of it.",
+        "exposed": [
+          "Everything your devices hold, while it runs: your vault and the record of every run, your mail, your calendar links and your connected accounts' tokens, and every repo you read. For now your enclave is one of your devices, with their access; a later version may narrow it.",
+          "Lium itself: Lium's node software and the container it starts for you, which its evidence does not cover sit inside the boundary and could read all of it.",
+          "The machine's holder, a miner you do not know, by a physical attack on its memory that no check detects, or anyone who breaks the TEE or escapes its agents' container: all of the above, and the keys to act as this device until it stops, reading and writing your repos and calling your accounts. Tokens taken then work until you replace them at their providers.",
+          "A holder who has done such an attack once can fake the check on every machine they run, this enclave's among them.",
+          "Agents you run in it act as root on the internet through its egress: the sites they reach see what they send, and the exit that carries it sees where it goes and anything not encrypted.",
+          "Its agents read every repo you read, and an agent in it that a page misleads can send out what it read. A run in it that reads your mail, calendars, accounts or vault uses none of its root tools unless you approve, and a run's writes after it read mail, a page or another outside source wait until you release them before its root tools see them.",
+          "Under the default egress its agents reach web, mail and DNS ports and ports from 1024 up, not SSH's port 22; an exit of your own network carries the rest.",
+          "If it is your network's mail indexer, it is no device of yours: it holds each member's incoming mail, in plaintext as it arrives, whether or not they granted it anything, and every mailbox a member grants it, which Lium, or the machine's holder by a physical attack, could read. It then runs no agents and admits no login. If it was set up over SSH, your device cannot check what the setup installed and relies on the word of the Owner or Admin whose device did, whom your mail settings name. In a Team it starts taking mail a day after every member is told.",
+          "Services that listen in it on every interface are listed to every device of your network, which can connect to them unless its policy narrows that; its agents' own services stay in your view until you map one.",
+          "The machine's holder sees its traffic's size and timing, and, under direct egress, which you approve, where it goes and anything not encrypted.",
+          "URnetwork's servers see its shape, provider, state, times, charges and how much it sends through URnetwork's network."
+        ],
+        "private": [
+          "Its files, keys and agents' work are encrypted in memory and on disk: the machine's holder cannot read them short of that attack, and URnetwork's servers never see them or its commands.",
+          "Its keys are made inside it and never leave it; your device checked its evidence before admitting it as yours.",
+          "Its agents never hold your keys, tokens or links: its sidecar uses them for them, outside their container. It cannot add a device, consent, share, approve for you, or change your settings.",
+          "When it stops, its keys end with it, and your repos move to keys it never held.",
+          "By default its traffic leaves through URnetwork's network, so sites see an exit's address, not the machine's."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "enclave:cathedral",
+    "version": 1,
+    "revision": 0,
+    "grace_days": 14,
+    "since_ms": 1796083200000,
+    "locales": [
+      {
+        "locale": "en",
+        "summary": "A TEE on a machine a Cathedral miner holds. Your own enclave is one of your devices and holds what they hold, so Cathedral, a physical attack or a breach there could expose all of it.",
+        "exposed": [
+          "Everything your devices hold, while it runs: your vault and the record of every run, your mail, your calendar links and your connected accounts' tokens, and every repo you read. For now your enclave is one of your devices, with their access; a later version may narrow it.",
+          "Cathedral itself: Cathedral's sandbox platform, as its gate documents it sit inside the boundary and could read all of it.",
+          "The machine's holder, a miner you do not know, by a physical attack on its memory that no check detects, or anyone who breaks the TEE or escapes its agents' container: all of the above, and the keys to act as this device until it stops, reading and writing your repos and calling your accounts. Tokens taken then work until you replace them at their providers.",
+          "A holder who has done such an attack once can fake the check on every machine they run, this enclave's among them.",
+          "Agents you run in it act as root on the internet through its egress: the sites they reach see what they send, and the exit that carries it sees where it goes and anything not encrypted.",
+          "Its agents read every repo you read, and an agent in it that a page misleads can send out what it read. A run in it that reads your mail, calendars, accounts or vault uses none of its root tools unless you approve, and a run's writes after it read mail, a page or another outside source wait until you release them before its root tools see them.",
+          "Under the default egress its agents reach web, mail and DNS ports and ports from 1024 up, not SSH's port 22; an exit of your own network carries the rest.",
+          "If it is your network's mail indexer, it is no device of yours: it holds each member's incoming mail, in plaintext as it arrives, whether or not they granted it anything, and every mailbox a member grants it, which Cathedral, or the machine's holder by a physical attack, could read. It then runs no agents and admits no login. If it was set up over SSH, your device cannot check what the setup installed and relies on the word of the Owner or Admin whose device did, whom your mail settings name. In a Team it starts taking mail a day after every member is told.",
+          "Services that listen in it on every interface are listed to every device of your network, which can connect to them unless its policy narrows that; its agents' own services stay in your view until you map one.",
+          "The machine's holder sees its traffic's size and timing, and, under direct egress, which you approve, where it goes and anything not encrypted.",
+          "URnetwork's servers see its shape, provider, state, times, charges and how much it sends through URnetwork's network."
+        ],
+        "private": [
+          "Its files, keys and agents' work are encrypted in memory and on disk: the machine's holder cannot read them short of that attack, and URnetwork's servers never see them or its commands.",
+          "Its keys are made inside it and never leave it; your device checked its evidence before admitting it as yours.",
+          "Its agents never hold your keys, tokens or links: its sidecar uses them for them, outside their container. It cannot add a device, consent, share, approve for you, or change your settings.",
+          "When it stops, its keys end with it, and your repos move to keys it never held.",
+          "By default its traffic leaves through URnetwork's network, so sites see an exit's address, not the machine's."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "search:parallel",
+    "version": 1,
+    "revision": 0,
+    "grace_days": 14,
+    "since_ms": 1796083200000,
+    "locales": [
+      {
+        "locale": "en",
+        "summary": "Parallel reads this search and may train on it; URnetwork does not see it",
+        "exposed": [
+          "Parallel, the search provider, reads each search and its results. It may keep them and use them to train its models, though not linked to you.",
+          "Vercel, which runs Parallel's search service, sees each search too.",
+          "Each search is a public USDC payment on the Base blockchain from URnetwork's payment address, so anyone can count URnetwork's searches and see when they happen.",
+          "URnetwork's servers keep which of your network's agents searched in each minute for 72 hours. If Parallel kept a search and its payment, and both its records and URnetwork's were taken in that time, they could tie the search to your network.",
+          "The exit that carries a search sees that it goes to Parallel, and its size and timing.",
+          "So never search for passwords, secrets or personal details."
+        ],
+        "private": [
+          "URnetwork's servers never see a search or its results. They learn only that your network searched, when, and what it cost.",
+          "Parallel sees an exit's address and URnetwork's payment address, never you, your device or your network.",
+          "Results are not stored in your history, which keeps only what you searched for and how many results came back."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "connect:google",
+    "version": 1,
+    "revision": 0,
+    "grace_days": 14,
+    "since_ms": 1796083200000,
+    "locales": [
+      {
+        "locale": "en",
+        "summary": "Your agents use your Google account through a connection only your own devices hold; Google sees what they do there.",
+        "exposed": [
+          "Google sees your account, URnetwork's app, everything your agents read and write there, and the address of the exit they use, or your own if you choose direct; at sign-in, your own address and browser.",
+          "Your agents act there as you: once you connect it, an agent that has read nothing someone else wrote reads, writes and sends there without asking you, so a mistaken agent can send what you did not mean.",
+          "What your agents read there goes to the model you chose, as its label says. What they read from Google, and what they make of it, goes only to models on your devices and to providers whose written terms bar training on it, keeping it past the request and letting people read it, and never to a harness that calls its own provider.",
+          "The connection's tokens, to anyone using one of your devices unlocked, and to a lost device until you replace the connection; for Google, a device holds only its own kind's token.",
+          "URnetwork's storage holds the connection encrypted, and sees when it is written: for Microsoft, at each refresh, and for a service you added yourself, at each refresh too.",
+          "Disconnect revokes the connection's tokens at Google. On Android, Google's Play services gets this phone's tokens over the phone's own network, so Google sees its address then too."
+        ],
+        "private": [
+          "Your sign-in happens in your own browser and returns to this device; no URnetwork server sees it, a code or a token.",
+          "No agent sees a token: sidecar adds it to each call, and no record or log holds it.",
+          "No one else in your network opens the tokens, an admin or your Team's audit reader included, and when you leave it your devices revoke them at Google where it allows that.",
+          "Once an agent has read anything someone else wrote, its writes wait for an automatic check on this device, which can be wrong, or for you (approvals:auto), and anything it would send waits for you."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "connect:microsoft",
+    "version": 1,
+    "revision": 0,
+    "grace_days": 14,
+    "since_ms": 1796083200000,
+    "locales": [
+      {
+        "locale": "en",
+        "summary": "Your agents use your Microsoft account through a connection only your own devices hold; Microsoft sees what they do there.",
+        "exposed": [
+          "Microsoft sees your account, URnetwork's app, everything your agents read and write there, and the address of the exit they use, or your own if you choose direct; at sign-in, your own address and browser.",
+          "Your agents act there as you: once you connect it, an agent that has read nothing someone else wrote reads, writes and sends there without asking you, so a mistaken agent can send what you did not mean.",
+          "What your agents read there goes to the model you chose, as its label says. What they read from Google, and what they make of it, goes only to models on your devices and to providers whose written terms bar training on it, keeping it past the request and letting people read it, and never to a harness that calls its own provider.",
+          "The connection's tokens, to anyone using one of your devices unlocked, and to a lost device until you replace the connection; for Google, a device holds only its own kind's token.",
+          "URnetwork's storage holds the connection encrypted, and sees when it is written: for Microsoft, at each refresh, and for a service you added yourself, at each refresh too.",
+          "No single token can be revoked; removing URnetwork's app from your Microsoft account ends them all, and an unused token lapses after 90 days."
+        ],
+        "private": [
+          "Your sign-in happens in your own browser and returns to this device; no URnetwork server sees it, a code or a token.",
+          "No agent sees a token: sidecar adds it to each call, and no record or log holds it.",
+          "No one else in your network opens the tokens, an admin or your Team's audit reader included, and when you leave it your devices revoke them at Microsoft where it allows that.",
+          "Once an agent has read anything someone else wrote, its writes wait for an automatic check on this device, which can be wrong, or for you (approvals:auto), and anything it would send waits for you."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "connect:custom",
+    "version": 1,
+    "revision": 0,
+    "grace_days": 14,
+    "since_ms": 1796083200000,
+    "locales": [
+      {
+        "locale": "en",
+        "summary": "Your agents use your account at a service you added yourself through a connection only your own devices hold; that service sees what they do there.",
+        "exposed": [
+          "That service sees your account, URnetwork's app, everything your agents read and write there, and the address of the exit they use, or your own if you choose direct; at sign-in, your own address and browser.",
+          "Your agents act there as you: once you connect it, an agent that has read nothing someone else wrote reads, writes and sends there without asking you, so a mistaken agent can send what you did not mean.",
+          "What your agents read there goes to the model you chose, as its label says. What they read from Google, and what they make of it, goes only to models on your devices and to providers whose written terms bar training on it, keeping it past the request and letting people read it, and never to a harness that calls its own provider.",
+          "The connection's tokens, to anyone using one of your devices unlocked, and to a lost device until you replace the connection; for Google, a device holds only its own kind's token.",
+          "URnetwork's storage holds the connection encrypted, and sees when it is written: for Microsoft, at each refresh, and for a service you added yourself, at each refresh too.",
+          "No one at URnetwork reviewed it; Disconnect revokes at it where it offers revocation, and once an agent has read anything someone else wrote, every call that changes anything waits for you."
+        ],
+        "private": [
+          "Your sign-in happens in your own browser and returns to this device; no URnetwork server sees it, a code or a token.",
+          "No agent sees a token: sidecar adds it to each call, and no record or log holds it.",
+          "No one else in your network opens the tokens, an admin or your Team's audit reader included, and when you leave it your devices revoke them at that service where it allows that.",
+          "Once an agent has read anything someone else wrote, its writes wait for an automatic check on this device, which can be wrong, or for you (approvals:auto), and anything it would send waits for you."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "listeners:publish",
+    "version": 1,
+    "revision": 0,
+    "grace_days": 14,
+    "since_ms": 1796083200000,
+    "locales": [
+      {
+        "locale": "en",
+        "summary": "Every device of your network sees the services your devices listen on, with their programs' names, and can connect to them unless your network's policy says otherwise.",
+        "exposed": [
+          "Every device of this network, other members' and its servers and agents included, sees each service your devices offer other machines: its address, port and protocol, the name of the program that opened it or the label you gave it, and your forwards and port maps, with where they lead and until when.",
+          "Unless your network's admins narrowed it, every device of the network, agents in its enclaves included, can connect to those services. One that does not check who connects, such as a development server or a database without a password, is open to all of them.",
+          "A computer of the network that may connect to one of those services, a web server or a file share among them, also shows it by name in its Bonjour browsers, such as Finder and Safari, where any program on that computer can read the name.",
+          "Where `ur tun` runs on your device, those connections come from the connecting device's network address and your firewall filters them. Where it does not, they come from your device's own address and your firewall does not see them: a service it keeps off your local network is open to the network's devices unless you hide it.",
+          "If an Owner or Admin also acknowledges this for the network, its servers, CI runners and enclaves list their services too and, where the network has no policy, can connect to every listed service.",
+          "A program names itself, so a name in the list is that program's word.",
+          "URnetwork's storage holds each list encrypted, and sees its size and when it changes: when your devices' services start and stop, never which."
+        ],
+        "private": [
+          "Services that listen only on this device itself (127.0.0.1 or ::1), and sidecar's own mail and git servers, are not listed, and the network's default rule never reaches them.",
+          "A service or a device you hide leaves the list and every Bonjour browser, and the network's default rule stops opening it; hiding a service with `ur bridge discovery hide` does the same. Your own devices still see it, and rules your network wrote still apply.",
+          "Each of your computers lists nothing until you have seen its own list there and confirmed it.",
+          "Nothing connects to your services to describe them."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "approvals:auto",
+    "version": 1,
+    "revision": 0,
+    "grace_days": 14,
+    "since_ms": 1796083200000,
+    "locales": [
+      {
+        "locale": "en",
+        "summary": "Once an agent has read something someone else wrote, an automatic check on this device, which can be wrong, decides some of its actions instead of you.",
+        "exposed": [
+          "The check can be wrong. It is a small model that looks for instructions hidden in what an agent read: a web page, an email, a search result, an invitation, a service's data or another agent's message. Text written to slip past it can pass; published attacks pass checks like it most of the time.",
+          "When it lets such text through, an agent can, without asking you: fetch an address it composed, on a site you have used, which can carry what the agent read to that site; send a command or a message to one of your own enclaves; add, move or remove events without guests on your own calendar; change your own data at a connected service; or send a message to URnetwork's support, whose team reads it.",
+          "What it decided, with its score and what it read, is in your record, and the app lists each day's automatic approvals."
+        ],
+        "private": [
+          "The check runs on this device or in your enclave, never on a URnetwork server, and nothing it reads leaves for it.",
+          "It never decides anything that reaches other people, such as invitations, sends or another member, but a message to URnetwork's support, and never one with a file or what your agents read of your mail, calendar, accounts or files; a site, enclave or calendar your agents have not used; secrets in what would leave; spending, enclaves, sign-ins or disclosures. Those always ask you.",
+          "At most 10 a run and 50 a day; once it asks you in a run, everything else in that run asks you too.",
+          "You can turn it off, for everything or for one kind, in settings or with ur approvals mode ask."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "support:urnetwork",
+    "version": 1,
+    "revision": 0,
+    "grace_days": 14,
+    "since_ms": 1796083200000,
+    "locales": [
+      {
+        "locale": "en",
+        "summary": "Not end-to-end encrypted: URnetwork, and Anthropic for it, read everything you and your agents send to support, and nothing else of yours.",
+        "exposed": [
+          "Each message, each file and log sent with it, and each reply is kept readable on URnetwork's support service, where URnetwork's support team and its tools read them; a breach of that service, or a legal demand that reaches it, reaches them too.",
+          "URnetwork's support uses Anthropic's Claude to sort messages and draft replies, so Anthropic reads what support gives it, as URnetwork's subprocessor. URnetwork's agreement with Anthropic bars training on it, and Anthropic keeps it 30 days. Another company is added only after you are told here.",
+          "Your agents can write to support for you, under their names: without asking you when their work has read nothing someone else wrote; otherwise an automatic check on this device, which can be wrong, decides first, or you do. A message with a file, or from work that read your mail, calendar, accounts or files, always asks you.",
+          "Logs hold what sidecar and the Harness did: error codes, counts, timings, versions and your device's system, never what you or your agents wrote, read or ran, and no name, address or file.",
+          "In a Team, its Owners and Admins see when you and your agents wrote to support and how much, and its auditor can open what was sent and received; you see each time the auditor does."
+        ],
+        "private": [
+          "Nothing outside this conversation: support reads no other data of yours, and this device sends it only the messages, logs and files you or your agents send, an agent's file only with your approval.",
+          "Messages and files are kept 180 days after support resolves their item, logs 7 days; you can delete yours at any time.",
+          "An agent's message that holds anything like a key, password, token or sign-in code is refused.",
+          "Support's replies are information, not instructions: your agents treat them as text someone else wrote, and support changes your account only when you ask in the app.",
+          "You can stop your agents' messages, or their logs, in settings, and a Team's admins can for the network."
+        ]
+      }
+    ]
+  }
+]
