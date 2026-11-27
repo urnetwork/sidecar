@@ -724,12 +724,6 @@ var testFenceAdditions = []struct {
 	{message: "ReachReceipt", field: testFenceField{name: "closed_millis", number: 14, typeName: "int64"}, question: testEnclaveSshSource},
 	{message: "ReachReceipt", field: testFenceField{name: "client_byte_count", number: 15, typeName: "uint64"}, question: testEnclaveSshSource},
 	{message: "ReachReceipt", field: testFenceField{name: "server_byte_count", number: 16, typeName: "uint64"}, question: testEnclaveSshSource},
-	// DESIGN-COMPUTE.md §16.5's deposit into agent repos as a rule naming every repo of the kind, evs:kind:agent
-	// (SKILL-M11-01)
-	{message: "AclTarget", field: testFenceField{name: "repo_kind", number: 14, typeName: "RepoKind"}, question: "skill-m11-01-agent-deposit-rule-target (QD-1433)"},
-	// DESIGN-COMPUTE.md §20.4's and §20.7's agent repo label, keyed (SKILL-M11-01)
-	{message: "RepoCreate", field: testFenceField{name: "label_mac", number: 5, typeName: "bytes"}, question: "skill-m11-01-repo-create-label-form (QD-1434)"},
-	{message: "AclRepo", field: testFenceField{name: "label_mac", number: 15, typeName: "bytes"}, question: "skill-m11-01-repo-create-label-form (QD-1434)"},
 }
 
 // Numbers an owner's answer reserves in a message the design fences, ahead of design-records' fold, each with the

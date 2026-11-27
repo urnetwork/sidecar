@@ -110,6 +110,8 @@ bridge_close(grant_id | rule_id)   a GrantRevoke of the forward's grant, or a Br
 dns_records()   dns_set(name, type, value)   dns_delete(name, type)
 team_members | team_agents | acl_grants | record_query | run_coverage | approval_status(filters) -> rows
 acl_check(action, resource) -> allowed, grant_id, reason
+                 a dial to a client no binding names counts only a rule that limits no ports (§8.10; owner
+                 decision 806)
 record_append(kind: claim|handoff|ask|answer|check|note, action_id, targets, text, expires) -> entry_id
                  in a team network claim and handoff update the calling run's announcement, and ask, answer,
                  check and note write directory entries (16.11)

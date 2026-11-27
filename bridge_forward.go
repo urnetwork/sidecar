@@ -456,7 +456,10 @@ type ForwarderArgs struct {
 	// GET /sidecar/identity/<sidecar_id>'s current binding as api signed it, which the Forwarder verifies under the
 	// identity key its judged state admits. Nil fetches none, so every link waits.
 	Binding func(ctx context.Context, sidecarId Id) ([]byte, error)
-	// Whether the forwarding client's credential has lapsed (4.2.6's lapsed): read when a follow fails. Nil never.
+	// Whether the forwarding client's credential has lapsed (4.2.6's lapsed): read when a follow fails, on the loop's
+	// goroutine with no lock of the Forwarder's held, so it may call into the sink. A true answer raises
+	// forward_client_lapsed, so a host answers true only once its sink holds the lapse's pending, and no status reports
+	// a lapse while the posture still serves its state. Nil never.
 	ClientLapsed func() bool
 	Store        ForwarderStore
 	Keys         ForwarderKeys

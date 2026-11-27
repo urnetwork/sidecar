@@ -3091,3 +3091,28 @@ _S796 = "and the build's answer recorded while they were folded, 796. "
 assert STATUS.count(_S796) == 1, 'status moved'
 STATUS = STATUS.replace(_S796, "and the build's answer recorded while they were folded, 796, and the answers recorded "
                         "after them, owner decisions 797 to 805. ")
+
+# Owner decision 806 (2026-11-26): the answer recorded after the fifteenth fold (QD-1432), folded by the sixteenth
+# fold, track dr24-late-fold. QD-1433 to QD-1436, recorded beside it, answer compute questions and take no number.
+INDEX += [
+    (806, "Check's dial to a client",
+     "At a client no binding names, Check counts only a document rule that limits no ports, as the contract gate does."),
+]
+for _n, _note in [
+        (106, " Extended by @@OD:806@@: Check reads the legacy rule at a client no binding names."),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 807))
+DATES.update({806: '2026-11-26'})
+_D805 = "and the address Linux's advertising proxy answers IPv6 mDNS from (805), extending @@OD:778@@. "
+assert DECISIONS_INTRO.count(_D805) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D805, _D805 + "A sixteenth fold numbers the one answer recorded after the fifteenth that is not a compute "
+    "question's: at a client no binding names, `AclEngine.Check` counting only a document rule that limits no ports "
+    "(806), extending @@OD:106@@. ")
+_S805 = "and the answers recorded after them, owner decisions 797 to 805. "
+assert STATUS.count(_S805) == 1, 'status moved'
+STATUS = STATUS.replace(_S805, "and the answers recorded after them, owner decisions 797 to 805, and the answer recorded "
+                        "after the fifteenth fold, 806. ")
