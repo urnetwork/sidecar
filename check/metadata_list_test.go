@@ -74,33 +74,9 @@ type metadataListAddition struct {
 // sweep's (owner decisions 658, 656 and 655), QD-1165's with the fourth late fold's (owner decision 680),
 // QD-1186's with the sixth late fold's (owner decision 709), and DESIGN-COMPUTE.md's rows with the eighth late
 // fold's, which takes its Appendix D: compute-1 to compute-11 and api-7's and evs-1's compute words, which
-// CARCH-M11-03 published as v68 (QD-1252, QD-1367). Each entry here waits for the next fold.
-var metadataListAdditions = []metadataListAddition{
-	{
-		// compute-plan-catalog-versions (QD-1237): the remote catalog's versions in compute_catalog_version, MG-C2's,
-		// under compute-7 (INFER-M12-01)
-		question: "compute-plan-catalog-versions",
-		block: `compute-7:
-  service: compute (K_P's signer) and taskworker (compute_gamma_mint, compute_gamma_spend, compute_gamma_watch, compute_provider_prices, compute_reconcile)
-  store: compute_provider, compute_provider_price, compute_provider_ledger, compute_gamma_deposit and compute_gamma_op (MG-C2); Redis {cmpv_<provider_id>} (each provider's capacity)
-  sees: "URnetwork's provider balances, gamma deposits, mints, spends and hotkeys (public on chain); per provider, its id, kind, status and gate results and its hourly price reads; and each provider's account as last read less the cost of what it served and the holds open there since, with no network (DESIGN-COMPUTE §10.4)"
-  why: paying providers in gamma and holding no call or enclave past what a provider's account can serve (DESIGN-COMPUTE §10.4, §10.5, §10.7)
-`,
-		list: `compute-7:
-  service: compute (K_P's signer and the catalog route) and taskworker (compute_gamma_mint, compute_gamma_spend, compute_gamma_watch, compute_provider_prices, compute_reconcile)
-  store: compute_provider, compute_provider_price, compute_catalog_version, compute_provider_ledger, compute_gamma_deposit and compute_gamma_op (MG-C2); Redis {cmpv_<provider_id>} (each provider's capacity)
-  sees: "URnetwork's provider balances, gamma deposits, mints, spends and hotkeys (public on chain); per provider, its id, kind, status and gate results and its hourly price reads; each published version of the remote catalog and when it was published, every model's provider, name, kind, label, efforts, limits, tools, modalities, license, provider model id and prices, a direct model's host, receiver and targets, the areas' sections, and each direct provider's costliest worst case (DESIGN-COMPUTE §6.3, §6.6; QD-1237); and each provider's account as last read less the cost of what it served and the holds open there since, with no network (DESIGN-COMPUTE §10.4)"
-  why: paying providers in gamma and holding no call or enclave past what a provider's account can serve (DESIGN-COMPUTE §10.4, §10.5, §10.7); one catalog every device lists and every remote charge is priced from (§6.3, §9.6)
-`,
-	},
-	{
-		// skill-m11-01-repo-create-label-form (QD-1434): an agent repo's keyed label, RepoCreate's label_mac and its
-		// folded row's, under api-7 (SKILL-M11-01; agent-repos-acl-forms)
-		question: "skill-m11-01-repo-create-label-form",
-		block:    `repos with kind (agents, one a member, and agent, one an agent, so api sees how many agent repos a member has, DESIGN-COMPUTE §20.4; listeners, one a network, §26.6)`,
-		list:     `repos with kind (agents, one a member, and agent, one an agent, so api sees how many agent repos a member has, DESIGN-COMPUTE §20.4, and each agent repo's keyed label, the first 16 bytes of HMAC-SHA256 of agent/<name> under a key only the network's sidecars derive, filed in its RepoCreate and kept in its row, so api sees a per-network value that names no agent and links nothing across networks, DESIGN-COMPUTE §20.7, QD-1434; listeners, one a network, §26.6)`,
-	},
-}
+// CARCH-M11-03 published as v68 (QD-1252, QD-1367), and QD-1237's compute-7 words and QD-1434's api-7 words, which
+// INFER-M12-01 and SKILL-M11-01 published, with the sixteenth fold's (v74). Each entry here waits for the next fold.
+var metadataListAdditions = []metadataListAddition{}
 
 // §2.8's block with each addition in place, in order, and a finding for each that does not apply.
 func applyMetadataListAdditions(block []byte, additions []metadataListAddition) ([]byte, []string) {

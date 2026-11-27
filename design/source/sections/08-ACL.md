@@ -78,6 +78,9 @@ a subject (an enclave)               ssh, with users agent, root and edit and an
 listener:<selector>                  dial: each listed socket and map entry of the subjects named, at their
                                      overlay addresses, under the listeners feature (owner decision 770;
                                      DESIGN-COMPUTE.md §26.7)
+evs:kind:agent                       deposit alone, in a grant alone: every agent repo the rows hold, one
+                                     created between bases included, under agent_repos (8.5; DESIGN-COMPUTE.md
+                                     §16.5); the one destination naming a kind, never beside read, write or admin
 * (as a dst)                         any subject, application socket, ip range (exits included) or general or
                                      record repo here; outward resources (tls/ and smtp/ sockets, dns:, mail:,
                                      other networks) and §8.5's kinds must be named
@@ -85,7 +88,7 @@ listener:<selector>                  dial: each listed socket and map entry of t
 
 acl.proto numbers `AclAutogroup` and `AclAction` from 1 in the order the lists above write them, 0 being unspecified (§7.9's record bytes).
 
-**Readings.** `ParseAclPolicy` runs on every reader, so what it accepts is a format. A last segment that is exactly `*` takes every name below its prefix, at least one segment deeper, so `sock:tls/*` reaches `tls/443/blog`; this is the one place "within a label or segment" is read against its letter, and any other `*` stays inside its segment, a `tls/` or `smtp/` name's or a dns host's glob kept as written in rows (`*-preview`; 8.8's `public_name`). A bare `*` dst, `sock:*` and a glob in the first segment reach application sockets and `share/` only, never `tls/`, `smtp/` or §9.4's other reserved first segments, or the implicit document's self-approved tagged rule would reach the `tls/` names its admin-approved rule holds. `admin` on a repo implies write and read of it, within 8.6's ceiling, a read_only sidecar still getting only read; a policy grant of `admin` therefore adds a key holder, which the preview names as a reader. Write implies deposit in a repo that takes deposits, a kind whose 8.5 row names depositors (vault, mailbox, secret and the Team record) or a general repo its `RepoCreate` marks an inbox, the repos whose generations carry a drop key (D-KEYS-17): a mailbox's consented devices, its receivers among them, and a group inbox's writers deposit the mail they take with no send grant, and the deposit gives a writer nothing its write did not, deposits counting against §20's storage either way (owner decision 688). As an approver, `autogroup:dst-owner` reads a socket's listeners as the subjects holding `listen` on it in the state at the statement's position, never live registrations: one owner or sponsor across them names that one, otherwise `autogroup:admin`; over an atom target it expands to every standing sidecar holding the atom. `autogroup:self` of a legacy client, or of a tagged sidecar whose sponsor is gone, resolves to `autogroup:admin`, as `autogroup:sponsor` does for an untagged requester (owner decision 355). A `route` rule that names no `ip:` destination and no `autogroup:internet` reaches, through each advertiser its via subjects hold for the source that is also among the rule's subject destinations for that source, every prefix of that advertiser's subnet routes in force, whole, its exposed prefix included: under `route` a subject destination's routes in force are what such a rule reaches, through the vias that hold their advertiser, so grant 1 reaches exactly the prefixes a member's own devices' approved routes serve (8.5), a rule whose destinations name none of its vias opens nothing new, and only an internet or /0 rule gives exits (§17.7; owner decision 575); a policy's own `ip:` tests judge such a rule as 8.8's saving rules say (owner decision 615). A source holds at most 4 MiB, 8.8's rows bound, and nests at most 4 deep, the schema's real depth; both are format constants, and the nesting bound runs before `encoding/json`, which recurses per level.
+**Readings.** `ParseAclPolicy` runs on every reader, so what it accepts is a format. A last segment that is exactly `*` takes every name below its prefix, at least one segment deeper, so `sock:tls/*` reaches `tls/443/blog`; this is the one place "within a label or segment" is read against its letter, and any other `*` stays inside its segment, a `tls/` or `smtp/` name's or a dns host's glob kept as written in rows (`*-preview`; 8.8's `public_name`). A bare `*` dst, `sock:*` and a glob in the first segment reach application sockets and `share/` only, never `tls/`, `smtp/` or §9.4's other reserved first segments, or the implicit document's self-approved tagged rule would reach the `tls/` names its admin-approved rule holds. `admin` on a repo implies write and read of it, within 8.6's ceiling, a read_only sidecar still getting only read; a policy grant of `admin` therefore adds a key holder, which the preview names as a reader. Write implies deposit in a repo that takes deposits, a kind whose 8.5 row names depositors (vault, mailbox, secret and the Team record) or a general repo its `RepoCreate` marks an inbox, the repos whose generations carry a drop key (D-KEYS-17): a mailbox's consented devices, its receivers among them, and a group inbox's writers deposit the mail they take with no send grant, and the deposit gives a writer nothing its write did not, deposits counting against §20's storage either way (owner decision 688). As an approver, `autogroup:dst-owner` reads a socket's listeners as the subjects holding `listen` on it in the state at the statement's position, never live registrations: one owner or sponsor across them names that one, otherwise `autogroup:admin`; over an atom target it expands to every standing sidecar holding the atom. `autogroup:self` of a legacy client, or of a tagged sidecar whose sponsor is gone, resolves to `autogroup:admin`, as `autogroup:sponsor` does for an untagged requester (owner decision 355). A `route` rule that names no `ip:` destination and no `autogroup:internet` reaches, through each advertiser its via subjects hold for the source that is also among the rule's subject destinations for that source, every prefix of that advertiser's subnet routes in force, whole, its exposed prefix included: under `route` a subject destination's routes in force are what such a rule reaches, through the vias that hold their advertiser, so grant 1 reaches exactly the prefixes a member's own devices' approved routes serve (8.5), a rule whose destinations name none of its vias opens nothing new, and only an internet or /0 rule gives exits (§17.7; owner decision 575); a policy's own `ip:` tests judge such a rule as 8.8's saving rules say (owner decision 615). `evs:kind:agent` is how a rule names every `agent` repo, DESIGN-COMPUTE.md §16.5's deposit default for them, which a Team's policy narrows per agent by naming agent repos instead (8.5): it compiles to `AclTarget.repo_kind` (8.8), refused while the head does not turn `agent_repos` on, so every release compiles the same rows before that base, and every reader matches it against the agent repos its rows hold, giving each its kind's rules at once, one created between bases included, each adding a deposit and nothing else, while rows naming another kind, or a kind beside another target or in a via, build no state; a request, a policy test and the `audit` block refuse it, and `*` and `evs:*` still reach no `agent` or `agents` repo. No label holds a colon, so no document that parsed before holds the form (DESIGN-COMPUTE-AMENDMENTS.md's QD-1433). A source holds at most 4 MiB, 8.8's rows bound, and nests at most 4 deep, the schema's real depth; both are format constants, and the nesting bound runs before `encoding/json`, which recurses per level.
 
 ### 8.5 Policy document and worked examples
 
@@ -130,7 +133,7 @@ The policy is HuJSON in the config repo, parsed in-repo: `aclStandardizeHujson` 
 
 A group inbox stays a `general` repo, marked at its creation: `RepoCreate`'s `inbox` is `group`, or `admin` for the network's admin address (8.8). Rotators set a marked repo's drop key as they do for a kind that takes deposits (§10.5, D-KEYS-17), and writers use §11.6's per-message slot rule for it. `ur id group-create` files its deposit grant beside the marker (§15.7); an untagged receiver in a network with no document already reaches its deposit ref through the implicit document's `autogroup:member` write on `evs:*` (§15.7), a marked repo's writers depositing by their write (8.4's readings; owner decision 688). A member's deposit into another member's mailbox is bounded by §20's storage limits, and the recipient's readers show it as from a member by the push's signer; `vault` and `secret` take no such deposit, and 8.8's "never in an owner-bound repo" stands for `RepoGrant`.
 
-Under DESIGN-COMPUTE.md's `agent_repos` feature (§7.9) two owner-bound kinds join, `agents`, one a member, and `agent`, one an agent, `agent` taking deposits, in a Team by default from members' devices and their agents, readers holding each card, status and summary path of `agents` to its agent's sidecar, with DESIGN-COMPUTE.md §16.5's defaults, and the inbox marker `team` marks the Team inbox (owner decisions 744, 747; DESIGN-COMPUTE.md §20.4). Under the `listeners` feature the kind `listeners`, one per network, is read by every admitted sidecar, which no document widens or narrows; each that is not read_only writes only its own versionless `s/<sidecar_id>`, the config writers, its admins, delete only removed sidecars' files, and `RepoAdmin` adds, `RepoGrant`, `RepoRevoke`, `RepoVersioning` and the search index are refused there (owner decision 770; DESIGN-COMPUTE.md §26.6).
+Under DESIGN-COMPUTE.md's `agent_repos` feature (§7.9) two owner-bound kinds join, `agents`, one a member, and `agent`, one an agent, readers holding each card, status and summary path of `agents` to its agent's sidecar, with DESIGN-COMPUTE.md §16.5's defaults, and the inbox marker `team` marks the Team inbox (owner decisions 744, 747; DESIGN-COMPUTE.md §20.4). Rules add nothing to `agents` repos and only deposit to `agent` repos, which take it by no kind default but by a rule that names one or names the kind, `evs:kind:agent` (8.4): `agent_repos`' implicit fragment gives that deposit to every admitted sidecar of a network with no document, and Team's starting document to `autogroup:member`, members' devices and the agents on them, so a Team narrows it per agent, another tagged subject depositing only where a rule names it (DESIGN-COMPUTE-AMENDMENTS.md's QD-1433). Each agent repo's `RepoCreate` carries its keyed label, `label_mac` (8.8), by which a reader binds the repo to `agent/<name>` under the member its row binds, so DESIGN-COMPUTE.md §20.7's check of a message's `to.repo` and `from.repo` holds across members while api sees a per-network value that names no agent (DESIGN-COMPUTE-AMENDMENTS.md's QD-1434, QD-1435). Under the `listeners` feature the kind `listeners`, one per network, is read by every admitted sidecar, which no document widens or narrows; each that is not read_only writes only its own versionless `s/<sidecar_id>`, the config writers, its admins, delete only removed sidecars' files, and `RepoAdmin` adds, `RepoGrant`, `RepoRevoke`, `RepoVersioning` and the search index are refused there (owner decision 770; DESIGN-COMPUTE.md §26.6).
 
 **Owner consent (owner decision 126).** One admin's signature admits a device under member M (owner decision 110), but in M's owner-bound repos admins only revoke or add the audit reader; there a later `EvsShare` to the same subject from M's consented device lifts a config writer's standing `RepoRevoke`, and a `RepoRevoke` naming one of M's consented devices is refused, since `SidecarRevoke` and `Suspend` already remove a device (owner decision 332; 8.8). One predicate, which §5.6 and §7.9 cite, names M's consented devices (D-ACL-22):
 
@@ -180,7 +183,7 @@ The **implicit document**, versioned in the sidecar repo, serves Community and P
       "maxExpiry": "30d" } ] }                                                          // decisions 179, 180)
 ```
 
-DESIGN-COMPUTE.md amends the implicit document and Team's starting document with the features that add them (§7.9), each compiling in only once the network turns its feature on, so the block above, which compiles today, keeps its rules until their code lands: the implicit document gains `autogroup:tagged` to `listener:*`, admitting only while the network's acknowledgment of `listeners:publish` stands (§2.8), and Team's starting document every client to `listener:*`, gates seeing port-limited dial rows (owner decisions 770, 771); and in an owner-bound repo a member may grant the network's indexer enclave read of their mailbox, which their devices carry to each incarnation, seating it as the mailbox's reader on its sponsor's setup statement where it was set up over SSH (owner decisions 752, 773; DESIGN-COMPUTE.md §11.10).
+DESIGN-COMPUTE.md amends the implicit document and Team's starting document with the features that add them (§7.9), each compiling in only once the network turns its feature on, so the block above, which compiles today, keeps its rules until their code lands: under `agent_repos` the implicit document gains `autogroup:sidecar`'s deposit to `evs:kind:agent`, compiled after the block above only once a base turns the feature on, and Team's starting document `autogroup:member`'s, which it holds only where its head turns the feature on (DESIGN-COMPUTE-AMENDMENTS.md's QD-1433); the implicit document gains `autogroup:tagged` to `listener:*`, admitting only while the network's acknowledgment of `listeners:publish` stands (§2.8), and Team's starting document every client to `listener:*`, gates seeing port-limited dial rows (owner decisions 770, 771); and in an owner-bound repo a member may grant the network's indexer enclave read of their mailbox, which their devices carry to each incarnation, seating it as the mailbox's reader on its sponsor's setup statement where it was set up over SSH (owner decisions 752, 773; DESIGN-COMPUTE.md §11.10).
 
 An ephemeral sidecar's evs access takes 8.6's ceiling: the config's and its team directory's read, the directory's own-path writes, kind-default deposits, and grants and EvsShares that name it. A tagged ephemeral sidecar is in `autogroup:tagged`, yet gets no deposit from the implicit document's `autogroup:tagged` rule: the ceiling counts a rule only where it names the sidecar, and that rule does not. Standing publishes need a Pro or Team document; §13.9 caps the rest, and §21.7's probation is a hard deny.
 
@@ -257,7 +260,8 @@ message AclRows {
                                           // the prefix rule sets that took effect (Repo rows); and
                                           // holders_shrunk_time_ms = 13, the time_ms of the entry at
                                           // holders_shrunk_at, or of the RepoCreate's while that is 0, §7.9's
-                                          // t_s (owner decision 557)
+                                          // t_s (owner decision 557); and an agent repo's label_mac = 15, its
+                                          // RepoCreate's keyed label (8.5)
   bytes bridge = 6;                       // §17's id-only section
   AclAudit audit = 7;                     // owner decision 63; Team only
   repeated AclSuspension suspensions = 8; // the Suspends a fold keeps (Folded grants)
@@ -323,6 +327,9 @@ message AclTarget {                       // exactly one kind set (owner decisio
   AclComputeResource compute_resource = 12;   // compute:enclave, compute:buy or compute:search
   bytes listener = 13;                    // listener:<selector>: an atom, as atom holds one, whose subjects'
                                           // listed sockets and map entries the target names (owner decision 770)
+  RepoKind repo_kind = 14;                // evs:kind:agent: every repo of the kind the rows hold, now and as
+                                          // each is created, for deposit alone; agent the one kind it names,
+                                          // under agent_repos (8.4)
 }
 // The rows above as Atoms, Folded grants and Repo rows below give them, and §8.4's and §11.12's named lists
 message AclAtom {                         // Atoms
@@ -378,6 +385,8 @@ message AclRepo {                         // every row keeps its signer and the 
   int64 holders_shrunk_time_ms = 13;      // §7.9's t_s (owner decision 557)
   RepoInbox inbox = 14;                   // the repo's RepoCreate's inbox marker, immutable (the table's
                                           // RepoCreate row)
+  bytes label_mac = 15;                   // an agent repo's RepoCreate's keyed label, immutable (the table's
+                                          // RepoCreate row; 8.5)
 }
 message AclRepoAdminRow {
   bytes sidecar_id = 1;
@@ -487,7 +496,7 @@ EvsShare{repo_id, subject, expires}                                a consented d
 OwnerConfirm{sidecar_id}                                           a consented device of the sidecar's member
                                                                    (8.5; owner decision 126)
 access log of one repo_id (owner decision 8):
-RepoCreate{repo_id, kind, inbox}                                   a sidecar the kind lets create it, which
+RepoCreate{repo_id, kind, inbox, label_mac}                        a sidecar the kind lets create it, which
   inbox (RepoInbox: 0 none, 1 group, 2 admin, 3 team) marks a      becomes the repo's admin: general or record, a
   group inbox (8.5): valid only with kind general; 2 only from     member device (untagged, not ephemeral, not
   a config writer, once a network, api and readers refusing a      read_only), or a tagged or ephemeral sidecar
@@ -512,6 +521,17 @@ RepoCreate{repo_id, kind, inbox}                                   a sidecar the
   network's the first standing mailcfg whose row names no
   owner and as a scope's the first whose row names that
   scope's member; no field is added (owner decision 631)
+  label_mac, an agent repo's alone and required there, refused
+  on every other kind: the first 16 bytes of
+  HMAC-SHA256(K_label, "agent/" || name), K_label =
+  HKDF-SHA256(the config repo's K_ref (§11.6), salt network_id,
+  info "urnetwork-sidecar-v1/agent-repo-label"), so every
+  admitted sidecar derives one key for the network's life; the
+  fold keeps it in the row (AclRepo.label_mac), a reader
+  recomputes it for the name a card or message gives, beside
+  the member the row binds, and api sees a per-network value
+  that names no agent (§2.8 api-7; 8.5;
+  DESIGN-COMPUTE-AMENDMENTS.md's QD-1434, QD-1435)
 RepoAdmin{repo_id, sidecar_id, add | remove}                       a repo admin or a config writer; in an
   a remove keeps the admin's row, stamped with its position        owner-bound repo, a Team scope's own mailcfg
   (Repo rows, above)                                               among them (8.5; owner decision 644), an add
@@ -654,6 +674,8 @@ message RepoCreate {
   RepoKind kind = 3;
   RepoInbox inbox = 4;                    // the table's RepoCreate row: only a general repo; admin only from a
                                           // config writer, once a network
+  bytes label_mac = 5;                    // the table's RepoCreate row: an agent repo's keyed label, 16 bytes,
+                                          // its alone
 }
 enum RepoInbox {                          // a group inbox's marker (8.5)
   REPO_INBOX_NONE = 0; REPO_INBOX_GROUP = 1; REPO_INBOX_ADMIN = 2;

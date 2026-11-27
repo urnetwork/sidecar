@@ -1764,3 +1764,29 @@ The owner answered QD-1432 on 2026-11-26, one at a time, accepting the recommend
 - **Superseded options.** A fresh grep finds 320 hits, none on a line this piece changed, and `v7/hits_class.json` carries every reading to its hit's current line; none live.
 - **Text.** No bare placeholders or HTML tags; the one research-sheet id stands; 12,916 section references, with the one unresolved as before. `v7/words.json` was regenerated, and `v7/text_checks.json` regenerated unchanged.
 - **DESIGN-DEFER.md.** 106 entries and 172 pointers, unchanged: nothing here defers or brings back anything.
+
+### The compute answers QD-1433 to QD-1436 and the agent repos' forms
+
+The owner answered four compute questions the build raised on 2026-11-26, one at a time, each with the recommended option, under the owner's standing acceptance of recommended options. They answer questions about DESIGN-COMPUTE.md, so they take no number, as QD-1388 to QD-1392 took none: DESIGN-COMPUTE-AMENDMENTS.md files them as the build's, QD-1433 and QD-1436 under its §16 and QD-1434 and QD-1435 under its §20, its lead and index naming them and the plan's reading QD-1378 taking an as-built line, and what they change here is written here:
+
+| Ledger id | Filed under | What it settles |
+|---|---|---|
+| QD-1433 | §16 | A rule names every `agent` repo for deposit with `evs:kind:agent`, `AclTarget.repo_kind` (14), so DESIGN-COMPUTE.md §16.5's default becomes a rule in `agent_repos`' implicit fragment and Team's starting document, which a Team narrows per agent. |
+| QD-1434 | §20 | QD-1378's agent repo label is keyed: `RepoCreate.label_mac` (5), kept in `AclRepo.label_mac` (15), the first 16 bytes of HMAC-SHA256 of `agent/<name>`, a per-network value api sees and that names no agent. |
+| QD-1435 | §20 | The label's key, K_label, derives from the config repo's K_ref, which never rotates, so every label verifies for the network's life. |
+| QD-1436 | §16 | An approved kind-21 raise of a gateway grant carries its agent in `CanonicalAction` field 43 beside the sealed grant id, and the broker lifts that agent's budgets. |
+
+- **The fences (QD-1433, QD-1434), as built** (SKILL-M11-01 with agent-repos-acl-forms, sidecar 1ceb2272, 5434b409, fd98ace0, d6799888): §8.8's `AclTarget` fence takes `repo_kind = 14`, its `AclRepo` fence `label_mac = 15` and its statement fence's `RepoCreate` `label_mac = 5`, the rows comment and the statement table's `RepoCreate` row naming the label, its bytes and its key; protocol/design_unfenced_test.go's three `testFenceAdditions` lines for them leave, the list keeping CTXH-M11-08's five `ReachReceipt` lines for the next piece.
+- **The kind form (QD-1433).** §8.4's resource table takes `evs:kind:agent`, deposit alone and in a grant alone, beside the `*` row's rule that §8.5's kinds must be named, and its readings what the form compiles to, when it is refused and how every reader matches it, `*` and `evs:*` still reaching no agent or agents repo; §8.5's `agent_repos` paragraph gives an agent repo's deposits as that rule or one naming the repo, never a kind default, with the label, and its paragraph on the documents the features amend names `agent_repos`' fragment, `autogroup:sidecar`'s deposit, and Team's starting rule, `autogroup:member`'s. The worked example and the implicit document stay as they are, acl_policy_host_test.go holding them to its fixtures, since the fragment compiles after the frozen implicit document, and only once a base turns the feature on.
+- **The label's key (QD-1435), as built** (SKILL-M11-01, sidecar fd98ace0, 8d41f2e8, 5f6b1504): §8.8's `RepoCreate` row gives K_label as HKDF-SHA256 of the config repo's K_ref (§11.6), salt network_id, info "urnetwork-sidecar-v1/agent-repo-label".
+- **The grant raise (QD-1436).** Decided ahead of its code: CACL's detail check and BAL's client still refuse a kind-21 action naming an agent and a grant, so a grant's raise stays device-only at the broker, failing closed, until a follow-up builds it. DESIGN.md's §16.8 carries no rule it changes, its server row already giving a kind-21 raise fields 38, sealed, and 43, so only DESIGN-COMPUTE-AMENDMENTS.md takes it.
+- **§2.8 and the lists.** §2.8's block takes the two lines check's `metadataListAdditions` had published, QD-1434's words in api-7 and QD-1237's in compute-7, the catalog route and `compute_catalog_version`, which INFER-M12-01 built (sidecar 744ea470, 791ac9a4), so the list moves to v74 with no new row; `make metadata` copies it, and the additions list is empty.
+
+`build.sh` on this folder reproduces DESIGN.md (SHA-256 `28eea76915308afb912e2154980603b8576fe8c1634fcfbdcaf69648b27567a6`) and DESIGN-DEFER.md (SHA-256 `3af6b10c35e06eaa2230e6232dc953d77f4539fe4065623950425ebab41895a6`, unchanged), and the validation shows:
+
+- **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item and no new §2.8 row, so no guard line.
+- **Owner decisions.** All 806 rows are present and cited; APPLY.md's section pairs hold. The four answers take no number, so `MAXD`, the range checks and `LATE_DATES` stay at 806. One open owner question, Q-REPO-6.
+- **Superseded options.** A fresh grep finds 320 hits, none on a line this piece changed, every reading carried to its line; none live.
+- **Text.** No bare placeholders or HTML tags; the one research-sheet id stands; 12,928 section references, with the one unresolved as before. `v7/words.json` was regenerated, and `v7/text_checks.json` regenerated unchanged.
+- **DESIGN-DEFER.md.** 106 entries and 172 pointers, unchanged.
+- **The metadata list** is v74, api-7's and compute-7's words; check's `metadataListAdditions` is empty.

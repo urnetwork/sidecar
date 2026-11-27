@@ -1,4 +1,4 @@
-# metadata_list.yml v73; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
+# metadata_list.yml v74; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
 # §7.9, §10, §11). v6 adds to v5 (2026-11-04) connect-1's ShareCert, api-6's push-token slot sentinels, api-7's
 # {acl_}q, cascade signers, recovery bindings, restored bindings' recovery windows and orphaned networks, api-13's
 # per-eraser closure counters, evs-1's secret kind and orphans, evs-3's creation block, fence time, deleted flag
@@ -275,6 +275,14 @@
 # (support-push-topic-hint-bytes), adds no row: api-6's wake classes take support beside mail, team, evs and core,
 # so the push sender's queue and its vendor wakes name that class too, with a version and no id, as the others do;
 # no value, field, Redis family or ttl changes, support-2 already naming the topic's hints.
+# v74, updated 2026-11-26 for the owner's answers QD-1434 (skill-m11-01-repo-create-label-form) and QD-1237
+# (compute-plan-catalog-versions), which SKILL-M11-01 and INFER-M12-01 published through check's additions, adds
+# no row: api-7's repos with kind take each agent repo's keyed label, RepoCreate's and AclRepo's label_mac, the
+# first 16 bytes of HMAC-SHA256 of agent/<name> under a key only the network's sidecars derive, a per-network
+# value that names no agent and links nothing across networks (DESIGN-COMPUTE §20.7); and compute-7 takes the
+# catalog route and compute_catalog_version, MG-C2's, each published version of the remote catalog and when it
+# was published (DESIGN-COMPUTE §6.3), which every device lists and every remote charge is priced from. No Redis
+# family or ttl changes.
 # Each row gives service, store (tables, Redis families, object families, logs or memory),
 # sees, why, ttl, and owner: the section that designs the value and states its ttl. Withdrawn rows keep
 # their ids so citations resolve. Public: this list ships in DESIGN.md on the public sidecar repo (owner
