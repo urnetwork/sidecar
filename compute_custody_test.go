@@ -177,6 +177,41 @@ func TestComputeCustodyCredentialMatched(t *testing.T) {
 	}
 }
 
+// Support's secret scan (§28.6), which reads Sidecar.SecretMatcher, refuses a message whose text or text file holds a
+// registered compute credential, as secret_in_message naming the credential class, and passes it once its source is
+// removed.
+func TestComputeCustodyInSupportScan(t *testing.T) {
+	sidecar := newTestComputeCustodySidecar(t)
+	canary := testComputeCustodyCanaries()[ComputeCustodyKindCalendarLinkSecret]
+	unregister, err := sidecar.RegisterComputeCustody(ComputeCustodyKindCalendarLinkSecret, &testComputeCustodySource{credentials: [][]byte{canary}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := "my calendar stopped syncing, here is what the settings show: " + string(canary)
+	file := &SupportFile{Data: []byte("settings dump\n" + hex.EncodeToString(canary) + "\n")}
+	matcher, err := sidecar.SecretMatcher()
+	if err != nil {
+		t.Fatal(err)
+	}
+	refused := supportScan(matcher, nil, text, nil, nil)
+	if refused == nil || refused.Refusal != SupportRefusalSecretInMessage || refused.SecretClass != SecretMatchCredential || refused.FileIndex != -1 {
+		t.Errorf("the text: %+v", refused)
+	}
+	refused = supportScan(matcher, nil, "the file has it", []*SupportFile{file}, []uint32{supportFileTypeText})
+	if refused == nil || refused.Refusal != SupportRefusalSecretInMessage || refused.FileIndex != 0 {
+		t.Errorf("a text file: %+v", refused)
+	}
+
+	unregister()
+	matcher, err = sidecar.SecretMatcher()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refused := supportScan(matcher, nil, text, []*SupportFile{file}, []uint32{supportFileTypeText}); refused != nil {
+		t.Errorf("removed, still refused: %+v", refused)
+	}
+}
+
 // A source that fails fails the matcher's build, so a caller refuses rather than answers unchecked: the error wraps
 // ErrComputeCustodyUnavailable and names the kind, keeps a locked store's error, and leaves cleared what the failing
 // source returned beside it; a Locked sidecar refuses before reading any source; and the registry refuses a kind no
