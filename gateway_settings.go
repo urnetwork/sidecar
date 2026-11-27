@@ -131,7 +131,8 @@ type GatewaySettings struct {
 	ImageMaxEdgePixelCount int
 	ImageMaxPixelCount     int
 	// The most pixels an image's header may declare before a front decodes it: 64 Mi, past any screenshot; a larger
-	// one is refused 400 unread, so a small file that declares a vast image takes no memory.
+	// one is refused 400 unread, so a small file that declares a vast image takes no memory. Non-positive refuses every
+	// image that needs a re-encode.
 	ImageDecodePixelCount int
 	// The quality a JPEG is re-encoded at, 1 to 100: 85.
 	ImageJpegQuality int

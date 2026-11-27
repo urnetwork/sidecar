@@ -123,16 +123,44 @@ func TestImageTargetSize(t *testing.T) {
 	}
 }
 
-// WebP decodes through golang.org/x/image's decoder and, past the size, becomes a PNG.
-func TestImageWebpDecodes(t *testing.T) {
+// A WebP header of chunk fourcc with data: RIFF, its size, WEBP, the chunk and its size.
+func testGatewayWebpHeader(fourcc string, data []byte) []byte {
+	header := []byte("RIFF")
+	header = binary.LittleEndian.AppendUint32(header, uint32(4+8+len(data)))
+	header = append(header, "WEBP"...)
+	header = append(header, fourcc...)
+	header = binary.LittleEndian.AppendUint32(header, uint32(len(data)))
+	return append(header, data...)
+}
+
+// A WebP's size is read from its own header, VP8L's, VP8's and VP8X's, with no decoder linked: one within the input
+// size is sent as it came, and one past it is refused 400 until a decoder past GO-2026-6222 is linked.
+func TestImageWebpReadByItsHeader(t *testing.T) {
 	settings := DefaultGatewaySettings()
 	mediaType, same, err := gatewayReencodeImage(settings, testGatewayWebp1x1)
 	if err != nil || mediaType != gatewayMediaTypeWebp || !bytes.Equal(same, testGatewayWebp1x1) {
 		t.Fatalf("a WebP within the size: %s %v", mediaType, err)
 	}
-	settings.ImageMaxEdgePixelCount, settings.ImageMaxPixelCount = 1, 1
-	if _, _, err := gatewayReencodeImage(settings, testGatewayWebp1x1); err != nil {
-		t.Fatalf("a WebP at the size: %v", err)
+	lossy := testGatewayWebpHeader("VP8 ", []byte{0x10, 0x02, 0x00, 0x9d, 0x01, 0x2a, 0x40, 0x01, 0xf0, 0x00, 0, 0, 0, 0})
+	config, err := gatewayWebpConfig(lossy)
+	if err != nil || config.Width != 320 || config.Height != 240 {
+		t.Errorf("VP8's size: %+v %v", config, err)
+	}
+	if _, same, err := gatewayReencodeImage(settings, lossy); err != nil || !bytes.Equal(same, lossy) {
+		t.Errorf("a lossy WebP within the size: %v", err)
+	}
+	// a canvas of 4000x3000, past the input size
+	extended := testGatewayWebpHeader("VP8X", []byte{0, 0, 0, 0, 0x9f, 0x0f, 0x00, 0xb7, 0x0b, 0x00})
+	if config, err := gatewayWebpConfig(extended); err != nil || config.Width != 4000 || config.Height != 3000 {
+		t.Errorf("VP8X's size: %+v %v", config, err)
+	}
+	_, _, err = gatewayReencodeImage(settings, extended)
+	refusal, ok := err.(*gatewayError)
+	if !ok || refusal.Code != GatewayErrorCodeInvalidImage || refusal.Status != 400 || !strings.Contains(refusal.Message, "PNG or JPEG") {
+		t.Errorf("an oversized WebP: %v", err)
+	}
+	if _, err := gatewayWebpConfig(testGatewayWebpHeader("ALPH", make([]byte, 10))); err == nil {
+		t.Error("a WebP of an unknown first chunk was read")
 	}
 }
 
