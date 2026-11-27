@@ -642,8 +642,9 @@ func agentsPersonName(ctx context.Context, client *AgentsClient) AgentName {
 // Who a reply in thread answers, where it names no to, by the replied message's verified provenance, the person's
 // answered to the member's me (§20.7's to row): in a thread to all, the message that opened it, whose sender every
 // reply goes back to (§20.8's third question), unless the caller opened it; else the newest message another sender
-// wrote. The caller is the agent caller, or with person the member's person, whose own words it never answers.
-// ErrAgentSendRecipient where that sender cannot be verified.
+// wrote; and in a thread no one else has written in yet, the agent the caller's own newest message named, so a
+// follow-up or a close goes where the thread did. The caller is the agent caller, or with person the member's person,
+// whose own words it never answers. ErrAgentSendRecipient where that sender cannot be verified.
 func agentsReplyRecipient(ctx context.Context, client *AgentsClient, caller AgentName, person bool, thread *AgentThreadRead, toAll bool) (AgentName, error) {
 	senderOf := func(message *AgentMessageRead) (AgentName, bool, error) {
 		trust := message.Trust
@@ -669,6 +670,13 @@ func agentsReplyRecipient(ctx context.Context, client *AgentsClient, caller Agen
 	for i := len(thread.Messages) - 1; 0 <= i; i -= 1 {
 		if name, found, err := senderOf(thread.Messages[i]); err != nil || found {
 			return name, err
+		}
+	}
+	for i := len(thread.Messages) - 1; 0 <= i; i -= 1 {
+		message := thread.Messages[i]
+		own := (person && message.Trust.Class == AgentMessageTrustPerson) || (caller != "" && message.Trust.Sender.Name == caller)
+		if own && message.Message.To != nil {
+			return message.Message.To.Name, nil
 		}
 	}
 	return "", ErrAgentSendRecipient

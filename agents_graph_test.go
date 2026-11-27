@@ -10,6 +10,7 @@ package sidecar
 
 import (
 	"context"
+	"errors"
 	"io"
 	"slices"
 	"sync"
@@ -308,5 +309,27 @@ func TestPersonWatchTellsEachMessageOnce(t *testing.T) {
 	}
 	if messages, _, _ := heard.heard(); len(messages) != 2 {
 		t.Fatalf("a message told twice: %d", len(messages))
+	}
+}
+
+// The person's reply and close in a thread answer the client's refusal as an error, never a result: a thread holding
+// as many messages as a thread may refuses both, and nothing is written.
+func TestPersonContinueAnswersTheRefusal(t *testing.T) {
+	env := newTestAgentToolsEnv(t)
+	ctx := env.world.ctx
+	opened, err := env.phone.SendAsPerson(ctx, &AgentPersonSendArgs{To: "fix", Body: "How close?"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	env.world.settings.ThreadMessageMax = 1
+	writes := env.world.writeCount
+	for _, args := range []*AgentPersonSendArgs{{Thread: opened.Thread, Close: true}, {Thread: opened.Thread, To: "fix", Body: "again"}} {
+		result, err := env.phone.SendAsPerson(ctx, args)
+		if !errors.Is(err, ErrAgentThreadFull) || result != nil {
+			t.Fatalf("%+v answered %+v, %v", args, result, err)
+		}
+	}
+	if env.world.writeCount != writes {
+		t.Fatalf("refused sends wrote %d times", env.world.writeCount-writes)
 	}
 }

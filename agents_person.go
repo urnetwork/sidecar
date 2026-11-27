@@ -378,48 +378,51 @@ func (self *AgentsClient) SendAsPerson(ctx context.Context, args *AgentPersonSen
 		}
 		sent, err = self.Send(ctx, send)
 	default:
-		thread, err := ParseAgentThreadId(args.Thread)
-		if err != nil {
-			return nil, fmt.Errorf("%w: the thread", ErrAgentToolArguments)
-		}
-		repoId, read, err := agentsThreadRepo(ctx, self, "", thread)
-		if err != nil {
-			return nil, err
-		}
-		inAgentsRepo := repoId == place.agentsRepoId
-		if toAll && !inAgentsRepo {
-			return nil, fmt.Errorf("%w: to \"*\" continues a thread to every agent", ErrAgentToolArguments)
-		}
-		var to AgentName
-		switch {
-		case toAll:
-		case args.To != "":
-			if to, err = ParseAgentName(args.To, self.settings); err != nil {
-				return nil, fmt.Errorf("%w: to is an agent's name", ErrAgentToolArguments)
-			}
-		case !args.Close || !inAgentsRepo:
-			if to, err = agentsReplyRecipient(ctx, self, "", true, read, inAgentsRepo); err != nil {
-				return nil, err
-			}
-		}
-		if args.Close {
-			sent, err = self.Close(ctx, &AgentCloseArgs{Person: true, Thread: thread, RepoId: repoId, To: to})
-			break
-		}
-		send.Thread, send.ThreadRepoId, send.To = thread, repoId, to
-		if toAll {
-			sent, err = self.Broadcast(ctx, send)
-		} else {
-			sent, err = self.Send(ctx, send)
-		}
-		if err != nil {
-			return nil, agentToolSendError(err)
-		}
+		sent, err = self.personContinue(ctx, place, args, send, toAll)
 	}
 	if err != nil {
 		return nil, agentToolSendError(err)
 	}
 	return agentSendToolResultOf(sent), nil
+}
+
+// The person's reply, answer to all or close in args.Thread: the thread found in the member's repos, its recipient
+// named, or taken from the replied message's provenance (agentsReplyRecipient), and written as the person's.
+func (self *AgentsClient) personContinue(ctx context.Context, place *agentsPlace, args *AgentPersonSendArgs, send *AgentSendArgs,
+	toAll bool) (*AgentSendResult, error) {
+	thread, err := ParseAgentThreadId(args.Thread)
+	if err != nil {
+		return nil, fmt.Errorf("%w: the thread", ErrAgentToolArguments)
+	}
+	repoId, read, err := agentsThreadRepo(ctx, self, "", thread)
+	if err != nil {
+		return nil, err
+	}
+	inAgentsRepo := repoId == place.agentsRepoId
+	if toAll && !inAgentsRepo {
+		return nil, fmt.Errorf("%w: to \"*\" continues a thread to every agent", ErrAgentToolArguments)
+	}
+	var to AgentName
+	switch {
+	case toAll:
+	case args.To != "":
+		if to, err = ParseAgentName(args.To, self.settings); err != nil {
+			return nil, fmt.Errorf("%w: to is an agent's name", ErrAgentToolArguments)
+		}
+	case !args.Close || !inAgentsRepo:
+		// a close in a thread to all goes to all; any other answer goes to the thread's other side
+		if to, err = agentsReplyRecipient(ctx, self, "", true, read, inAgentsRepo); err != nil {
+			return nil, err
+		}
+	}
+	if args.Close {
+		return self.Close(ctx, &AgentCloseArgs{Person: true, Thread: thread, RepoId: repoId, To: to})
+	}
+	send.Thread, send.ThreadRepoId, send.To = thread, repoId, to
+	if toAll {
+		return self.Broadcast(ctx, send)
+	}
+	return self.Send(ctx, send)
 }
 
 // What the person's inbox reads.
