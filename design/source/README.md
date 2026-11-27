@@ -7,7 +7,7 @@
 | Path | What it is |
 |---|---|
 | `sections/01-CTX.md` … `sections/23-PHASE.md` | DESIGN.md §1-§23, one file per section. The build copies them verbatim, adding only links. |
-| `owner/DECISIONS.md` | The owner's record, entries 1-806. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
+| `owner/DECISIONS.md` | The owner's record, entries 1-807. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
 | `owner/APPLY.md` | The rules for applying the owner's decisions: precedence (§1), supersession, where two decisions disagree (§2), notation (§3), editing rules (§4), and the follow-up decisions 112-136 with the sections each binds (§6-§8). |
 | `CONVENTIONS.md` | The writing conventions every section follows: the owner directive (§0), the owner rules (§1), the section template (§2) and the X registry (§7), which DESIGN.md's X1-X20 table replaced. |
 | `OUTLINE.md` | The original outline: section codes, scope boundaries, and the word budgets that G0's density rule replaced on 2026-11-04. |
@@ -44,7 +44,7 @@ It needs only `python3`; it was built and checked with Python 3.13. The steps, a
 
 The data files are layered. Each `data_*N.py` loads its predecessor with `runpy` and patches it: `data_front10.py` loads `data_front9.py`, back to `data_front3.py`, and the registers, glossary and appendices go the same way. Change the top layer (the `*10` files), or add an `*11` layer that loads them. Comments in the scripts cite working files from the design sessions (the reconcilers' orders, `peer/`, `review/`, `snap/`), which were not imported; they are history.
 
-## Adding owner decision N (807 onward)
+## Adding owner decision N (808 onward)
 
 1. Add entry N to `owner/DECISIONS.md`: the question, the answer, its cost, the options not taken, and what raised it.
 2. In `asm/data_front10.py`, append `(N, "<what it settles>", "<one line>")` to `INDEX`, add `DATES[N]`, and raise the `assert` to `list(range(1, N + 1))`. Update `STATUS` and `DECISIONS_INTRO` where they name a range. `@@OD:k@@` writes a link to decision k.
@@ -1884,3 +1884,20 @@ The owner answered eleven more questions the build raised implementing DESIGN-CO
 - **Superseded options.** A fresh grep finds 320 hits, none on a line this piece changed, every reading carried to its line; none live.
 - **Text.** No bare placeholders or HTML tags; the one research-sheet id stands; 12,941 section references, with the one unresolved as before. `v7/words.json` was regenerated, and `v7/text_checks.json` regenerated unchanged.
 - **DESIGN-DEFER.md.** 106 entries and 172 pointers, unchanged: RK_g's wait for a bounded matcher is the review phase's or a later track's work, which no release defers, so it takes no entry.
+
+### Owner decisions 807 and 801 built, and the owner's landing allowances
+
+- **Status reads (807), built.** forward-lapse-decision-race landed it as the sixteenth fold stated it (sdk 53d997e7): §17.8's forwarding roles paragraph and owner decision 807's entry say it is built where they said decided ahead of its code, and §18.6's mirror already stated it as fact.
+- **Waits for a time (801), the last sites.** Fix track clock-sweep-later-pass set the `Forwarder`'s wait through `ClockAfterAt` (sidecar e9c39b5d), which clock-wait-at-sweep had left while bridge_forward.go was forward-lapse-decision-race's file, and the stream deadlines' through `ClockAfterFuncAt`, the root's unexported delegates leaving (c9d90a1b): owner decision 801's entry says so, and §4.5's `Clock` comment and §22.8's determinism row already name the exported helpers alone.
+- **Landings past the tip's custody-leg failure (QD-1446 to QD-1448, QD-1450).** Four one-time allowances, as QD-1195's was, change no design and take no number: owner/DECISIONS.md records them as an owner instruction after the numbered entries, beside QD-1195's and QD-1227's. The fix they waited on landed with secret-matcher-reader-keys (sidecar 648ccf71).
+- **This file.** The contents table and the heading on adding a decision name 807 as the last entry, where the sixteenth fold's last piece had left 806.
+
+`build.sh` on this folder reproduces DESIGN.md (SHA-256 `9b474900a09ded93e8aa2971d2569ffd54a7e5e01f8422bfab51e53fa44594b7`) and DESIGN-DEFER.md (SHA-256 `3af6b10c35e06eaa2230e6232dc953d77f4539fe4065623950425ebab41895a6`, unchanged), and the validation shows:
+
+- **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item and no §2.8 row, so no guard line.
+- **Owner decisions.** All 807 rows are present and cited; APPLY.md's section pairs hold. The allowances take no number, so `MAXD`, the range checks and `LATE_DATES` stay at 807. One open owner question, Q-REPO-6.
+- **Superseded options.** A fresh grep finds 320 hits, none on a line this piece changed, every reading carried to its line; none live.
+- **Text.** No bare placeholders or HTML tags; the one research-sheet id stands; 12,941 section references, with the one unresolved as before. `v7/words.json` was regenerated, and `v7/text_checks.json` regenerated unchanged.
+- **DESIGN-DEFER.md.** 106 entries and 172 pointers, unchanged.
+
+The fold numbered no owner decision: of the answers recorded since the sixteenth fold, QD-1438 to QD-1445, QD-1449 and QD-1451 to QD-1454 are compute answers, which DESIGN-COMPUTE-AMENDMENTS.md files, QD-1438's and QD-1452's words in §2.8's list, and QD-1446 to QD-1448 and QD-1450 an owner instruction. Outside this folder it touched DESIGN.md (rebuilt); RECORD.md (section 21's continuations row); DESIGN-AMENDMENTS.md's lead and its two "Later decisions" items' lines; DESIGN-COMPUTE-AMENDMENTS.md (its lead and index, the thirteen answers and the lines of QD-1254 and QD-1383); and metadata_list.yml (v75) with check/metadata_list_test.go's additions list, empty again; outside git, .stack/decisions/folded.txt. Left for the tracks that own them: owner decision 797's code (fetch-m13-01, not started) and QD-1436's (a follow-up of bal-m12-15, with CACL's detail check); QD-1441's prompt sentence and `ur acl`'s offer (CACL-M11-03's), QD-1449's RK_g (a bounded matcher), QD-1451's (support-log-start-after-close), QD-1453's landing (srch-m13-01, whose websearch.proto mapping then quotes compute-10's words) and QD-1454's (x-image-vuln-bump); kind 56 with SAFE-M13-08; record_kind.go's and record.proto's headers, which still say that kinds 57 and the `ssh` reach kind, `EnclaveEntryBody`, `body_apart`, `bodies_dropped` and `SeqRange` wait for a fold, the record's stream A tasks' files (.stack/plan/CONTRACTS.md C-26); REVIEW-HANDOFF.md's decisions bullet, which waits for the compute draft to finish; and QD-024 and QD-1086, as before.
