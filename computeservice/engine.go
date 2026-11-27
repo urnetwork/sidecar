@@ -90,6 +90,9 @@ type ComputeEngineDeps struct {
 	// adapters, K_P's signer, the signer's mTLS client): the host's, absent in tests. nil answers every name with an
 	// error.
 	SecretFile func(name string) ([]byte, error)
+	// Where an admission's address is, for §17.2's region check (abuse_region.go): server's GeoLite2 City lookup, which
+	// the block's host passes in. nil answers every admission 503: no region checked, nothing admitted.
+	RegionLookup ComputeRegionLookup
 	// The newest verified compute policy the broker holds (§5.4), the provider adapters' only source of hosts,
 	// receivers, targets and model ids: ATTEST's fetcher on the block, which INFER-M12-04 wires. nil gives every
 	// adapter none, so no direct target is made.
@@ -109,6 +112,8 @@ type ComputeEngineDeps struct {
 	testAdmissionChecks []ComputeAdmissionCheck
 	// A test's catalog versions, in place of compute_catalog_version over Env (broker_catalog.go).
 	testCatalogStore computeCatalogVersionStore
+	// A test's abuse holds, in place of compute_abuse_hold over Env (abuse_hold.go).
+	testAbuseHoldStore computeAbuseHoldStore
 }
 
 // The engine. See the file header.

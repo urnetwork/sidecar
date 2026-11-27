@@ -126,6 +126,8 @@ barrier certs.revoke.after certsservice/revoke.go
 barrier certs.revoke.before certsservice/revoke.go
 barrier certs.run_order.before certsservice/run.go
 barrier certs.run_order.issued certsservice/run.go
+barrier compute.abuse_hold.fill.after computeservice/abuse_hold.go
+barrier compute.abuse_hold.fill.before computeservice/abuse_hold.go
 barrier compute.catalog.publish.after computeservice/broker_catalog.go
 barrier compute.catalog.publish.before computeservice/broker_catalog.go
 barrier compute.drain.end.after computeservice/engine.go
@@ -136,6 +138,8 @@ barrier compute.request.admit.after computeservice/engine.go
 barrier compute.request.admit.before computeservice/engine.go
 barrier compute.stream.comment.after computeservice/engine_stream.go
 barrier compute.stream.comment.before computeservice/engine_stream.go
+barrier compute_abuse_hold.commit.after controller/compute_abuse_hold.go
+barrier compute_abuse_hold.commit.before controller/compute_abuse_hold.go
 barrier compute_auto_renew.charge.after controller/compute_auto_renew.go
 barrier compute_auto_renew.charge.before controller/compute_auto_renew.go
 barrier compute_book.commit.after controller/compute_book.go
