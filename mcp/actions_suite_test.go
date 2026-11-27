@@ -273,16 +273,30 @@ var actionsToolKinds = map[string]sidecar.SidecarActionKind{
 	"directory_request": sidecar.SidecarActionAccessRequest,
 	"run_restore":       sidecar.SidecarActionRestore,
 	"support_send":      sidecar.SidecarActionSupportSend,
+	// DESIGN-COMPUTE §15.2's, by §16.3's kinds, one kind for several tools where §16.3 files them alike: a start a tool
+	// asks for is a kind 19 as a create is, every send of a tainted run a kind 24, and each calendar write a kind 25
+	"enclave_create":  sidecar.SidecarActionEnclaveCreate,
+	"enclave_start":   sidecar.SidecarActionEnclaveCreate,
+	"enclave_delete":  sidecar.SidecarActionEnclaveDelete,
+	"enclave_exec":    sidecar.SidecarActionTaintedSend,
+	"agent_send":      sidecar.SidecarActionTaintedSend,
+	"agent_broadcast": sidecar.SidecarActionTaintedSend,
+	"calendar_add":    sidecar.SidecarActionCalendarWrite,
+	"calendar_update": sidecar.SidecarActionCalendarWrite,
+	"calendar_delete": sidecar.SidecarActionCalendarWrite,
+	"service_call":    sidecar.SidecarActionServiceWrite,
 }
 
 // What a field's name may not hold: a key, a secret or anything that opens one.
 var actionsKeyWords = []string{"key", "secret", "private", "seed", "token", "password", "pem", "cert"}
 
 // Every O tool, and every W tool that may act, names a kind MCP-M3-02's table holds; each row's fields are
-// CanonicalAction's, and none is a key, so tls_publish's row keeps the key in the sidecar (X1).
+// CanonicalAction's, and none is a key, so tls_publish's row keeps the key in the sidecar (X1). A §16.5 tool's kind is
+// its own; DESIGN-COMPUTE §15.2's tools may share §16.3's kinds among themselves, never with a §16.5 tool.
 func TestActionsDescriptorLint(t *testing.T) {
 	fields := (&protocol.CanonicalAction{}).ProtoReflect().Descriptor().Fields()
 	kinds := []sidecar.SidecarActionKind{}
+	computeKinds := []sidecar.SidecarActionKind{}
 	for _, design := range mcpCatalogDesign {
 		if design.tier != McpTierOutward && !design.mayAct {
 			continue
@@ -292,10 +306,14 @@ func TestActionsDescriptorLint(t *testing.T) {
 			t.Errorf("%s acts outward and names no kind", design.name)
 			continue
 		}
-		if slices.Contains(kinds, kind) {
+		switch {
+		case slices.Contains(kinds, kind) || !design.compute && slices.Contains(computeKinds, kind):
 			t.Errorf("%s names a kind another tool names", design.name)
+		case design.compute:
+			computeKinds = append(computeKinds, kind)
+		default:
+			kinds = append(kinds, kind)
 		}
-		kinds = append(kinds, kind)
 		row, ok := sidecar.CanonicalActionFields(kind)
 		if !ok {
 			t.Errorf("%s's kind %d has no row in the kind table", design.name, kind)

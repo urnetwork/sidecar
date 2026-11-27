@@ -16,7 +16,7 @@
    "projects": {
 --- a/$HOME/.claude/settings.json
 +++ b/$HOME/.claude/settings.json
-@@ -3,7 +3,17 @@
+@@ -3,7 +3,23 @@
    "permissions": {
      "allow": ["Bash(git status)", "Read"],
      "ask": [
@@ -24,9 +24,15 @@
 +      "Bash(rm:*)",
 +      "mcp__ur__bridge_expose",
 +      "mcp__ur__bridge_forward",
++      "mcp__ur__calendar_add",
++      "mcp__ur__calendar_delete",
++      "mcp__ur__calendar_update",
 +      "mcp__ur__directory_request",
 +      "mcp__ur__dns_delete",
 +      "mcp__ur__dns_set",
++      "mcp__ur__enclave_create",
++      "mcp__ur__enclave_delete",
++      "mcp__ur__enclave_start",
 +      "mcp__ur__mail_alias_create",
 +      "mcp__ur__mail_alias_delete",
 +      "mcp__ur__socket_listen",
@@ -35,7 +41,7 @@
      ]
    },
    "hooks": {
-@@ -12,6 +22,129 @@
+@@ -12,6 +28,129 @@
          "matcher": "Edit|Write",
          "hooks": [
            { "type": "command", "command": "/opt/fmt/bin/format-on-save" }
