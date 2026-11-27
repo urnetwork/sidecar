@@ -82,9 +82,6 @@ type GatewaySettings struct {
 	TokenByteCount int
 	// How long a token is valid from its mint: 1 h, so a token on disk lives at most an hour (IC-11).
 	TokenLife time.Duration
-	// How long a token's hash stays in the store past its expiry before a sweep drops it: 0, at once. A token past
-	// its expiry is refused whether or not its hash is still kept.
-	TokenSweepDelay time.Duration
 	// The most grants one network's store holds: 64, past every harness and agent of one person's devices. A grant
 	// past it is refused.
 	GrantCount int
@@ -137,7 +134,6 @@ func DefaultGatewaySettings() *GatewaySettings {
 
 		TokenByteCount:       32,
 		TokenLife:            1 * time.Hour,
-		TokenSweepDelay:      0,
 		GrantCount:           64,
 		GrantTokenCount:      64,
 		GrantModelCount:      64,
