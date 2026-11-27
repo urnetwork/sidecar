@@ -756,7 +756,6 @@ func (self *Forwarder) run() {
 			}
 			wake = earlierTime(wake, self.sinkAlarmAt)
 		}
-		// the wait is set for the wake's time itself, so a move of the clock as it is set cannot leave it late (QD-1425)
 		select {
 		case <-self.ctx.Done():
 			return
@@ -765,7 +764,7 @@ func (self *Forwarder) run() {
 		case <-hintChanged:
 		case <-self.clockCheck:
 			// the next turn reads the clock again and arms the wait anew from it
-		case <-ClockAfterAt(self.clock, wake):
+		case <-self.clock.After(wake.Sub(now)):
 		}
 	}
 }
