@@ -117,6 +117,7 @@ type gatewayKeys struct {
 	drawLock sync.Mutex
 }
 
+// Registers the keys' draw lock as a compute component of every Sidecar on the daemon's legs.
 func init() {
 	registerComputeComponent(gatewayKeysComponentName, func(sidecar *Sidecar) (*gatewayKeys, error) {
 		return &gatewayKeys{}, nil

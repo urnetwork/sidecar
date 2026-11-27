@@ -732,34 +732,42 @@ func (self gatewayJsonObject) MarshalJSON() ([]byte, error) {
 // The Responses front (see the file header).
 type gatewayResponsesFront struct{}
 
+// See gatewayFront.
 func (gatewayResponsesFront) api() SessionGatewayApi {
 	return SessionGatewayApiResponses
 }
 
+// See gatewayFront.
 func (gatewayResponsesFront) renderer() string {
 	return GatewayRendererResponses
 }
 
+// See gatewayFront.
 func (gatewayResponsesFront) responseIdPrefix() string {
 	return gatewayResponseIdPrefix
 }
 
+// See gatewayFront: SRCH's filter for Responses.
 func (gatewayResponsesFront) filter(hostedSearch *GatewayHostedSearch, harness string, body []byte) ([]byte, error) {
 	return hostedSearch.FilterResponses(harness, body)
 }
 
+// See gatewayFront.
 func (gatewayResponsesFront) route(settings *GatewaySettings, body []byte, key []byte) ([]byte, *gatewayError) {
 	return gatewayRouteResponses(settings, body, key)
 }
 
+// See gatewayFront.
 func (gatewayResponsesFront) translate(body []byte) (*InferRequest, *gatewayRequestOptions, *gatewayError) {
 	return gatewayTranslateResponses(body)
 }
 
+// See gatewayFront: a `: ping` comment.
 func (gatewayResponsesFront) keepaliveFrame() []byte {
 	return []byte(gatewaySseKeepaliveComment)
 }
 
+// See gatewayFront.
 func (gatewayResponsesFront) newProducer(run *gatewayCallRun) gatewayProducer {
 	return &gatewayResponsesProducer{run: run, toolItems: map[string]*gatewayResponsesItemState{}}
 }

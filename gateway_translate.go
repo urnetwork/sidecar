@@ -675,6 +675,7 @@ func gatewayJsonErrorText(err error) string {
 // the body its recorded items rebuild, its params with its system node's instructions and tools and its input items.
 type gatewayResponsesRenderer struct{}
 
+// Registers the Responses front's session renderer.
 func init() {
 	RegisterSessionRenderer(gatewayResponsesRenderer{})
 }
