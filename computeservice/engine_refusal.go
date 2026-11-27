@@ -6,8 +6,9 @@
 //
 // The codes are evs's not_found, unauthenticated, scope and unavailable; §16.6's upgrade_required; this plan's
 // not_built, idempotency_key_required and invalid, which the design does not name; and the areas' own: capacity, held,
-// insufficient_quota, tee_unverified, disclosure_required, catalog_stale, rate_limited and suspended, and kind 21's
-// approval_refused and spent (§16.6's gate: refused writing nothing, and 409 SPENT; BAL-M12-16). The route bodies
+// insufficient_quota, tee_unverified, disclosure_required, catalog_stale, rate_limited and suspended, §17.2's
+// region_refused (451, CARCH-M12-01, which the design names no code for), and kind 21's approval_refused and spent
+// (§16.6's gate: refused writing nothing, and 409 SPENT; BAL-M12-16). The route bodies
 // are protobuf (QD-1246); a refusal is JSON, so a client reads it before it knows which message a route answers with.
 
 package computeservice
@@ -55,8 +56,11 @@ const (
 	ComputeRefusalCatalogStale ComputeRefusalCode = "catalog_stale"
 	// A rate the broker holds the caller to: a network's searches, failed promotion codes.
 	ComputeRefusalRateLimited ComputeRefusalCode = "rate_limited"
-	// The network's compute is suspended (§9.9, §17.2).
+	// The network's compute is suspended (§9.9, §17.2): by §21's standing or an operator's hold (abuse_hold.go), the
+	// reason saying which.
 	ComputeRefusalSuspended ComputeRefusalCode = "suspended"
+	// The request's address is in a region the broker refuses compute to (§17.2's sanctioned users; abuse_region.go).
+	ComputeRefusalRegionRefused ComputeRefusalCode = "region_refused"
 	// An approval route's decisions do not spend, or ask what no decision of the kind may (§16.6's gate step 1), its
 	// reason the spend check's code; nothing was written.
 	ComputeRefusalApprovalRefused ComputeRefusalCode = "approval_refused"
@@ -82,6 +86,7 @@ var computeRefusalStatuses = map[ComputeRefusalCode]int{
 	ComputeRefusalCatalogStale:           http.StatusConflict,
 	ComputeRefusalRateLimited:            http.StatusTooManyRequests,
 	ComputeRefusalSuspended:              http.StatusForbidden,
+	ComputeRefusalRegionRefused:          http.StatusUnavailableForLegalReasons,
 	ComputeRefusalApprovalRefused:        http.StatusForbidden,
 	ComputeRefusalSpent:                  http.StatusConflict,
 }

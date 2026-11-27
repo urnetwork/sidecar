@@ -456,11 +456,14 @@ func (self *Subprotocol) startStreamLoops() {
 
 // The stream sender: each queued frame to connect with zero wait, in order, what connect refuses put back
 // and tried again after CallSendRetryInterval. Each wait is on the queue, the retry or the dispatcher's
-// end, so it never spins; what is queued when the dispatcher ends is dropped, its streams ending too.
+// end, so it never spins; what is queued when the dispatcher ends is dropped, its streams ending too. No
+// frame goes once the dispatcher has ended, a pause's timer or a queue's wake taken as it ended included,
+// and an ended dispatcher asks the clock for nothing.
 func (self *Subprotocol) runStreamSender() {
 	defer self.handlers.Done()
 	streams := &self.streams
-	for {
+	// select takes any of its ready cases at random: a wake or a pause taken as the dispatcher ended reads as the end
+	for self.ctx.Err() == nil {
 		var outbound []*streamOutbound
 		func() {
 			streams.stateLock.Lock()
@@ -491,10 +494,12 @@ func (self *Subprotocol) runStreamSender() {
 			defer streams.stateLock.Unlock()
 			streams.outbound = append(refused, streams.outbound...)
 		}()
+		if self.ctx.Err() != nil {
+			return
+		}
 		select {
 		case <-self.clock.After(self.settings.CallSendRetryInterval):
 		case <-self.ctx.Done():
-			return
 		}
 	}
 }
