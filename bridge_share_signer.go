@@ -375,15 +375,20 @@ func (self *BridgeShareSignerRenewer) RenewAll(ctx context.Context) ([]Id, error
 }
 
 // Runs passes each RenewInterval, and at once at each signal of wake, a new generation's, until ctx ends. A failed
-// pass is logged by its shares' ids and tried again at the next.
+// pass is logged by its shares' ids and tried again at the next. No pass starts once ctx has ended, a wake or a
+// timer taken as it ended included, so no due share certifies a seed on the dead context that never lands; an ended
+// ctx asks the clock for nothing.
 func (self *BridgeShareSignerRenewer) Run(ctx context.Context, wake <-chan struct{}) {
-	for {
+	// select takes any of its ready cases at random: a wake or a timer taken as ctx ended reads as the end
+	for ctx.Err() == nil {
 		if _, err := self.RenewAll(ctx); err != nil && ctx.Err() == nil {
 			self.log.Warningf("bridge share signers: a renewal did not land: %v", err)
 		}
+		if ctx.Err() != nil {
+			return
+		}
 		select {
 		case <-ctx.Done():
-			return
 		case <-wake:
 		case <-self.clock.After(self.settings.RenewInterval):
 		}

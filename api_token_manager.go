@@ -215,6 +215,11 @@ func (self *sidecarTokenManager) run() {
 				continue
 			case <-ClockAfterAt(self.args.Clock, refreshAt):
 			}
+			// select takes any of its ready cases at random: the refresh point taken as the manager closed reads as
+			// the end, so no refresh runs for a closed manager
+			if self.ctx.Err() != nil {
+				return
+			}
 		} else {
 			select {
 			case <-self.ctx.Done():
@@ -251,10 +256,18 @@ func (self *sidecarTokenManager) run() {
 					return
 				case <-retryNotify:
 				case <-self.args.Clock.After(retryTimeout):
+					// select takes any of its ready cases at random: a retry taken as the manager closed reads as
+					// the end, so no refresh, and no expiry it finds, follows the close
+					if self.ctx.Err() != nil {
+						return
+					}
 					// the same token again, unless it changed meanwhile
 					if current := self.args.Api.currentByJwt(); current == byJwt {
 						continue
 					}
+				}
+				if self.ctx.Err() != nil {
+					return
 				}
 			}
 			break

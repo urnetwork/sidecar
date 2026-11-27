@@ -48,7 +48,6 @@ import (
 )
 
 // §11.13's floor, which no setting passes: the readers' allowance.
-const evsPurgeMinAllowance = 60 * time.Second
 
 // The series the purge exports, with no network or repo label (D-OPS-8; §19.8's versionless row), the observed one
 // with the sweep (QD-855).
@@ -118,8 +117,10 @@ type PurgeNewestReader interface {
 
 // Tunables of the purge (§11.13's who row; §22.8 tunes the rate and the queue).
 type PurgerSettings struct {
+	// §11.13's floor on Allowance, the least a reader is given: 60 s. A smaller Allowance is refused. Positive.
+	MinAllowance time.Duration
 	// The readers' allowance from certainty to the first DELETE, on this process's checked clock: 60 s, and
-	// never less.
+	// never less than MinAllowance.
 	Allowance time.Duration
 	// DELETEs a second this process issues at most: 200. Positive.
 	DeleteRate int
@@ -137,8 +138,11 @@ type PurgerSettings struct {
 }
 
 func DefaultPurgerSettings() *PurgerSettings {
+	// §11.13's allowance, which is also its floor
+	minAllowance := 60 * time.Second
 	return &PurgerSettings{
-		Allowance:           evsPurgeMinAllowance,
+		MinAllowance:        minAllowance,
+		Allowance:           minAllowance,
 		DeleteRate:          200,
 		QueueIdCount:        1000000,
 		DrainTimeout:        70 * time.Second,
@@ -151,8 +155,10 @@ func DefaultPurgerSettings() *PurgerSettings {
 // ErrPurgerSettings for a value past §11.13's floors or one the purge cannot work with.
 func (self *PurgerSettings) Validate() error {
 	switch {
-	case self.Allowance < evsPurgeMinAllowance:
-		return fmt.Errorf("%w: an allowance of %s, under §11.13's %s", ErrPurgerSettings, self.Allowance, evsPurgeMinAllowance)
+	case self.MinAllowance <= 0:
+		return fmt.Errorf("%w: a floor on the allowance that is not positive", ErrPurgerSettings)
+	case self.Allowance < self.MinAllowance:
+		return fmt.Errorf("%w: an allowance of %s, under §11.13's %s", ErrPurgerSettings, self.Allowance, self.MinAllowance)
 	case self.GiveUpAge <= self.Allowance:
 		return fmt.Errorf("%w: a give-up age of %s, inside the allowance", ErrPurgerSettings, self.GiveUpAge)
 	case self.DeleteRate <= 0 || self.QueueIdCount <= 0 || self.DrainTimeout < 0 || self.StagedEvacuationAge <= 0 || self.StatementAheadBound < 0:

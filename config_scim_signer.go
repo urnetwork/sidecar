@@ -97,6 +97,8 @@ type ConfigScimSigner struct {
 	source   ScimChangeSource
 	settings *ConfigScimSignerSettings
 	passLock chan struct{}
+	// closed once the loop has returned, at once where none runs
+	runDone chan struct{}
 }
 
 // A scim_signer for sidecar reading source; with source set and a positive PollInterval its loop runs from here until
@@ -105,6 +107,8 @@ func NewConfigScimSigner(ctx context.Context, sidecar *Sidecar, source ScimChang
 	self := newConfigScimSigner(ctx, sidecar, source, settings)
 	if source != nil && 0 < self.settings.PollInterval {
 		go self.run()
+	} else {
+		close(self.runDone)
 	}
 	return self
 }
@@ -122,6 +126,7 @@ func newConfigScimSigner(ctx context.Context, sidecar *Sidecar, source ScimChang
 		source:   source,
 		settings: settings,
 		passLock: make(chan struct{}, 1),
+		runDone:  make(chan struct{}),
 	}
 }
 
@@ -130,15 +135,20 @@ func (self *ConfigScimSigner) Close() {
 	self.cancel()
 }
 
-// The loop: a pass every PollInterval, a failed one logged and tried again at the next.
+// The loop: a pass every PollInterval, a failed one logged and tried again at the next. No pass starts once the
+// signer has closed, a timer taken as it closed included, and a closed signer asks the clock for nothing.
 func (self *ConfigScimSigner) run() {
-	for {
+	defer close(self.runDone)
+	// select takes either of two ready cases at random: a timer taken as the signer closed reads as the end
+	for self.ctx.Err() == nil {
 		if _, err := self.Pass(self.ctx); err != nil && self.ctx.Err() == nil {
 			self.sidecar.log.Infof("[config]a scim_signer pass stopped: %s", err)
 		}
+		if self.ctx.Err() != nil {
+			return
+		}
 		select {
 		case <-self.ctx.Done():
-			return
 		case <-self.sidecar.clock.After(self.settings.PollInterval):
 		}
 	}
@@ -147,12 +157,20 @@ func (self *ConfigScimSigner) run() {
 // One pass (the file header): reads the queue and signs what this sidecar, as the one scim_signer names, may sign at
 // once. A pass with no source, or on a sidecar scim_signer does not name, signs nothing.
 func (self *ConfigScimSigner) Pass(ctx context.Context) (*ConfigScimSignerPass, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	select {
 	case self.passLock <- struct{}{}:
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
 	defer func() { <-self.passLock }()
+	// select takes either of two ready cases at random: a lock taken as ctx ended goes back, and the end answers, so
+	// no pass reads the queue or signs on an ended context
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	pass := &ConfigScimSignerPass{}
 	identity := self.sidecar.currentIdentity()

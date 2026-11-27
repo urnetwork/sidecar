@@ -456,18 +456,23 @@ func (self *DnsWatch) Close() {
 	<-self.done
 }
 
-// Runs a pass about every Interval, jittered, until ctx ends.
+// Runs a pass about every Interval, jittered, until ctx ends. No pass starts once ctx has ended, a wait whose timer
+// fired with the end included, so the end leaves no pass to fail its lookups and mark the watch degraded; an ended
+// ctx asks the clock for nothing.
 func (self *DnsWatch) run(ctx context.Context) {
 	defer close(self.done)
-	for {
+	for ctx.Err() == nil {
 		wait := self.settings.Interval
 		if 0 < self.settings.Jitter {
 			wait += time.Duration(rand.Int64N(int64(2*self.settings.Jitter))) - self.settings.Jitter
 		}
 		select {
 		case <-ctx.Done():
-			return
 		case <-self.clock.After(max(wait, self.settings.PassMinWait)):
+		}
+		// select takes either of two ready cases at random: a timer that fired as ctx ended reads as the end
+		if ctx.Err() != nil {
+			return
 		}
 		self.Pass(ctx)
 	}
@@ -495,9 +500,18 @@ const dnsWatchMailMxPreference = 10
 // same are a split, asked once more before it alarms, so a health drop between them does not. Whatever the once more
 // gathers stands in the first asking's place: a split again alarms; answers that agree are judged; none judge nothing,
 // since the split the first asking saw could not be told from a change in between.
+//
+// A ctx that has ended, before the pass or while it waited for the one running, runs none, alarms nothing and leaves
+// the status as it stood.
 func (self *DnsWatch) Pass(ctx context.Context) bool {
+	if ctx.Err() != nil {
+		return false
+	}
 	self.passLock.Lock()
 	defer self.passLock.Unlock()
+	if ctx.Err() != nil {
+		return false
+	}
 	items, err := self.items(ctx)
 	if err != nil {
 		// no zone, so no expectation the pass could hold the resolvers to: the next pass tries again
