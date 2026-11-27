@@ -518,7 +518,7 @@ func (self *SessionGatewayCall) takeInput(ctx context.Context, input []map[strin
 		nodes = append(nodes, &sessionGatewayCallNode{chainSha256: chainSha256, form: form})
 		parentChain = chainSha256[:]
 	}
-	runIds := recorder.index.candidates(runId, self.binding.Resumes)
+	runIds := recorder.index.candidates(runId, self.binding.GrantId, self.binding.Resumes)
 	held := 0
 	for _, node := range nodes {
 		heldRunId, nodeId, ok := self.heldIn(runIds, node.chainSha256)

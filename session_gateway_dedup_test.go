@@ -312,3 +312,18 @@ func TestSessionGatewayCodexShapedTurnsLineUp(t *testing.T) {
 		t.Errorf("the second turn's context: exact %v, params %s", ended.Context.GetExact(), ended.Context.GetParams())
 	}
 }
+
+// A run of another grant named as resumed is passed over: the session starts its own tree, sharing nothing with it.
+func TestSessionGatewayResumeOfAnotherGrantPassedOver(t *testing.T) {
+	world := newTestSessionGatewayWorld(t)
+	prompt := testResponsesUser("a synthetic prompt both sessions send")
+	other := world.bound()
+	other.GrantId = sidecar.NewId()
+	world.call(other, testResponsesBody("You are Codex.", prompt), "req-other")
+	resumed := world.bound()
+	resumed.Resumes = []sidecar.Id{other.RunId}
+	call, ended, _ := world.call(resumed, testResponsesBody("You are Codex.", prompt, testResponsesUser("and more")), "req-resumed")
+	if ended.Continues != nil || call.InputRunIds()[0] != resumed.RunId {
+		t.Errorf("a session resumed another grant's run: %+v, %v", ended.Continues, call.InputRunIds())
+	}
+}

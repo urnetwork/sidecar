@@ -302,8 +302,9 @@ func (self *SessionGatewayIndex) grantOf(runId Id) (Id, bool) {
 }
 
 // The runs a request of runId looks for its prefix in, its own first: the runs it continues, transitively, then
-// resumed, each once, at most GatewayResumeRunCount.
-func (self *SessionGatewayIndex) candidates(runId Id, resumed []Id) []Id {
+// resumed, each once, at most GatewayResumeRunCount; a resumed run the index holds under another grant than grantId is
+// passed over, since a session resumes only its own grant's (§24.8's resume row).
+func (self *SessionGatewayIndex) candidates(runId Id, grantId Id, resumed []Id) []Id {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	count := max(self.settings.GatewayResumeRunCount, 1)
@@ -318,6 +319,9 @@ func (self *SessionGatewayIndex) candidates(runId Id, resumed []Id) []Id {
 		}
 	}
 	for _, resumedRunId := range resumed {
+		if run, ok := self.runs[resumedRunId]; ok && run.grantId != grantId {
+			continue
+		}
 		if !idsContain(runIds, resumedRunId) && len(runIds) < count {
 			runIds = append(runIds, resumedRunId)
 		}
