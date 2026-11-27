@@ -1,6 +1,6 @@
 --- a/$HOME/.codex/config.toml
 +++ b/$HOME/.codex/config.toml
-@@ -11,3 +11,37 @@
+@@ -11,3 +11,55 @@
  
  [profiles.review]
  model = "review-example"
@@ -15,6 +15,15 @@
 +[mcp_servers.ur.tools.bridge_forward]
 +approval_mode = "prompt"
 +
++[mcp_servers.ur.tools.calendar_add]
++approval_mode = "prompt"
++
++[mcp_servers.ur.tools.calendar_delete]
++approval_mode = "prompt"
++
++[mcp_servers.ur.tools.calendar_update]
++approval_mode = "prompt"
++
 +[mcp_servers.ur.tools.directory_request]
 +approval_mode = "prompt"
 +
@@ -22,6 +31,15 @@
 +approval_mode = "prompt"
 +
 +[mcp_servers.ur.tools.dns_set]
++approval_mode = "prompt"
++
++[mcp_servers.ur.tools.enclave_create]
++approval_mode = "prompt"
++
++[mcp_servers.ur.tools.enclave_delete]
++approval_mode = "prompt"
++
++[mcp_servers.ur.tools.enclave_start]
 +approval_mode = "prompt"
 +
 +[mcp_servers.ur.tools.mail_alias_create]

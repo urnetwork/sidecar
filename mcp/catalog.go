@@ -7,13 +7,16 @@
 // makes the daemon's catalog from every registration linked into the build.
 //
 // mcpCatalogDesign is §16.5's table: each name, its tier, whether a W tool may act outward, whether it takes uses,
-// and the task that owns it (MCP.md's "who builds which tool"). mcpCatalogUnbuilt names the ones whose owners have not
-// landed: the catalog test fails when a design name is neither registered nor listed there, or registered while still
-// listed, so a gap between plans shows as a failing test, never as a missing tool. An owner that lands its tools
-// removes them from the list in the same change. A registered evs or search tool that reports nothing to McpGuard
-// fails it as well (mcpCatalogGuarded), since §16.6's repo rows judge only what a tool reports, and so does a tool
-// whose uses differ from its row: mail_send takes uses and every other tool none (owner decision 613), so an agent asks
-// for a template through mail_send alone and every other O tool files one use.
+// and the task that owns it (MCP.md's "who builds which tool"), with DESIGN-COMPUTE §15.2's rows added to it at their
+// tiers (CSURF-M11-02). mcpCatalogUnbuilt names the ones whose owners have not landed: the catalog test fails when a
+// design name is neither registered nor listed there, so a gap between plans shows as a failing test, never as a
+// missing tool. A §16.5 owner that lands its tools removes them from the list in the same change, and one registered
+// while still listed fails. §15.2's rows are the one exception (CONTRACTS C-29): no compute area edits this file, so a
+// compute tool registered and still listed passes, and the review phase prunes the list. Every registered tool is held
+// to its row, listed or not. A registered evs or search tool that reports nothing to McpGuard fails it as well
+// (mcpCatalogGuarded), since §16.6's repo rows judge only what a tool reports, and so does a tool whose uses differ from
+// its row: mail_send takes uses and every other tool none (owner decision 613), so an agent asks for a template
+// through mail_send alone and every other O tool files one use.
 //
 // Safe for concurrent use; registration happens before serving.
 
@@ -157,14 +160,15 @@ func NewDaemonMcpCatalog(server *McpServer, sink McpCallSink) *McpCatalog {
 	return catalog
 }
 
-// One §16.5 tool: its tier, whether a W tool may run an outward action, whether it takes uses, and the task that owns
-// it.
+// One §16.5 tool: its tier, whether a W tool may run an outward action, whether it takes uses, the task that owns it,
+// and whether it is one of DESIGN-COMPUTE §15.2's rows, which may stay listed unbuilt once registered (CONTRACTS C-29).
 type mcpCatalogDesignTool struct {
 	name     string
 	tier     McpTier
 	mayAct   bool
 	multiUse bool
 	owner    string
+	compute  bool
 }
 
 // §16.5's table, by its rows (MCP.md's "who builds which tool"; C-14, C-15).
@@ -212,15 +216,62 @@ var mcpCatalogDesign = []mcpCatalogDesignTool{
 	{name: "search", tier: McpTierRead, owner: "SEARCH-M10-29"},
 	{name: "search_agents", tier: McpTierRead, owner: "SEARCH-M10-29"},
 	{name: "search_status", tier: McpTierRead, owner: "SEARCH-M10-29"},
-	// DESIGN-COMPUTE §28.4's, which the support switch registers (tools_support.go)
-	{name: "support_send", tier: McpTierOutward, owner: "support-skill"},
-	{name: "support_list", tier: McpTierRead, owner: "support-skill"},
-	{name: "support_read", tier: McpTierRead, owner: "support-skill"},
+
+	// DESIGN-COMPUTE §15.2's rows, added to §16.5's catalog with its tiers (CSURF-M11-02), each owned by its area's
+	// tool task and none taking uses (owner decision 613). A tool §15.2 makes W, and O by kind 24 or 26 in a tainted
+	// run or for a write, may act: enclave_exec, agent_send, agent_broadcast and service_call. enclave_stop is W, refused
+	// in a tainted session; enclave_start is O, a kind 19. External harnesses get models through the gateway, so there is
+	// no models_list or inference tool; there is no web_fetch (Q-FETCH-5), no connection_request, which only a person in
+	// the apps or at the terminal answers (Q-CONN-12), no tool for checkout, auto-renew, refunds or promotion codes
+	// (§14.3), and none that acknowledges a disclosure (D-CSURF-1): catalog_compute_test.go holds the table to that.
+	{name: "compute_balance", tier: McpTierRead, owner: "BAL-M12-20", compute: true},
+	{name: "compute_spend", tier: McpTierRead, owner: "BAL-M12-20", compute: true},
+	{name: "enclave_list", tier: McpTierRead, owner: "ENC-M14-29", compute: true},
+	{name: "enclave_status", tier: McpTierRead, owner: "ENC-M14-29", compute: true},
+	{name: "enclave_create", tier: McpTierOutward, owner: "ENC-M14-29", compute: true},
+	{name: "enclave_stop", tier: McpTierWrite, owner: "ENC-M14-29", compute: true},
+	{name: "enclave_start", tier: McpTierOutward, owner: "ENC-M14-29", compute: true},
+	{name: "enclave_delete", tier: McpTierOutward, owner: "ENC-M14-29", compute: true},
+	{name: "enclave_exec", tier: McpTierWrite, mayAct: true, owner: "ENC-M14-29", compute: true},
+	// §20.10's tiers
+	{name: "agent_register", tier: McpTierWrite, owner: "SKILL-M11-07", compute: true},
+	{name: "agent_summary", tier: McpTierWrite, owner: "SKILL-M11-07", compute: true},
+	{name: "agent_list", tier: McpTierRead, owner: "SKILL-M11-07", compute: true},
+	{name: "agent_find", tier: McpTierRead, owner: "SKILL-M11-07", compute: true},
+	{name: "agent_send", tier: McpTierWrite, mayAct: true, owner: "SKILL-M11-07", compute: true},
+	{name: "agent_broadcast", tier: McpTierWrite, mayAct: true, owner: "SKILL-M11-07", compute: true},
+	{name: "agent_inbox", tier: McpTierRead, owner: "SKILL-M11-07", compute: true},
+	{name: "agent_close", tier: McpTierWrite, owner: "SKILL-M11-07", compute: true},
+	// the only web search external harnesses get, since the gateway serves none (§21.7, Q-SRCH-7); its name stays
+	// web_search beside `ur web-search` (compute-plan-ur-search-collision, QD-1382)
+	{name: "web_search", tier: McpTierRead, owner: "SRCH-M13-11", compute: true},
+	{name: "listeners_list", tier: McpTierRead, owner: "LSTN-M13-15", compute: true},
+	{name: "calendar_list", tier: McpTierRead, owner: "MAILCAL-M13-11", compute: true},
+	{name: "calendar_add", tier: McpTierOutward, owner: "MAILCAL-M13-11", compute: true},
+	{name: "calendar_update", tier: McpTierOutward, owner: "MAILCAL-M13-11", compute: true},
+	{name: "calendar_delete", tier: McpTierOutward, owner: "MAILCAL-M13-11", compute: true},
+	{name: "connections_list", tier: McpTierRead, owner: "CONN-M13-10", compute: true},
+	{name: "service_call", tier: McpTierWrite, mayAct: true, owner: "CONN-M13-10", compute: true},
+	// §28.4's, which the support switch registers (tools_support.go)
+	{name: "support_send", tier: McpTierOutward, owner: "support-skill", compute: true},
+	{name: "support_list", tier: McpTierRead, owner: "support-skill", compute: true},
+	{name: "support_read", tier: McpTierRead, owner: "support-skill", compute: true},
 }
 
-// The design names whose owners have not landed their tools: every one, at MCP-M3-12. An owner removes its names
-// in the change that registers them; none is left.
+// The design names whose owners have not landed their tools: every one, at MCP-M3-12. A §16.5 owner removes its names
+// in the change that registers them, and none of those is left. DESIGN-COMPUTE §15.2's stay here, registered or not,
+// until the review phase prunes them (CONTRACTS C-29).
 var mcpCatalogUnbuilt = []string{
+	// BAL-M12-20's, which register once their rows are here (tools_compute.go)
+	"compute_balance", "compute_spend",
+	"enclave_list", "enclave_status", "enclave_create", "enclave_stop", "enclave_start", "enclave_delete", "enclave_exec",
+	// SKILL-M11-07's, which register once their rows are here (tools_agents.go)
+	"agent_register", "agent_summary", "agent_list", "agent_find", "agent_send", "agent_broadcast", "agent_inbox",
+	"agent_close",
+	"web_search",
+	"listeners_list",
+	"calendar_list", "calendar_add", "calendar_update", "calendar_delete",
+	"connections_list", "service_call",
 	// registered only once the release's support switch is on, at G-SUP-service (DESIGN-COMPUTE §28.21)
 	"support_send", "support_list", "support_read",
 }
@@ -233,21 +284,26 @@ func mcpCatalogGuarded(name string) bool {
 }
 
 // Holds a catalog to §16.5: every registered tool a design name with its tier, hints and uses, every evs and search
-// tool reporting its targets to McpGuard, and every design name registered or still unbuilt, never both. The catalog
-// test runs it on the daemon's catalog.
+// tool reporting its targets to McpGuard, and every design name registered or still unbuilt, never both but for
+// §15.2's compute rows (CONTRACTS C-29). The catalog test runs it on the daemon's catalog.
 func checkMcpCatalog(catalog *McpCatalog) error {
+	return checkMcpCatalogAgainst(catalog, mcpCatalogDesign, mcpCatalogUnbuilt)
+}
+
+// checkMcpCatalog over a design table and its unbuilt names, which a test plants.
+func checkMcpCatalogAgainst(catalog *McpCatalog, designTable []mcpCatalogDesignTool, unbuiltNames []string) error {
 	registered := map[string]*mcpCatalogTool{}
 	for _, tool := range catalog.sorted() {
 		registered[tool.tool.Name] = tool
 	}
 	designNames := map[string]bool{}
 	errs := []string{}
-	for _, design := range mcpCatalogDesign {
+	for _, design := range designTable {
 		designNames[design.name] = true
 		tool, isRegistered := registered[design.name]
-		unbuilt := slices.Contains(mcpCatalogUnbuilt, design.name)
+		unbuilt := slices.Contains(unbuiltNames, design.name)
 		switch {
-		case isRegistered && unbuilt:
+		case isRegistered && unbuilt && !design.compute:
 			errs = append(errs, fmt.Sprintf("%s is registered and still listed unbuilt", design.name))
 		case !isRegistered && !unbuilt:
 			errs = append(errs, fmt.Sprintf("%s (%s) is neither registered nor listed unbuilt", design.name, design.owner))
@@ -277,7 +333,7 @@ func checkMcpCatalog(catalog *McpCatalog) error {
 			errs = append(errs, fmt.Sprintf("%s is no §16.5 tool", name))
 		}
 	}
-	for _, name := range mcpCatalogUnbuilt {
+	for _, name := range unbuiltNames {
 		if !designNames[name] {
 			errs = append(errs, fmt.Sprintf("%s is listed unbuilt and is no §16.5 tool", name))
 		}
