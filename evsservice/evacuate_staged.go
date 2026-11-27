@@ -158,8 +158,8 @@ func (self *evacuateRun) decideStaged(minute *evacuateMinute, place *protocol.Ev
 			case newest.CommitMinuteEnd.IsZero():
 				// replaced by a version whose commit the head no longer shows: keep, as above
 				write = true
-			case self.now.Before(newest.CommitMinuteEnd.Add(evsPurgeMinAllowance)):
-				// replaced under 60 s ago: readers may still be inside the allowance
+			case self.now.Before(newest.CommitMinuteEnd.Add(DefaultPurgerSettings().MinAllowance)):
+				// replaced inside §11.13's least allowance, the purge's floor: readers may still be inside it
 				write = true
 			}
 			if !write {

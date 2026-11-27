@@ -11,8 +11,79 @@
 //
 // The proof is tls-wait-ctx-shape's clock (tlsWaitEndingClock), which ends the context as a wait's timer fires, so
 // both cases are ready when select runs, over 64 rounds, which leave the old coin no chance (at most (1/2)^64) to pass.
-// The engines' cases are in each engine's clock_select_ctx_sweep_test.go, the config writer's in
-// clock_select_ctx_sweep_external_test.go, and the certificate manager's Close in clock_select_ctx_sweep_hooks_test.go.
+// More of the root's cases are in clock_select_ctx_sweep_more_test.go, the engines' in each engine's
+// clock_select_ctx_sweep_test.go, the config writer's in clock_select_ctx_sweep_external_test.go, and the certificate
+// manager's Close in clock_select_ctx_sweep_hooks_test.go.
+//
+// The sweep's account of the other selects on a context's end beside a clock's timer, or beside a wake a clock's
+// AfterFunc pokes, in the repository's non-test files, by where each step past the end goes.
+//
+// Left as they are, the step past the end harmless:
+//
+//	every case ends the wait, or the timer's answers the call: the drains (daemon_socket.go's, dnsservice's api and
+//	  edge, evsservice/engine.go's two, gkmservice's, computeservice's waitInFlight, socket_listen.go's,
+//	  socket_platform_listen.go's, smtpedgeservice's drainConnections, tlsedgeservice's Drain, evsservice/purge.go's
+//	  Drain); the answers (daemon_events.go next, daemon_search_budget.go Admit, harness_daemon.go's events,
+//	  harness_ui.go Ask, mail_local_credential.go Check, pushservice's long poll, stream_open.go OpenStream,
+//	  rpc_call.go awaitPending, whose DEADLINE_EXCEEDED for CANCELLED comes only at the call's own deadline, where the
+//	  peer's timeout_ms ends the handler as Cancel would, bridge_discovery_component.go handleWatch, search_limits.go
+//	  admit, search_remote_search.go ask, search_more.go's progress, evs_local_lock.go lockIn); the clock contexts
+//	  (rpc_headcheck.go clockContext, stream_peer.go clockContextUntil); and those that already answer the end after
+//	  their select (api_service_token_retry.go, tls_custom_domain.go wait, gkm_rekey.go take, the CT watch's and the
+//	  certificate manager's loops)
+//	no context case, or no timer: enclave_container.go kill, infer_engine_process.go Generate,
+//	  smtpedgeservice/connection.go watch, mxedgeservice/splice.go run, gkm_recovery.go followRecoveryBinding,
+//	  mcp/resources.go run, device/bridge_reach.go runReach, tlsedgeservice/splice.go admitChunk, pushservice's wake
+//	  sender dispatcher, socketsservice's runRemovals
+//	the step past the end checks the context first: acl_gate.go's loader, evsservice/purge.go run (next answers
+//	  stop), acl_contract.go run (loadHeads), sidecar_core.go run, envelope_reassembly.go run (its expire gives back
+//	  reservations, and close waits for it), and cli/daemon_desktop_tls.go's two loops
+//	the step past the end is a call that takes the dead context, which refuses it before any I/O (net/http checks it
+//	  before dialing; the stores, Redis, gkm and evs take it), with nothing local, durable or seen by another reader
+//	  first: attest_policy_fetch.go run, compute_client.go run, config_client.go run, dns_hint.go runHints,
+//	  dns_label_refresh.go run, acl_follow.go's ack, daemon_socket.go probe (net.Dialer), evs_client.go
+//	  awaitFirstGeneration, evs_deposit.go waitDropKey, evs_drop_preview.go, evs_epoch_read.go, evs_http.go send,
+//	  evs_repo.go callLifecycle, evs_reseed.go, record_evs.go post, record_vault.go awaitVault, mail_config_write.go
+//	  createRecord, mail_send_result.go runSendWatch, mail_component_receive.go's zone wait, record_approval_state.go
+//	  Run, push_poll.go run, harness_retry.go waitUntil, infer_compute_client.go wait, infer_download.go's waits,
+//	  model/compute_model_mirror.go readChunk, host_edge_clients.go refreshAuth, sidecar_generation_http.go's two,
+//	  certsservice's caaWait and solver wait, dnsservice/feed.go parkUntil, evsservice's budget_client.go runWeights,
+//	  quota_gate.go, hdd_admission.go, collect_markers.go Collect, marker.go waitOverMarker, drop_job.go dropPace,
+//	  epoch_copy.go pace, push_commit.go takeOver, outcome.go, refuse.go and quota_read_gate.go Wait, gkmservice's
+//	  listNetworks, mxedgeservice's direct_mx.go and records.go runs and its wake hold's dial, smtp_outcome.go
+//	  progress, smtpedgeservice/send_log.go run, pushservice's wake_enqueue.go, socketsservice's gate_projection.go,
+//	  removeClient, runKills and runSweeps, smtpproof's probe pace and key waits, and the ur commands' waits
+//	  (cli/cmd_bridge.go, cmd_compute.go, cmd_login_device.go, commands.go connectDaemon)
+//	the end closes what the retry would use, the race an accept or read in flight at the end has: mxedgeservice's
+//	  Serve, dnsservice/edge.go's readPackets and Serve, tlsedgeservice's PROXY listener, and cli's mDNS queries
+//	the same step the end takes anyway: support_log.go run (the end's case flushes), tls_reach_receipt.go run (close
+//	  writes what the loop has not), bridge_daemon_forward.go's UDP sweep (it closes conns the end closes), daemon.go
+//	  idle (only Close), keys_instance.go run (the auto-lock it was due), acl_gate.go run (the epoch and dirty marks;
+//	  no loader loads past the end)
+//	test support and upstream: sidecartest's fakes and drivers, built into no release leg, and third_party's
+//	  go-sev-guest and go-tdx-guest, kept as upstream ships them
+//
+// Left for a later pass, the step past the end outward or durable and its fix not built here:
+//
+//	held by another lane when the sweep ran: agents_deliver.go, agents_status.go, bridge_forward.go
+//	whose file brings a settings migration with it (QD-702): rpc_headcheck_stop.go run, whose alarm owner decision
+//	  129 fixes outside settings, beside a document bound and witness_bound_hours' range
+//	outward or durable past the end: bridge_component.go catchUp (the catch-up alarm) and fetchBindings (the binding
+//	  cache saved, a compile wanted), bridge_discovery_component.go run, viewer and watch, daemon_search_serve.go
+//	  follow, directory_client.go Run, device/bridge.go run, device/bridge_link.go run, evs_local_receive.go runQueue,
+//	  evs_local_sync.go run, indexer_search.go Run, mail_component.go runGeneration, mail_direct.go runAssigned,
+//	  mail_imap_session.go Idle, mail_ingest.go's passes, rpc_headcheck_rounds.go run and rpc_headcheck.go
+//	  followFetch, sidecar_scim_signer.go run, smtp_outbox.go Run, socket_share.go run, stream_keepalive.go, and the
+//	  ur daemon's cli/bridge_shared_block.go, discovery proxies, relay reconnect, resume.go clock cap and tun device's
+//	  sync and local loops (real time, with no clock seam a fake clock drives)
+//	to judge on a closer reading: bridge_share.go run, evs_component.go's mapper and repair loops, evs_subscribe.go
+//	  run, evs_write.go waitPathEpoch, gkm_directory.go and gkm_group.go's waits, gkm_upkeep.go run,
+//	  gkmservice/reconciler.go run, host_quota_batcher.go, record_batch.go and socket_registrar.go's runs,
+//	  infer_cache_secret.go enclaveWait, mail_config.go run, push_state.go, pushservice/publisher.go and
+//	  wake_sender.go wait, search_member_host.go, search_remote_ask.go and search_sync.go, sidecar_config_follower.go,
+//	  smtp_prover_host.go Run, support_client.go run, the engines' readiness probes (mxedge's, smtpedge's and
+//	  sockets'), evsservice's budget_loop.go, hdd_loop.go, budget_client.go runAccounts, drop_delete.go and
+//	  gc_orphans.go paces, dnsservice/feed.go's snapshot writer, and cli's darwin and mDNS gatherers
 
 package sidecar
 

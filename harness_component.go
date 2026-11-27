@@ -33,6 +33,8 @@ type HarnessSources struct {
 	BudgetRaiser HarnessBudgetRaiser
 	AutoVerdicts HarnessAutoVerdicts
 	Foreground   HarnessForeground
+	// SKILL's delivery of a reopened agent's untaken messages (harness_reopen.go).
+	Untaken HarnessUntaken
 }
 
 // An owner's installer: sets its own sources, reading the Sidecar at use, never while it installs.
@@ -82,6 +84,7 @@ func installHarnessSources(sidecar *Sidecar, registrations []*harnessSourcesRegi
 			{name: "BudgetRaiser", was: sources.BudgetRaiser, isNow: attempt.BudgetRaiser},
 			{name: "AutoVerdicts", was: sources.AutoVerdicts, isNow: attempt.AutoVerdicts},
 			{name: "Foreground", was: sources.Foreground, isNow: attempt.Foreground},
+			{name: "Untaken", was: sources.Untaken, isNow: attempt.Untaken},
 		} {
 			if field.was != nil && field.was != field.isNow {
 				replaced = append(replaced, field.name)
@@ -204,6 +207,15 @@ func (self *harnessSidecarRuns) Mark(ctx context.Context, runId Id, mark string)
 	return runs.Mark(ctx, runId, mark)
 }
 
+// AddGap, on the network's store: a gap counted against the run's coverage.
+func (self *harnessSidecarRuns) AddGap(ctx context.Context, runId Id, code string) error {
+	runs, err := self.store()
+	if err != nil {
+		return err
+	}
+	return runs.AddGap(ctx, runId, code)
+}
+
 // Marks, unread where there is no store.
 func (self *harnessSidecarRuns) Marks(runId Id) ([]string, error) {
 	runs, err := self.store()
@@ -271,6 +283,12 @@ func newSidecarHarness(sidecar *Sidecar) (*sidecarHarness, error) {
 		// the release's support switch (§28.21): off, no agent lists the support tools or their skill
 		support = sidecar.Support
 	}
+	// the session journal's recorder observes the Harness's events (harness_record.go)
+	var observer func(agentId Id, event *HarnessEvent)
+	observed, hasObserver := sources.Journal.(harnessObservedJournal)
+	if hasObserver {
+		observer = observed.observe
+	}
 	harness, err := NewHarness(&HarnessArgs{
 		Settings:     settings,
 		Log:          sidecar.log,
@@ -288,9 +306,18 @@ func newSidecarHarness(sidecar *Sidecar) (*sidecarHarness, error) {
 		Foreground:   sources.Foreground,
 		Support:      support,
 		Network:      &harnessSidecarNetwork{sidecar: sidecar},
+		Observer:     observer,
+		OpenRuns: &harnessStoreOpenRuns{store: func() (SidecarStore, error) {
+			return sidecar.LocalStore().Directory(harnessComponentName, harnessComponentName)
+		}},
+		RunReader: &harnessSidecarRunReader{sidecar: sidecar},
+		Untaken:   sources.Untaken,
 	})
 	if err != nil {
 		return nil, err
+	}
+	if hasObserver {
+		observed.bind(harness)
 	}
 	return &sidecarHarness{sidecar: sidecar, harness: harness, component: &HarnessComponent{harness: harness}}, nil
 }
@@ -309,6 +336,14 @@ func (self *Sidecar) Harness() (*Harness, error) {
 	}
 	component.addOnce.Do(func() {
 		_, component.addErr = self.AddComponent(component.component)
+		if component.addErr == nil {
+			// the runs a daemon held open when it stopped are taken up again (harness_reopen.go)
+			go func() {
+				if _, err := component.harness.Reopen(self.ctx); err != nil {
+					self.log.Warningf("[harness]runs were not reopened: %v", err)
+				}
+			}()
+		}
 	})
 	if component.addErr != nil {
 		return nil, component.addErr
