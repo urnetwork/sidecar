@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/urnetwork/sidecar"
+	"github.com/urnetwork/sidecar/model"
 	"github.com/urnetwork/sidecar/sidecartest"
 	"github.com/urnetwork/sidecar/sidecartest/crossslot"
 )
@@ -22,6 +23,7 @@ func testComputeFamilyKeys() map[string][]string {
 	return map[string][]string{
 		"compute-1":  {ComputeNetworkRedisKey(networkId), ComputeDirectInFlightRedisKey(hotkey[:]), ComputeDirectPendingRedisKey(hotkey[:])},
 		"compute-2":  {ComputePromoFailureRedisKey(networkId)},
+		"compute-3":  {model.ComputeAbuseHoldRedisKey(networkId)},
 		"compute-4":  {ComputeEnclaveRedisKey(testComputeId("enclave-1"))},
 		"compute-6":  {ComputeBudgetRedisKey(networkId, testComputeId("agent-1"))},
 		"compute-9":  {ComputeCollateralRedisKey(sha256.Sum256([]byte("a vendor's item")))},

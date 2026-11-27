@@ -6,8 +6,7 @@
 // The address is the one the broker sees: X-UR-Forwarded-For, which every ingress in front of a block overwrites
 // with the address and port it accepted the client's connection from (server's router.SetIngressHeaders, warp's
 // nginx), or the connection's peer for a request no ingress fronts. It is read in memory for the one lookup and kept
-// nowhere: no log line, no error text, no metric label, no Redis key, no row (I-13; question
-// carch-m12-01-compute-hold-row amends compute-5 for it). A header that is not one address, which no ingress writes,
+// nowhere: no log line, no error text, no metric label, no Redis key, no row (I-13; compute-5 names it, QD-1438). A header that is not one address, which no ingress writes,
 // and a lookup that cannot answer refuse, unavailable: an admission that cannot check its region does not pass. An
 // address the database places nowhere, a reserved or unannounced one, is in no listed region and passes.
 //

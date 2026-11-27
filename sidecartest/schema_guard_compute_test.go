@@ -31,6 +31,8 @@ var testComputeRowFamilies = map[string][]MetadataFamily{
 	"compute-3": {
 		{Kind: MetadataFamilyTable, Name: "compute_charge_lot"}, {Kind: MetadataFamilyTable, Name: "compute_charge_total"},
 		{Kind: MetadataFamilyTable, Name: "compute_charge_pruned"}, {Kind: MetadataFamilyTable, Name: "compute_account"},
+		// an operator's hold and its projection (CARCH-M12-01, QD-1438)
+		{Kind: MetadataFamilyTable, Name: "compute_abuse_hold"}, {Kind: MetadataFamilyRedis, Name: "{cmp_}:"},
 	},
 	"compute-4": {
 		{Kind: MetadataFamilyRedis, Name: "{cmpe_}"}, {Kind: MetadataFamilyTable, Name: "compute_enclave"},
