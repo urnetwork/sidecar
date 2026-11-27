@@ -27,11 +27,15 @@ func newUrDaemonGateway(stateDirectory string, settings *sidecar.SidecarSettings
 	})
 }
 
-// Registers gateway's control methods on daemon, over the networks it hosts, and holds its port where a grant stands. A
-// port it could not bind is logged and named by ur status; nothing here fails the daemon's start.
+// Registers gateway's control methods on daemon, over the networks it hosts, mounts its API fronts (DESIGN-COMPUTE
+// §8.4, §8.5: POST /v1/responses and the fronts after it, each call refused until the recorder GW-M12-06 sets is
+// there, IC-19), and holds its port where a grant stands. A port it could not bind is logged and named by ur status;
+// nothing here fails the daemon's start. The gateway's Close drains the fronts' calls in flight first.
 func startUrDaemonGateway(daemon *sidecar.Daemon, gateway *sidecar.GatewayServer, log sidecar.Logger) error {
 	gateway.SetHosts(sidecar.GatewayDaemonHosts(daemon))
-	for _, method := range gateway.DaemonMethods() {
+	fronts := gateway.MountFronts(&sidecar.GatewayFrontsArgs{})
+	methods := append(gateway.DaemonMethods(), fronts.DaemonMethods()...)
+	for _, method := range methods {
 		if err := daemon.RegisterMethod(method); err != nil {
 			return err
 		}

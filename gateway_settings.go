@@ -102,6 +102,54 @@ type GatewaySettings struct {
 	// unbound. A name matches as itself or followed by "-", as Codex's native binary is named per target. Codex:
 	// codex; Claude Code: claude, and node, which runs it from npm.
 	HarnessProcessNames map[string][]string
+	// The header each harness names its session in, which a bound call's run is found by (§8.9: each harness's adapter
+	// mapping its own header to the session ids its hooks report): Codex's session-id, Claude Code's
+	// x-claude-code-session-id. A harness with none here binds its calls to its process's newest run.
+	HarnessSessionHeaders map[string]string
+
+	// §8.5's keepalive: a `: ping` comment (Responses, Chat Completions) or a ping event (Messages) once an answer's
+	// stream has carried no byte for this long: 15 s, well inside Codex's and Claude Code's idle timeouts (5 min), so a
+	// long prefill or a queued remote call never reads as a dead stream. Non-positive sends none.
+	KeepaliveInterval time.Duration
+	// How long a front waits for the router's first event before it sends its answer's headers, so a failure that is
+	// the stream's first event is still answered in its API's HTTP status (a 503 tee_unverified, a 429
+	// insufficient_quota) rather than as a stream's terminal event: 10 s, past which the answer starts, keepalives
+	// with it. Non-positive starts every answer at once.
+	FirstEventWait time.Duration
+	// The random bytes of an id the gateway makes up, in hex after its prefix: a response's resp_, an item's msg_, rs_
+	// and fc_, a completion's chatcmpl-: 24, as long as the ids the APIs' own servers give.
+	IdRandomByteCount int
+	// The most bytes of an Idempotency-Key a front takes (draft-ietf-httpapi-idempotency-key-header-09 bounds none): 256,
+	// past a UUID or any key a client library makes. A longer one is refused 400.
+	IdempotencyKeyByteCount int
+
+	// §8.5's images, re-encoded smaller before a call so a session's screenshots stay small: an image whose long edge
+	// passes ImageMaxEdgePixelCount, or whose pixels pass ImageMaxPixelCount, is downscaled by whole-pixel area averages
+	// to fit both, deterministically, so the session entries dedupe it across turns. 1568 px and 1,192,464 px (1092²),
+	// the sizes vision models take whole before tiling. The catalog carries no input size per model (§6.3), so these
+	// stand for every model's. Non-positive re-encodes nothing.
+	ImageMaxEdgePixelCount int
+	ImageMaxPixelCount     int
+	// The most pixels an image's header may declare before a front decodes it: 64 Mi, past any screenshot; a larger
+	// one is refused 400 unread, so a small file that declares a vast image takes no memory. Non-positive refuses every
+	// image that needs a re-encode.
+	ImageDecodePixelCount int
+	// The quality a JPEG is re-encoded at, 1 to 100: 85.
+	ImageJpegQuality int
+
+	// §8.5's kept responses (GW-M12-05): how long a call's answer is kept once the call ends, for a retry of the same
+	// operation to be answered from it, and how long an Idempotency-Key is remembered: 10 min. Non-positive keeps none,
+	// so every request is a new call.
+	KeptResponseLife time.Duration
+	// The most bytes of one call's answer that are kept: 16 MiB, past any answer's tokens. A call whose answer passes it
+	// stops being kept, so its retry is a new call. Non-positive keeps none.
+	KeptResponseByteCount int
+	// The most calls one network's table holds, in flight and kept: 256. A call past it is not kept, the oldest ended
+	// one dropped first.
+	KeptCallCount int
+	// How long a planned restart (an upgrade, ur daemon restart) waits for calls in flight before the gateway stops: 10
+	// min. New calls are refused 503 meanwhile, with BusyRetryAfter. Non-positive waits for none.
+	PlannedRestartWait time.Duration
 }
 
 // The component's defaults, the only place one is set.
@@ -144,5 +192,24 @@ func DefaultGatewaySettings() *GatewaySettings {
 			"codex":       {"codex"},
 			"claude-code": {"claude", "node"},
 		},
+		HarnessSessionHeaders: map[string]string{
+			"codex":       "Session-Id",
+			"claude-code": "X-Claude-Code-Session-Id",
+		},
+
+		KeepaliveInterval:       15 * time.Second,
+		FirstEventWait:          10 * time.Second,
+		IdRandomByteCount:       24,
+		IdempotencyKeyByteCount: 256,
+
+		ImageMaxEdgePixelCount: 1568,
+		ImageMaxPixelCount:     1092 * 1092,
+		ImageDecodePixelCount:  64 * 1024 * 1024,
+		ImageJpegQuality:       85,
+
+		KeptResponseLife:      10 * time.Minute,
+		KeptResponseByteCount: 16 * 1024 * 1024,
+		KeptCallCount:         256,
+		PlannedRestartWait:    10 * time.Minute,
 	}
 }
