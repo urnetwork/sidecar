@@ -1891,8 +1891,9 @@ The owner answered eleven more questions the build raised implementing DESIGN-CO
 - **Waits for a time (801), the last sites.** Fix track clock-sweep-later-pass set the `Forwarder`'s wait through `ClockAfterAt` (sidecar e9c39b5d), which clock-wait-at-sweep had left while bridge_forward.go was forward-lapse-decision-race's file, and the stream deadlines' through `ClockAfterFuncAt`, the root's unexported delegates leaving (c9d90a1b): owner decision 801's entry says so, and §4.5's `Clock` comment and §22.8's determinism row already name the exported helpers alone.
 - **Landings past the tip's custody-leg failure (QD-1446 to QD-1448, QD-1450).** Four one-time allowances, as QD-1195's was, change no design and take no number: owner/DECISIONS.md records them as an owner instruction after the numbered entries, beside QD-1195's and QD-1227's. The fix they waited on landed with secret-matcher-reader-keys (sidecar 648ccf71).
 - **This file.** The contents table and the heading on adding a decision name 807 as the last entry, where the sixteenth fold's last piece had left 806.
+- **§16.6's wording.** The second piece's secrets rule names the tls and smtp components where it read "those components", which named none.
 
-`build.sh` on this folder reproduces DESIGN.md (SHA-256 `9b474900a09ded93e8aa2971d2569ffd54a7e5e01f8422bfab51e53fa44594b7`) and DESIGN-DEFER.md (SHA-256 `3af6b10c35e06eaa2230e6232dc953d77f4539fe4065623950425ebab41895a6`, unchanged), and the validation shows:
+`build.sh` on this folder reproduces DESIGN.md (SHA-256 `498ed3c720c8ab4c50904016e74bb53f9ccd53da4b6ffea4d98625aaeb86751d`) and DESIGN-DEFER.md (SHA-256 `3af6b10c35e06eaa2230e6232dc953d77f4539fe4065623950425ebab41895a6`, unchanged), and the validation shows:
 
 - **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item and no §2.8 row, so no guard line.
 - **Owner decisions.** All 807 rows are present and cited; APPLY.md's section pairs hold. The allowances take no number, so `MAXD`, the range checks and `LATE_DATES` stay at 807. One open owner question, Q-REPO-6.
