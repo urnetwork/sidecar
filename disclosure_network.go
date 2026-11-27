@@ -559,6 +559,11 @@ func (self *computeNetworkDisclosureActor) ack(ctx context.Context, args *Comput
 	if err := computeNetworkDisclosureActRefusal(args.Origin, args.HarnessAncestor); err != nil {
 		return nil, err
 	}
+	// who may act, before what the text says
+	memberId, err := self.admin()
+	if err != nil {
+		return nil, err
+	}
 	disclosure, err := self.registry.Disclosure(args.Id)
 	if err != nil {
 		return nil, err
@@ -570,10 +575,6 @@ func (self *computeNetworkDisclosureActor) ack(ctx context.Context, args *Comput
 	if args.Version != disclosure.Version() || !shown || disclosure.Revision() < args.Revision {
 		// not this version's text: show the current text again
 		return nil, ErrDisclosureChanged
-	}
-	memberId, err := self.admin()
-	if err != nil {
-		return nil, err
 	}
 	body, err := proto.MarshalOptions{Deterministic: true}.Marshal(&protocol.DisclosureAck{
 		NetworkId:    self.view.networkId().Bytes(),
