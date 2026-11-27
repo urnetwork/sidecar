@@ -1,8 +1,9 @@
 //go:build !ios_extension && !sidecar_http
 
 // The support client as a Sidecar's compute component (DESIGN-COMPUTE §28.4, compute_sidecar.go): constructed as the
-// Sidecar starts, on its local store's support directory and its host's support log, and closed as it ends. Its
-// sources beyond the Sidecar (support_sources.go) start unset, so until their owners land every message answers
+// Sidecar starts, on its local store's support directory and its host's support log, and closed as it ends. Of its
+// sources beyond the Sidecar (support_sources.go), the policy's support line is the attest component's store's, read
+// at each use (attest_policy_support.go); the rest start unset, so until their owners land every message answers
 // disclosure_required and nothing is posted; and the release's switch, SupportSettings.ServiceEnabled, is off until
 // G-SUP-service passes, so every surface answers ErrSupportUnavailable meanwhile (§28.21).
 
@@ -33,6 +34,7 @@ func newSidecarSupportClient(sidecar *Sidecar) (*SupportClient, error) {
 		},
 		Clock:      sidecar.settings.Clock,
 		BundleHost: &SupportLogBundleHost{Version: Version},
+		Sources:    &SupportSources{Policy: &computePolicySupportSource{sidecar: sidecar}},
 	})
 	if err != nil {
 		return nil, err
