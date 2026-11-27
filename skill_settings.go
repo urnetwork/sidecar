@@ -140,6 +140,56 @@ type SkillSettings struct {
 	WatchRetryWait time.Duration
 	// How many messages one take of untaken threads hands over at once: 1,024, the rest at the next. Positive.
 	UntakenMaxCount int
+
+	// The agent_* tools (§20.8, §20.10; SKILL-M11-07).
+
+	// The most words of a task agent_find ranks agents by: 16, the first ones, enough for any task a person types.
+	// Positive.
+	FindTermMaxCount int
+	// The shortest word agent_find ranks by, in characters: 2, so "ui" and "db" count while "a" does not. Positive.
+	FindTermMinCharCount int
+	// The shortest word that matches another by prefix, in characters: 4, so "limiter" finds "limiters" and "limit"
+	// finds "limiting", while "a" finds nothing. Positive.
+	FindPrefixMinCharCount int
+	// How much a task's word counts where it matches an agent's status task, its activity, its summary or its name:
+	// 3, 2, 1 and 2, the status task naming what the agent works on most directly (§20.8). Not negative.
+	FindTaskWeight     int
+	FindActivityWeight int
+	FindSummaryWeight  int
+	FindNameWeight     int
+	// How much a hit of the agents repo's search index counts for the agent whose status or summary it names: 1, a
+	// near match the index found where the scan's words did not. Not negative.
+	FindIndexWeight int
+	// The most matches agent_find answers: 8, the best first. Positive.
+	FindMatchMaxCount int
+	// How far the best match must stand above the next for agent_find to call it clear, in percent of the next's score:
+	// 150, so a near tie goes to the person to choose (§20.8). At least 100.
+	FindClearMarginPercent int
+	// How long agent_find waits for the agents repo's search index before it ranks by the scan alone: 2 seconds, since
+	// the scan reads every status and summary anyway. Non-positive skips the index.
+	FindIndexWait time.Duration
+	// The most hits of the index agent_find reads: 64. Positive.
+	FindIndexHitCount int
+	// The most messages one agent_inbox answer carries: 64, the rest counted for the next call. Positive.
+	InboxResultMessageCount int
+	// The most bytes of subjects and bodies one agent_inbox answer carries: 128 KiB, past which the rest are counted
+	// for the next call; one message always, whatever its size. Positive.
+	InboxResultByteCount int
+	// The most repos a thread named by its id alone is looked for in: the caller's inbox, the agents repo, me's and each
+	// card's agent repo, at most 1,024, the cards' own bound. Positive.
+	ThreadRepoSearchCount int
+
+	// ur agents, Agents() and the agent graph (§20.8, §15.1, §15.3; SKILL-M11-08).
+
+	// The most edges the agent graph draws: 4,096, launches and conversations, the newest conversations kept. Positive.
+	GraphEdgeMaxCount int
+	// The most summaries, each a version, an agent's view opens: 32, newest first. Positive.
+	SummaryVersionListCount int
+	// How long the daemon's agents.watch waits for a new message before it answers with none: 25 seconds, under ur's
+	// 35-second call bound, so the daemon's answer comes first. Non-positive answers at once.
+	DaemonWatchWait time.Duration
+	// The most messages one agents.watch answer carries: 256, the rest at the next call. Positive.
+	DaemonWatchMessageCount int
 }
 
 // The component's defaults, the only place one is set.
@@ -191,5 +241,26 @@ func DefaultSkillSettings() *SkillSettings {
 		WatchPassMinInterval: time.Second,
 		WatchRetryWait:       30 * time.Second,
 		UntakenMaxCount:      1024,
+
+		FindTermMaxCount:        16,
+		FindTermMinCharCount:    2,
+		FindPrefixMinCharCount:  4,
+		FindTaskWeight:          3,
+		FindActivityWeight:      2,
+		FindSummaryWeight:       1,
+		FindNameWeight:          2,
+		FindIndexWeight:         1,
+		FindMatchMaxCount:       8,
+		FindClearMarginPercent:  150,
+		FindIndexWait:           2 * time.Second,
+		FindIndexHitCount:       64,
+		InboxResultMessageCount: 64,
+		InboxResultByteCount:    128 * 1024,
+		ThreadRepoSearchCount:   1024,
+
+		GraphEdgeMaxCount:       4096,
+		SummaryVersionListCount: 32,
+		DaemonWatchWait:         25 * time.Second,
+		DaemonWatchMessageCount: 256,
 	}
 }
