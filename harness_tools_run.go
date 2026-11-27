@@ -32,6 +32,8 @@ type harnessCallResult struct {
 	durationMs *int64
 	// whether the tool is built into sidecar, whose keep: false the record honors (§24.9)
 	builtIn bool
+	// the tool's record stub, SRCH's web search stub, which the journal keeps for a built-in's keep: false result
+	searchStub []byte
 }
 
 // The tool result message of a settled call; its details left out where they are not to be kept.
@@ -97,6 +99,7 @@ func (self *harnessAgent) runCall(ctx context.Context, toolCall *HarnessPiToolCa
 	result.details = ran.result.Details
 	result.keep = ran.keep
 	result.untrusted = ran.result.Trust == HarnessToolUntrusted
+	result.searchStub = ran.result.SearchStub
 	return result
 }
 
@@ -201,7 +204,7 @@ func (self *harnessAgent) runTools(ctx context.Context, message *HarnessPiMessag
 func (self *harnessAgent) persistResult(ctx context.Context, result *harnessCallResult) (*HarnessPiMessage, error) {
 	timestampMs := self.harness.clock.Now().UnixMilli()
 	journaled := result.message(timestampMs, true)
-	tool := &HarnessJournalTool{Name: result.toolCall.Name, BuiltIn: result.builtIn, KeepFalse: !result.keep}
+	tool := &HarnessJournalTool{Name: result.toolCall.Name, BuiltIn: result.builtIn, KeepFalse: !result.keep, SearchStub: result.searchStub}
 	if _, err := self.journalMessageOf(ctx, journaled, result.untrusted, "tool "+result.toolCall.Name, tool); err != nil {
 		return nil, err
 	}

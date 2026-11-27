@@ -13,6 +13,7 @@
 package sidecar
 
 import (
+	"context"
 	"errors"
 	"fmt"
 )
@@ -77,6 +78,10 @@ func newHarnessToolSet(settings *HarnessSettings, registry *HarnessToolRegistry,
 			}
 			seen[name] = true
 			tool, spec, ok := registry.Tool(name, profile)
+			if available, offered := tool.(HarnessToolAvailable); ok && offered && !available.Available(context.Background()) {
+				// not offered now: left out, never refused (web_search without a search line, §21.11)
+				continue
+			}
 			if !ok {
 				if refuseMissing {
 					return nil, 0, fmt.Errorf("%w: %s is not served in %s", ErrHarnessToolOutsideProfile, name, profile)

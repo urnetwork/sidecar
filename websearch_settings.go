@@ -74,10 +74,12 @@ type WebSearchSettings struct {
 	ObjectiveMaxCharacterCount     int
 	ToolObjectiveMaxCharacterCount int
 
-	// The tool's limits (§21.6): 50 searches a run and 30 a minute an agent, set per agent.
-	RunSearchMaxCount   int
-	AgentSearchMaxCount int
-	AgentSearchWindow   time.Duration
+	// The tool's limits (§21.6): 50 searches a run and 30 a minute an agent, set per agent; a run's count forgotten once
+	// it has searched nothing for a day.
+	RunSearchMaxCount     int
+	AgentSearchMaxCount   int
+	AgentSearchWindow     time.Duration
+	RunCountIdleRetention time.Duration
 	// What the model reads of results (§21.6): each result's excerpts cut at 3,000 characters, the whole at 20,000.
 	ResultExcerptMaxCharacterCount int
 	ExcerptTotalMaxCharacterCount  int
@@ -146,6 +148,7 @@ func DefaultWebSearchSettings() *WebSearchSettings {
 		RunSearchMaxCount:               50,
 		AgentSearchMaxCount:             30,
 		AgentSearchWindow:               time.Minute,
+		RunCountIdleRetention:           24 * time.Hour,
 		ResultExcerptMaxCharacterCount:  3000,
 		ExcerptTotalMaxCharacterCount:   20000,
 		DetailsExcerptMaxCharacterCount: 500,
