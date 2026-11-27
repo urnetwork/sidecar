@@ -231,7 +231,8 @@ func send(ctx context.Context, client *http.Client, settings *RunSettings, url s
 // line, a comment counted; a last event with no blank line after it is dispatched too.
 func parseSse(body []byte, lineByteCount int) ([]*SseEvent, int, error) {
 	scanner := bufio.NewScanner(bytes.NewReader(body))
-	scanner.Buffer(make([]byte, 0, 64*1024), lineByteCount)
+	// the scanner grows its own buffer, up to the line's bound
+	scanner.Buffer(nil, lineByteCount)
 	events := []*SseEvent{}
 	commentCount := 0
 	var current *SseEvent
