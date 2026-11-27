@@ -8,9 +8,9 @@
 //
 //   - exactly one JSON object in valid UTF-8, nothing after it;
 //   - every member name exactly one this file declares at its place, matched by its bytes, none twice in an object,
-//     and no null anywhere a value is declared; the search and services lines are kept as the raw JSON they were,
-//     byte for byte inside the verified bytes, for SRCH and CONN to decode strictly (§21.5, §25.4), and are held here
-//     only to the same names-once, depth, size and count rules;
+//     and no null anywhere a value is declared; the search, services and support lines are kept as the raw JSON they
+//     were, byte for byte inside the verified bytes, for SRCH, CONN and the support client to decode strictly (§21.5,
+//     §25.4, §28.10), and are held here only to the same names-once, depth, size and count rules;
 //   - integers written as integers, within their type; the depth, each object's and array's count, each string's
 //     length and the whole document's size bounded by AttestSettings, which the pipeline that builds a policy reads
 //     too (ATTEST-M12-02);
@@ -135,6 +135,11 @@ type ComputePolicy struct {
 	// The services a connection may reach (§25.4), as the raw JSON the document holds, which CONN decodes strictly;
 	// nil where the policy carries none.
 	Services json.RawMessage `json:"services,omitempty"`
+	// The support line (§5.4, §28.10): the feedback service's host, the one place a device posts to support, and each
+	// subprocessor support:urnetwork names, as the raw JSON the document holds, which ParseSupportPolicyLine decodes
+	// strictly (support_sources.go); nil where the policy carries none, and then no message is posted. A device posts
+	// to the newest policy's host whatever that policy's not_after (ComputePolicyStore.SupportLine).
+	Support json.RawMessage `json:"support,omitempty"`
 	// Per provider, chip identities a custody registry vouches for: a match labels the instance A2.
 	Custody []*ComputePolicyCustody `json:"custody"`
 	// Refused whatever else passes.

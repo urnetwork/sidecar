@@ -756,7 +756,7 @@ host     in D's network, the device's hosted address, maps and served prefixes r
 ```
 
 - **Rules.** An sdk mints its device client `acl_enforcing` (§7.7) only after its forwarding role leaves legacy, so its resident publishes `team` hints to it (§6.8); earlier or older-sdk clients stay legacy until the app re-mints them (owner decision 106), its sidecar re-enrolling (18.5's State). `checkDeviceSubprotocolId` (sdk/device_local_subprotocol.go:85-93) also refuses 21842-21851 to apps.
-- **Mirror.** Bridge status and forwarding's setup calls (the keys' public halves out, the hand-off in, the witness hint) are additive, like network peers (sdk/device_rpc.go:6202-6232, :12100-12135, :14388), each listed in its method table (sdk/device_rpc_methods.go:18, :234): an older peer answers unlisted methods as unknown (:9-18), so `DeviceRpcVersion` stays 3 (:7677). No other sidecar-role API crosses the device RPC, and no key: forwarding's keys never leave the VPN component, and S's never enter it.
+- **Mirror.** Bridge status and forwarding's setup calls (the keys' public halves out, the hand-off in, the witness hint) are additive, like network peers (sdk/device_rpc.go:6202-6232, :12100-12135, :14388), each listed in its method table (sdk/device_rpc_methods.go:18, :234): an older peer answers unlisted methods as unknown (:9-18), so `DeviceRpcVersion` stays 3 (:7677). No other sidecar-role API crosses the device RPC, and no key: forwarding's keys never leave the VPN component, and S's never enter it. A bridge status crosses it only on a change, since reading a forwarding role's posture tells the listeners nothing (§17.8's forwarding roles; owner decision 807).
 
 ### 18.7 Host services the sdk injects
 

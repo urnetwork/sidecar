@@ -31,7 +31,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -84,21 +83,21 @@ func NewComputePolicyHttpSource(base string, client *http.Client, settings *Atte
 
 // See ComputePolicySource.
 func (self *computePolicyHttpSource) Policy(ctx context.Context, version uint64) ([]byte, []byte, error) {
-	name := strconv.FormatUint(version, 10) + ".json"
-	document, err := self.get(ctx, name, self.settings.PolicyMaxByteCount)
+	document, err := self.get(ctx, ComputePolicyFileName(version), self.settings.PolicyMaxByteCount)
 	if err != nil {
 		return nil, nil, err
 	}
-	signature, err := self.get(ctx, name+".sig", self.settings.SignatureMaxByteCount)
+	signature, err := self.get(ctx, ComputePolicySignatureFileName(version), self.settings.SignatureMaxByteCount)
 	if err != nil {
 		return nil, nil, err
 	}
 	return document, signature, nil
 }
 
-// See ComputePolicySource.
+// See ComputePolicySource. The names are the pipeline's one layout (attest_policy_build.go), which publish and the
+// ticket host's release write.
 func (self *computePolicyHttpSource) Ticket(ctx context.Context, day time.Time) ([]byte, error) {
-	return self.get(ctx, "tickets/"+day.UTC().Format(computePolicyTicketDayLayout)+".bin", self.settings.TicketMaxByteCount)
+	return self.get(ctx, ComputePolicyTicketFileName(day), self.settings.TicketMaxByteCount)
 }
 
 // The body at name under the base, at most maxByteCount bytes, within FetchTimeout: 404 and 410 are

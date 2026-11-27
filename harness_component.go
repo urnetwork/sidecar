@@ -287,6 +287,7 @@ func newSidecarHarness(sidecar *Sidecar) (*sidecarHarness, error) {
 		BudgetRaiser: sources.BudgetRaiser,
 		Foreground:   sources.Foreground,
 		Support:      support,
+		Network:      &harnessSidecarNetwork{sidecar: sidecar},
 	})
 	if err != nil {
 		return nil, err
