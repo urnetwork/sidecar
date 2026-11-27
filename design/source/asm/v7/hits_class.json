@@ -2355,7 +2355,7 @@
  {
   "family": "mib64_trigger",
   "file": "16-MCP.md",
-  "line": 552,
+  "line": 554,
   "col": 382,
   "match": "64 MiB",
   "snippet": " by hash and size; 256 MiB per run-hour; vault bytes count toward storage (§20). For Harness and gateway runs every item a model read or wrote is kept, parts whole up to 64 MiB in 8 MiB blobs, under the same 256 MiB a run-hour, the gateway's session entries beside hooks, telemetry and transcripts, and web search results the MCP tool served stub",
@@ -2368,7 +2368,7 @@
  {
   "family": "mib64_trigger",
   "file": "16-MCP.md",
-  "line": 1350,
+  "line": 1352,
   "col": 62,
   "match": "64 MiB",
   "snippet": "memory                                                     <= 64 MiB decoded a daemon, <= 8 MiB a search, masks",
@@ -2381,7 +2381,7 @@
  {
   "family": "window_14d_weekly",
   "file": "16-MCP.md",
-  "line": 1493,
+  "line": 1495,
   "col": 101,
   "match": "14 days",
   "snippet": "            decision 156's general off switch for this repo; window 7 days (7-90), so latest holds 7-14 days;",
@@ -2394,7 +2394,7 @@
  {
   "family": "window_14d_weekly",
   "file": "16-MCP.md",
-  "line": 1505,
+  "line": 1507,
   "col": 12,
   "match": "weekly",
   "snippet": "roll-up     weekly, by the directory's network-scope search indexer, else the first writer after expiry (owner",
@@ -2407,7 +2407,7 @@
  {
   "family": "window_14d_weekly",
   "file": "16-MCP.md",
-  "line": 1983,
+  "line": 1985,
   "col": 14,
   "match": "7-day window",
   "snippet": "latest index (7-day window)           ~48 MB              ~190 MB               ~480 MB",
@@ -2420,7 +2420,7 @@
  {
   "family": "device_cap_1000",
   "file": "16-MCP.md",
-  "line": 2198,
+  "line": 2200,
   "col": 86,
   "match": "1,000 member devices",
   "snippet": "| Data-repo seats for the directory | no change to owner decision 144 | members past ~1,000 member devices wait keyless | not taken (owner decision 182) |",
