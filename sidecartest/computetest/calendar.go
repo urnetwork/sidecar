@@ -112,6 +112,10 @@ type FakeCalendarServerSettings struct {
 	// Graph's calendarView and instances page when a request names no $top (10), and the most $top takes (1,000).
 	GraphPageDefaultCount int
 	GraphPageMaxCount     int
+	// Graph's bodyPreview: the body's first 255 characters, as Graph's event resource documents it.
+	GraphBodyPreviewCharacterCount int
+	// The reminder a new Graph event takes when its create names none: 15 minutes, Outlook's default.
+	GraphDefaultReminder time.Duration
 }
 
 // The fake's defaults, the only place one is set.
@@ -125,6 +129,9 @@ func DefaultFakeCalendarServerSettings() *FakeCalendarServerSettings {
 		GoogleEventIdMaxLength:  1024,
 		GraphPageDefaultCount:   10,
 		GraphPageMaxCount:       1000,
+
+		GraphBodyPreviewCharacterCount: 255,
+		GraphDefaultReminder:           15 * time.Minute,
 	}
 }
 

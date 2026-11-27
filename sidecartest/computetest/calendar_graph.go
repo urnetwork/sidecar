@@ -476,12 +476,12 @@ func (self *FakeCalendarServer) graphFindWithLock(calendar *fakeCalendar, eventI
 	return nil, nil, false
 }
 
-// An event as Graph answers it.
-func (self *fakeGraphEvent) render(prefer *fakeGraphPrefer, calendar *fakeCalendar) map[string]any {
+// An event as Graph answers it, its bodyPreview the body's first previewCount characters.
+func (self *fakeGraphEvent) render(prefer *fakeGraphPrefer, calendar *fakeCalendar, previewCount int) map[string]any {
 	id := self.id(prefer)
-	preview := self.body.Content
-	if len(preview) > 255 {
-		preview = preview[:255]
+	preview := []rune(self.body.Content)
+	if len(preview) > previewCount {
+		preview = preview[:previewCount]
 	}
 	response := "none"
 	if self.isOrganizer {
@@ -506,7 +506,7 @@ func (self *fakeGraphEvent) render(prefer *fakeGraphPrefer, calendar *fakeCalend
 		"isReminderOn":               self.isReminderOn,
 		"hasAttachments":             false,
 		"subject":                    self.subject,
-		"bodyPreview":                preview,
+		"bodyPreview":                string(preview),
 		"importance":                 "normal",
 		"sensitivity":                "normal",
 		"isAllDay":                   self.isAllDay,
@@ -783,7 +783,7 @@ func (self *FakeCalendarServer) graphView(w http.ResponseWriter, r *http.Request
 			return strings.Compare(a.immutableId, b.immutableId)
 		})
 		for _, event := range listed {
-			events = append(events, event.render(prefer, calendar))
+			events = append(events, event.render(prefer, calendar, self.settings.GraphBodyPreviewCharacterCount))
 			starts = append(starts, event.start)
 		}
 	}()
@@ -820,7 +820,7 @@ func (self *FakeCalendarServer) graphGet(w http.ResponseWriter, prefer *fakeGrap
 	event, _, ok := self.graphFindWithLock(calendar, eventId)
 	var rendered map[string]any
 	if ok {
-		rendered = event.render(prefer, calendar)
+		rendered = event.render(prefer, calendar, self.settings.GraphBodyPreviewCharacterCount)
 	}
 	self.stateLock.Unlock()
 	if !ok {
@@ -987,7 +987,7 @@ func (self *FakeCalendarServer) graphCreate(w *fakeCalendarWriter, r *http.Reque
 						write.Resource = existing.immutableId
 						write.Uid = existing.icalUid
 						status = http.StatusCreated
-						rendered = existing.render(prefer, calendar)
+						rendered = existing.render(prefer, calendar, self.settings.GraphBodyPreviewCharacterCount)
 						return
 					}
 				}
@@ -1018,7 +1018,7 @@ func (self *FakeCalendarServer) graphCreate(w *fakeCalendarWriter, r *http.Reque
 			organizer:       fakeGraphEmail{Address: strings.ToLower(account.Address), Name: account.DisplayName},
 			isOrganizer:     true,
 			eventType:       "singleInstance",
-			reminderMinutes: 15,
+			reminderMinutes: int(self.settings.GraphDefaultReminder / time.Minute),
 			isReminderOn:    true,
 			showAs:          "busy",
 		}
@@ -1044,7 +1044,7 @@ func (self *FakeCalendarServer) graphCreate(w *fakeCalendarWriter, r *http.Reque
 		write.Notices = fakeGraphNotices(event, FakeCalendarNoticeRequest, time.Time{})
 		self.logWriteWithLock(exchange, write)
 		status = http.StatusCreated
-		rendered = event.render(prefer, calendar)
+		rendered = event.render(prefer, calendar, self.settings.GraphBodyPreviewCharacterCount)
 	}()
 	if status != http.StatusCreated {
 		fakeGraphError(w, status, code, message)
@@ -1129,7 +1129,7 @@ func (self *FakeCalendarServer) graphPatch(w *fakeCalendarWriter, r *http.Reques
 		write.Notices = fakeGraphNotices(updated, FakeCalendarNoticeRequest, occurrence)
 		self.logWriteWithLock(exchange, write)
 		status = http.StatusOK
-		rendered = updated.render(prefer, calendar)
+		rendered = updated.render(prefer, calendar, self.settings.GraphBodyPreviewCharacterCount)
 	}()
 	if status != http.StatusOK {
 		fakeGraphError(w, status, code, message)
@@ -1231,7 +1231,7 @@ func (self *FakeCalendarServer) PutGraphEvent(account string, calendarId string,
 		body:            fakeGraphBody{ContentType: "text"},
 		organizer:       fakeGraphEmail{Address: strings.ToLower(accountState.args.Address), Name: accountState.args.DisplayName},
 		eventType:       "singleInstance",
-		reminderMinutes: 15,
+		reminderMinutes: int(self.settings.GraphDefaultReminder / time.Minute),
 		isReminderOn:    true,
 		showAs:          "busy",
 	}
