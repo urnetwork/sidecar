@@ -314,7 +314,10 @@ func (self *SessionCaps) check(ctx context.Context, sync bool) (*SessionCapState
 			name string
 			used int64
 			base int64
-		}{{SessionCapNetwork, state.NetworkUsed, limit}, {SessionCapMember, state.MemberUsed, state.MemberCap}}
+		}{
+			{name: SessionCapNetwork, used: state.NetworkUsed, base: limit},
+			{name: SessionCapMember, used: state.MemberUsed, base: state.MemberCap},
+		}
 		for _, warn := range warns {
 			if float64(warn.used) < self.settings.WarningFraction*float64(warn.base) {
 				continue
