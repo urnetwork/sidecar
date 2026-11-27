@@ -189,6 +189,11 @@ type tlsPublish struct {
 	result   *TlsPublishResult
 	endpoint tlsPublishEndpoint
 	key      tlsPublishActionKey
+	// its host label, its port at the edge and the local address its visitors' connections reach, as its plan held
+	// them: what the listeners list reads (TlsComponent.Publishes)
+	host         string
+	port         int
+	localAddress netip.AddrPort
 }
 
 // What a publish's action is kept by (GrantActionKeeper): the name, audience and app mode its action names, the local
@@ -621,7 +626,7 @@ func (self *tlsPublisher) publish(ctx context.Context, settings *TlsPublishSetti
 	}
 
 	// step 4
-	publish = &tlsPublish{result: result, endpoint: endpoint, key: key}
+	publish = &tlsPublish{result: result, endpoint: endpoint, key: key, host: plan.host, port: plan.port, localAddress: plan.localAddress}
 	copied := *result
 	return &copied, nil
 }

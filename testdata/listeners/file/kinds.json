@@ -1,0 +1,15 @@
+{"v": 1, "sidecar": "019a7c2e-5b1d-7f3a-9c4e-0d2b8a6f1e30", "updated": "2026-11-23T14:05Z", "withheld": null, "truncated": true,
+ "entries": [
+  {"kind": "map", "proto": "udp", "port": 51820, "target": "[2001:db8::7]:51820", "desc": "wireguard", "desc_by": "target_program"},
+  {"kind": "forward", "proto": "tcp", "port": 18080, "to": "sock:board"},
+  {"kind": "tls", "proto": "tcp", "port": 443, "target": "127.0.0.1:3000", "desc": "node", "desc_by": "target_program",
+   "until": "2026-12-24T09:30Z", "name": "shop", "audience": "members-device"},
+  {"kind": "ssh", "proto": "tcp", "port": 22, "desc": "ssh (ur ssh-server)", "desc_by": "fixed"},
+  {"kind": "sock", "proto": "tcp", "target": "127.0.0.1:8080", "desc": "127.0.0.1:8080", "desc_by": "target", "name": "board"},
+  {"kind": "socket", "proto": "udp", "port": 53, "bind": "0.0.0.0", "desc": "another user's program", "desc_by": "other_user"},
+  {"kind": "socket", "proto": "tcp", "port": 3389, "bind": "::", "desc": "a system program", "desc_by": "system",
+   "v4_uncertain": true},
+  {"kind": "socket", "proto": "tcp", "port": 5432, "bind": "::", "desc": "com.docker.backend", "desc_by": "program",
+   "shared": true},
+  {"kind": "socket", "proto": "tcp", "port": 51820, "bind": "0.0.0.0", "desc": "wg-dev", "desc_by": "label",
+   "shadowed": true}]}

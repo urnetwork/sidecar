@@ -157,7 +157,7 @@ func TestSidecarSecretMatcherRefusesAReaderKeyItCannotRead(t *testing.T) {
 		{
 			name:    "a view reaching no gkm namespace",
 			secrets: &testSecretMatchOneNamespace{SidecarSecrets: enrollment.secrets},
-			err:     errSidecarReaderKeysUnreachable,
+			err:     errSidecarKeychainUnreachable,
 		},
 	} {
 		matcher, err := newTestSecretMatchSidecar(t, c.secrets).SecretMatcher()
@@ -177,5 +177,79 @@ func TestSidecarSecretMatcherRefusesAReaderKeyItCannotRead(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), string(damaged)) || strings.Contains(err.Error(), hex.EncodeToString(damaged)) {
 		t.Error("the error repeats the record")
+	}
+}
+
+// A sidecar's matcher holds its live agent subkeys (QD-1449), each seed and Ed25519 private key, minted as the daemon
+// mints them, and its components' keys, the tls device key and its pending successor, the front's session root and the
+// DKIM key, each made by its own component, all caught in every encoding in a tool result, a result's json and an
+// error; no agent certificate, public key or published DKIM key matches; and once the agent is revoked the next matcher
+// holds its subkey no longer and holds the rest.
+func TestSidecarSecretMatcherHoldsItsAgentAndComponentKeys(t *testing.T) {
+	sidecar, instance, _ := newIdentityTestSidecar(t)
+	networkId := sidecar.currentIdentity().NetworkId
+	secrets := instance.secrets(networkId, sidecarCoreSecretsNamespace)
+	agentId := NewId()
+	agentSeed, cert := testSecretMatchAgentSubkey(t, sidecar, secrets, agentId)
+	keys := newTestSecretMatchComponentKeys(t, instance, networkId)
+	matcher, err := sidecar.SecretMatcher()
+	if err != nil {
+		t.Fatal(err)
+	}
+	testSecretMatchCaught(t, matcher, "the agent subkey's seed", agentSeed)
+	testSecretMatchCaught(t, matcher, "the agent subkey's private key", []byte(ed25519.NewKeyFromSeed(agentSeed)))
+	for name, secret := range keys.secretForms {
+		testSecretMatchCaught(t, matcher, name, secret)
+	}
+	testSecretMatchNotCaught(t, matcher, "the agent subkey's public key", cert.PublicKey)
+	testSecretMatchNotCaught(t, matcher, "the agent subkey's certificate", cert.Cert)
+	for name, public := range keys.publicForms {
+		testSecretMatchNotCaught(t, matcher, name, public)
+	}
+
+	if err := sidecar.AgentRevoke(agentId); err != nil {
+		t.Fatal(err)
+	}
+	matcher, err = sidecar.SecretMatcher()
+	if err != nil {
+		t.Fatal(err)
+	}
+	testSecretMatchNotCaught(t, matcher, "the revoked agent's subkey seed", agentSeed)
+	for name, secret := range keys.secretForms {
+		testSecretMatchCaught(t, matcher, name, secret)
+	}
+}
+
+// A key the sidecar's keychain keeps but cannot give builds no matcher, so a caller refuses rather than answers
+// unchecked: an agent subkey record or a DKIM key record that does not decode, each repeating none of the record.
+func TestSidecarSecretMatcherRefusesAnAgentOrComponentKeyItCannotRead(t *testing.T) {
+	sidecar, instance, _ := newIdentityTestSidecar(t)
+	networkId := sidecar.currentIdentity().NetworkId
+	keys := newTestSecretMatchComponentKeys(t, instance, networkId)
+	damaged := []byte("synthetic damage, no key record")
+	for _, c := range []struct {
+		name    string
+		secrets SidecarSecrets
+		record  string
+		err     error
+	}{
+		{name: "an agent subkey", secrets: instance.secrets(networkId, sidecarCoreSecretsNamespace), record: sidecarAgentRecordName(NewId()), err: errSidecarAgentRecordFormat},
+		{name: "a dkim key", secrets: instance.secrets(networkId, SmtpDkimSecretsNamespace), record: keys.dkimKeyRecordName, err: errSidecarDkimKeyFormat},
+	} {
+		if err := c.secrets.Put(c.record, damaged); err != nil {
+			t.Fatal(err)
+		}
+		matcher, err := sidecar.SecretMatcher()
+		if matcher != nil || !errors.Is(err, c.err) || !errors.Is(err, ErrSidecarStoreFailed) {
+			t.Errorf("%s that does not decode: a matcher, %v", c.name, err)
+		} else if strings.Contains(err.Error(), string(damaged)) || strings.Contains(err.Error(), hex.EncodeToString(damaged)) {
+			t.Errorf("%s: the error repeats the record", c.name)
+		}
+		if err := c.secrets.Delete(c.record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := sidecar.SecretMatcher(); err != nil {
+		t.Errorf("with the damage gone: %v", err)
 	}
 }
