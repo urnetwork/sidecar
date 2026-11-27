@@ -40,14 +40,19 @@ func testDarwinDnsSdConnection(t *testing.T) *darwinDnsSdConnection {
 	return connection
 }
 
-// Waits for the next value on values, failing past a bound no local round trip comes near.
+// How long a test waits on one reply or apply before calling itself broken: past urTestTimeout, since mDNSResponder is
+// the machine's, answering every process and every lane's tests beside these, and a loaded machine slows it most. Every
+// wait is on a reply, an apply or a report; this bounds a hang alone.
+const darwinDnsSdTestTimeout = 2 * time.Minute
+
+// Waits for the next value on values, failing with what it waited for past darwinDnsSdTestTimeout.
 func testDarwinDnsSdNext[T any](t *testing.T, values chan T, what string) T {
 	t.Helper()
 	select {
 	case value := <-values:
 		return value
-	case <-time.After(10 * time.Second):
-		t.Fatalf("no %s within 10 s", what)
+	case <-time.After(darwinDnsSdTestTimeout):
+		t.Fatalf("no %s within %s", what, darwinDnsSdTestTimeout)
 	}
 	var zero T
 	return zero
