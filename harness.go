@@ -352,6 +352,8 @@ type Harness struct {
 	view atomic.Pointer[harnessViewLog]
 	// held across one emission: never stateLock
 	emitLock sync.Mutex
+	// §7.9's agents at work: a token for each running prompt, at most AgentConcurrentCount (harness_launch.go)
+	workSlots chan struct{}
 
 	// held across the support listener's add and removal, never with stateLock
 	supportLock sync.Mutex
@@ -403,6 +405,7 @@ func NewHarness(args *HarnessArgs) (*Harness, error) {
 		observer:        args.Observer,
 		support:         args.Support,
 		network:         args.Network,
+		workSlots:       make(chan struct{}, max(settings.AgentConcurrentCount, 0)),
 		stamper:         newHarnessEventStamper(),
 		subscribers:     newHarnessSubscribers(settings, log),
 		agents:          map[Id]*harnessAgent{},
@@ -465,6 +468,10 @@ func (self *Harness) Emit(agentId Id, event *HarnessEvent) error {
 	}()
 	if agent != nil {
 		agent.subscribers.deliver(event)
+		// a launched child's events reach its ancestors' subscribers too, nested under its agent_spawned (§7.9)
+		for ancestor := agent.parent; ancestor != nil; ancestor = ancestor.parent {
+			ancestor.subscribers.deliver(event)
+		}
 	}
 	self.subscribers.deliver(event)
 	return nil

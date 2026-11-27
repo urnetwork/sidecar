@@ -138,13 +138,27 @@ type harnessAgent struct {
 	paused *harnessPause
 	// what the run's calls were charged, in nano-USD
 	chargeNanoUsd uint64
+	// the agent that launched this one, nil for a root agent; its depth along that chain, 1 at a root (§7.9)
+	parent *harnessAgent
+	depth  int
+	// the children this agent launched, by id
+	childIds map[Id]bool
+	// whether the agent's prompt holds one of the Harness's work slots (harness_launch.go)
+	workSlotHeld bool
+	// the last run's final assistant message and its stop reason, which agent_wait answers
+	lastMessage    *HarnessPiMessage
+	lastStopReason string
 }
 
 // Starts an agent on spec: registered, its run opened, its workspace made, its tools picked within the tool budget and
 // Pi's versioned system message journaled. Refused without the skill, the journal or the store, for a profile this
 // Harness does not serve, and for a spec naming tools past the budget or outside the profile.
 func (self *Harness) NewAgent(ctx context.Context, spec *HarnessAgentSpec) (HarnessAgent, error) {
-	return self.startAgent(ctx, spec, nil)
+	agent, err := self.startAgent(ctx, spec, &harnessAgentStart{})
+	if err != nil {
+		return nil, err
+	}
+	return agent, nil
 }
 
 // A continuation's starting context (§24.7, CTXH's continue and fork): the run and node the new run hangs from, the
@@ -163,7 +177,25 @@ func (self *Harness) Continue(ctx context.Context, spec *HarnessAgentSpec, conti
 	if continuation == nil || continuation.ParentRunId == (Id{}) || continuation.ParentNodeId == "" {
 		return nil, fmt.Errorf("%w: a continuation names the run and node it continues", ErrHarnessSpecInvalid)
 	}
-	return self.startAgent(ctx, spec, continuation)
+	agent, err := self.startAgent(ctx, spec, &harnessAgentStart{continuation: continuation})
+	if err != nil {
+		return nil, err
+	}
+	return agent, nil
+}
+
+// How an agent starts beside its spec: a continuation's rebuilt context, or a launch's parent (harness_launch.go),
+// which the agent is the child of, its depth along the parent chain the Harness holds, the taint and marks it starts
+// with, and its first node, a link back to the parent's run and node, a root, so its context never takes in the
+// parent's (§24.4).
+type harnessAgentStart struct {
+	continuation *HarnessContinuation
+	parent       *harnessAgent
+	depth        int
+	taintReasons []RunTaintReason
+	marks        HarnessMark
+	// the child's root link, its parent's run and the node it launched from
+	link *HarnessPiLink
 }
 
 // The tool budget for model: the catalog's entry for it, resolved.
@@ -175,8 +207,9 @@ func (self *Harness) modelEntry(ctx context.Context, model string) (*InferCatalo
 	return catalog.Resolve(model, "")
 }
 
-// NewAgent and Continue.
-func (self *Harness) startAgent(ctx context.Context, spec *HarnessAgentSpec, continuation *HarnessContinuation) (HarnessAgent, error) {
+// NewAgent, Continue and Launch.
+func (self *Harness) startAgent(ctx context.Context, spec *HarnessAgentSpec, start *harnessAgentStart) (*harnessAgent, error) {
+	continuation := start.continuation
 	if spec == nil || spec.Model == "" {
 		return nil, fmt.Errorf("%w: no model", ErrHarnessSpecInvalid)
 	}
@@ -225,10 +258,10 @@ func (self *Harness) startAgent(ctx context.Context, spec *HarnessAgentSpec, con
 		return nil, err
 	}
 	runArgs := &HarnessRunArgs{RunId: runId, AgentId: agentId, Runs: self.runs, Gate: self.gate, Approvals: self.approvals,
-		AutoVerdicts: self.autoVerdicts, Emit: self.Emit}
+		AutoVerdicts: self.autoVerdicts, Emit: self.Emit, TaintReasons: start.taintReasons, Marks: start.marks}
 	if continuation != nil {
-		runArgs.TaintReasons = continuation.TaintReasons
-		runArgs.Marks = continuation.Marks
+		runArgs.TaintReasons = append(runArgs.TaintReasons, continuation.TaintReasons...)
+		runArgs.Marks |= continuation.Marks
 	}
 	run, err := NewHarnessRun(ctx, runArgs)
 	if err != nil {
@@ -259,9 +292,11 @@ func (self *Harness) startAgent(ctx context.Context, spec *HarnessAgentSpec, con
 		lifeCancel:  lifeCancel,
 		model:       resolution.Name,
 		idle:        make(chan struct{}),
+		parent:      start.parent,
+		depth:       max(start.depth, 1),
 	}
 	close(agent.idle)
-	if err := agent.journalStart(ctx, skillText, resolution, continuation); err != nil {
+	if err := agent.journalStart(ctx, skillText, resolution, continuation, start.link); err != nil {
 		workspace.Remove()
 		lifeCancel()
 		return nil, err
@@ -277,8 +312,9 @@ func (self *Harness) startAgent(ctx context.Context, spec *HarnessAgentSpec, con
 }
 
 // Journals the agent's first nodes: Pi's versioned system message (the skill, the instructions, each tool's schema) and
-// the run's first model_change, a root, or for a continuation hanging from the continued run's node.
-func (self *harnessAgent) journalStart(ctx context.Context, skillText string, resolution *InferCatalogResolution, continuation *HarnessContinuation) error {
+// the run's first model_change, a root, or for a continuation hanging from the continued run's node, or for a launched
+// child hanging from its root link back to the parent (§24.4).
+func (self *harnessAgent) journalStart(ctx context.Context, skillText string, resolution *InferCatalogResolution, continuation *HarnessContinuation, link *HarnessPiLink) error {
 	sections := []*HarnessPiSection{{Name: "skill", Text: skillText}}
 	// the skills the agent's tools come with, after recURd's (§28.4's support)
 	for _, skill := range self.toolSet.skills {
@@ -302,6 +338,14 @@ func (self *harnessAgent) journalStart(ctx context.Context, skillText string, re
 		for _, entry := range continuation.Nodes {
 			self.contextNodes = append(self.contextNodes, &harnessContextNode{entry: entry, tokens: self.entryTokens(entry)})
 		}
+	}
+	if link != nil && continuation == nil {
+		// the child's first node: a root naming its parent's run and node in its item, never as its parent
+		linkEntry := NewHarnessPiLinkEntry(NewHarnessPiEntryId(), "", now, link)
+		if err := self.journalWith(ctx, linkEntry, nil, false, ""); err != nil {
+			return err
+		}
+		parentId = linkEntry.Id()
 	}
 	systemEntry := NewHarnessPiMessageEntry(NewHarnessPiEntryId(), parentId, now, system)
 	if err := self.journalWith(ctx, systemEntry, parentRunId, false, ""); err != nil {
@@ -697,6 +741,8 @@ func (self *harnessAgent) Close() {
 	}()
 	// a view waiting on the agent's events hears that no more come (harness_daemon.go)
 	self.harness.viewClosed(self.id)
+	// a launched child's parent hears it exited (harness_launch.go)
+	self.harness.childClosed(self)
 }
 
 // What a run was started on, and where it came from.
