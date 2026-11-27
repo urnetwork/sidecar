@@ -39,6 +39,27 @@ type fakeMcpNetwork struct {
 	labelAgentIds map[string]sidecar.Id
 	// the runs the network's gateway recorded calls in (DESIGN-COMPUTE §24.8), as Sidecar.SessionGatewayRecorded reads
 	gatewayRunIds map[sidecar.Id]bool
+	// the served set of web_search hashes (DESIGN-COMPUTE §24.9), over the store, built at its first use
+	served *sidecar.SessionServedHashes
+}
+
+// The network's served set, as Sidecar.SessionServedHashes builds it: over the network's store, so a restart reads it.
+func (self *fakeMcpNetwork) SessionServedHashes() (*sidecar.SessionServedHashes, error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.served != nil {
+		return self.served, nil
+	}
+	store, err := self.store.Root().Directory("session_served", "session")
+	if err != nil {
+		return nil, err
+	}
+	served, err := sidecar.NewSessionServedHashes(store, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	self.served = served
+	return served, nil
 }
 
 // Whether the network's gateway recorded a call in the run.
