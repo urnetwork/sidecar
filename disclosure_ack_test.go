@@ -353,3 +353,62 @@ func testDisclosureSetVersion(policy *ComputePolicy, id string, version uint32, 
 	disclosure := policy.Disclosure(id)
 	disclosure.Version, disclosure.SinceMs, disclosure.GraceDays = version, since.UnixMilli(), graceDays
 }
+
+// The list Sidecar.ComputeDisclosures answers carries each id's acknowledgment from the same policy as its texts: the
+// version held, whose, whether a use is covered, and its mark; acknowledgments that do not read leave what asks
+// uncovered, with no scope, and what asks nothing covered.
+func TestComputeDisclosuresListCarriesAcks(t *testing.T) {
+	world := newTestDisclosureAckWorld(t)
+	component := &computeDisclosureComponent{
+		sidecar:  &Sidecar{log: NewNoopLogger()},
+		settings: world.registry.Settings(),
+		registry: world.registry,
+		acks:     world.acks,
+		marks:    world.marks,
+		check:    world.check,
+	}
+	if err := world.acks.Ack(t.Context(), testDisclosureConfirmed("inference:engy", 1)); err != nil {
+		t.Fatal(err)
+	}
+	list, err := component.list(t.Context(), "de")
+	if err != nil {
+		t.Fatal(err)
+	}
+	views := map[string]*ComputeDisclosureView{}
+	for _, view := range list.Disclosures {
+		views[view.Id] = view
+	}
+	if engy := views["inference:engy"]; engy.Scope != ComputeDisclosureScopePerson || engy.Acknowledged != 1 || !engy.Covered || engy.Changed {
+		t.Errorf("engy %+v", engy)
+	}
+	if search := views["search:parallel"]; search.Acknowledged != 0 || search.Covered {
+		t.Errorf("search %+v", search)
+	}
+	if local := views["inference:local"]; !local.Covered || local.Locale != "de" {
+		t.Errorf("local %+v", local)
+	}
+	// a new version within its grace: covered, marked changed
+	testDisclosureSetVersion(world.source.policy, "inference:engy", 2, world.clock.Now().Add(-time.Hour), 14)
+	world.source.policy = testDisclosurePolicyCopy(world.source.policy)
+	if list, err = component.list(t.Context(), ""); err != nil {
+		t.Fatal(err)
+	}
+	if engy := list.Disclosures[2]; engy.Id != "inference:engy" || engy.Version != 2 || engy.Acknowledged != 1 || !engy.Covered || !engy.Changed {
+		t.Errorf("engy at version 2 %+v", engy)
+	}
+	// unreadable acknowledgments: no scope, what asks not covered, what asks nothing covered
+	world.config.vault.historyErr = errors.New("evs unreachable")
+	if list, err = component.list(t.Context(), ""); err != nil {
+		t.Fatal(err)
+	}
+	for _, view := range list.Disclosures {
+		if view.Scope != "" || view.Acknowledged != 0 || view.Covered == view.Asks {
+			t.Errorf("unreadable: %+v", view)
+		}
+	}
+	// no policy: policy_unavailable, nothing listed
+	world.source.policy = nil
+	if list, err := component.list(t.Context(), ""); !errors.Is(err, ErrComputeDisclosurePolicyUnavailable) || list != nil {
+		t.Errorf("no policy: %v, %v", list, err)
+	}
+}

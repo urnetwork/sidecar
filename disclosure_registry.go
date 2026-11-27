@@ -490,6 +490,11 @@ func (self *ComputeDisclosureRegistry) List(locale string) (*ComputeDisclosureLi
 	if err != nil {
 		return nil, err
 	}
+	return self.listOf(snapshot, locale), nil
+}
+
+// snapshot's views in locale, each at the index of its disclosure in snapshot.disclosures.
+func (self *ComputeDisclosureRegistry) listOf(snapshot *computeDisclosureSnapshot, locale string) *ComputeDisclosureList {
 	list := &ComputeDisclosureList{
 		PolicyVersion: snapshot.policy.Version,
 		Locale:        computeDisclosureLocaleTag(locale, self.settings),
@@ -498,7 +503,7 @@ func (self *ComputeDisclosureRegistry) List(locale string) (*ComputeDisclosureLi
 	for _, disclosure := range snapshot.disclosures {
 		list.Disclosures = append(list.Disclosures, NewComputeDisclosureView(disclosure, locale))
 	}
-	return list, nil
+	return list
 }
 
 // What a list of disclosures answers, the same JSON on every surface: the daemon's compute.disclosure.list and the
@@ -603,11 +608,12 @@ func (self *Sidecar) ComputeDisclosures(ctx context.Context, locale string) (*Co
 	return component.list(ctx, locale)
 }
 
-// The list the component answers: the registry's, with each view's acknowledgment and mark (disclosure_check.go).
+// The list the component answers: the registry's, with each view's acknowledgment and mark (disclosure_check.go), its
+// texts and its coverage read from one policy.
 func (self *computeDisclosureComponent) list(ctx context.Context, locale string) (*ComputeDisclosureList, error) {
-	list, err := self.registry.List(locale)
+	snapshot, err := self.registry.current()
 	if err != nil {
 		return nil, err
 	}
-	return self.withAcks(ctx, list), nil
+	return self.withAcks(ctx, self.registry.listOf(snapshot, locale), snapshot.disclosures), nil
 }

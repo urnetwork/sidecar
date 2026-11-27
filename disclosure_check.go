@@ -342,10 +342,10 @@ func (self *Sidecar) OpenedComputeDisclosure(ctx context.Context, id string, ver
 	return component.marks.opened(disclosure.Id.String(), version, keepIds)
 }
 
-// The disclosure fields of a list: each view's acknowledged version, whose, whether it is covered now and whether its
-// lines are marked changed. Acknowledgments that do not read leave each view unacknowledged and not covered, the
-// closed reading.
-func (self *computeDisclosureComponent) withAcks(ctx context.Context, list *ComputeDisclosureList) *ComputeDisclosureList {
+// The disclosure fields of list, whose views are disclosures', index for index: each view's acknowledged version, whose,
+// whether it is covered now and whether its lines are marked changed. Acknowledgments that do not read leave each view
+// unacknowledged and, where it asks, not covered, the closed reading.
+func (self *computeDisclosureComponent) withAcks(ctx context.Context, list *ComputeDisclosureList, disclosures []*ComputeDisclosure) *ComputeDisclosureList {
 	scope, versions, err := self.check.covering(ctx)
 	if err != nil {
 		if self.sidecar.log.V(1).Enabled() {
@@ -353,26 +353,13 @@ func (self *computeDisclosureComponent) withAcks(ctx context.Context, list *Comp
 		}
 		scope, versions = "", map[string]uint32{}
 	}
-	disclosures, err := self.registry.Disclosures()
-	if err != nil {
-		return list
-	}
 	idChanged := self.marks.changed(disclosures, versions)
 	now := self.check.now()
-	for _, view := range list.Disclosures {
-		index := -1
-		for i, disclosure := range disclosures {
-			if disclosure.Id.String() == view.Id {
-				index = i
-			}
-		}
-		if index < 0 {
-			continue
-		}
+	for i, view := range list.Disclosures {
 		view.Scope, view.Acknowledged, view.Changed = scope, versions[view.Id], idChanged[view.Id]
 		view.Covered = !view.Asks
 		if view.Asks && scope != "" {
-			view.Covered, _ = computeDisclosureCovered(view.Acknowledged, disclosures[index], now)
+			view.Covered, _ = computeDisclosureCovered(view.Acknowledged, disclosures[i], now)
 		}
 	}
 	return list
