@@ -334,14 +334,18 @@ func listenersFileEntryCheck(index int, entry *protocol.ListenersEntry, settings
 		return listenersFileRefusal("entry %d is shared or shadowed and no socket", index)
 	}
 
-	hasTarget := kind == protocol.ListenersEntryKind_LISTENERS_ENTRY_KIND_MAP ||
-		kind == protocol.ListenersEntryKind_LISTENERS_ENTRY_KIND_TLS ||
+	// a map always has its target; a tls or sock entry has one where a local address takes its connections, and none
+	// where the host's own process does, an app's listener
+	isMap := kind == protocol.ListenersEntryKind_LISTENERS_ENTRY_KIND_MAP
+	mayTarget := isMap || kind == protocol.ListenersEntryKind_LISTENERS_ENTRY_KIND_TLS ||
 		kind == protocol.ListenersEntryKind_LISTENERS_ENTRY_KIND_SOCK
-	switch {
-	case hasTarget && !listenersTargetValid(entry.GetTarget(), settings.FieldMaxByteCount):
-		return listenersFileRefusal("entry %d's target is no ip:port", index)
-	case !hasTarget && entry.GetTarget() != "":
+	switch target := entry.GetTarget(); {
+	case !mayTarget && target != "":
 		return listenersFileRefusal("entry %d's kind has no target", index)
+	case isMap && target == "":
+		return listenersFileRefusal("entry %d, a map, has no target", index)
+	case target != "" && !listenersTargetValid(target, settings.FieldMaxByteCount):
+		return listenersFileRefusal("entry %d's target is no ip:port", index)
 	}
 	isForward := kind == protocol.ListenersEntryKind_LISTENERS_ENTRY_KIND_FORWARD
 	switch {

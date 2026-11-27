@@ -20,6 +20,8 @@ package sidecar
 import (
 	"context"
 	"fmt"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -355,6 +357,31 @@ func (self *SocketComponent) Active() bool {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	return 0 < len(self.listeners)
+}
+
+// One live listen of the component as DESIGN-COMPUTE §26.4's sock row reads it (LSTN-M13-04): its namespace and
+// canonical name, which only this device's own person and agents read, and the network's own devices by its listeners
+// file, sealed.
+type SocketListenName struct {
+	Namespace SocketNamespace
+	Name      string
+}
+
+// The component's live listens, by namespace then name: read only, for the listeners list (LSTN-M13-04).
+func (self *SocketComponent) Listens() []SocketListenName {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	names := make([]SocketListenName, 0, len(self.listeners))
+	for listener := range self.listeners {
+		names = append(names, SocketListenName{Namespace: listener.namespace, Name: listener.name})
+	}
+	slices.SortFunc(names, func(a SocketListenName, b SocketListenName) int {
+		if a.Namespace != b.Namespace {
+			return int(a.Namespace) - int(b.Namespace)
+		}
+		return strings.Compare(a.Name, b.Name)
+	})
+	return names
 }
 
 // Installs this device's own evaluation of its config, which admission's step 6 and a dialer's listen check read.
