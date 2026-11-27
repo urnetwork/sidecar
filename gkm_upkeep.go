@@ -327,25 +327,35 @@ func (self *GkmUpkeep) RefillKeyPackages() {
 }
 
 // The loop: a pass, then wait for UpkeepInterval or an ask, trying a ReaderKey upload that failed again meanwhile as
-// its retry comes due.
+// its retry comes due. No pass or retry starts once the upkeep has ended, an ask, a due pass or a due retry taken as it
+// ended included, since either drops the lapsed ReaderKeys and mints the one due in the keychain before its upload
+// meets the dead context, and an ended upkeep asks the clock for nothing.
 func (self *GkmUpkeep) run() {
 	defer close(self.done)
-	for {
+	// select takes any of its ready cases at random: a case taken as the upkeep ended reads as the end
+	for self.ctx.Err() == nil {
 		_, asked := self.passAsked.Get()
 		self.pass(self.ctx)
+		if self.ctx.Err() != nil {
+			// an upkeep that ended as the pass ran asks the clock for nothing
+			return
+		}
 		passDue := self.clock.After(self.settings.UpkeepInterval)
-		for waiting := true; waiting; {
+		for waiting := true; waiting && self.ctx.Err() == nil; {
 			retryDue, scopesChanged := self.readerKeyRetryWait()
+			retry := false
 			select {
 			case <-self.ctx.Done():
-				return
 			case <-asked:
 				waiting = false
 			case <-passDue:
 				waiting = false
 			case <-retryDue:
-				self.retryReaderKey(self.ctx)
+				retry = true
 			case <-scopesChanged:
+				retry = true
+			}
+			if retry && self.ctx.Err() == nil {
 				self.retryReaderKey(self.ctx)
 			}
 		}

@@ -356,18 +356,24 @@ func (self *evsSubscriber) start() error {
 	return nil
 }
 
-// The rounds, each at the next due time or a wake, until ctx ends; done closes then.
+// The rounds, each at the next due time or a wake, until ctx ends; done closes then. No round starts once ctx has
+// ended, a wake or the due time taken as it ended included, since a round takes the pending deletes off their list
+// and moves the resync's and the renewals' times whatever its calls meet, and an ended ctx asks the clock for nothing.
 func (self *evsSubscriber) run(ctx context.Context, done chan struct{}) {
 	defer close(done)
-	for {
+	// select takes any of its ready cases at random: a wake or the due time taken as ctx ended reads as the end
+	for ctx.Err() == nil {
 		next := self.runDue(ctx)
+		if ctx.Err() != nil {
+			// rounds that ended as this one ran ask the clock for nothing
+			return
+		}
 		var timer <-chan time.Time
 		if !next.IsZero() {
 			timer = ClockAfterAt(self.client.clock, next)
 		}
 		select {
 		case <-ctx.Done():
-			return
 		case <-self.wake:
 		case <-timer:
 		}
@@ -618,9 +624,14 @@ func (self *evsSubscriber) subscribe(ctx context.Context, repo *EvsRepo, args *E
 		}()
 		select {
 		case <-ctx.Done():
+		case <-ClockAfterAt(self.client.clock, leaseDueAt):
+		}
+		// select takes either of its ready cases at random: the lease's due time taken as ctx ended answers as the end
+		// does, the lease owed to the rounds, where a lease on the dead context would read the cancel as final and
+		// drop the subscription for good
+		if ctx.Err() != nil {
 			self.wakeRounds()
 			return subscription, nil
-		case <-ClockAfterAt(self.client.clock, leaseDueAt):
 		}
 	}
 }

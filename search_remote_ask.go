@@ -282,7 +282,9 @@ func (self *SearchRemoteClient) foreground() (bool, chan struct{}) {
 
 // Follows one generation until ctx ends: bit 1 by asksSearch, the foreground to the dispatcher, and at each foreground
 // and each move of the mode, the answers or the config while in it, the first-choice own indexer, the zero Id where
-// there is none. Nothing here opens a session or sends a frame (owner decision 609).
+// there is none. Nothing here opens a session or sends a frame (owner decision 609). Nothing is set on the dispatcher
+// once the generation has ended, a change or the recheck's wait taken as it ended included, and an ended generation
+// asks the clock for nothing.
 func (self *SearchRemoteClient) follow(ctx context.Context, transport searchRemoteTransport) {
 	configMoved := make(chan struct{}, 1)
 	if self.args.ConfigWatch != nil {
@@ -294,7 +296,9 @@ func (self *SearchRemoteClient) follow(ctx context.Context, transport searchRemo
 		})
 		defer stop()
 	}
-	for {
+	// select takes any of its ready cases at random: a change or the recheck taken as the generation ended reads as the
+	// end
+	for ctx.Err() == nil {
 		foreground, foregroundChanged := self.foreground()
 		_, stateChanged := self.args.State.Changes()
 		transport.SetForeground(foreground)
@@ -304,7 +308,6 @@ func (self *SearchRemoteClient) follow(ctx context.Context, transport searchRemo
 		}
 		select {
 		case <-ctx.Done():
-			return
 		case <-foregroundChanged:
 		case <-stateChanged:
 		case <-configMoved:

@@ -598,23 +598,36 @@ func (self *SidecarConfigFollower) run(networkId Id, sidecarId Id) {
 	}
 	var removeRecord func()
 	if self.args.RecordEvs != nil {
-		for {
-			if removeRecord, err = self.bindRecord(client); err == nil {
-				break
-			} else {
-				self.moveTo(SidecarConfigFollowerCatchingUp, fmt.Sprintf("waiting for the member record binding: %v", err))
-			}
-			select {
-			case <-self.ctx.Done():
-				return
-			case <-self.clock.After(self.settings.AnchorRetryInterval):
-			}
+		var bound bool
+		if removeRecord, bound = self.bindRecordWithRetry(client); !bound {
+			return
 		}
 	}
 	self.stand(networkId, sidecarId, client, removeRecord)
 }
 
-// The anchor, asked again at a doubling interval while the keychain is locked or api serves no genesis to trust.
+// The member record's binding, asked again each AnchorRetryInterval until it binds: its remove, and false once the
+// follower has ended, the retry's wait taken as it ended included, so no record is bound, and no authority installed,
+// past the end.
+func (self *SidecarConfigFollower) bindRecordWithRetry(client *ConfigClient) (func(), bool) {
+	// select takes either of its ready cases at random: the retry's wait taken as the follower ended reads as the end
+	for self.ctx.Err() == nil {
+		removeRecord, err := self.bindRecord(client)
+		if err == nil {
+			return removeRecord, true
+		}
+		self.moveTo(SidecarConfigFollowerCatchingUp, fmt.Sprintf("waiting for the member record binding: %v", err))
+		select {
+		case <-self.ctx.Done():
+		case <-self.clock.After(self.settings.AnchorRetryInterval):
+		}
+	}
+	return nil, false
+}
+
+// The anchor, asked again at a doubling interval while the keychain is locked or api serves no genesis to trust. The
+// follower's error once it has ended, a retry's wait taken as it ended included, so no anchor is asked for, recorded
+// on first use or followed past the end.
 func (self *SidecarConfigFollower) anchorWithRetry(networkId Id) (*SidecarAnchor, error) {
 	wait := self.settings.AnchorRetryInterval
 	for {
@@ -629,8 +642,11 @@ func (self *SidecarConfigFollower) anchorWithRetry(networkId Id) (*SidecarAnchor
 		}
 		select {
 		case <-self.ctx.Done():
-			return nil, self.ctx.Err()
 		case <-self.clock.After(wait):
+		}
+		// select takes either of its ready cases at random: the wait taken as the follower ended answers the end
+		if err := self.ctx.Err(); err != nil {
+			return nil, err
 		}
 		wait = min(2*wait, self.settings.AnchorRetryMaxInterval)
 	}

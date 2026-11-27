@@ -381,17 +381,22 @@ func (self *Sidecar) FilePrefixRules(ctx context.Context, client *EvsClient, req
 // The prefix rules' loop until ctx ends (DESIGN-DETAILS 16.2.8, 16.2.9): every RepairPassInterval, on a device whose
 // composition repairs, one pass of the repair runner over each repo whose mirror journalled an ignored event, and the
 // pin pushes the journal owes. What a pass leaves waits for the next. None runs while the client's rules are dark
-// (QD-1032), since prefixJudge answers no judge.
+// (QD-1032), since prefixJudge answers no judge. No pass starts once ctx has ended, the interval's end taken as it
+// ended included, since a pass removes from the sealed journal what it settles with no read, whatever its reads meet,
+// and an ended ctx asks the clock for nothing.
 func (self *EvsComponent) runPrefixRepair(ctx context.Context) {
 	judge := self.client.prefixJudge()
 	if judge == nil || !judge.args.Repair || judge.settings.RepairPassInterval <= 0 {
 		return
 	}
-	for {
+	for ctx.Err() == nil {
 		select {
 		case <-ctx.Done():
-			return
 		case <-self.client.clock.After(judge.settings.RepairPassInterval):
+		}
+		// select takes either of its ready cases at random: the interval's end taken as ctx ended reads as the end
+		if ctx.Err() != nil {
+			return
 		}
 		self.client.passPrefixRepair(ctx)
 	}

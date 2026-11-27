@@ -493,31 +493,32 @@ func (self *GkmGroupClient) jitter(max time.Duration) time.Duration {
 	return time.Duration(drawn.Int64())
 }
 
-// Waits out a delay on the client's clock, or ctx.
+// Waits out a delay on the client's clock, or ctx: ctx's error once it has ended, the delay's end taken as it ended
+// included, so a flow's next step never runs on the dead context, and an ended ctx asks the clock for nothing.
 func (self *GkmGroupClient) wait(ctx context.Context, delay time.Duration) error {
-	if delay <= 0 {
+	if delay <= 0 || ctx.Err() != nil {
 		return ctx.Err()
 	}
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
 	case <-self.clock.After(delay):
-		return nil
 	}
+	// select takes either of its ready cases at random: the delay's end taken as ctx ended answers the end
+	return ctx.Err()
 }
 
-// Waits until the clock reaches at, the wait set for that time itself (QD-1425), or until ctx ends. A time already
-// reached waits for nothing.
+// Waits until the clock reaches at, the wait set for that time itself (QD-1425), or until ctx ends, answering as wait
+// does. A time already reached waits for nothing.
 func (self *GkmGroupClient) waitUntil(ctx context.Context, at time.Time) error {
-	if !self.clock.Now().Before(at) {
+	if !self.clock.Now().Before(at) || ctx.Err() != nil {
 		return ctx.Err()
 	}
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
 	case <-ClockAfterAt(self.clock, at):
-		return nil
 	}
+	// select takes either of its ready cases at random: the time's wait taken as ctx ended answers the end
+	return ctx.Err()
 }
 
 // One repo's group as this sidecar drives it. One flow runs at a time.
