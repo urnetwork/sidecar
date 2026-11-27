@@ -9,9 +9,7 @@
 //  2. the operator's hold (model's compute_abuse_hold), placed by `sidecarctl compute suspend` through api's staff
 //     route and ended by `sidecarctl compute resume`: the projection {cmp_<network_id>}:a on the host's Redis, which
 //     every broker instance shares, or on a miss the row in Postgres, which it then projects; reason hold. A held
-//     network keeps its balance and its records; this only refuses. Until question carch-m12-01-compute-hold-row's
-//     answer registers the table (model's compute_abuse_hold.go), no database holds it, so a miss's read fails and
-//     every admission refuses;
+//     network keeps its balance and its records; this only refuses;
 //  3. the flags other areas keep on a network for some of its admissions, read into the one hold through
 //     registerComputeAbuseFlag: INFER's and BAL's second direct-call mismatch in 30 days, refusing the network's
 //     direct calls (§6.6, §9.11); SRCH's suspension of a network's search (§21.5, §21.10); ENC's failed starts
