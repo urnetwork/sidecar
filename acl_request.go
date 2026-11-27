@@ -210,10 +210,11 @@ func ParseAclGrantDst(dst string) (*protocol.AclTarget, *protocol.AclPortRange, 
 	return nil, nil, fmt.Errorf("%w: grant_dst kind %q", ErrAclGrantFieldInvalid, kind)
 }
 
-// One grant_allow entry: §8.4's action name.
+// One grant_allow entry: §8.4's action name. DESIGN-COMPUTE §16.2's actions take no requested grant yet: a requested ssh
+// grant is the enclaves feature's (§16.5's ssh row; CACL-M14-01), and the rest are no request's, so each is refused.
 func ParseAclGrantAllow(allow string) (protocol.AclAction, error) {
 	for action := protocol.AclAction_ACL_ACTION_DIAL; action <= aclActionMax; action += 1 {
-		if aclActionName(action) == allow {
+		if !aclComputeAction(action) && aclActionName(action) == allow {
 			return action, nil
 		}
 	}
