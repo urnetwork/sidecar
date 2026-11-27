@@ -4,10 +4,13 @@
 // matches, and its errors never echo an input that does (mcp/tool.go). A SecretMatcher matches two things:
 //
 //	credentials  the values the daemon holds that grant something: the client's bearer token (by_jwt), the identity
-//	             key's and the ClientKey's seeds and their Ed25519 private keys, and the connect identity a client
+//	             key's and the ClientKey's seeds and their Ed25519 private keys, the connect identity a client
 //	             generation keeps (§5.9's connect_identity): its seed and the keys that derive from it, the sequence
-//	             certificate's key and each provide secret key (record_secret_match_connect.go), each raw, as hex in
-//	             either case and as base64 in the standard and URL alphabets, padded and not
+//	             certificate's key and each provide secret key (record_secret_match_connect.go), and the compute
+//	             credentials each area registers for this Sidecar (DESIGN-COMPUTE §2.5, compute_custody.go): the cache
+//	             secret, SSH keys, calendar links' secrets, connections' OAuth credentials and access tokens, and an
+//	             incarnation's provisioning key, each raw, as hex in either case and as base64 in the standard and URL
+//	             alphabets, padded and not
 //	token forms  every rule of the redactor's (record_redact_rules.go), PII aside, which is no credential: the shapes a
 //	             leaked token of any service takes, the daemon's own or not
 //
@@ -17,8 +20,9 @@
 // certificate, which every peer the client reaches is shown.
 //
 // The keys are read where they are made, so each read reaches testHookSecret (identity_keys.go, api_token_manager.go,
-// identity_connect.go, sidecar_new_connect.go), and a matcher holds copies of them in memory for its life: build one
-// per call, or per credential change. A SecretMatcher is immutable and safe for concurrent use.
+// identity_connect.go, sidecar_new_connect.go, and each compute source's own file), and a matcher holds copies of them
+// in memory for its life: build one per call, or per credential change. A SecretMatcher is immutable and safe for
+// concurrent use.
 
 package sidecar
 
@@ -115,10 +119,12 @@ func (self *SecretMatcher) FormCount() int {
 }
 
 // The credentials this sidecar holds now, as a matcher (I-7): its bearer token, its keys and the connect identity its
-// keychain keeps, read from the network's keychain. ErrSidecarStoreLocked's error while Locked, ErrSidecarNoIdentity
-// before enrollment, and ErrSidecarStoreFailed's for a connect identity record that does not decode, so a caller that
-// cannot build one refuses rather than answers unchecked. A sidecar holding a key but no token matches the keys, and
-// one whose keychain keeps no connect identity yet, as before its generation's first start, matches the rest.
+// keychain keeps, read from the network's keychain, and the compute credentials its registered sources hold
+// (compute_custody.go). ErrSidecarStoreLocked's error while Locked, ErrSidecarNoIdentity before enrollment,
+// ErrSidecarStoreFailed's for a connect identity record that does not decode, and ErrComputeCustodyUnavailable's,
+// naming the kind, where a compute source fails, so a caller that cannot build one refuses rather than answers
+// unchecked. A sidecar holding a key but no token matches the keys, and one whose keychain keeps no connect identity
+// yet, as before its generation's first start, matches the rest.
 func (self *Sidecar) SecretMatcher() (*SecretMatcher, error) {
 	var state SidecarState
 	var secrets SidecarSecrets
@@ -163,6 +169,11 @@ func (self *Sidecar) SecretMatcher() (*SecretMatcher, error) {
 	case err == nil:
 		credentials = append(credentials, []byte(byJwt))
 	case !errors.Is(err, ErrSidecarStoreAbsent):
+		return nil, fmt.Errorf("secret matcher: %w", err)
+	}
+	computeCredentials, err := self.computeCustodyCredentials()
+	credentials = append(credentials, computeCredentials...)
+	if err != nil {
 		return nil, fmt.Errorf("secret matcher: %w", err)
 	}
 	return NewSecretMatcher(credentials, settings), nil
