@@ -485,18 +485,22 @@ func (self *BridgeLinkManager) checkClock() {
 
 // Keeps the links: one maintain pass at each wake, and a timer for the next time a link's state changes, capped by
 // ClockCheckInterval, so a wall-clock time such as a replaced link's drain end is read again at least that often (the
-// pass is the same either way: it acts on what is due at its now).
+// pass is the same either way: it acts on what is due at its now). The timer is set for its time itself
+// (clockAfterFuncAt), so a move of the clock between the pass and the timer cannot leave it late (QD-1425).
 func (self *BridgeLinkManager) run() {
 	defer close(self.done)
 	for {
 		next := self.maintain()
 		stop := func() bool { return false }
 		if !next.IsZero() {
-			wait := next.Sub(self.clock.Now())
-			if interval := self.settings.ClockCheckInterval; 0 < interval && interval < wait {
-				wait = interval
+			wakeAt := next
+			if interval := self.settings.ClockCheckInterval; 0 < interval {
+				if checkAt := self.clock.Now().Add(interval); checkAt.Before(next) {
+					wakeAt = checkAt
+				}
 			}
-			stop = self.clock.AfterFunc(wait, self.wakeRun)
+			// wakeRun never blocks and takes no lock, so a time already reached may call it here
+			stop = clockAfterFuncAt(self.clock, wakeAt, self.wakeRun)
 		}
 		select {
 		case <-self.ctx.Done():

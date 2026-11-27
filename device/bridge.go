@@ -206,8 +206,10 @@ func (self *Bridge) relink() {
 }
 
 // Waits for the next time a row's meaning changes, and publishes again then, until the bridge closes. Each turn arms
-// the wait from the wall clock's now, capped by ClockCheckInterval; a capped wait that ends short of the time only
-// reads the clock again, and a check from CheckClock publishes at once, as the timer does, then arms the wait anew.
+// the wait for that time, or for ClockCheckInterval past the wall clock's now when that comes first; a capped wait
+// that ends short of the time only reads the clock again, and a check from CheckClock publishes at once, as the timer
+// does, then arms the wait anew. The wait is set for its time itself (clockAfterAt), so a move of the clock between
+// run's reading and the wait cannot leave the wait late (QD-1425).
 func (self *Bridge) run() {
 	defer close(self.done)
 	for {
@@ -215,12 +217,14 @@ func (self *Bridge) run() {
 		var timeout <-chan time.Time
 		capped := false
 		if !deadline.IsZero() {
-			wait := deadline.Sub(self.clock.Now())
-			if interval := self.settings.ClockCheckInterval; 0 < interval && interval < wait {
-				wait = interval
-				capped = true
+			wakeAt := deadline
+			if interval := self.settings.ClockCheckInterval; 0 < interval {
+				if checkAt := self.clock.Now().Add(interval); checkAt.Before(deadline) {
+					wakeAt = checkAt
+					capped = true
+				}
 			}
-			timeout = self.clock.After(wait)
+			timeout = clockAfterAt(self.clock, wakeAt)
 		}
 		select {
 		case <-self.ctx.Done():
