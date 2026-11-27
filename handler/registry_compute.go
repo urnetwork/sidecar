@@ -11,12 +11,6 @@ package handler
 
 // The routes of §14.3's api/compute rows no handler is registered for, as "METHOD path", with the task that builds each.
 var computeApiRouteUnbuilt = []string{
-	// §9.13's balance, BAL-M12-15
-	"GET /compute/balance",
-	// §9.10's and §9.13's reads, BAL-M12-15
-	"GET /compute/charges",
-	"GET /compute/statement",
-	"GET /compute/spend",
 	// §21.9's terms and their clauses, BAL-M13-03
 	"GET /compute/terms",
 	"POST /compute/terms",

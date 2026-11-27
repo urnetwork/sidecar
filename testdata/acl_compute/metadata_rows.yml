@@ -24,13 +24,6 @@ AclTarget.listener: {number: 13, type: bytes, row: api-7, sees: "rules with targ
 # agent_repos' deposit rule, evs:kind:agent: a target naming a repo kind, no repo or name (QD-1433)
 AclTarget.repo_kind: {number: 14, type: RepoKind, row: api-7, sees: "rules with targets"}
 
-# An agent repo's keyed label on its RepoCreate and in its folded row (QD-1434): 16 bytes of HMAC-SHA256 of
-# agent/<name> under a key only the network's sidecars derive, so api sees a per-network value that names no agent and
-# links nothing across networks; the owner's answer decided the field and that api-7 shows it, and design-records
-# writes those words into the list
-RepoCreate.label_mac: {number: 5, type: bytes, row: api-7, pending: "QD-1434: an agent repo's keyed label, 16 bytes of HMAC-SHA256 of its name under a key only the network's sidecars derive", until: M11}
-AclRepo.label_mac: {number: 15, type: bytes, row: api-7, pending: "QD-1434: an agent repo's keyed label in its folded row, as its RepoCreate carries it", until: M11}
-
 # protocol/bridge/auth.proto's authorization features (CACL-M11-02, §16.6): the bits a head turns on, which every base's
 # rows carry beside self_admit and scim_signer (testdata/config's lines), in api-7's words since metadata_list.yml v68.
 # ServiceSettings.auth_features, their source, rides config heads, which evs holds as ciphertext; capability bit 3 is a
