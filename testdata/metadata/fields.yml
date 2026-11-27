@@ -576,6 +576,10 @@ fields:
   AclRepo.deletion: api-7
   AclRepo.lock: api-7
   AclRepo.holders_shrunk_at: api-7
+  # Answered (QD-1434): an agent repo's keyed label, 16 bytes of HMAC-SHA256 of agent/<name> under a key only the
+  # network's sidecars derive, which its RepoCreate files and its folded row keeps; api-7's words name it ahead of
+  # design-records' fold of §2.8 (check/metadata_list_test.go's metadataListAdditions).
+  AclRepo.label_mac: api-7
   AclRepoAdminRow.sidecar_id: api-7
   AclRepoAdminRow.signer: api-7
   AclRepoAdminRow.at: api-7
@@ -623,6 +627,7 @@ fields:
   RepoCreate.header: api-7
   RepoCreate.repo_id: api-7
   RepoCreate.kind: api-7
+  RepoCreate.label_mac: api-7
   RepoAdmin.header: api-7
   RepoAdmin.repo_id: api-7
   RepoAdmin.sidecar_id: api-7
