@@ -112,7 +112,9 @@ type searchServeDispatcher interface {
 }
 
 // Registers or unregisters as the designation stands, at each entry the installed authority applies and every
-// Search.ServeRecheckInterval, until ctx ends, when it unregisters.
+// Search.ServeRecheckInterval, until ctx ends, when it unregisters. No look starts once ctx has ended, an entry, a
+// follower's change or a timer taken as it ended included, so nothing registers or sets its bit on the dead
+// generation's dispatcher, and an ended ctx asks the clock for nothing.
 func (self *searchServeComponent) follow(ctx context.Context, dispatcher searchServeDispatcher) {
 	var registered *searchServeRegistration
 	var authority SidecarAuthority
@@ -126,7 +128,8 @@ func (self *searchServeComponent) follow(ctx context.Context, dispatcher searchS
 			self.unregister(dispatcher, registered)
 		}
 	}()
-	for {
+	// select takes any of its ready cases at random: a case taken as ctx ended reads as the end
+	for ctx.Err() == nil {
 		// The verified follower can finish its initial read after this generation attached.
 		var followerChanged <-chan struct{}
 		if follower := self.sidecar.ConfigFollower(); follower != nil {
@@ -148,9 +151,12 @@ func (self *searchServeComponent) follow(ctx context.Context, dispatcher searchS
 			}
 		}
 		registered = self.apply(dispatcher, registered)
+		if ctx.Err() != nil {
+			// a generation that ended as the look ran asks the clock for nothing
+			return
+		}
 		select {
 		case <-ctx.Done():
-			return
 		case <-entries:
 		case <-followerChanged:
 		case <-self.sidecar.clock.After(self.sidecar.settings.Search.ServeRecheckInterval):

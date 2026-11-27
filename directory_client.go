@@ -521,9 +521,12 @@ func (self *DirectoryClient) dueMillis() int64 {
 	return due
 }
 
-// Syncs on §16.11's cadence until ctx ends: see the file's header. A second Run waits for the first to return.
+// Syncs on §16.11's cadence until ctx ends: see the file's header. A second Run waits for the first to return. No sync
+// starts once ctx has ended, a wake the due time's timer gave as ctx ended included, so the schedule keeps its last
+// sync and AfterSync hears of none past the end, and an ended ctx asks the clock for nothing.
 func (self *DirectoryClient) Run(ctx context.Context) {
-	for {
+	// select takes either of its ready cases at random: a wake taken as ctx ended reads as the end
+	for ctx.Err() == nil {
 		nowMillis := self.clock.Now().UnixMilli()
 		if due := self.dueMillis(); due <= nowMillis {
 			func() {
@@ -558,8 +561,6 @@ func (self *DirectoryClient) Run(ctx context.Context) {
 		stop := ClockAfterFuncAt(self.clock, time.UnixMilli(self.dueMillis()), self.signal)
 		select {
 		case <-ctx.Done():
-			stop()
-			return
 		case <-self.wake:
 		}
 		stop()

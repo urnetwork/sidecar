@@ -56,6 +56,9 @@ type BridgeDiscoverySettings struct {
 	ShareCount int
 	// The most hides the host keeps, ports and instances together: 1,024. Positive.
 	HideCount int
+	// The least the host loop and a viewer wait for their next time, measured from the pass's now: 1 ms, so a pass that
+	// leaves a time already passed cannot spin. Positive.
+	PassMinWait time.Duration
 }
 
 // §17.7.1's values, and the build's.
@@ -76,6 +79,7 @@ func DefaultBridgeDiscoverySettings() *BridgeDiscoverySettings {
 		ShareUpkeepInterval:     1 * time.Minute,
 		ShareCount:              64,
 		HideCount:               1024,
+		PassMinWait:             time.Millisecond,
 	}
 }
 
@@ -95,6 +99,7 @@ func (self *BridgeDiscoverySettings) validate() error {
 		"ListedTtl":               self.ListedTtl,
 		"GatherDemandTimeout":     self.GatherDemandTimeout,
 		"ShareUpkeepInterval":     self.ShareUpkeepInterval,
+		"PassMinWait":             self.PassMinWait,
 		"WatchHoldTimeout":        wire.WatchHoldTimeout,
 	}
 	for name, value := range positiveDurations {
