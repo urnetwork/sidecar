@@ -7,8 +7,10 @@ package sidecar
 
 import (
 	"bytes"
+	_ "embed"
 	"encoding/hex"
 	"errors"
+	"flag"
 	"os"
 	"strings"
 	"testing"
@@ -19,8 +21,29 @@ import (
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
-// The golden encoding of testComputeBlockFull's compute rows in the compile test world.
+// Rewrites testdata/acl_compute/'s goldens from the compile as it stands.
+var testUpdateAclComputeGoldens = flag.Bool("update-acl-compute", false, "rewrite testdata/acl_compute/'s goldens")
+
+// The golden encoding of testComputeBlockFull's compute rows in the compile test world, embedded, since the
+// sidecar_http leg's Worker reads no file.
 const testComputeRowsGoldenPath = "testdata/acl_compute/compute_rows.hex"
+
+//go:embed testdata/acl_compute/compute_rows.hex
+var testComputeRowsGolden string
+
+// Holds encoded to golden, or writes it to path under -update-acl-compute.
+func testAclComputeGolden(t *testing.T, path string, golden string, encoded []byte) {
+	t.Helper()
+	if *testUpdateAclComputeGoldens {
+		if err := os.WriteFile(path, []byte(hex.EncodeToString(encoded)+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	if strings.TrimSpace(golden) != hex.EncodeToString(encoded) {
+		t.Errorf("the rows moved from %s: %x", path, encoded)
+	}
+}
 
 // A compile world holding the block's subjects' names, its document source, and compute_policy on.
 func newTestComputeBlockWorld(t *testing.T, source string) *aclCompileWorld {
@@ -72,13 +95,7 @@ func TestComputeBlockRowsGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if *testUpdateApprovalComputeRender {
-		if err := os.WriteFile(testComputeRowsGoldenPath, []byte(hex.EncodeToString(encoded)+"\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	} else if golden, err := os.ReadFile(testComputeRowsGoldenPath); err != nil || strings.TrimSpace(string(golden)) != hex.EncodeToString(encoded) {
-		t.Errorf("the rows moved from %s (%v): %x", testComputeRowsGoldenPath, err, encoded)
-	}
+	testAclComputeGolden(t, testComputeRowsGoldenPath, testComputeRowsGolden, encoded)
 	// the interns' group atom is among the rows' atoms, as a rule's src would make it
 	if !strings.Contains(rows.String(), "") || !testAclRowsHoldAtom(rows, world.group("interns")) {
 		t.Error("the budget's group has no atom row")
