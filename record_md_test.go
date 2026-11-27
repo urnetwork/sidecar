@@ -210,6 +210,17 @@ type recordMdKind struct {
 	since    string
 }
 
+// Whether section 6.1's exception row lets a kind of this number, name and class sit outside its block: one of the
+// compute kinds from 56, of class action, which the row names by number and name (owner decision 802).
+func (self *recordMd) blockException(t *testing.T, number int, name string, class string) bool {
+	t.Helper()
+	if number < 56 || 63 < number || class != "action" {
+		return false
+	}
+	row := self.row(t, "6.1", "exception")
+	return regexp.MustCompile(`\b` + strconv.Itoa(number) + ` ` + regexp.QuoteMeta(name) + `\b`).MatchString(row)
+}
+
 // Section 6.3's rows by kind name.
 func (self *recordMd) registry(t *testing.T) map[string]recordMdKind {
 	t.Helper()
@@ -1631,7 +1642,8 @@ func TestRecordMdRegistryHoldsTogether(t *testing.T) {
 		numberNames[kind.number] = kind.name
 		block := (kind.number >= 1 && kind.number <= 15 && (kind.class == "coordination" || kind.class == "announce" || kind.class == "request")) ||
 			(kind.number >= 16 && kind.number <= 47 && (kind.class == "action" || kind.class == "accounting" || kind.class == "log")) ||
-			(kind.number >= 48 && kind.number <= 63 && (kind.class == "capture" || kind.class == "bulk"))
+			(kind.number >= 48 && kind.number <= 63 && (kind.class == "capture" || kind.class == "bulk")) ||
+			doc.blockException(t, kind.number, kind.name, kind.class)
 		if !block {
 			t.Errorf("kind %s at %d sits outside section 6.1's block for class %s", kind.name, kind.number, kind.class)
 		}

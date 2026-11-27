@@ -877,8 +877,10 @@ determinism fake clocks and barriers only, no sleeps; a schedule waiting over 60
             outside it (§4.7); a test that advances the fake clock past a timer the code arms after a step first
             waits until the clock holds that timer, since an advance between the step and the arming leaves nothing
             to fire (owner decision 549); and code that waits for a time sets the wait for that time on the clock
-            itself, through the root's clockAfterAt and clockAfterFuncAt, which FakeClock serves under its own
-            lock, so a move of the clock between a reading and the wait never sets it late (owner decision 801)
+            itself, through the root's ClockAfterAt and ClockAfterFuncAt, which FakeClock serves under its own
+            lock, so a move of the clock between a reading and the wait never sets it late, and a wait for the
+            earlier of a time and a duration reads the duration's end from the clock before the wait, so a move
+            makes it early, never late (owner decision 801)
 twins       every refusal schedule has a twin that must succeed, so a disabled feature fails
 real        T3 runs each T3 row through server's real handlers and stores (api, evs, gkm, the token exchange,
             Postgres, the 3-master Redis Cluster, D-OPS-20's MinIO build), never fixtures that pre-authorize; the
