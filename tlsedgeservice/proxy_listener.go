@@ -339,8 +339,7 @@ func (self *proxyHeaderListener) closeListener() {
 	})
 }
 
-// Accepts until the listener closes, and never waits on a peer. A retry's timer that fired as the listener ended
-// accepts nothing more, so no connection is taken past the end before the inner listener's close lands.
+// Accepts until the listener closes, and never waits on a peer.
 func (self *proxyHeaderListener) run() {
 	for {
 		conn, err := self.listener.Accept()
@@ -348,16 +347,10 @@ func (self *proxyHeaderListener) run() {
 			// the test net/http's Serve uses, deprecated only because most timeouts are not temporary
 			var netErr net.Error
 			if errors.As(err, &netErr) && netErr.Temporary() {
-				if self.ctx.Err() != nil {
-					return
-				}
 				select {
 				case <-self.ctx.Done():
-				case <-self.clock.After(self.settings.AcceptRetryTimeout):
-				}
-				// select takes either of two ready cases at random: a timer taken as the listener ended reads as the end
-				if self.ctx.Err() != nil {
 					return
+				case <-self.clock.After(self.settings.AcceptRetryTimeout):
 				}
 				continue
 			}

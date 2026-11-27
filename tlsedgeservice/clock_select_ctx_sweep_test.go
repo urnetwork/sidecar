@@ -1,12 +1,13 @@
 package tlsedgeservice_test
 
-// The TLS edge's waits end with their context (clock-select-ctx-sweep). Serve's and the PROXY listener's accept
-// retries and the kill loop's wait each selected on the engine's end beside a clock's timer and went on whenever
-// select took the timer as the engine ended: an accept loop accepted again past the end, and could admit and serve a
-// connection on the dead engine before its listener's close landed, and the kill loop reloaded the switch on the dead
-// context, counting a load. Each now answers the end whatever else was ready. The proof is sidecartest.EndingClock,
-// which ends the engine as a wait's timer fires, over 64 rounds, which leave the old coin no chance (at most
-// (1/2)^64) to pass.
+// The TLS edge's waits end with their context (clock-select-ctx-sweep). Serve's accept retry and the kill loop's
+// wait each selected on the engine's end beside a clock's timer and went on whenever select took the timer as the
+// engine ended: Serve accepted again past the end, and since a parent context's end closes no listener, it went on
+// admitting and serving connections on the dead engine, and the kill loop reloaded the switch on the dead context,
+// counting a load. Each now answers the end whatever else was ready. The proof is sidecartest.EndingClock, which ends
+// the engine as a wait's timer fires, over 64 rounds, which leave the old coin no chance (at most (1/2)^64) to pass.
+// The PROXY listener's retry is left as it was: its end closes the inner listener (the end's AfterFunc), so an accept
+// past it meets the close an accept in flight at the end meets.
 
 import (
 	"context"
@@ -103,35 +104,6 @@ func TestTlsEdgeServeAcceptsNothingAfterTheEngineEnds(t *testing.T) {
 			t.Fatalf("round %d: %v after %d accepts and %d waits, want nil after 1 of each", round, err, listener.acceptCount.Load(), clock.Waits())
 		}
 		cancel()
-	}
-}
-
-// The PROXY listener accepts nothing once it has ended: an accept that fails for now waits AcceptRetryTimeout, and an
-// end landing as that wait's timer fires ends its loop after the one accept, in each of 64 rounds. A loop that took the
-// timer's case accepted again past the end.
-func TestProxyHeaderListenerAcceptsNothingAfterItEnds(t *testing.T) {
-	for round := range 64 {
-		settings := tlsedgeservice.DefaultProxyHeaderSettings()
-		clock := sidecartest.NewEndingClock(sidecartest.DefaultClockStart(), sidecartest.EndingClockCounts(settings.AcceptRetryTimeout))
-		settings.Clock = clock
-		inner := &clockSelectTestListener{}
-		ctx, cancel := context.WithCancel(context.Background())
-		ended := make(chan struct{})
-		clock.Arm(1, func() {
-			cancel()
-			close(ended)
-		})
-		listener, err := tlsedgeservice.NewProxyHeaderListener(ctx, inner, settings)
-		if err != nil {
-			t.Fatal(err)
-		}
-		clock.Open()
-		clockSelectAwait(t, ended, "the end at the accept's retry")
-		// Close returns once the accept loop has
-		listener.Close()
-		if accepts := inner.acceptCount.Load(); accepts != 1 || clock.Waits() != 1 {
-			t.Fatalf("round %d: %d accepts and %d waits, want 1 of each", round, accepts, clock.Waits())
-		}
 	}
 }
 
