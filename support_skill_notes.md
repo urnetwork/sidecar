@@ -113,8 +113,10 @@ Readings:
 
 Waiting on others (each failing closed meanwhile):
 
-- ATTEST: the signed policy's `support` line (§5.4), kept as raw JSON the way `search` and `services` are, for
-  `ParseSupportPolicyLine`; until then no host is named and messages wait in the outbox.
+- ATTEST: the signed policy's `support` line (§5.4) is in the format since ATTEST-M12-02, kept as raw JSON the way
+  `search` and `services` are, written by the pipeline only where `ParseSupportPolicyLine` reads it, and read by the
+  client through the attest store (`attest_policy_support.go`); until a sitting signs a policy carrying one, which
+  waits on the key ceremony, no host is named and messages wait in the outbox.
 - CTRUST (CTRUST-M11-01, -M12-01, -M13-01): `support:urnetwork`'s text in the policy, the person's acknowledgment, and
   compute credentials in the scan; until then every message answers `disclosure_required`.
 - FB's service and its token route (G-SUP-service, FB's G1 to G5): the token source; until then nothing is posted.
