@@ -1,15 +1,17 @@
 package main
 
-// ur disclosures (cmd_disclosures.go; CTRUST-M11-01): the list of the newest verified policy's disclosures, each id's
-// version, summary and what it asks before, in the terminal's locale, its --json shape, policy_unavailable with no
-// policy, and ur harness's prompt texts; on a stand-in of the daemon's list method over a real registry built from the
-// root's fixture line (testdata/disclosure/).
+// ur disclosures (cmd_disclosures.go; CTRUST-M11-01, CTRUST-M12-01, CTRUST-M12-02): the list of the newest verified
+// policy's disclosures, each id's version, summary and what it asks before, in the terminal's locale, its --json shape,
+// policy_unavailable with no policy, ur harness's prompt texts, the person's acknowledgment on /dev/tty, an Owner's or
+// Admin's for the network and its removal, and ur status's lines for a tagged sidecar; on a stand-in of the daemon's
+// disclosure methods over a real registry built from the root's fixture line (testdata/disclosure/).
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -68,6 +70,10 @@ type testUrDisclosureStand struct {
 	changed map[string]bool
 	// what ack answers in turn, the last again once they run out; none records the acknowledgment
 	ackReplies []*sidecar.DaemonComputeDisclosureActReply
+	// by id, the network's acknowledgment ack_network recorded, which the list names as an Owner's taken entry
+	networks map[string]*sidecar.DaemonComputeDisclosureNetworkActParams
+	// what ack_network answers in place of recording, as the daemon refuses a Member's device
+	networkErr error
 }
 
 // The methods as the daemon answers them, the list's unavailable reply included, without their network rule, since the
@@ -94,8 +100,49 @@ func (self *testUrDisclosureStand) methods() []*sidecar.DaemonMethod {
 				for _, view := range list.Disclosures {
 					view.Scope, view.Acknowledged, view.Changed = sidecar.ComputeDisclosureScopePerson, self.acknowledged[view.Id], self.changed[view.Id]
 					view.Covered = !view.Asks || view.Version <= view.Acknowledged
+					if network := self.networks[view.Id]; network != nil {
+						view.Network = &sidecar.ComputeNetworkDisclosure{Id: view.Id, Version: network.Version, Locale: network.Locale,
+							MemberId: testUrDisclosureOwner, SidecarId: testUrDisclosureOwnerDevice, PinVersion: 40,
+							SignedAtMs: 1796083200000, Taken: true, Stands: view.Version <= network.Version}
+					}
 				}
 				return list, nil
+			},
+		},
+		{
+			Name:    sidecar.DaemonMethodComputeDisclosureAckNetwork,
+			Confirm: true,
+			Handler: func(ctx context.Context, call *sidecar.DaemonCall) (any, error) {
+				self.record(sidecar.DaemonMethodComputeDisclosureAckNetwork, call)
+				params := &sidecar.DaemonComputeDisclosureNetworkActParams{}
+				if err := json.Unmarshal(call.Params, params); err != nil {
+					return nil, err
+				}
+				self.stateLock.Lock()
+				defer self.stateLock.Unlock()
+				if self.networkErr != nil {
+					return nil, self.networkErr
+				}
+				if self.networks == nil {
+					self.networks = map[string]*sidecar.DaemonComputeDisclosureNetworkActParams{}
+				}
+				self.networks[params.Id] = params
+				return &sidecar.DaemonComputeDisclosureActReply{Id: params.Id, Version: params.Version}, nil
+			},
+		},
+		{
+			Name:    sidecar.DaemonMethodComputeDisclosureRemoveNetwork,
+			Confirm: true,
+			Handler: func(ctx context.Context, call *sidecar.DaemonCall) (any, error) {
+				self.record(sidecar.DaemonMethodComputeDisclosureRemoveNetwork, call)
+				params := &sidecar.DaemonComputeDisclosureRemoveParams{}
+				if err := json.Unmarshal(call.Params, params); err != nil {
+					return nil, err
+				}
+				self.stateLock.Lock()
+				defer self.stateLock.Unlock()
+				delete(self.networks, params.Id)
+				return &sidecar.DaemonComputeDisclosureActReply{Id: params.Id}, nil
 			},
 		},
 		{
@@ -480,5 +527,154 @@ func TestUrDisclosuresHarnessAckNeedsTerminal(t *testing.T) {
 	if calls[len(calls)-1] != sidecar.DaemonMethodComputeDisclosureAck || !confirmed[len(confirmed)-1] ||
 		string(params[len(params)-1]) != `{"network":"acme","id":"inference:engy","version":1}` {
 		t.Fatalf("the acknowledgment %v %s %v", calls, params, confirmed)
+	}
+}
+
+// The Owner and the device the stand-in's network acknowledgments name.
+var (
+	testUrDisclosureOwner       = sidecar.Id{0x0a, 0x01}
+	testUrDisclosureOwnerDevice = sidecar.Id{0x0a, 0x02}
+)
+
+// ur disclosures ack <id> --network prints the whole text on /dev/tty and, on "I understand", sends the Confirm method
+// compute.disclosure.ack_network with the version, locale and revision shown, German here; the list then names the
+// network's acknowledgment under the id, who gave it on which device and when.
+func TestUrDisclosuresAckNetwork(t *testing.T) {
+	policy := testUrDisclosurePolicy(t)
+	stand := newTestUrDisclosureStand(t, &testUrDisclosureSource{policy: policy})
+	cli, stdout, stderr := testUrDisclosureCli(t, stand, map[string]string{"LANG": "de_DE.UTF-8"})
+	tty := &testTty{lines: []string{"I understand"}}
+	cli.openTty = func() (urTty, error) { return tty, nil }
+	if code := cli.main(t.Context(), []string{"ur", "disclosures", "ack", "inference:local", "--network", "--in=acme"}); code != urExitOk {
+		t.Fatalf("exit %d: %s", code, stderr.String())
+	}
+	if stdout.String() != "acknowledged inference:local version 1 for the network\n" {
+		t.Errorf("stdout %q", stdout.String())
+	}
+	if !strings.Contains(tty.written.String(), "Summary: "+policy.Disclosures[0].Text("de").Summary) ||
+		!strings.Contains(tty.written.String(), "for the network's tagged and cloud sidecars") {
+		t.Errorf("the terminal was shown:\n%s", tty.written.String())
+	}
+	calls, params, confirmed := stand.recorded()
+	if !slices.Equal(calls, []string{sidecar.DaemonMethodComputeDisclosureList, sidecar.DaemonMethodComputeDisclosureOpen,
+		sidecar.DaemonMethodComputeDisclosureAckNetwork}) || !confirmed[2] {
+		t.Fatalf("the calls %v, confirmed %v", calls, confirmed)
+	}
+	if string(params[2]) != `{"network":"acme","id":"inference:local","version":1,"locale":"de","revision":0}` {
+		t.Errorf("the act's params %s", params[2])
+	}
+	cli, stdout, _ = testUrDisclosureCli(t, stand, map[string]string{})
+	if code := cli.main(t.Context(), []string{"ur", "disclosures"}); code != urExitOk {
+		t.Fatalf("exit %d", code)
+	}
+	want := "    for the network: version 1, by member " + testUrDisclosureOwner.String() + " on device " + testUrDisclosureOwnerDevice.String() +
+		" at 2026-12-01T00:00:00Z, covering\n"
+	if !strings.Contains(stdout.String(), want) {
+		t.Errorf("the list lacks %q:\n%s", want, stdout.String())
+	}
+	// anything but "I understand" sends nothing
+	declined := newTestUrDisclosureStand(t, &testUrDisclosureSource{policy: testUrDisclosurePolicy(t)})
+	cli, _, stderr = testUrDisclosureCli(t, declined, map[string]string{})
+	cli.openTty = func() (urTty, error) { return &testTty{lines: []string{"ok"}}, nil }
+	if code := cli.main(t.Context(), []string{"ur", "disclosures", "ack", "inference:engy", "--network"}); code != urExitFailed ||
+		!strings.Contains(stderr.String(), "not acknowledged") {
+		t.Fatalf("declined: exit %d %s", code, stderr.String())
+	}
+	if calls, _, _ := declined.recorded(); slices.Contains(calls, sidecar.DaemonMethodComputeDisclosureAckNetwork) {
+		t.Fatalf("a declined text was acknowledged: %v", calls)
+	}
+}
+
+// Without a terminal the network's acknowledgment is refused and nothing is sent; on a Member's device the daemon's
+// refusal, naming who can, is what ur says, and nothing is recorded.
+func TestUrDisclosuresAckNetworkRefusedForMember(t *testing.T) {
+	stand := newTestUrDisclosureStand(t, &testUrDisclosureSource{policy: testUrDisclosurePolicy(t)})
+	cli, _, stderr := testUrDisclosureCli(t, stand, map[string]string{})
+	if code := cli.main(t.Context(), []string{"ur", "disclosures", "ack", "inference:engy", "--network"}); code != urExitFailed ||
+		!strings.Contains(stderr.String(), "terminal") {
+		t.Fatalf("no terminal: exit %d %s", code, stderr.String())
+	}
+	if calls, _, _ := stand.recorded(); slices.Contains(calls, sidecar.DaemonMethodComputeDisclosureAckNetwork) {
+		t.Fatalf("calls without a terminal: %v", calls)
+	}
+	stand.networkErr = fmt.Errorf("%w: this device's member is no Owner or Admin; one of the network's Owners or Admins acknowledges for it",
+		sidecar.ErrNetworkDisclosureRefused)
+	cli, _, stderr = testUrDisclosureCli(t, stand, map[string]string{})
+	cli.openTty = func() (urTty, error) { return &testTty{lines: []string{"I understand"}}, nil }
+	if code := cli.main(t.Context(), []string{"ur", "disclosures", "ack", "inference:engy", "--network"}); code != urExitFailed ||
+		!strings.Contains(stderr.String(), "no Owner or Admin") {
+		t.Fatalf("a Member's device: exit %d %s", code, stderr.String())
+	}
+	if len(stand.networks) != 0 {
+		t.Fatalf("a refused act recorded %v", stand.networks)
+	}
+}
+
+// ur disclosures remove <id> --network takes the network's acknowledgment out once the person confirms on /dev/tty,
+// and sends nothing on any other answer.
+func TestUrDisclosuresRemoveNetwork(t *testing.T) {
+	stand := newTestUrDisclosureStand(t, &testUrDisclosureSource{policy: testUrDisclosurePolicy(t)})
+	stand.networks = map[string]*sidecar.DaemonComputeDisclosureNetworkActParams{"inference:engy": {Id: "inference:engy", Version: 1}}
+	cli, _, stderr := testUrDisclosureCli(t, stand, map[string]string{})
+	cli.openTty = func() (urTty, error) { return &testTty{lines: []string{"no"}}, nil }
+	if code := cli.main(t.Context(), []string{"ur", "disclosures", "remove", "inference:engy", "--network"}); code != urExitFailed ||
+		!strings.Contains(stderr.String(), "not removed") || len(stand.networks) != 1 {
+		t.Fatalf("declined: exit %d %s", code, stderr.String())
+	}
+	cli, stdout, stderr := testUrDisclosureCli(t, stand, map[string]string{})
+	cli.openTty = func() (urTty, error) { return &testTty{lines: []string{"yes"}}, nil }
+	if code := cli.main(t.Context(), []string{"ur", "disclosures", "remove", "inference:engy", "--network", "--in=acme"}); code != urExitOk {
+		t.Fatalf("exit %d: %s", code, stderr.String())
+	}
+	calls, params, confirmed := stand.recorded()
+	if calls[len(calls)-1] != sidecar.DaemonMethodComputeDisclosureRemoveNetwork || !confirmed[len(confirmed)-1] ||
+		string(params[len(params)-1]) != `{"network":"acme","id":"inference:engy"}` || len(stand.networks) != 0 ||
+		stdout.String() != "removed the network's acknowledgment of inference:engy\n" {
+		t.Fatalf("the removal: %v %s, %q", calls, params[len(params)-1], stdout.String())
+	}
+}
+
+// ur status names, on a tagged or cloud sidecar, each network acknowledgment it relies on: its version, who gave it on
+// which device and when, and whether it covers a use, in its grace or not at all; nothing on a member's device.
+func TestUrStatusNamesNetworkDisclosures(t *testing.T) {
+	networkId := sidecar.Id{0x0b}
+	entry := func(id string, mutate func(entry *sidecar.ComputeNetworkDisclosure)) *sidecar.ComputeNetworkDisclosure {
+		network := &sidecar.ComputeNetworkDisclosure{Id: id, Version: 1, MemberId: testUrDisclosureOwner, SidecarId: testUrDisclosureOwnerDevice,
+			SignedAtMs: 1796083200000, Taken: true, Stands: true}
+		if mutate != nil {
+			mutate(network)
+		}
+		return network
+	}
+	list := &sidecar.ComputeDisclosureList{Disclosures: []*sidecar.ComputeDisclosureView{
+		{Id: "inference:engy", Version: 1, Asks: true, Scope: sidecar.ComputeDisclosureScopeNetwork, Network: entry("inference:engy", nil)},
+		{Id: "search:parallel", Version: 2, Asks: true, Scope: sidecar.ComputeDisclosureScopeNetwork, Network: entry("search:parallel",
+			func(network *sidecar.ComputeNetworkDisclosure) {
+				network.InGrace, network.GraceEndMs = true, 1797292800000
+			})},
+		{Id: "inference:saygm", Version: 3, Asks: true, Scope: sidecar.ComputeDisclosureScopeNetwork, Network: entry("inference:saygm",
+			func(network *sidecar.ComputeNetworkDisclosure) { network.Stands = false })},
+		{Id: "listeners:publish", Version: 1, Asks: true, Scope: sidecar.ComputeDisclosureScopeNetwork, Network: entry("listeners:publish",
+			func(network *sidecar.ComputeNetworkDisclosure) {
+				network.Taken, network.Stands, network.Refusal = false, false, "signer"
+			})},
+		{Id: "inference:local", Version: 1, Scope: sidecar.ComputeDisclosureScopeNetwork},
+	}}
+	by := "by member " + testUrDisclosureOwner.String() + " on device " + testUrDisclosureOwnerDevice.String() + " at 2026-12-01T00:00:00Z"
+	want := []string{
+		"disclosure: network " + networkId.String() + " inference:engy acknowledged for the network, version 1, " + by + ", covering",
+		"disclosure: network " + networkId.String() + " search:parallel acknowledged for the network, version 1, " + by +
+			", covering through version 2's grace, until 2026-12-15T00:00:00Z",
+		"disclosure: network " + networkId.String() + " inference:saygm acknowledged for the network, version 1, " + by + ", covering no use of version 3",
+		"disclosure: network " + networkId.String() + " listeners:publish acknowledged for the network, version 1, " + by + ", not taken (signer)",
+	}
+	if got := urStatusDisclosureLines(networkId, list); !slices.Equal(got, want) {
+		t.Errorf("the lines:\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	for _, view := range list.Disclosures {
+		view.Scope = sidecar.ComputeDisclosureScopePerson
+	}
+	if got := urStatusDisclosureLines(networkId, list); len(got) != 0 {
+		t.Errorf("a member's device: %v", got)
 	}
 }

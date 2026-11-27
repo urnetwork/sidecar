@@ -1,0 +1,17 @@
+{
+  "comment": "A DisclosureAck (DESIGN-COMPUTE §2.8, CTRUST-M12-02) made from these inputs, all synthetic: the identity key from seed_hex, the ids and pin as given. body_hex is the deterministic protobuf, signed_bytes_sha256_hex the SHA-256 of §6.9's signed bytes for purpose disclosure-ack and type 0x1809, signature_hex the Ed25519 signature, statement the Signed as the compute block holds it, standard base64. SIDECAR_REGENERATE_DISCLOSURE_ACK_VECTOR=1 go test -run '^TestDisclosureAckStatementRoundTrip$' writes the outputs again from the inputs.",
+  "seed_hex": "adfb57c9ce502bf1667b4a09aaee592657c1b5271b074a9ecda198239d96a84a",
+  "network_id": "7b5f3f3a-1945-a836-ad5d-ff53c1f5db00",
+  "disclosure_id": "inference:engy",
+  "version": 1,
+  "locale": "de",
+  "revision": 2,
+  "member_id": "8347edaf-e494-d965-1e2d-0f0babb36a67",
+  "sidecar_id": "743bd75e-4b8a-c50f-0096-a45b4726efdf",
+  "pin_version": 41,
+  "pin_chain_hex": "ec5df4d1b54cf08a3e98777f2994a751dacd49554dac898e0ee27c39a8ecabe2",
+  "body_hex": "0a107b5f3f3a1945a836ad5dff53c1f5db00120e696e666572656e63653a656e6779180122026465280232108347edafe494d9651e2d0f0babb36a673a10743bd75e4b8ac50f0096a45b4726efdf422408291220ec5df4d1b54cf08a3e98777f2994a751dacd49554dac898e0ee27c39a8ecabe2",
+  "signed_bytes_sha256_hex": "a0ffb291e2f90703518e52687ec52f1259b53eea1d33676e004eb1f7025228ed",
+  "signature_hex": "c77569f9ffc00fd52a74e4a3659d92cd560a9b58e8ef72e9151e8144902e521d6f6b13a4b9b128a55225d397552d3ae06bbb21f668b9f741c8b7d4e3a3f84c0e",
+  "statement": "CnQKEHtfPzoZRag2rV3/U8H12wASDmluZmVyZW5jZTplbmd5GAEiAmRlKAIyEINH7a/klNllHi0PC6uzamc6EHQ7115LisUPAJakW0cm799CJAgpEiDsXfTRtUzwij6Yd38plKdR2s1JVU2siY4O4nw5qOyr4hIQdDvXXkuKxQ8AlqRbRybv3yJAx3Vp+f/AD9UqdOSjZZ2SzVYKm1jo73LpFR6BRJAuUh1vaxOkubEopVIl05dVLTrga7sh9mi590HIt9Tjo/hMDjCJMA=="
+}

@@ -1,0 +1,31 @@
+// The network's acknowledgment of a disclosure (DESIGN-COMPUTE §2.8's network row; CO-41, Q-CTRUST-3's (c);
+// CTRUST-M12-02): an Owner's or Admin's statement that they read a disclosure's whole text for the network's tagged and
+// cloud sidecars, which read no vault. It is the body of a §6.9 Signed of purpose disclosure-ack and type
+// SIGNED_DISCLOSURE_ACK (0x1809, §6.11, Appendix D), by the identity key of that member's approval-capable device, kept
+// in the ACL document's compute block as disclosures, {"<id>": <the Signed, deterministic protobuf in standard
+// base64>} (§16.4), or, in a network with no document, in the block-alone record, a config record that sets no reach.
+// It rides only inside the config head, which the config repo seals, and stays out of the projection and its rows
+// (Q-CTRUST-2), so no server reads a field.
+//
+// The fields are §2.8's list, numbered in the order it writes them (the network, the id, the version, the locale and
+// revision shown, the member), then the signing device and the AuthPin of the verified state it signed at, by which a
+// reader judges "when it signed" as an ApprovalDecision's auth_pin is judged (the plan's proposal). The forwarding role
+// never links it (owner decision 197).
+
+syntax = "proto3";
+package urnetwork.sidecar;
+
+import "protocol/bridge/auth.proto";
+
+option go_package = "github.com/urnetwork/sidecar/protocol";
+
+message DisclosureAck {
+  bytes network_id = 1;
+  string disclosure_id = 2;             // family:slug, the compute block's key the statement sits under
+  uint32 version = 3;                   // the version shown, which only a changed fact raises
+  string locale = 4;                    // the locale of the text shown, a BCP 47 tag: need not be English
+  uint32 revision = 5;                  // the revision of the text shown
+  bytes member_id = 6;                  // the Owner or Admin who read it
+  bytes sidecar_id = 7;                 // that member's approval-capable device, whose identity key signs
+  AuthPin auth_pin = 8;                 // the device's verified state when it signed
+}

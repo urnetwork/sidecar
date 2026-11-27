@@ -181,8 +181,9 @@ var aclComputeApprovalKindsAll = []SidecarActionKind{
 // FB section 5's feedback.egress values (§28.6).
 var aclComputeSupportEgresses = []string{"on", "persons", "auto_only", "off"}
 
-// The disclosure id families §2.8 names, ahead of their slug.
-var aclComputeDisclosureFamilies = []string{"search", "inference", "enclave", "connect", "listeners", "approvals"}
+// The disclosure id families §2.8 names, ahead of their slug: support's among them, whose network acknowledgment covers
+// a tagged sidecar's messages to support (§28.13; CTRUST-M12-02).
+var aclComputeDisclosureFamilies = []string{"search", "inference", "enclave", "connect", "listeners", "approvals", "support"}
 
 // One parsed compute block. A key the block leaves out reads as its zero here, nil or 0, and §16.5's default holds
 // for it (ComputePolicyView). Immutable once parsed: lists in the order written.
