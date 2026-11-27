@@ -1140,7 +1140,7 @@ func (self *RecordEvsStreams) readStream(ctx context.Context, repoId Id, writerS
 					return nil, err
 				}
 				if body == nil {
-					version.Bodies = append(version.Bodies, &RecordStreamBodyFile{Path: path})
+					version.Bodies = append(version.Bodies, &RecordStreamBodyFile{Path: path, PaddedByteCount: entry.GetPaddedSize()})
 					continue
 				}
 				if path != body.path {

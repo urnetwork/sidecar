@@ -338,9 +338,12 @@ func (self *mailImapSession) applyWithLock(w *imapserver.UpdateWriter, next *Mai
 }
 
 // Polls, then waits for the mailbox's hint, a change through the store, or IdlePollInterval, and polls again, until
-// stop. Each wait subscribes just before the poll it follows, so a change between the two wakes it.
+// stop. Each wait subscribes just before the poll it follows, so a change between the two wakes it. No poll starts
+// once the server has ended, a hint, a change or a timer taken as it ended included, so nothing more is written to the
+// client past the end, and an ended server asks the clock for nothing.
 func (self *mailImapSession) Idle(w *imapserver.UpdateWriter, stop <-chan struct{}) error {
-	for {
+	// select takes any of its ready cases at random: a case taken as the server ended reads as the end
+	for self.server.ctx.Err() == nil {
 		select {
 		case <-stop:
 			// go-imap may have moved on already, so a stopped IDLE polls no more
@@ -351,16 +354,20 @@ func (self *mailImapSession) Idle(w *imapserver.UpdateWriter, stop <-chan struct
 		if err != nil {
 			return err
 		}
+		if self.server.ctx.Err() != nil {
+			// a server that ended as the poll ran asks the clock for nothing
+			return nil
+		}
 		select {
 		case <-stop:
 			return nil
 		case <-self.server.ctx.Done():
-			return nil
 		case <-revised:
 		case <-hinted:
 		case <-self.server.clock.After(self.server.settings.IdlePollInterval):
 		}
 	}
+	return nil
 }
 
 // One of IDLE's polls: the session read under commandLock, the folder read without it, and what moved applied under it

@@ -35,10 +35,13 @@ type streamKeepaliveAct struct {
 	code protocol.StreamResetCode
 }
 
-// The keepalive loop. See the file header.
+// The keepalive loop. See the file header. No wake acts once the dispatcher has closed, a wake or a change taken as it
+// closed included, so no Ping goes and no stream is reset past the end, and a closed dispatcher asks the clock for
+// nothing.
 func (self *Subprotocol) runStreamKeepalive() {
 	defer self.handlers.Done()
-	for {
+	// select takes any of its ready cases at random: a wake or a change taken as the dispatcher closed reads as the end
+	for self.ctx.Err() == nil {
 		_, changed := self.streams.change.Get()
 		now := self.clock.Now()
 		acts, next := self.streamKeepaliveActs(now)
@@ -52,6 +55,10 @@ func (self *Subprotocol) runStreamKeepalive() {
 				self.resetPeerStreams(act.peerId, act.code, nil)
 				testHookBarrier("stream.keepalive_reset.after", key)
 			}
+		}
+		if self.ctx.Err() != nil {
+			// a dispatcher that closed as the acts ran asks the clock for nothing
+			return
 		}
 		var wake <-chan time.Time
 		if !next.IsZero() {
@@ -69,7 +76,6 @@ func (self *Subprotocol) runStreamKeepalive() {
 		case <-wake:
 		case <-changed:
 		case <-self.ctx.Done():
-			return
 		}
 	}
 }

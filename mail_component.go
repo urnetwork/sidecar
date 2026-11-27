@@ -206,10 +206,13 @@ func (self *MailClient) seams() *mailComponentSeams {
 	return seams
 }
 
-// A generation's passes until it ends, then its parts stopped.
+// A generation's passes until it ends, then its parts stopped. No pass starts once the generation has ended, a change
+// or a timer taken as it ended included, so nothing starts, publishes or binds on the dead generation, and an ended
+// generation asks the clock for nothing.
 func (self *MailClient) runGeneration(run *mailComponentRun) {
 	defer self.stopRun(run)
-	for {
+	// select takes any of its ready cases at random: a change or a timer taken as the generation ended reads as the end
+	for run.ctx.Err() == nil {
 		changed := func() chan struct{} {
 			self.stateLock.Lock()
 			defer self.stateLock.Unlock()
@@ -219,9 +222,12 @@ func (self *MailClient) runGeneration(run *mailComponentRun) {
 		if !self.pass(run) {
 			wait = self.settings.UnboundCheckInterval
 		}
+		if run.ctx.Err() != nil {
+			// a generation that ended as the pass ran asks the clock for nothing
+			return
+		}
 		select {
 		case <-run.ctx.Done():
-			return
 		case <-changed:
 		case <-self.clock.After(wait):
 		}

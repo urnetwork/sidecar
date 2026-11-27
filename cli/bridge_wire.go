@@ -433,7 +433,7 @@ type urBridgeDaemonArgs struct {
 	// own cap, device.BridgeSettings.ClockCheckInterval, the one interval on a desktop. Non-positive runs them only at
 	// a resume.
 	ClockCheckInterval time.Duration
-	// What the cap's waits read. Nil is real time.
+	// What the cap's and the shared blocks' waits read. Nil is real time.
 	Clock sidecar.Clock
 }
 

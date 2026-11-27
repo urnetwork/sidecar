@@ -144,16 +144,21 @@ func (self *indexSchedule) add(args *indexScheduleRefArgs) *indexScheduleRef {
 }
 
 // Ticks every TickInterval on the schedule's clock until ctx ends, handing each tick's outcomes to observe, which may
-// be nil.
+// be nil. No tick starts once ctx has ended, a timer taken as it ended included, so no merge, roll-up or backfill runs
+// on the dead context, and an ended ctx asks the clock for nothing.
 func (self *indexSchedule) Run(ctx context.Context, observe func(ticks []*indexScheduleTick)) {
-	for {
+	// select takes either of its ready cases at random: a timer taken as ctx ended reads as the end
+	for ctx.Err() == nil {
 		ticks := self.tick(ctx)
 		if observe != nil {
 			observe(ticks)
 		}
+		if ctx.Err() != nil {
+			// a schedule that ended as the tick ran asks the clock for nothing
+			return
+		}
 		select {
 		case <-ctx.Done():
-			return
 		case <-self.clock.After(self.settings.TickInterval):
 		}
 	}

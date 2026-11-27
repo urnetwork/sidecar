@@ -44,6 +44,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/urnetwork/sidecar/protocol"
@@ -115,6 +116,9 @@ type SessionJournal struct {
 	clock    Clock
 	random   io.Reader
 	gap      func(runId Id, code string)
+	// whether history stops leaving the device now (§24.10's caps, session_cap.go): a part that would need a blob is
+	// kept by hash and size; nil for never
+	capped atomic.Pointer[func() bool]
 
 	journalLock sync.Mutex
 	stateLock   sync.Mutex
@@ -182,6 +186,22 @@ func NewSessionJournal(args *SessionJournalArgs) (*SessionJournal, error) {
 // Sets the push interval from the harness config's record.session_push_secs, within its bounds.
 func (self *SessionJournal) SetPushSecs(pushSecs int) {
 	self.record.SetRideInterval(self.settings.PushIntervalFor(pushSecs))
+}
+
+// Sets what says history stops leaving the device (§24.10's caps): while it answers true a part that would need a blob
+// is kept by hash and size, omitted, with the run's gap oversize. Nil, the default, never caps.
+func (self *SessionJournal) SetCapped(capped func() bool) {
+	if capped == nil {
+		self.capped.Store(nil)
+		return
+	}
+	self.capped.Store(&capped)
+}
+
+// Whether history is at a cap now.
+func (self *SessionJournal) isCapped() bool {
+	capped := self.capped.Load()
+	return capped != nil && (*capped)()
 }
 
 // Lets the turn's session entries leave, in the run's next push (D-CTXH-12).
@@ -365,7 +385,8 @@ func (self *SessionJournal) journalNode(state *sessionJournalRun, run *SessionRu
 	recordBody := self.settings.body()
 	oversize := 0
 	item, cuts, err := sessionCutParts(value, recordBody, func(size uint64) bool {
-		return self.chargeRunHour(state, int64(size))
+		// at a cap a part that would need a blob is kept by hash and size, the run's gap oversize (§24.10)
+		return !self.isCapped() && self.chargeRunHour(state, int64(size))
 	})
 	if err != nil {
 		return nil, err

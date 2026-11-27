@@ -151,7 +151,7 @@ func SessionRebuild(ctx context.Context, args *SessionRebuildArgs) (*SessionRebu
 		node, ok := view.Node(nodeId)
 		if !ok {
 			// a node this device does not hold: erased, away, or none
-			tail = append(tail, &SessionRebuiltNode{RunId: view.RunId, NodeId: nodeId, Check: SessionCheckUnverifiable, Why: "a node whose body is not held"})
+			tail = append(tail, sessionRebuildMissing(view, nodeId))
 			missingNode = true
 			break
 		}
@@ -298,6 +298,28 @@ func SessionRebuild(ctx context.Context, args *SessionRebuildArgs) (*SessionRebu
 		rebuilt.Check = SessionCheckVerified
 	}
 	return rebuilt, nil
+}
+
+// A node a rebuild's path names that its run's view does not hold (CTXH-M11-05; §24.10's after row): erased where every
+// node of the run this device does not hold is erased, so the node can be none other, as a fork's path reads once its
+// source run is erased; else unverifiable, its body away (withheld, dropped, not fetched). Never an alarm.
+func sessionRebuildMissing(view *SessionRunView, nodeId Id) *SessionRebuiltNode {
+	missing := &SessionRebuiltNode{RunId: view.RunId, NodeId: nodeId, Check: SessionCheckUnverifiable, Why: "a node whose body is not held"}
+	erased := 0
+	for _, read := range view.Nodes {
+		switch {
+		case read.Body != nil:
+		case read.State.KeyGone():
+			erased += 1
+		default:
+			return missing
+		}
+	}
+	if 0 < erased {
+		missing.State = RecordEntryErased
+		missing.Why = "erased"
+	}
+	return missing
 }
 
 // A mail tool's result kept by reference (§24.9), re-rendered from its mailbox: the item with the text put back as the
