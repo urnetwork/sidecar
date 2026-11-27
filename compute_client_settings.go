@@ -67,6 +67,11 @@ type ComputeClientSettings struct {
 	// The most rows one answer of the charges, statement or spend routes may hold before the client refuses it
 	// whole: 10,000, past a month's day rows for a busy network, so a broken answer cannot fill memory.
 	AnswerMaxRowCount int
+
+	// The Harness's failure choice "raise the budget" (DESIGN-COMPUTE §7.4) files kind 21 at this many times the
+	// agent's cap for the period that ran out: 2, which the person approves or not as the card shows it. A reading:
+	// the design names no amount (BAL-M12-20).
+	BudgetRaiseCapMultiple int64
 }
 
 // The component's defaults, the only place one is set.
@@ -90,5 +95,6 @@ func DefaultComputeClientSettings() *ComputeClientSettings {
 		ChargesPageRowCount:        100,
 		CursorMaxByteCount:         256,
 		AnswerMaxRowCount:          10000,
+		BudgetRaiseCapMultiple:     2,
 	}
 }
