@@ -188,6 +188,8 @@ type GatewayServer struct {
 	hosts GatewayHosts
 	// mcp's run index, set once the MCP server is built; nil binds no call (gateway_bind.go)
 	binder GatewayRunBinder
+	// the fronts mounted on it (gateway_responses.go), drained at Close; nil while none are
+	fronts *GatewayFronts
 }
 
 // A server over args. It serves nothing until Start.
@@ -512,9 +514,19 @@ func (self *GatewayServer) DaemonMethods() []*DaemonMethod {
 	}
 }
 
-// Stops serving for good: requests in flight get ShutdownTimeout, and the server's copies of the unit's sockets close
-// too, the unit keeping its own.
+// Stops serving for good: the fronts' calls in flight get GatewaySettings.PlannedRestartWait to end, new calls refused
+// meanwhile (§8.5's planned restart), then requests in flight get ShutdownTimeout, and the server's copies of the
+// unit's sockets close too, the unit keeping its own.
 func (self *GatewayServer) Close() {
+	fronts := func() *GatewayFronts {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		return self.fronts
+	}()
+	if fronts != nil {
+		fronts.Drain(context.Background())
+		fronts.Close()
+	}
 	self.reloadLock.Lock()
 	defer self.reloadLock.Unlock()
 	server, served, listener, files := func() (*http.Server, chan struct{}, *GatewayListener, []*os.File) {
