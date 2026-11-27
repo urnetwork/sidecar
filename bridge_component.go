@@ -243,6 +243,8 @@ type BridgeComponent struct {
 	removeEntry  func()
 	bindings     *BridgeBindingCache
 	bindingsWake chan struct{}
+	// closed when fetchBindings returns
+	bindingsDone chan struct{}
 	// the rows of the shares this host serves, which the fetcher keeps and a compile reads (BridgeCompileLocal.ShareTables)
 	shareTables *BridgeShareTableView
 
@@ -320,6 +322,7 @@ func NewBridgeComponent(ctx context.Context, args *BridgeComponentArgs) (*Bridge
 		tip:          NewMonitorValue[uint64](0),
 		bindings:     NewBridgeBindingCache(settings.BindingRetainTimeout, settings.BindingMaxCount),
 		bindingsWake: make(chan struct{}, 1),
+		bindingsDone: make(chan struct{}),
 		compileRetry: settings.CompileRetryInterval,
 		parts:        args.parts,
 	}
@@ -518,7 +521,8 @@ func (self *BridgeComponent) addServing(delta int) {
 
 // 12.2.5's step 3: replays every entry above the sink's state pin with its denials, waiting for the client's follow
 // where its store lagged the posture's pin, then compiles at the tip where one can run. Returns once caught up, or
-// with ctx's error.
+// with ctx's error. No catch_up_waiting is raised once ctx has ended, its timer taken as ctx ended included, and an
+// ended ctx asks the clock for nothing.
 func (self *BridgeComponent) catchUp(ctx context.Context) error {
 	alarmed := false
 	waitStart := self.clock.Now()
@@ -557,7 +561,7 @@ func (self *BridgeComponent) catchUp(ctx context.Context) error {
 			reached <- err
 		}()
 		var alarmAfter <-chan time.Time
-		if !alarmed {
+		if !alarmed && ctx.Err() == nil {
 			// for the alarm's time itself, so a move of the clock as the wait is set cannot leave it late (QD-1425)
 			alarmAfter = ClockAfterAt(self.clock, waitStart.Add(self.settings.CatchUpAlarmTimeout))
 		}
@@ -568,6 +572,11 @@ func (self *BridgeComponent) catchUp(ctx context.Context) error {
 				return ctx.Err()
 			}
 		case <-alarmAfter:
+			// select takes any of its ready cases at random: the alarm's timer taken as ctx ended raises nothing
+			if err := ctx.Err(); err != nil {
+				cancel()
+				return err
+			}
 			alarmed = true
 			self.emitAlarm(BridgeAlarm{Reason: SidecarBridgeAlarmCatchUpWaiting, N: lagging,
 				Detail: "the config's follow lags the device role's pin; no provider until it catches up"})
@@ -602,7 +611,9 @@ func (self *BridgeComponent) currentSink() BridgeStateSink {
 	return self.sink
 }
 
-// Ends the component: its goroutines, and the entry callback. The device role is the caller's.
+// Ends the component: its goroutines, and the entry callback. The device role is the caller's. The binding fetcher is
+// joined too, so no pass of its saves the cache once Close has returned: each of its steps ends with the component's
+// context, and it takes no lock Close's callers hold.
 func (self *BridgeComponent) Close() {
 	self.cancel()
 	if self.removeEntry != nil {
@@ -610,6 +621,7 @@ func (self *BridgeComponent) Close() {
 	}
 	<-self.done
 	<-self.shareMode.done
+	<-self.bindingsDone
 	self.stopReach()
 }
 
@@ -649,10 +661,12 @@ func (self *BridgeComponent) Compiled() *BridgeCompiled {
 	return self.compiled
 }
 
-// The loop that owns every call into the sink (the file's comment).
+// The loop that owns every call into the sink (the file's comment). No turn starts once the component has closed, a
+// compile's timer or a tip taken as it closed included, so the sink is handed no entry and no compile past the end.
 func (self *BridgeComponent) run() {
 	defer close(self.done)
-	for {
+	// select takes any of its ready cases at random: a case taken as the component closed reads as the end
+	for self.ctx.Err() == nil {
 		_, tipChanged := self.tip.Get()
 		var reads []*BridgeConfigEntry
 		func() {
@@ -666,6 +680,10 @@ func (self *BridgeComponent) run() {
 		}()
 		if 0 < len(reads) {
 			self.handEntries(reads)
+		}
+		if self.ctx.Err() != nil {
+			// a component that closed as the entries went asks the clock for nothing
+			return
 		}
 		var compileAt <-chan time.Time
 		if self.compileWanted {
@@ -681,7 +699,6 @@ func (self *BridgeComponent) run() {
 		}
 		select {
 		case <-self.ctx.Done():
-			return
 		case work := <-self.requests:
 			work()
 		case <-tipChanged:
@@ -1033,18 +1050,24 @@ func (self *BridgeComponent) loadBindings(env *SidecarEnv) {
 // The binding fetcher: after each compile, and each BindingRefreshInterval, every binding a compile waits for and
 // every current one past its refresh, verified and kept, a share link host's under the network and key its alias
 // pinned; and the rows of the shares a compile waits for, and each ShareTableRefreshInterval those it compiled. A
-// change wants a compile. Off the compile's path.
+// change wants a compile. Off the compile's path. No pass starts once the component has closed, a wake or a timer
+// taken as it closed included, so no binding expires and no cache is saved past the end, and a closed component asks
+// the clock for nothing.
 func (self *BridgeComponent) fetchBindings() {
 	fetchedAt := map[Id]time.Time{}
 	// a share link host's network and pinned key, by its sidecar_id, kept for its refreshes
 	shareHosts := map[Id]BridgeCompileWait{}
 	sharesRefreshedAt := time.Time{}
-	for {
+	defer close(self.bindingsDone)
+	// select takes any of its ready cases at random: a wake or a timer taken as the component closed reads as the end
+	for self.ctx.Err() == nil {
 		select {
 		case <-self.ctx.Done():
-			return
 		case <-self.bindingsWake:
 		case <-self.clock.After(self.settings.BindingRefreshInterval):
+		}
+		if self.ctx.Err() != nil {
+			return
 		}
 		var api *SidecarApi
 		var store SidecarStore

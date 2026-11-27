@@ -229,7 +229,9 @@ func (self *SidecarScimSigner) designated(sidecarId Id) bool {
 	return state.ScimSignerStanding(sidecarId, self.sidecar.clock.Now())
 }
 
-// The component's part of one generation (the file header), until ctx ends, when the source goes.
+// The component's part of one generation (the file header), until ctx ends, when the source goes. No look starts once
+// ctx has ended, a wake or a poll taken as it ended included, so no signer is installed and no pass runs or is
+// counted past the end, and an ended ctx asks the clock for nothing.
 func (self *SidecarScimSigner) run(ctx context.Context, sidecarId Id, api *SidecarApi) {
 	wake := make(chan struct{}, 1)
 	poke := func() {
@@ -251,10 +253,14 @@ func (self *SidecarScimSigner) run(ctx context.Context, sidecarId Id, api *Sidec
 			status.Installed = false
 		})
 	}()
+	if ctx.Err() != nil {
+		return
+	}
 	// the first look's pass is due at once; then one every PollInterval while the source stays
 	due := true
 	poll := self.sidecar.clock.After(self.settings.PollInterval)
-	for {
+	// select takes any of its ready cases at random: a wake or a poll taken as ctx ended reads as the end
+	for ctx.Err() == nil {
 		if current := self.sidecar.authority(); current != authority {
 			removeCallback()
 			authority, removeCallback = current, func() {}
@@ -307,11 +313,13 @@ func (self *SidecarScimSigner) run(ctx context.Context, sidecarId Id, api *Sidec
 		}
 		select {
 		case <-ctx.Done():
-			return
 		case <-wake:
 		case <-poll:
-			due = true
-			poll = self.sidecar.clock.After(self.settings.PollInterval)
+			// a poll taken as ctx ended asks the clock for no next one
+			if ctx.Err() == nil {
+				due = true
+				poll = self.sidecar.clock.After(self.settings.PollInterval)
+			}
 		}
 	}
 }

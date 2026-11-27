@@ -348,7 +348,9 @@ func bridgeDiscoveryServes(input *bridgeDiscoveryHostInput) bool {
 }
 
 // The host loop (the file's host row): recomputes what the host publishes at each wake and the next expiry, and runs
-// the gatherer on demand, until Close.
+// the gatherer on demand, until Close. No pass starts once the component has closed, a wake or a timer taken as it
+// closed included, so nothing is published or written to the sealed settings past the end, and a closed component asks
+// the clock for nothing.
 func (self *BridgeDiscoveryComponent) run() {
 	defer close(self.done)
 	var gatherCancel context.CancelFunc
@@ -367,7 +369,8 @@ func (self *BridgeDiscoveryComponent) run() {
 		}
 	}
 	defer stopGather()
-	for {
+	// select takes any of its ready cases at random: a wake or a timer taken as the component closed reads as the end
+	for self.ctx.Err() == nil {
 		now := self.clock.Now()
 		input, serving, published := self.refresh(now)
 		self.upkeepShares(input, now)
@@ -412,13 +415,16 @@ func (self *BridgeDiscoveryComponent) run() {
 				}
 			}
 		}()
-		// set for its time itself (QD-1425), a millisecond past now at the least, so a pass that leaves a time passed
+		if self.ctx.Err() != nil {
+			// a component that closed as the pass ran asks the clock for nothing
+			return
+		}
+		// set for its time itself (QD-1425), PassMinWait past now at the least, so a pass that leaves a time passed
 		// cannot spin
 		select {
 		case <-self.ctx.Done():
-			return
 		case <-self.wake:
-		case <-ClockAfterAt(self.clock, laterTime(next, now.Add(time.Millisecond))):
+		case <-ClockAfterAt(self.clock, laterTime(next, now.Add(self.settings.PassMinWait))):
 		}
 	}
 }
@@ -578,7 +584,7 @@ func (self *BridgeDiscoveryComponent) viewer(ctx context.Context, dispatcher bri
 		next := self.rebuildView()
 		var expiry <-chan time.Time
 		if !next.IsZero() {
-			expiry = ClockAfterAt(self.clock, laterTime(next, self.clock.Now().Add(time.Millisecond)))
+			expiry = ClockAfterAt(self.clock, laterTime(next, self.clock.Now().Add(self.settings.PassMinWait)))
 		}
 		select {
 		case <-ctx.Done():

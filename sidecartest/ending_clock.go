@@ -10,8 +10,10 @@
 //
 // Now stays where the clock started, unless MoveOnFire has it move to each wait's time as the wait fires, as a real
 // timer's firing finds the time passed, for a loop that reads the clock again after its wait. AfterFunc never calls
-// its function. The clock is no sidecar.ClockAt, so a wait for a time, sidecar.ClockAfterAt's, is a wait for the
-// timeout to it from Now. Safe for concurrent use.
+// its function, unless FireAfterFuncs has its waits counted and fired as After's are, the function called on the
+// setting goroutine, after the end when it is the end's wait, so a wake it pokes is ready beside the end. The clock is
+// no sidecar.ClockAt, so a wait for a time, sidecar.ClockAfterAt's, is a wait for the timeout to it from Now. Safe for
+// concurrent use.
 
 package sidecartest
 
@@ -32,6 +34,8 @@ type EndingClock struct {
 	now       time.Time
 	// whether a wait that fires moves now to its time
 	moves bool
+	// whether AfterFunc's waits are taken and fired as After's are
+	firesAfterFuncs bool
 	// the counted wait, from 1, at which end runs; 0 for none, which fires every counted wait
 	endIndex int
 	end      func()
@@ -78,28 +82,39 @@ func (self *EndingClock) MoveOnFire() {
 	self.moves = true
 }
 
+// Has AfterFunc's waits taken and fired as After's are, each function that fires called on the setting goroutine
+// before AfterFunc returns: only for a function that takes no lock its setter holds.
+func (self *EndingClock) FireAfterFuncs() {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.firesAfterFuncs = true
+}
+
+// Takes a wait of timeout once the clock is open: whether it fires, where the clock then stands, and the end to run
+// first when it is the end's.
+func (self *EndingClock) ask(timeout time.Duration) (fires bool, firedAt time.Time, end func()) {
+	<-self.opened
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.askCount += 1
+	if self.counts != nil && !self.counts(timeout) {
+		return false, time.Time{}, nil
+	}
+	self.waitCount += 1
+	if self.waitCount == self.endIndex {
+		end = self.end
+	}
+	fires = self.endIndex == 0 || self.waitCount <= self.endIndex
+	if fires && self.moves {
+		self.now = self.now.Add(max(0, timeout))
+	}
+	return fires, self.now, end
+}
+
 // See sidecar.Clock: blocks until Open, then fires at once when it is a counted wait at or before the end's, running
 // the end first when it is the end's.
 func (self *EndingClock) After(timeout time.Duration) <-chan time.Time {
-	<-self.opened
-	var end func()
-	fires, firedAt := func() (bool, time.Time) {
-		self.stateLock.Lock()
-		defer self.stateLock.Unlock()
-		self.askCount += 1
-		if self.counts != nil && !self.counts(timeout) {
-			return false, time.Time{}
-		}
-		self.waitCount += 1
-		if self.waitCount == self.endIndex {
-			end = self.end
-		}
-		fires := self.endIndex == 0 || self.waitCount <= self.endIndex
-		if fires && self.moves {
-			self.now = self.now.Add(max(0, timeout))
-		}
-		return fires, self.now
-	}()
+	fires, firedAt, end := self.ask(timeout)
 	// the end lands before the timer's channel is handed back, so the waiter's select finds both ready
 	if end != nil {
 		end()
@@ -111,10 +126,31 @@ func (self *EndingClock) After(timeout time.Duration) <-chan time.Time {
 	return fire
 }
 
-// See sidecar.Clock. It never calls function.
+// See sidecar.Clock. It never calls function, unless FireAfterFuncs: then it blocks until Open and takes the wait as
+// After does, calling function before it returns when the wait fires, after the end when it is the end's.
 func (self *EndingClock) AfterFunc(timeout time.Duration, function func()) (stop func() bool) {
+	firesAfterFuncs := func() bool {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		return self.firesAfterFuncs
+	}()
+	if !firesAfterFuncs {
+		return func() bool {
+			return true
+		}
+	}
+	fires, _, end := self.ask(timeout)
+	if end != nil {
+		end()
+	}
+	if !fires {
+		return func() bool {
+			return true
+		}
+	}
+	function()
 	return func() bool {
-		return true
+		return false
 	}
 }
 

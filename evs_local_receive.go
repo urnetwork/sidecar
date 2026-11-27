@@ -802,25 +802,38 @@ func (self *EvsGitReceiver) dueQueue() ([]Id, time.Time) {
 }
 
 // The queue's loop until ctx ends: a round at each wake and each push due (queueRound), and every SENT attempt asked
-// again each JournalResolveInterval.
+// again each JournalResolveInterval. No round or resolve starts once ctx has ended, a wake or a timer taken as it
+// ended included, so no due push is taken off the queue or held, and no attempt resolved, on the dead context, and an
+// ended ctx asks the clock for nothing.
 func (self *EvsGitReceiver) runQueue(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	resolveAt := self.clock.After(self.settings.JournalResolveInterval)
-	for {
+	// select takes any of its ready cases at random: a case taken as ctx ended reads as the end
+	for ctx.Err() == nil {
 		next := self.queueRound(ctx)
+		if err := ctx.Err(); err != nil {
+			// a queue that ended as the round ran asks the clock for nothing
+			return err
+		}
 		var timer <-chan time.Time
 		if !next.IsZero() {
 			timer = ClockAfterAt(self.clock, next)
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
 		case <-self.queueWakeup:
 		case <-timer:
 		case <-resolveAt:
-			resolveAt = self.clock.After(self.settings.JournalResolveInterval)
-			self.resolveAll(ctx)
+			// a resolve's timer taken as ctx ended resolves nothing
+			if ctx.Err() == nil {
+				resolveAt = self.clock.After(self.settings.JournalResolveInterval)
+				self.resolveAll(ctx)
+			}
 		}
 	}
+	return ctx.Err()
 }
 
 // One round of the queue: where a client generation began since the last round (reconnected), the holds offline left

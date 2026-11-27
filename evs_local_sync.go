@@ -196,7 +196,9 @@ func (self *EvsGitSyncEngine) Run(ctx context.Context) error {
 	return self.run(ctx)
 }
 
-// Run's loop, its start already made.
+// Run's loop, its start already made. No replay, gc or resync starts once ctx has ended, a wake or the resync's timer
+// taken as it ended included, so the mount is not written on the dead context, and an ended ctx asks the clock for
+// nothing.
 func (self *EvsGitSyncEngine) run(ctx context.Context) error {
 	repoId := self.mount.RepoId
 	remove := self.client.AddRepoChangeListener(&repoId, func(change *EvsRepoChange) {
@@ -214,16 +216,26 @@ func (self *EvsGitSyncEngine) run(ctx context.Context) error {
 		}
 	}
 	wakeAll()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	resync := self.clock.After(self.settings.SyncResyncInterval)
 	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
 		case <-self.wakeup:
 		case <-resync:
-			resync = self.clock.After(self.settings.SyncResyncInterval)
-			wakeAll()
-			continue
+			// a resync's timer taken as ctx ended wakes nothing
+			if ctx.Err() == nil {
+				resync = self.clock.After(self.settings.SyncResyncInterval)
+				wakeAll()
+				continue
+			}
+		}
+		// select takes any of its ready cases at random: a wake or the resync's timer taken as ctx ended reads as the
+		// end
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 		for _, refId := range self.takeWakes() {
 			if err := self.Replay(ctx, refId); err != nil && ctx.Err() == nil {

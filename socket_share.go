@@ -540,13 +540,18 @@ func (self *DaemonSockets) LiveShareCount() int {
 }
 
 // Loads and listens every ResumeInterval until the daemon ends, so a share comes back after an unlock, a reconnect or
-// a listener the service closed.
+// a listener the service closed. No load starts once the daemon has ended, a timer taken as it ended included, so no
+// share resumes or listens past the end, and an ended daemon asks the clock for nothing.
 func (self *socketShares) run() {
-	for {
+	// select takes either of its ready cases at random: a timer taken as the daemon ended reads as the end
+	for self.ctx.Err() == nil {
 		self.load()
+		if self.ctx.Err() != nil {
+			// shares that ended as the load ran ask the clock for nothing
+			return
+		}
 		select {
 		case <-self.ctx.Done():
-			return
 		case <-self.clock.After(self.settings.ResumeInterval):
 		}
 	}

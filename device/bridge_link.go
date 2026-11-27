@@ -486,11 +486,18 @@ func (self *BridgeLinkManager) checkClock() {
 // Keeps the links: one maintain pass at each wake, and a timer for the next time a link's state changes, capped by
 // ClockCheckInterval, so a wall-clock time such as a replaced link's drain end is read again at least that often (the
 // pass is the same either way: it acts on what is due at its now). The timer is set for its time itself
-// (clockAfterFuncAt), so a move of the clock between the pass and the timer cannot leave it late (QD-1425).
+// (clockAfterFuncAt), so a move of the clock between the pass and the timer cannot leave it late (QD-1425). No pass
+// starts once the manager has closed, a wake its timer or a check gave as it closed included, so no link is closed
+// or built past the end, and a closed manager asks the clock for nothing.
 func (self *BridgeLinkManager) run() {
 	defer close(self.done)
-	for {
+	// select takes either of its ready cases at random: a wake taken as the manager closed reads as the end
+	for self.ctx.Err() == nil {
 		next := self.maintain()
+		if self.ctx.Err() != nil {
+			// a manager that closed as the pass ran asks the clock for nothing
+			return
+		}
 		stop := func() bool { return false }
 		if !next.IsZero() {
 			wakeAt := next
@@ -504,8 +511,6 @@ func (self *BridgeLinkManager) run() {
 		}
 		select {
 		case <-self.ctx.Done():
-			stop()
-			return
 		case <-self.wake:
 		}
 		stop()

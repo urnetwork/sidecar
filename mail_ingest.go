@@ -528,10 +528,13 @@ func (self *MailIngestSettings) retryWait() time.Duration {
 // answered runs out, never two within gap of each other, so wakes that come while a pass runs or within gap after it
 // bring one pass. A wait that is not positive leaves the next pass to a wake alone. Both waits run from the pass's end,
 // each a time waited for itself (QD-1425), so a move of the clock past the gap's end does not push the timed wait
-// later. MailIngestor.Run's loop, and a group repo's on the mail component (mail_component_group.go).
+// later. MailIngestor.Run's loop, and a group repo's on the mail component (mail_component_group.go). No pass starts
+// once ctx has ended, a wake or a timer taken as it ended included, so nothing is ingested or written on the dead
+// context, and an ended ctx asks the clock for nothing.
 func mailRunPasses(ctx context.Context, clock Clock, gap time.Duration, wake <-chan struct{}, pass func() (wait time.Duration)) {
 	gap = max(gap, 0)
-	for {
+	// select takes any of its ready cases at random: a wake or a timer taken as ctx ended reads as the end
+	for ctx.Err() == nil {
 		wait := pass()
 		if ctx.Err() != nil {
 			return
@@ -543,6 +546,9 @@ func mailRunPasses(ctx context.Context, clock Clock, gap time.Duration, wake <-c
 			case <-ctx.Done():
 				return
 			case <-ClockAfterAt(clock, passEnd.Add(gap)):
+			}
+			if ctx.Err() != nil {
+				return
 			}
 		}
 		if 0 < wait && wait <= gap {
@@ -556,7 +562,6 @@ func mailRunPasses(ctx context.Context, clock Clock, gap time.Duration, wake <-c
 		}
 		select {
 		case <-ctx.Done():
-			return
 		case <-wake:
 		case <-timer:
 		}
