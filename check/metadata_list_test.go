@@ -93,6 +93,13 @@ var metadataListAdditions = []metadataListAddition{
   why: paying providers in gamma and holding no call or enclave past what a provider's account can serve (DESIGN-COMPUTE §10.4, §10.5, §10.7); one catalog every device lists and every remote charge is priced from (§6.3, §9.6)
 `,
 	},
+	{
+		// skill-m11-01-repo-create-label-form (QD-1434): an agent repo's keyed label, RepoCreate's label_mac and its
+		// folded row's, under api-7 (SKILL-M11-01; agent-repos-acl-forms)
+		question: "skill-m11-01-repo-create-label-form",
+		block:    `repos with kind (agents, one a member, and agent, one an agent, so api sees how many agent repos a member has, DESIGN-COMPUTE §20.4; listeners, one a network, §26.6)`,
+		list:     `repos with kind (agents, one a member, and agent, one an agent, so api sees how many agent repos a member has, DESIGN-COMPUTE §20.4, and each agent repo's keyed label, the first 16 bytes of HMAC-SHA256 of agent/<name> under a key only the network's sidecars derive, filed in its RepoCreate and kept in its row, so api sees a per-network value that names no agent and links nothing across networks, DESIGN-COMPUTE §20.7, QD-1434; listeners, one a network, §26.6)`,
+	},
 }
 
 // §2.8's block with each addition in place, in order, and a finding for each that does not apply.
