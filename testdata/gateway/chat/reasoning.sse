@@ -1,0 +1,12 @@
+data: {"id":"chatcmpl-000000000000000300000000000000040000000000000005","object":"chat.completion.chunk","created":1795770000,"model":"chutes-kimi-k3-tee-high","choices":[{"index":0,"delta":{"role":"assistant","content":""},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"chatcmpl-000000000000000300000000000000040000000000000005","object":"chat.completion.chunk","created":1795770000,"model":"chutes-kimi-k3-tee-high","choices":[{"index":0,"delta":{"reasoning_content":"A listing "},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"chatcmpl-000000000000000300000000000000040000000000000005","object":"chat.completion.chunk","created":1795770000,"model":"chutes-kimi-k3-tee-high","choices":[{"index":0,"delta":{"reasoning_content":"is asked."},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"chatcmpl-000000000000000300000000000000040000000000000005","object":"chat.completion.chunk","created":1795770000,"model":"chutes-kimi-k3-tee-high","choices":[{"index":0,"delta":{"content":"Listing."},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"chatcmpl-000000000000000300000000000000040000000000000005","object":"chat.completion.chunk","created":1795770000,"model":"chutes-kimi-k3-tee-high","choices":[{"index":0,"delta":{},"logprobs":null,"finish_reason":"stop"}],"usage":{"prompt_tokens":50,"completion_tokens":9,"total_tokens":59,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":6}}}
+
+data: [DONE]
+
