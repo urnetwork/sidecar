@@ -200,7 +200,7 @@ func (self *approvalComputeRenderer) field(name string, value string) {
 	self.shown[name] = value
 }
 
-// text escaped as one line, past the bound cut and withheld, a value holding escaped characters flagged.
+// A string escaped as one line, past the bound cut and withheld, a value holding escaped characters flagged.
 func (self *approvalComputeRenderer) text(name string, text string) string {
 	if self.settings.TextMaxByteCount < len(text) {
 		self.withhold("%s holds %d bytes, more than this device shows whole", name, len(text))
