@@ -74,6 +74,10 @@ func runUrAgents(ctx context.Context, cli *urCli, options docopt.Opts) error {
 	}
 	task := urOptionString(options, "<task>")
 	if run, reserved := urAgentsSubcommands[task]; reserved {
+		// a subcommand's word reached the task's line: only one that takes no argument runs from there
+		if task != "ls" && task != "inbox" {
+			return &urExitError{code: urExitUsage, err: fmt.Errorf("ur agents %s takes its arguments: ur agents --help", task)}
+		}
 		return run(ctx, cli, options)
 	}
 	if task == "" && !slices.ContainsFunc(urAgentsSearchFlags, func(flag string) bool {

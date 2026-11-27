@@ -124,6 +124,14 @@ func TestAgentsTaskStillSearches(t *testing.T) {
 	if len(listed) != 3 || len(fake.callsOf(sidecar.DaemonMethodSearchAgents)) != 2 || !strings.Contains(string(listed[2].params), `"retired":true`) {
 		t.Fatalf("the lists: %+v", fake.calls)
 	}
+	// a subcommand's word with none of its arguments is no task, and sends nothing
+	cli.openTty = func() (urTty, error) { return &testTty{lines: []string{"y"}}, nil }
+	if code := testUrRun(cli, "agents", "send"); code != urExitUsage {
+		t.Fatalf("ur agents send alone: exit %d", code)
+	}
+	if len(fake.callsOf(sidecar.DaemonMethodAgentsSend)) != 0 || len(fake.callsOf(sidecar.DaemonMethodSearchAgents)) != 2 {
+		t.Fatalf("ur agents send alone called %+v", fake.calls)
+	}
 }
 
 func TestAgentsLsWithholdsOffATerminal(t *testing.T) {

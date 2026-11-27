@@ -369,11 +369,17 @@ type daemonAgentsHubMessage struct {
 	taints bool
 }
 
-// The watch of client, started where none runs.
+// The watch of client, started where none runs, counted waiting under the hub's lock, so an idle close, which takes the
+// same lock, never closes a watch a caller holds.
 func (self *daemonAgentsHub) watchOf(client *AgentsClient) (*daemonAgentsHubWatch, error) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	if watch := self.watches[client]; watch != nil {
+		func() {
+			watch.stateLock.Lock()
+			defer watch.stateLock.Unlock()
+			watch.waiting += 1
+		}()
 		return watch, nil
 	}
 	watch := &daemonAgentsHubWatch{hub: self, client: client, updated: make(chan struct{}), lastUsed: client.clock.Now()}
@@ -385,6 +391,7 @@ func (self *daemonAgentsHub) watchOf(client *AgentsClient) (*daemonAgentsHubWatc
 		return nil, err
 	}
 	watch.watch = personWatch
+	watch.waiting = 1
 	self.watches[client] = watch
 	return watch, nil
 }
@@ -452,11 +459,6 @@ func (self *daemonAgentsHub) wait(ctx context.Context, client *AgentsClient, ses
 	if err != nil {
 		return nil, err
 	}
-	func() {
-		watch.stateLock.Lock()
-		defer watch.stateLock.Unlock()
-		watch.waiting += 1
-	}()
 	defer self.leave(watch)
 	if cursorText == "" {
 		reply, _ := watch.answer(^uint64(0)>>1, include)
