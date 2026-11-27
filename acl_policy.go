@@ -727,6 +727,26 @@ func (self *aclPolicyReader) checkRule(rule *aclPolicyRule) error {
 	return nil
 }
 
+// Refuses a rule's evs:kind:<kind> destination where it cannot mean what it says: in a request, since a rule over
+// every repo of a kind is a document's default and no requester's to ask for, and in a grant beside read, write or
+// admin, since such a destination takes deposit alone, an owner-bound kind's readers coming only from its owner's
+// consent (§8.5, owner decision 126; DESIGN-COMPUTE §16.5, QD-1433).
+func (self *aclPolicyReader) checkRepoKindDestinations(rule *aclPolicyRule, request bool) error {
+	if !slices.ContainsFunc(rule.dst, func(resource AclResource) bool { return resource.Kind == AclResourceRepoKind }) {
+		return nil
+	}
+	if request {
+		return self.refuse(aclPolicyRefusal("evs:kind: names a grant's destination, never a request's"))
+	}
+	for _, action := range rule.allow {
+		switch action {
+		case protocol.AclAction_ACL_ACTION_READ, protocol.AclAction_ACL_ACTION_WRITE, protocol.AclAction_ACL_ACTION_ADMIN:
+			return self.refuse(aclPolicyRefusal("evs:kind: takes deposit alone"))
+		}
+	}
+	return nil
+}
+
 // One entry of grants.
 func (self *aclPolicyReader) readGrant() (AclGrant, error) {
 	grant := AclGrant{}
@@ -825,6 +845,9 @@ func (self *aclPolicyReader) readGrant() (AclGrant, error) {
 	if err := self.checkRule(&rule); err != nil {
 		return AclGrant{}, err
 	}
+	if err := self.checkRepoKindDestinations(&rule, false); err != nil {
+		return AclGrant{}, err
+	}
 	grant.Id, grant.Src, grant.Dst, grant.Allow, grant.Note = rule.id, rule.src, rule.dst, rule.allow, rule.note
 	return grant, nil
 }
@@ -879,6 +902,9 @@ func (self *aclPolicyReader) readRequest() (AclRequest, error) {
 		return AclRequest{}, err
 	}
 	if err := self.checkRule(&rule); err != nil {
+		return AclRequest{}, err
+	}
+	if err := self.checkRepoKindDestinations(&rule, true); err != nil {
 		return AclRequest{}, err
 	}
 	request.Id, request.Src, request.Dst, request.Allow, request.Note = rule.id, rule.src, rule.dst, rule.allow, rule.note

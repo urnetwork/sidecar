@@ -7,6 +7,7 @@
 package sidecar
 
 import (
+	"bytes"
 	"errors"
 	"slices"
 	"testing"
@@ -166,5 +167,73 @@ func TestRegisterRefusedWhileAgentReposOff(t *testing.T) {
 	world.featureOn = true
 	if _, err := laptop.Register(world.ctx, &AgentRegisterArgs{Name: "Fix_It"}); !errors.Is(err, ErrAgentNameInvalid) {
 		t.Fatalf("a name out of the grammar: %v", err)
+	}
+}
+
+// An agent repo's RepoCreate files its name's keyed label under the network's K_label (QD-1434), the person's me repo
+// labeled me alike, and a reader recomputing it finds the repo the member's agent/<name> and no other name's or
+// member's; with no K_label the agent repo is not made, its card naming none, and no label is checked; while
+// agent_repos is off the check answers ErrAgentReposOff.
+func TestRegisterFilesAgentRepoLabel(t *testing.T) {
+	world := newTestAgentCardsWorld(t)
+	laptop := world.client(world.laptop)
+	scout, err := laptop.Register(world.ctx, &AgentRegisterArgs{Name: "scout", Harness: "ur-harness 1.0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	me, err := laptop.RegisterMe(world.ctx, &AgentRegisterMeArgs{Harness: "ur-harness 1.0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, registration := range []struct {
+		name   AgentName
+		repoId Id
+	}{{name: scout.Name, repoId: scout.Card.AgentRepo}, {name: me.Name, repoId: me.Card.AgentRepo}} {
+		if !bytes.Equal(world.agentRepoLabels[registration.repoId], world.labelKey.Mac(registration.name)) {
+			t.Fatalf("%s's repo filed %x", registration.name, world.agentRepoLabels[registration.repoId])
+		}
+		labeled, err := laptop.AgentRepoLabeled(world.ctx, world.member, registration.name, registration.repoId)
+		if err != nil || !labeled {
+			t.Fatalf("%s's repo: %t, %v", registration.name, labeled, err)
+		}
+	}
+	for _, c := range []struct {
+		name     string
+		memberId Id
+		agent    AgentName
+	}{
+		{name: "another name", memberId: world.member, agent: "reviewer"},
+		{name: "another member", memberId: world.otherMember, agent: scout.Name},
+	} {
+		if labeled, err := laptop.AgentRepoLabeled(world.ctx, c.memberId, c.agent, scout.Card.AgentRepo); err != nil || labeled {
+			t.Errorf("%s: %t, %v", c.name, labeled, err)
+		}
+	}
+	if _, err := laptop.AgentRepoLabeled(world.ctx, world.member, "Not A Name", scout.Card.AgentRepo); !errors.Is(err, ErrAgentNameInvalid) {
+		t.Errorf("a name out of the grammar: %v", err)
+	}
+
+	// no K_label: no unlabeled agent repo is made, and no label is checked
+	world.stateLock.Lock()
+	world.labelKey = nil
+	createdBefore := len(world.created)
+	world.stateLock.Unlock()
+	if _, err := laptop.Register(world.ctx, &AgentRegisterArgs{Name: "builder", Harness: "ur-harness 1.0"}); !errors.Is(err, ErrAgentsUnavailable) {
+		t.Fatalf("a registration with no label key: %v", err)
+	}
+	if len(world.created) != createdBefore {
+		t.Fatalf("%d repos made with no label key", len(world.created)-createdBefore)
+	}
+	if view, err := laptop.Card(world.ctx, "builder"); err != nil || view.Card.AgentRepo != (Id{}) {
+		t.Fatalf("builder's card: %+v, %v", view, err)
+	}
+	if _, err := laptop.AgentRepoLabeled(world.ctx, world.member, scout.Name, scout.Card.AgentRepo); !errors.Is(err, ErrAgentsUnavailable) {
+		t.Fatalf("a check with no label key: %v", err)
+	}
+	world.stateLock.Lock()
+	world.featureOn = false
+	world.stateLock.Unlock()
+	if _, err := laptop.AgentRepoLabeled(world.ctx, world.member, scout.Name, scout.Card.AgentRepo); !errors.Is(err, ErrAgentReposOff) {
+		t.Fatalf("a check while agent_repos is off: %v", err)
 	}
 }

@@ -233,10 +233,15 @@ func restoreFirstAclFiles(head *ConfigHead, files map[string][]byte) (*ConfigHea
 	return NewConfigHead(restored)
 }
 
-// The Owner's Team creation includes the fixed starter. Its request rule and grants must
-// fit the network's effective limits, and its policy tests must pass before the first signature.
+// The Owner's Team creation includes the fixed starter, with the rules of each feature the first head turns on
+// (AclTeamStartDocumentFor). Its request rule and grants must fit the network's effective limits, and its policy tests
+// must pass before the first signature.
 func planFirstTeamAcl(ctx context.Context, state *ConfigState, head *ConfigHead, quota *QuotaLimits, settings *SidecarAclWriterSettings, now time.Time) (*AclSavePlan, error) {
-	plan, err := PlanAclSave(ctx, &AclSaveInput{Policy: AclTeamStartDocument(), Head: head, State: state, Limits: aclWriterLimits(quota, settings), Now: now})
+	features, err := aclHeadAuthFeatures(head)
+	if err != nil {
+		return nil, err
+	}
+	plan, err := PlanAclSave(ctx, &AclSaveInput{Policy: AclTeamStartDocumentFor(features), Head: head, State: state, Limits: aclWriterLimits(quota, settings), Now: now})
 	if err != nil {
 		return nil, err
 	}

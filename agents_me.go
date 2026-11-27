@@ -106,8 +106,12 @@ func (self *AgentsClient) ensureMeRepo(ctx context.Context, place *agentsPlace, 
 	if self.args.CreateRepo == nil {
 		return ErrAgentsUnavailable
 	}
+	labelMac, err := self.agentRepoLabelMac(ctx, registration.Name)
+	if err != nil {
+		return fmt.Errorf("agents: the person's agent repo label: %w", err)
+	}
 	memberId := place.memberId
-	repoId, err := self.args.CreateRepo(ctx, &EvsCreateRepoArgs{Kind: protocol.RepoKind_REPO_KIND_AGENT, OwnerMemberId: &memberId})
+	repoId, err := self.args.CreateRepo(ctx, &EvsCreateRepoArgs{Kind: protocol.RepoKind_REPO_KIND_AGENT, OwnerMemberId: &memberId, LabelMac: labelMac})
 	if err != nil {
 		return fmt.Errorf("agents: the person's agent repo: %w", err)
 	}

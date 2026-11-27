@@ -19,7 +19,11 @@ func aclTestKindRepo(fixture *aclTestFixture, kind protocol.RepoKind, ownerId Id
 	if kind == protocol.RepoKind_REPO_KIND_CONFIG {
 		return fixture.configRepo(Id{}, Id{})
 	}
-	repoId, _ := fixture.repo(kind, ownerId)
+	repoId, row := fixture.repo(kind, ownerId)
+	if kind == protocol.RepoKind_REPO_KIND_AGENT {
+		// every agent repo's row carries its RepoCreate's keyed label (QD-1434)
+		row.LabelMac = testAgentRepoLabelMac(repoId.String())
+	}
 	return repoId
 }
 

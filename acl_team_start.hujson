@@ -11,6 +11,12 @@
       "allow": ["dial", "route"] },
     // R-ACL-3's default: a recURd agent reaches its owner's or sponsor's devices on 443
     { "src": ["tag:recurd"], "dst": ["autogroup:self"], "allow": ["dial"], "ip": ["tcp:443"] },
+    // +agent_repos
+    // DESIGN-COMPUTE §16.5's deposit into agent repos (§20.4): members' devices and the agents on them deposit into
+    // every agent repo, an agent's inbox, and read nothing there; a Team narrows it per agent, naming the agent repos
+    // its members deposit into, and another tagged subject deposits only where a rule names it (Q-HARN-9)
+    { "src": ["autogroup:member"], "dst": ["evs:kind:agent"], "allow": ["deposit"] },
+    // -agent_repos
   ],
   "requests": [
     // the team directory's reach requests (§16.11), the implicit document's last rule

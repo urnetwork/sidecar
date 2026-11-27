@@ -184,6 +184,11 @@ func BootstrapNetwork(ctx context.Context, args *ConfigBootstrapArgs) (*ConfigBo
 		if err != nil {
 			return nil, err
 		}
+		// the features first, so the starting policy plans on the head it lands in: Team's starting document holds the
+		// rules of each feature the head turns on, whose forms its compile refuses before (AclTeamStartDocumentFor)
+		if head, err = configHeadWithAuthFeatures(head, args.Sign, AuthFeaturesImplemented()); err != nil {
+			return nil, fmt.Errorf("config bootstrap: the first head's features: %w", err)
+		}
 		if initialize := args.First.Initialize; initialize != nil {
 			head, err = initialize(ctx, genesisLog.State(), head)
 			if err != nil {

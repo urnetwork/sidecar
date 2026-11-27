@@ -301,6 +301,8 @@ func aclTestCheckUnjudged(check AclPolicyCheck) string {
 		if resource.RepoId == (Id{}) && strings.Contains(resource.Name, "*") {
 			return "a check over a set of repos: name one"
 		}
+	case AclResourceRepoKind:
+		return "a check over a set of repos: name one"
 	case AclResourceIp:
 		if !resource.Cidr.IsValid() {
 			return "an ip: name hosts does not hold"

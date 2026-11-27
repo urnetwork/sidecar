@@ -15,8 +15,9 @@
 //	          so two devices' agents racing one name each learn the name they got; a card that stands for this agent
 //	          is its own, re-registered (un-retired where it had retired); one retired NameReuseAfter ago is taken
 //	          over (§20.5's reuse)
-//	3 repo    agent/<name>, kind agent, created when this agent_id's card names none, and the card rewritten to name
-//	          it: one repo per durable agent_id, never per session (§20.14). A child agent_launch started in its
+//	3 repo    agent/<name>, kind agent, its RepoCreate filing the name's keyed label under the network's K_label
+//	          (QD-1434), created when this agent_id's card names none, and the card rewritten to name it: one repo per
+//	          durable agent_id, never per session (§20.14). A child agent_launch started in its
 //	          parent's Harness gets none until its first agent_send (SKILL-M11-04), its card naming its parent, so
 //	          its messages meanwhile land in its nearest ancestor's repo (AgentsClient.AgentRepo); a tagged sidecar,
 //	          which no RepoCreate of the kind takes, is left without one until the enclaves feature's evs_member
@@ -227,8 +228,12 @@ func (self *AgentsClient) ensureAgentRepo(ctx context.Context, place *agentsPlac
 	if self.args.CreateRepo == nil || !place.authority.UntaggedConsented(place.sidecarId, place.memberId) {
 		return nil
 	}
+	labelMac, err := self.agentRepoLabelMac(ctx, registration.Name)
+	if err != nil {
+		return fmt.Errorf("agents: %s's agent repo label: %w", registration.Name, err)
+	}
 	memberId := place.memberId
-	repoId, err := self.args.CreateRepo(ctx, &EvsCreateRepoArgs{Kind: protocol.RepoKind_REPO_KIND_AGENT, OwnerMemberId: &memberId})
+	repoId, err := self.args.CreateRepo(ctx, &EvsCreateRepoArgs{Kind: protocol.RepoKind_REPO_KIND_AGENT, OwnerMemberId: &memberId, LabelMac: labelMac})
 	if err != nil {
 		return fmt.Errorf("agents: %s's agent repo: %w", registration.Name, err)
 	}

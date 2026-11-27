@@ -1486,6 +1486,7 @@ type AclRepo struct {
 	// shrink row's second comparison reads at every verifier, a new device
 	// and a cold gate that start at a base among them (QD-1015)
 	Inbox         RepoInbox `protobuf:"varint,14,opt,name=inbox,proto3,enum=urnetwork.sidecar.RepoInbox" json:"inbox,omitempty"` // the original RepoCreate's immutable inbox role (§8.8, QD-102)
+	LabelMac      []byte    `protobuf:"bytes,15,opt,name=label_mac,json=labelMac,proto3" json:"label_mac,omitempty"`             // an agent repo's RepoCreate's keyed label, immutable (QD-1434)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1616,6 +1617,13 @@ func (x *AclRepo) GetInbox() RepoInbox {
 		return x.Inbox
 	}
 	return RepoInbox_REPO_INBOX_NONE
+}
+
+func (x *AclRepo) GetLabelMac() []byte {
+	if x != nil {
+		return x.LabelMac
+	}
+	return nil
 }
 
 // A RepoAdmin{remove} stamps removed_at and keeps the row, so a reader judges the admin's right at a position before
@@ -2103,7 +2111,8 @@ func (x *AclAudit) GetAuditOptIn() []byte {
 // Exactly one kind set, in the forms CompileAcl writes (acl-m2-02-state-readings #2): repo_id sixteen zero bytes is
 // every general or record repo (evs:*, a bare *); socket_tokens one name's token path under one K_sock, a rotation
 // adding a second target under the previous key (plan-SOCK-ksock-rotation); socket_prefix with no token every
-// application and share/ socket; public_name a tls/ or smtp/ name or a dns host, glob kept, told apart by a /.
+// application and share/ socket; public_name a tls/ or smtp/ name or a dns host, glob kept, told apart by a /;
+// repo_kind every repo of one kind, which a reader matches against the repos its rows hold at once (QD-1433).
 type AclTarget struct {
 	state        protoimpl.MessageState `protogen:"open.v1"`
 	Atom         []byte                 `protobuf:"bytes,1,opt,name=atom,proto3" json:"atom,omitempty"`
@@ -2120,8 +2129,10 @@ type AclTarget struct {
 	ModelGlob       string             `protobuf:"bytes,11,opt,name=model_glob,json=modelGlob,proto3" json:"model_glob,omitempty"` // model:<glob>, a glob within canonical names, never read as a label
 	ComputeResource AclComputeResource `protobuf:"varint,12,opt,name=compute_resource,json=computeResource,proto3,enum=urnetwork.sidecar.AclComputeResource" json:"compute_resource,omitempty"`
 	Listener        []byte             `protobuf:"bytes,13,opt,name=listener,proto3" json:"listener,omitempty"` // listener:<selector>: an atom, as atom holds one, whose subjects'
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// listed sockets and map entries the target names (§26.7)
+	RepoKind      RepoKind `protobuf:"varint,14,opt,name=repo_kind,json=repoKind,proto3,enum=urnetwork.sidecar.RepoKind" json:"repo_kind,omitempty"` // evs:kind:agent: every repo of the kind the rows hold, now and as each is
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *AclTarget) Reset() {
@@ -2236,6 +2247,13 @@ func (x *AclTarget) GetListener() []byte {
 		return x.Listener
 	}
 	return nil
+}
+
+func (x *AclTarget) GetRepoKind() RepoKind {
+	if x != nil {
+		return x.RepoKind
+	}
+	return RepoKind_REPO_KIND_UNSPECIFIED
 }
 
 // An active Suspend a fold keeps until an Unsuspend of its own suspend_id lands. signer_class settles who may
@@ -2564,6 +2582,7 @@ type RepoCreate struct {
 	RepoId        []byte                  `protobuf:"bytes,2,opt,name=repo_id,json=repoId,proto3" json:"repo_id,omitempty"`
 	Kind          RepoKind                `protobuf:"varint,3,opt,name=kind,proto3,enum=urnetwork.sidecar.RepoKind" json:"kind,omitempty"`
 	Inbox         RepoInbox               `protobuf:"varint,4,opt,name=inbox,proto3,enum=urnetwork.sidecar.RepoInbox" json:"inbox,omitempty"` // only a general repo; admin only from a config writer, once a network
+	LabelMac      []byte                  `protobuf:"bytes,5,opt,name=label_mac,json=labelMac,proto3" json:"label_mac,omitempty"`             // an agent repo's alone: the first 16 bytes of HMAC-SHA256 of agent/<name>
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2624,6 +2643,13 @@ func (x *RepoCreate) GetInbox() RepoInbox {
 		return x.Inbox
 	}
 	return RepoInbox_REPO_INBOX_NONE
+}
+
+func (x *RepoCreate) GetLabelMac() []byte {
+	if x != nil {
+		return x.LabelMac
+	}
+	return nil
 }
 
 type RepoAdmin struct {
@@ -3373,7 +3399,7 @@ const file_protocol_acl_proto_rawDesc = "" +
 	"\tapprovers\x18\x06 \x01(\rR\tapprovers\x124\n" +
 	"\x16default_expiry_seconds\x18\a \x01(\x03R\x14defaultExpirySeconds\x12,\n" +
 	"\x12max_expiry_seconds\x18\b \x01(\x03R\x10maxExpirySeconds\x12\x1a\n" +
-	"\bevidence\x18\t \x03(\rR\bevidence\"\x82\x06\n" +
+	"\bevidence\x18\t \x03(\rR\bevidence\"\x9f\x06\n" +
 	"\aAclRepo\x12\x17\n" +
 	"\arepo_id\x18\x01 \x01(\fR\x06repoId\x12/\n" +
 	"\x04kind\x18\x02 \x01(\x0e2\x1b.urnetwork.sidecar.RepoKindR\x04kind\x12&\n" +
@@ -3389,7 +3415,8 @@ const file_protocol_acl_proto_rawDesc = "" +
 	"\x11holders_shrunk_at\x18\v \x01(\x04R\x0fholdersShrunkAt\x12K\n" +
 	"\fprefix_rules\x18\f \x03(\v2(.urnetwork.sidecar.AclRepoPrefixRulesRowR\vprefixRules\x123\n" +
 	"\x16holders_shrunk_time_ms\x18\r \x01(\x03R\x13holdersShrunkTimeMs\x122\n" +
-	"\x05inbox\x18\x0e \x01(\x0e2\x1c.urnetwork.sidecar.RepoInboxR\x05inbox\"w\n" +
+	"\x05inbox\x18\x0e \x01(\x0e2\x1c.urnetwork.sidecar.RepoInboxR\x05inbox\x12\x1b\n" +
+	"\tlabel_mac\x18\x0f \x01(\fR\blabelMac\"w\n" +
 	"\x0fAclRepoAdminRow\x12\x1d\n" +
 	"\n" +
 	"sidecar_id\x18\x01 \x01(\fR\tsidecarId\x12\x16\n" +
@@ -3431,7 +3458,7 @@ const file_protocol_acl_proto_rawDesc = "" +
 	"repo_kinds\x18\x02 \x03(\rR\trepoKinds\x12\x19\n" +
 	"\brepo_ids\x18\x03 \x03(\fR\arepoIds\x12 \n" +
 	"\faudit_opt_in\x18\x04 \x01(\fR\n" +
-	"auditOptIn\"\xae\x03\n" +
+	"auditOptIn\"\xe8\x03\n" +
 	"\tAclTarget\x12\x12\n" +
 	"\x04atom\x18\x01 \x01(\fR\x04atom\x12\x1d\n" +
 	"\n" +
@@ -3449,7 +3476,8 @@ const file_protocol_acl_proto_rawDesc = "" +
 	"\n" +
 	"model_glob\x18\v \x01(\tR\tmodelGlob\x12P\n" +
 	"\x10compute_resource\x18\f \x01(\x0e2%.urnetwork.sidecar.AclComputeResourceR\x0fcomputeResource\x12\x1a\n" +
-	"\blistener\x18\r \x01(\fR\blistenerJ\x04\b\b\x10\t\"\x93\x01\n" +
+	"\blistener\x18\r \x01(\fR\blistener\x128\n" +
+	"\trepo_kind\x18\x0e \x01(\x0e2\x1b.urnetwork.sidecar.RepoKindR\brepoKindJ\x04\b\b\x10\t\"\x93\x01\n" +
 	"\rAclSuspension\x12\x18\n" +
 	"\asubject\x18\x01 \x01(\fR\asubject\x12\x1d\n" +
 	"\n" +
@@ -3473,13 +3501,14 @@ const file_protocol_acl_proto_rawDesc = "" +
 	"\fOwnerConfirm\x12:\n" +
 	"\x06header\x18\x01 \x01(\v2\".urnetwork.sidecar.StatementHeaderR\x06header\x12\x1d\n" +
 	"\n" +
-	"sidecar_id\x18\x02 \x01(\fR\tsidecarId\"\xc6\x01\n" +
+	"sidecar_id\x18\x02 \x01(\fR\tsidecarId\"\xe3\x01\n" +
 	"\n" +
 	"RepoCreate\x12:\n" +
 	"\x06header\x18\x01 \x01(\v2\".urnetwork.sidecar.StatementHeaderR\x06header\x12\x17\n" +
 	"\arepo_id\x18\x02 \x01(\fR\x06repoId\x12/\n" +
 	"\x04kind\x18\x03 \x01(\x0e2\x1b.urnetwork.sidecar.RepoKindR\x04kind\x122\n" +
-	"\x05inbox\x18\x04 \x01(\x0e2\x1c.urnetwork.sidecar.RepoInboxR\x05inbox\"\xbb\x01\n" +
+	"\x05inbox\x18\x04 \x01(\x0e2\x1c.urnetwork.sidecar.RepoInboxR\x05inbox\x12\x1b\n" +
+	"\tlabel_mac\x18\x05 \x01(\fR\blabelMac\"\xbb\x01\n" +
 	"\tRepoAdmin\x12:\n" +
 	"\x06header\x18\x01 \x01(\v2\".urnetwork.sidecar.StatementHeaderR\x06header\x12\x17\n" +
 	"\arepo_id\x18\x02 \x01(\fR\x06repoId\x12\x1d\n" +
@@ -3716,32 +3745,33 @@ var file_protocol_acl_proto_depIdxs = []int32{
 	9,  // 24: urnetwork.sidecar.AclRepo.inbox:type_name -> urnetwork.sidecar.RepoInbox
 	7,  // 25: urnetwork.sidecar.AclRepoGrantRow.role:type_name -> urnetwork.sidecar.RepoGrantRole
 	1,  // 26: urnetwork.sidecar.AclTarget.compute_resource:type_name -> urnetwork.sidecar.AclComputeResource
-	45, // 27: urnetwork.sidecar.GrantActivate.header:type_name -> urnetwork.sidecar.StatementHeader
-	46, // 28: urnetwork.sidecar.GrantActivate.decisions:type_name -> urnetwork.sidecar.Signed
-	45, // 29: urnetwork.sidecar.EvsShare.header:type_name -> urnetwork.sidecar.StatementHeader
-	45, // 30: urnetwork.sidecar.OwnerConfirm.header:type_name -> urnetwork.sidecar.StatementHeader
-	45, // 31: urnetwork.sidecar.RepoCreate.header:type_name -> urnetwork.sidecar.StatementHeader
-	6,  // 32: urnetwork.sidecar.RepoCreate.kind:type_name -> urnetwork.sidecar.RepoKind
-	9,  // 33: urnetwork.sidecar.RepoCreate.inbox:type_name -> urnetwork.sidecar.RepoInbox
-	45, // 34: urnetwork.sidecar.RepoAdmin.header:type_name -> urnetwork.sidecar.StatementHeader
-	10, // 35: urnetwork.sidecar.RepoAdmin.change:type_name -> urnetwork.sidecar.RepoAdminChange
-	45, // 36: urnetwork.sidecar.RepoGrant.header:type_name -> urnetwork.sidecar.StatementHeader
-	7,  // 37: urnetwork.sidecar.RepoGrant.role:type_name -> urnetwork.sidecar.RepoGrantRole
-	45, // 38: urnetwork.sidecar.RepoRevoke.header:type_name -> urnetwork.sidecar.StatementHeader
-	45, // 39: urnetwork.sidecar.RepoDelete.header:type_name -> urnetwork.sidecar.StatementHeader
-	45, // 40: urnetwork.sidecar.RepoRestore.header:type_name -> urnetwork.sidecar.StatementHeader
-	45, // 41: urnetwork.sidecar.RepoVersioning.header:type_name -> urnetwork.sidecar.StatementHeader
-	8,  // 42: urnetwork.sidecar.RepoVersioning.lock:type_name -> urnetwork.sidecar.RepoVersioningLock
-	45, // 43: urnetwork.sidecar.RepoPrefixRules.header:type_name -> urnetwork.sidecar.StatementHeader
-	42, // 44: urnetwork.sidecar.PrefixRuleSet.rules:type_name -> urnetwork.sidecar.PrefixRule
-	11, // 45: urnetwork.sidecar.PrefixRule.action:type_name -> urnetwork.sidecar.PrefixAction
-	45, // 46: urnetwork.sidecar.AuditOptIn.header:type_name -> urnetwork.sidecar.StatementHeader
-	45, // 47: urnetwork.sidecar.AuditOptOut.header:type_name -> urnetwork.sidecar.StatementHeader
-	48, // [48:48] is the sub-list for method output_type
-	48, // [48:48] is the sub-list for method input_type
-	48, // [48:48] is the sub-list for extension type_name
-	48, // [48:48] is the sub-list for extension extendee
-	0,  // [0:48] is the sub-list for field type_name
+	6,  // 27: urnetwork.sidecar.AclTarget.repo_kind:type_name -> urnetwork.sidecar.RepoKind
+	45, // 28: urnetwork.sidecar.GrantActivate.header:type_name -> urnetwork.sidecar.StatementHeader
+	46, // 29: urnetwork.sidecar.GrantActivate.decisions:type_name -> urnetwork.sidecar.Signed
+	45, // 30: urnetwork.sidecar.EvsShare.header:type_name -> urnetwork.sidecar.StatementHeader
+	45, // 31: urnetwork.sidecar.OwnerConfirm.header:type_name -> urnetwork.sidecar.StatementHeader
+	45, // 32: urnetwork.sidecar.RepoCreate.header:type_name -> urnetwork.sidecar.StatementHeader
+	6,  // 33: urnetwork.sidecar.RepoCreate.kind:type_name -> urnetwork.sidecar.RepoKind
+	9,  // 34: urnetwork.sidecar.RepoCreate.inbox:type_name -> urnetwork.sidecar.RepoInbox
+	45, // 35: urnetwork.sidecar.RepoAdmin.header:type_name -> urnetwork.sidecar.StatementHeader
+	10, // 36: urnetwork.sidecar.RepoAdmin.change:type_name -> urnetwork.sidecar.RepoAdminChange
+	45, // 37: urnetwork.sidecar.RepoGrant.header:type_name -> urnetwork.sidecar.StatementHeader
+	7,  // 38: urnetwork.sidecar.RepoGrant.role:type_name -> urnetwork.sidecar.RepoGrantRole
+	45, // 39: urnetwork.sidecar.RepoRevoke.header:type_name -> urnetwork.sidecar.StatementHeader
+	45, // 40: urnetwork.sidecar.RepoDelete.header:type_name -> urnetwork.sidecar.StatementHeader
+	45, // 41: urnetwork.sidecar.RepoRestore.header:type_name -> urnetwork.sidecar.StatementHeader
+	45, // 42: urnetwork.sidecar.RepoVersioning.header:type_name -> urnetwork.sidecar.StatementHeader
+	8,  // 43: urnetwork.sidecar.RepoVersioning.lock:type_name -> urnetwork.sidecar.RepoVersioningLock
+	45, // 44: urnetwork.sidecar.RepoPrefixRules.header:type_name -> urnetwork.sidecar.StatementHeader
+	42, // 45: urnetwork.sidecar.PrefixRuleSet.rules:type_name -> urnetwork.sidecar.PrefixRule
+	11, // 46: urnetwork.sidecar.PrefixRule.action:type_name -> urnetwork.sidecar.PrefixAction
+	45, // 47: urnetwork.sidecar.AuditOptIn.header:type_name -> urnetwork.sidecar.StatementHeader
+	45, // 48: urnetwork.sidecar.AuditOptOut.header:type_name -> urnetwork.sidecar.StatementHeader
+	49, // [49:49] is the sub-list for method output_type
+	49, // [49:49] is the sub-list for method input_type
+	49, // [49:49] is the sub-list for extension type_name
+	49, // [49:49] is the sub-list for extension extendee
+	0,  // [0:49] is the sub-list for field type_name
 }
 
 func init() { file_protocol_acl_proto_init() }

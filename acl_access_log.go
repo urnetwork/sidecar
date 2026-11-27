@@ -67,6 +67,7 @@ package sidecar
 import (
 	"bytes"
 	"cmp"
+	"crypto/subtle"
 	"errors"
 	"slices"
 
@@ -123,6 +124,10 @@ func FoldAclRepos(repos []*protocol.AclRepo, entries []AclAccessLogEntry) ([]*pr
 				// a second Team inbox while one stands, which no check takes, folds to nothing
 				return nil, ErrAclAccessLogFold
 			}
+			if !aclRepoLabelMacFits(body.GetKind(), body.GetLabelMac()) {
+				// a label that does not fit its kind, which no check takes, folds to nothing
+				return nil, ErrAclAccessLogFold
+			}
 			if slices.ContainsFunc(next, func(repo *protocol.AclRepo) bool { return bytes.Equal(repo.GetRepoId(), body.GetRepoId()) }) {
 				return nil, ErrAclAccessLogFold
 			}
@@ -130,7 +135,9 @@ func FoldAclRepos(repos []*protocol.AclRepo, entries []AclAccessLogEntry) ([]*pr
 				RepoId: bytes.Clone(body.GetRepoId()),
 				Kind:   body.GetKind(),
 				Inbox:  body.GetInbox(),
-				Admins: []*protocol.AclRepoAdminRow{{SidecarId: signer, Signer: signer, At: at}},
+				// an agent repo's keyed label, immutable as the kind is (QD-1434)
+				LabelMac: bytes.Clone(body.GetLabelMac()),
+				Admins:   []*protocol.AclRepoAdminRow{{SidecarId: signer, Signer: signer, At: at}},
 				// the making is the repo's t_s until its first shrink (QD-1015)
 				HoldersShrunkTimeMs: statement.TimeMs,
 			}
@@ -425,6 +432,16 @@ func (self *AclState) TeamInbox() (Id, bool) {
 func (self *AclState) MemberAgentRepo(memberId Id, repoId Id) bool {
 	repo := self.repos[repoId]
 	return repo != nil && !repo.deleted && repo.kind == protocol.RepoKind_REPO_KIND_AGENT && repo.ownerId == memberId && memberId != (Id{})
+}
+
+// Whether repoId is a standing agent repo of memberId's whose RepoCreate filed labelMac, compared in constant time: the
+// check a reader holding K_label makes that a repo is memberId's agent/<name>, labelMac being AgentRepoLabelKey.Mac of
+// that name (DESIGN-COMPUTE §20.7's cross-member check; QD-1434).
+func (self *AclState) MemberAgentRepoLabeled(memberId Id, repoId Id, labelMac []byte) bool {
+	if !self.MemberAgentRepo(memberId, repoId) || len(labelMac) != AgentRepoLabelMacByteCount {
+		return false
+	}
+	return subtle.ConstantTimeCompare(self.repos[repoId].row.GetLabelMac(), labelMac) == 1
 }
 
 // The revokes without the subject's.

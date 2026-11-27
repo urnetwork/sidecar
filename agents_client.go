@@ -60,6 +60,9 @@ type AgentsClientArgs struct {
 	Repo func(repoId Id) AgentsRepoAccess
 	// Creates an agents or agent repo bound to its creator's member: EvsClient.CreateRepo's, answering its id.
 	CreateRepo func(ctx context.Context, args *EvsCreateRepoArgs) (Id, error)
+	// The network's agent repo label key (EvsClient.AgentRepoLabelKey, QD-1434): what an agent repo's RepoCreate files
+	// its name's keyed label under and a reader checks one by. Nil creates no agent repo and verifies no label.
+	LabelKey func(ctx context.Context) (*AgentRepoLabelKey, error)
 	// The agent_id this sidecar keeps for a label (Sidecar.ResolveAgentId): an agent's name is its label (§20.5).
 	AgentId func(label string) (Id, error)
 	// Whether AgentRevoke tombstoned an agent's subkey on this sidecar (Sidecar.AgentRevoked): its card retires.
@@ -144,9 +147,16 @@ func newSidecarAgents(sidecar *Sidecar) (*AgentsClient, error) {
 			}
 			return repo.RepoId(), err
 		},
+		LabelKey: func(ctx context.Context) (*AgentRepoLabelKey, error) {
+			client := sidecar.EvsClient()
+			if client == nil {
+				return nil, ErrAgentsUnavailable
+			}
+			return client.AgentRepoLabelKey(ctx)
+		},
 		AgentId:      sidecar.ResolveAgentId,
 		AgentRevoked: sidecar.AgentRevoked,
-		HostName: agentsHostNames(sidecar),
+		HostName:     agentsHostNames(sidecar),
 		FeatureCheck: func() error {
 			return sidecar.CheckAuthFeature(AuthFeatureAgentRepos)
 		},
@@ -216,6 +226,40 @@ func (self *AgentsClient) place() (*agentsPlace, error) {
 		place.agentsRepo = self.args.Repo(agentsRepoId)
 	}
 	return place, nil
+}
+
+// The keyed label an agent repo named name files (QD-1434), under the network's K_label: an error where this sidecar
+// derives none, so no agent repo is created unlabeled.
+func (self *AgentsClient) agentRepoLabelMac(ctx context.Context, name AgentName) ([]byte, error) {
+	if self.args.LabelKey == nil {
+		return nil, fmt.Errorf("%w: no agent repo label key", ErrAgentsUnavailable)
+	}
+	key, err := self.args.LabelKey(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrAgentsUnavailable, err)
+	}
+	return key.Mac(name), nil
+}
+
+// Whether repoId is memberId's agent repo labeled agent/<name> (DESIGN-COMPUTE §20.7's check of to.repo and from.repo;
+// QD-1434): a standing agent repo the log binds to memberId whose RepoCreate filed name's keyed label, recomputed under
+// this sidecar's K_label. What SKILL-M13-01's reader asks before it takes another member's agent's name; within a member
+// a card binds its name to its repo (§20.5). ErrAgentReposOff while the feature is off, ErrAgentsUnavailable where this
+// sidecar derives no K_label, and false, nil for a repo that is not one. K_label derives from the config repo's K_ref,
+// so a label verifies for the network's life (QD-1435).
+func (self *AgentsClient) AgentRepoLabeled(ctx context.Context, memberId Id, name AgentName, repoId Id) (bool, error) {
+	place, err := self.place()
+	if err != nil {
+		return false, err
+	}
+	if _, err := ParseAgentName(string(name), self.settings); err != nil {
+		return false, err
+	}
+	labelMac, err := self.agentRepoLabelMac(ctx, name)
+	if err != nil {
+		return false, err
+	}
+	return place.authority.MemberAgentRepoLabeled(memberId, repoId, labelMac), nil
 }
 
 // The place, its agents repo required.

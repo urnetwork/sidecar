@@ -256,6 +256,7 @@ message AclRepo {
                                              // shrink row's second comparison reads at every verifier, a new device
                                              // and a cold gate that start at a base among them (QD-1015)
   RepoInbox inbox = 14;                      // the original RepoCreate's immutable inbox role (§8.8, QD-102)
+  bytes label_mac = 15;                      // an agent repo's RepoCreate's keyed label, immutable (QD-1434)
 }
 
 // A RepoAdmin{remove} stamps removed_at and keeps the row, so a reader judges the admin's right at a position before
@@ -318,7 +319,8 @@ message AclAudit {                        // a reader every member sees (owner d
 // Exactly one kind set, in the forms CompileAcl writes (acl-m2-02-state-readings #2): repo_id sixteen zero bytes is
 // every general or record repo (evs:*, a bare *); socket_tokens one name's token path under one K_sock, a rotation
 // adding a second target under the previous key (plan-SOCK-ksock-rotation); socket_prefix with no token every
-// application and share/ socket; public_name a tls/ or smtp/ name or a dns host, glob kept, told apart by a /.
+// application and share/ socket; public_name a tls/ or smtp/ name or a dns host, glob kept, told apart by a /;
+// repo_kind every repo of one kind, which a reader matches against the repos its rows hold at once (QD-1433).
 message AclTarget {
   reserved 8;                             // an ip target's CIDR, kept in AclLocalPolicy, never in rows
   bytes atom = 1;
@@ -336,6 +338,9 @@ message AclTarget {
   AclComputeResource compute_resource = 12;
   bytes listener = 13;                    // listener:<selector>: an atom, as atom holds one, whose subjects'
                                           // listed sockets and map entries the target names (§26.7)
+  RepoKind repo_kind = 14;                // evs:kind:agent: every repo of the kind the rows hold, now and as each is
+                                          // created, for deposit alone; agent the one kind it names, under
+                                          // agent_repos (DESIGN-COMPUTE §16.5, §20.4; QD-1433)
 }
 
 // An active Suspend a fold keeps until an Unsuspend of its own suspend_id lands. signer_class settles who may
@@ -385,6 +390,10 @@ message RepoCreate {
   bytes repo_id = 2;
   RepoKind kind = 3;
   RepoInbox inbox = 4;                    // only a general repo; admin only from a config writer, once a network
+  bytes label_mac = 5;                    // an agent repo's alone: the first 16 bytes of HMAC-SHA256 of agent/<name>
+                                          // under K_label, which every admitted sidecar derives from the config
+                                          // repo's key, so api sees a per-network value naming no agent (DESIGN-COMPUTE
+                                          // §20.4, §20.7; QD-1434)
 }
 
 enum RepoInbox {

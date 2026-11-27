@@ -55,9 +55,9 @@ func testComputeValueLine(value protoreflect.EnumValueDescriptor) string {
 	return fmt.Sprintf("%02d.%s", value.Number(), value.Name())
 }
 
-// §16.2's actions after §8.4's, AclTarget's three compute kinds after its ten, AclRows' compute_rows after its ten,
-// §16.4's AclComputeRows and AclComputeBudgetRow, and the enums ComputeAssurance and AclComputeResource, each number
-// as the plan writes it.
+// §16.2's actions after §8.4's, AclTarget's three compute kinds after its ten and agent_repos' repo_kind after them
+// (QD-1433), AclRows' compute_rows after its ten, §16.4's AclComputeRows and AclComputeBudgetRow, and the enums
+// ComputeAssurance and AclComputeResource, each number as the plan writes it.
 func TestAclComputeDescriptor(t *testing.T) {
 	if got, want := testComputeEnumValues(t, "AclAction"), []string{
 		"00.ACL_ACTION_UNSPECIFIED", "01.ACL_ACTION_DIAL", "02.ACL_ACTION_LISTEN", "03.ACL_ACTION_ROUTE",
@@ -70,7 +70,7 @@ func TestAclComputeDescriptor(t *testing.T) {
 	testComputeMessageFields(t, testAclProtoPath, "AclTarget", 1, protowire.MaxValidNumber, []string{
 		"1 atom bytes", "2 sidecar_id bytes", "3 network_id bytes", "4 repo_id bytes", "5 socket_tokens repeated bytes",
 		"6 socket_prefix bool", "7 public_name string", "9 mail_send bool", "10 client_id bytes", "11 model_glob string",
-		"12 compute_resource AclComputeResource", "13 listener bytes",
+		"12 compute_resource AclComputeResource", "13 listener bytes", "14 repo_kind RepoKind",
 	})
 	if got := testComputeReserved(testComputeMessage(t, testAclProtoPath, "AclTarget")); !slices.Equal(got, []protoreflect.FieldNumber{8}) {
 		t.Errorf("AclTarget reserves %v", got)

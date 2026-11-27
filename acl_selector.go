@@ -331,7 +331,27 @@ const (
 	AclResourceMail
 	// a bare *
 	AclResourceAll
+	// evs:kind:<kind>, every repo of one kind, for deposit alone: agent, under agent_repos (DESIGN-COMPUTE §16.5;
+	// QD-1433)
+	AclResourceRepoKind
 )
+
+// The kinds evs:kind:<kind> names, each a kind whose repos only a rule naming them takes deposits into: an agent
+// repo's inbox (DESIGN-COMPUTE §20.4). No other kind takes a rule over all its repos, so * and evs:* still never reach
+// §8.5's kinds (§8.4).
+var aclNameDestinationRepoKinds = map[string]protocol.RepoKind{
+	"agent": protocol.RepoKind_REPO_KIND_AGENT,
+}
+
+// The name evs:kind:<kind> writes for kind, "" for a kind no destination names.
+func aclDestinationRepoKindName(kind protocol.RepoKind) string {
+	for name, named := range aclNameDestinationRepoKinds {
+		if named == kind {
+			return name
+		}
+	}
+	return ""
+}
 
 // One entry of a grant's dst (§8.4). In a Name, * stands for any run within one label or segment, and
 // a bare * for all of a kind. Comparable, so a list of them can be searched.
@@ -344,6 +364,8 @@ type AclResource struct {
 	Name string
 	// AclResourceRepo's when named by id.
 	RepoId Id
+	// AclResourceRepoKind's: the one kind it names.
+	RepoKind protocol.RepoKind
 	// AclResourceIp's, with its host bits clear. ParseAclPolicy fills it in from hosts for an ip named
 	// by a hosts entry; parseAclResource alone leaves that one invalid.
 	Cidr netip.Prefix
@@ -372,6 +394,8 @@ func (self AclResource) String() string {
 		return "mail:" + self.Name
 	case AclResourceAll:
 		return "*"
+	case AclResourceRepoKind:
+		return "evs:kind:" + aclDestinationRepoKindName(self.RepoKind)
 	}
 	return ""
 }
@@ -430,6 +454,15 @@ func parseAclResource(text string) (AclResource, error) {
 		}
 		return AclResource{Kind: AclResourceIp, Name: value}, nil
 	case "evs":
+		// kind:<kind> names every repo of a kind a rule names for deposit (QD-1433); a label holds no colon, so no
+		// document that parsed before holds the form
+		if name, isKind := strings.CutPrefix(value, "kind:"); isKind {
+			kind, known := aclNameDestinationRepoKinds[name]
+			if !known {
+				return AclResource{}, aclPolicyRefusal("not a repo kind a destination names")
+			}
+			return AclResource{Kind: AclResourceRepoKind, RepoKind: kind}, nil
+		}
 		// an id or a config label, and never a path: paths are encrypted and no rule may name one (X2).
 		// So / and \ are refused by name, and a dot, which a label does not need, keeps file names and ..
 		// out as well.
@@ -500,7 +533,8 @@ func parseAclCidr(value string) (netip.Prefix, error) {
 // §8.5's admin-approved rule holds. share/ counts as application here (SOCK-M5-15).
 //
 // A repo's kind is not in its label, so this says nothing about §8.5's kinds that * never matches.
-// AclState holds that rule (ACL-M2-02).
+// AclState holds that rule (ACL-M2-02), and for the same reason evs:kind:<kind> covers no concrete repo: the reader
+// matches it against the kinds its rows hold.
 func (self AclResource) covers(concrete AclResource) bool {
 	if strings.Contains(concrete.Name, "*") || (concrete.Name == "" && concrete.RepoId == (Id{})) {
 		return false

@@ -20,10 +20,14 @@
 // The agent_repos feature's kinds (DESIGN-COMPUTE §20.4, §16.5, D-SKILL-1; SKILL-M11-01) follow the owner-bound rules
 // as vault and mailbox do, bound to their creator's member: its consented devices read and write, the admins among them
 // administer, and an EvsShare's subject, one of the member's own agents, reads and writes too, where a vault's or
-// mailbox's only reads. An agents repo takes no deposit but readers' receipts, and no rule adds to it; an agent repo
-// takes deposits from every member device of the network, from every admitted sidecar in a network with no document
-// (addAgentRepoDeposit), and from a subject a rule naming the repo outright gives deposit. The Team inbox, a general repo
-// whose RepoCreate marks it team, is read and written by every admitted sidecar of the network within §8.6's ceiling.
+// mailbox's only reads. An agents repo takes no deposit but readers' receipts, and no rule adds to it. An agent repo
+// takes deposits by rule alone (QD-1433): one naming every agent repo, evs:kind:agent, which a reader matches against
+// the rows' repos at once, so a repo created between bases takes it from its creation, or one naming the repo outright,
+// each adding deposit and nothing else. agent_repos' implicit fragment gives every admitted sidecar of a network with no
+// document that rule, and Team's starting document gives it to autogroup:member, where a Team's policy narrows it per
+// agent or names another tagged subject (Q-HARN-9); §8.6's ceiling holds an ephemeral sidecar out of both, as it holds
+// one out of every rule that does not name it. The Team inbox, a general repo whose RepoCreate marks it team, is read
+// and written by every admitted sidecar of the network within §8.6's ceiling.
 //
 // The config repo's row is the state's own where the rows hold none (acl_state.go, QD-719), so its kind default
 // answers in every state. Its admins are the config writers, each a member device of an AdminSet member that is not
@@ -315,11 +319,8 @@ func (self *AclState) sidecarEvsAccess(sidecar *aclSidecarState, repoId Id, audi
 		self.addOwnerBoundRights(&accumulator, sidecar, repoId, repo, consented, nowMs)
 	case protocol.RepoKind_REPO_KIND_AGENTS, protocol.RepoKind_REPO_KIND_AGENT:
 		// DESIGN-COMPUTE §20.4's owner-bound kinds: the member's consented devices read and write, and its EvsShares'
-		// subjects, the member's other agents, read and write too; an agent repo also takes the deposits below
+		// subjects, the member's other agents, read and write too; an agent repo's deposits are its rules' (below)
 		self.addOwnerBoundRights(&accumulator, sidecar, repoId, repo, consented, nowMs)
-		if repo.kind == protocol.RepoKind_REPO_KIND_AGENT {
-			self.addAgentRepoDeposit(&accumulator, sidecar)
-		}
 	case protocol.RepoKind_REPO_KIND_TEAM_RECORD:
 		// autogroup:admin and :auditor read; autogroup:member and tagged subjects deposit (§8.5). The read
 		// is no row §8.6's ceiling counts, so an ephemeral sidecar only deposits.
@@ -483,19 +484,6 @@ func (self *AclState) addOwnerBoundRights(accumulator *aclEvsAccumulator, sideca
 	}
 }
 
-// An agent repo's deposits beyond its writers' and readers' receipts (DESIGN-COMPUTE §20.4, §16.5's deposit row): every
-// member device of the network, through which the agents on it deposit; and in a network with no document, every
-// admitted sidecar, ephemeral and tagged ones included, as the implicit document's rule gives (§16.5's personal
-// column). A network with a document, a Team's from its starting document on, gives another tagged subject deposit
-// only by a rule naming the repo (the kind's DocumentRights; Q-HARN-9). Evaluated here from the rows' has_document,
-// not compiled, so it reads at once for a repo created between bases; no document narrows it per agent yet (question
-// skill-m11-01-agent-deposit-rule-target).
-func (self *AclState) addAgentRepoDeposit(accumulator *aclEvsAccumulator, sidecar *aclSidecarState) {
-	if sidecar.class == AclSubjectClassMemberDevice || !self.rows.GetHasDocument() {
-		accumulator.add(AclEvsDeposit, AclDecision{Reason: AclReasonKindDefault})
-	}
-}
-
 // Whether the projection marks the sidecar mail_send at nowMs: a send grant with mail_send in force whose source holds
 // it, MaySend's answer for it (D-ACL-12), which owner decision 333's mailbox deposit reads. The caller has resolved the
 // sidecar and found it not hard denied.
@@ -508,21 +496,26 @@ func (self *AclState) sidecarMarkedMailSend(sidecar *aclSidecarState, nowMs int6
 
 // The rights the rows' rules give the sidecar on the repo, by kind as the file's header says, within the
 // ceiling: none on a Team scope's own mailcfg or an agents repo, whatever names it, the tag:mail kind rule of an older
-// compile included (QD-1107).
+// compile included (QD-1107). An agent repo takes the rules naming every repo of its kind with those naming it, each
+// adding a deposit alone (QD-1433).
 func (self *AclState) addRuleRights(accumulator *aclEvsAccumulator, sidecar *aclSidecarState, repoId Id, repo *aclRepoState, nowMs int64) {
 	explicit := self.repoRules[repoId]
 	wildcard := aclRepoKindGeneral(repo.kind)
+	// only an agent repo takes the rules over its kind
+	var byKind aclBits
 	allowed := AclEvsRights(0)
 	switch {
 	case aclRepoKindGeneral(repo.kind), repo.kind == protocol.RepoKind_REPO_KIND_TEAM_RECORD,
 		repo.kind == protocol.RepoKind_REPO_KIND_MAILCFG && !repo.ownerBound():
 		allowed = AclEvsDeposit | AclEvsRead | AclEvsWrite | AclEvsAdmin
-	case repo.kind == protocol.RepoKind_REPO_KIND_VAULT, repo.kind == protocol.RepoKind_REPO_KIND_MAILBOX,
-		repo.kind == protocol.RepoKind_REPO_KIND_AGENT:
-		// a rule naming an agent repo outright adds a deposit alone, another tagged subject's (DESIGN-COMPUTE §16.5)
+	case repo.kind == protocol.RepoKind_REPO_KIND_VAULT, repo.kind == protocol.RepoKind_REPO_KIND_MAILBOX:
 		allowed = AclEvsDeposit
+	case repo.kind == protocol.RepoKind_REPO_KIND_AGENT:
+		// a rule naming every agent repo or this one outright adds a deposit alone (DESIGN-COMPUTE §16.5, QD-1433)
+		allowed = AclEvsDeposit
+		byKind = self.kindRepoRules[repo.kind]
 	}
-	if allowed == 0 || (explicit == nil && !wildcard) {
+	if allowed == 0 || (explicit == nil && byKind == nil && !wildcard) {
 		return
 	}
 	ceiling := sidecar.ceilingRules
@@ -530,6 +523,9 @@ func (self *AclState) addRuleRights(accumulator *aclEvsAccumulator, sidecar *acl
 		var word uint64
 		if explicit != nil {
 			word = explicit[w]
+		}
+		if byKind != nil {
+			word |= byKind[w]
 		}
 		if wildcard {
 			word |= self.wildcardRepoRules[w]

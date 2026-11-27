@@ -12,6 +12,8 @@
 //	ip:<cidr>        nothing: a route rule's targets are its via subjects (plan-BRIDGE-gate-row-prefixes #1)
 //	evs:<repo>       the id, or a label's through the labels file, a label glob every label it matches, evs:* the
 //	                 wildcard repo, sixteen zero bytes
+//	evs:kind:agent   repo_kind, every agent repo the rows hold, which a reader matches at once; refused while the head
+//	                 does not turn agent_repos on (DESIGN-COMPUTE §16.5, §16.6; QD-1433)
 //	dns:<host>       public_name, glob kept
 //	mail:<alias>     mail_send, all a server sees of mail (D-ACL-12)
 //
@@ -65,6 +67,8 @@ func (self *aclCompiler) targets(resource AclResource) ([]*protocol.AclTarget, e
 		return nil, nil
 	case AclResourceRepo:
 		return self.repoTargets(resource)
+	case AclResourceRepoKind:
+		return self.repoKindTargets(resource)
 	case AclResourceDns:
 		return []*protocol.AclTarget{{PublicName: resource.Name}}, nil
 	case AclResourceMail:
@@ -131,6 +135,19 @@ func (self *aclCompiler) repoTargets(resource AclResource) ([]*protocol.AclTarge
 		}
 	}
 	return targets, nil
+}
+
+// An evs:kind:<kind> resource's target: the kind, under the feature that defines it, so every release compiles the
+// same rows before the base that turns it on, where no document may name it (§16.6's before row).
+func (self *aclCompiler) repoKindTargets(resource AclResource) ([]*protocol.AclTarget, error) {
+	switch resource.RepoKind {
+	case protocol.RepoKind_REPO_KIND_AGENT:
+		if self.input.AuthFeatures&AuthFeatureAgentRepos == 0 {
+			return nil, aclCompileRefusal("evs:kind:agent while the network's agent_repos feature is off")
+		}
+		return []*protocol.AclTarget{{RepoKind: resource.RepoKind}}, nil
+	}
+	return nil, aclCompileRefusal("a repo kind no destination names")
 }
 
 // Adds a resource's device-only detail.

@@ -188,9 +188,11 @@ type aclRule struct {
 	// resource targets
 	repoTargets  []Id
 	repoWildcard bool
-	sockets      []aclSocketTarget
-	publicNames  []string
-	mailSend     bool
+	// the kinds whose every repo the rule names, evs:kind:agent's (QD-1433)
+	repoKindTargets []protocol.RepoKind
+	sockets         []aclSocketTarget
+	publicNames     []string
+	mailSend        bool
 	// the rule's ip field names ports, which the rows do not carry (plan-BRIDGE-gate-row-prefixes #1)
 	portsLimited bool
 }
@@ -307,6 +309,9 @@ type AclState struct {
 	wildcardRepoRules aclBits
 	// by repo: rules with an evs action naming it
 	repoRules map[Id]aclBits
+	// by repo kind: rules with an evs action naming every repo of it, evs:kind:agent's, which a repo of the kind takes
+	// from its creation on, between bases included (QD-1433)
+	kindRepoRules map[protocol.RepoKind]aclBits
 
 	sidecarIndexes map[Id]int32
 	sidecars       []aclSidecarState
@@ -356,6 +361,7 @@ func NewAclState(rows *protocol.AclRows, view AclAuthView) (*AclState, error) {
 		pin:            view.Pin(),
 		atomIndexes:    map[Id]int32{},
 		repoRules:      map[Id]aclBits{},
+		kindRepoRules:  map[protocol.RepoKind]aclBits{},
 		sidecarIndexes: map[Id]int32{},
 		memberAtoms:    map[Id][]int32{},
 		clientAtoms:    map[Id][]int32{},
@@ -548,6 +554,14 @@ func (self *AclState) indexRules() error {
 				}
 				repoRules.set(rule.index)
 			}
+			for _, kind := range rule.repoKindTargets {
+				kindRules, found := self.kindRepoRules[kind]
+				if !found {
+					kindRules = newBits()
+					self.kindRepoRules[kind] = kindRules
+				}
+				kindRules.set(rule.index)
+			}
 		}
 	}
 	// a socket dial grant reaches the subjects that listen on what it names (§8.10)
@@ -572,8 +586,8 @@ func (self *AclState) indexRules() error {
 	return nil
 }
 
-// Sorts one target into its rule, refusing one with two kinds set. One with none, from a later format,
-// adds nothing.
+// Sorts one target into its rule, refusing one with two kinds set, or a repo kind no destination names, which no
+// compile writes. One with none, from a later format, adds nothing.
 func (self *AclState) classifyTarget(rule *aclRule, target *protocol.AclTarget, field string) error {
 	kindCount := 0
 	count := func(set bool) {
@@ -589,6 +603,7 @@ func (self *AclState) classifyTarget(rule *aclRule, target *protocol.AclTarget, 
 	count(target.GetPublicName() != "")
 	count(target.GetMailSend())
 	count(len(target.GetClientId()) != 0)
+	count(target.GetRepoKind() != protocol.RepoKind_REPO_KIND_UNSPECIFIED)
 	if 1 < kindCount {
 		return aclRowsRefusal("%s sets %d kinds", field, kindCount)
 	}
@@ -649,6 +664,11 @@ func (self *AclState) classifyTarget(rule *aclRule, target *protocol.AclTarget, 
 		rule.publicNames = append(rule.publicNames, target.GetPublicName())
 	case target.GetMailSend():
 		rule.mailSend = true
+	case target.GetRepoKind() != protocol.RepoKind_REPO_KIND_UNSPECIFIED:
+		if aclDestinationRepoKindName(target.GetRepoKind()) == "" {
+			return aclRowsRefusal("%s names a repo kind no destination names", field)
+		}
+		rule.repoKindTargets = append(rule.repoKindTargets, target.GetRepoKind())
 	}
 	return nil
 }
@@ -673,6 +693,7 @@ func (self *AclState) classifyVia(rule *aclRule, via *protocol.AclTarget, field 
 	count(len(via.GetSocketTokens()) != 0 || via.GetSocketPrefix())
 	count(via.GetPublicName() != "")
 	count(via.GetMailSend())
+	count(via.GetRepoKind() != protocol.RepoKind_REPO_KIND_UNSPECIFIED)
 	switch {
 	case 1 < kindCount:
 		return aclRowsRefusal("%s sets %d kinds", field, kindCount)
@@ -777,6 +798,9 @@ func (self *AclState) indexRepos() error {
 		}
 		if !aclRepoInboxFits(row.GetKind(), row.GetInbox()) {
 			return aclRowsRefusal("%s has an invalid inbox role", field)
+		}
+		if !aclRepoLabelMacFits(row.GetKind(), row.GetLabelMac()) {
+			return aclRowsRefusal("%s has a label_mac that does not fit its kind", field)
 		}
 		if row.GetInbox() == protocol.RepoInbox_REPO_INBOX_ADMIN {
 			if adminInbox {

@@ -1,0 +1,6 @@
+// agent_repos' implicit fragment (DESIGN-COMPUTE §16.5's deposit row, §16.6's implicit row; QD-1433): in a network with
+// no document every admitted sidecar deposits into every agent repo, an agent's inbox, and reads nothing there; §8.6's
+// ceiling holds an ephemeral sidecar out of it, as out of every rule that does not name it. It compiles after the frozen
+// implicit document only once a base turns agent_repos on, so every release compiles the same rows before that base.
+{ "grants": [
+    { "src": ["autogroup:sidecar"], "dst": ["evs:kind:agent"], "allow": ["deposit"] } ] }

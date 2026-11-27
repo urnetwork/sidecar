@@ -64,8 +64,13 @@ func TestDaemonTeamOwnerRestartsWithItsFirstPolicy(t *testing.T) {
 		t.Fatalf("first signed policy: %v, %v", state.Base(), err)
 	}
 	head, err := follower.Heads().ReadConfigHead(ctx, 1, state.Base().GetConfigHeadSha256())
-	if err != nil || !bytes.Equal(head.File(sidecar.ConfigHeadPolicyPath), sidecar.AclTeamStartDocument()) {
+	if err != nil || !bytes.Equal(head.File(sidecar.ConfigHeadPolicyPath), sidecar.AclTeamStartDocumentFor(state.AuthFeatures())) {
 		t.Fatalf("verified first head: %v", err)
+	}
+	// the first head turns on every feature this release implements, agent_repos among them, so the starting document
+	// holds its member deposit rule (DESIGN-COMPUTE §16.5, QD-1433)
+	if !state.AuthFeatureOn(sidecar.AuthFeatureAgentRepos) || !bytes.Contains(head.File(sidecar.ConfigHeadPolicyPath), []byte(`"evs:kind:agent"`)) {
+		t.Fatalf("the first Team head's features %s, and its document lacks agent_repos' rule", state.AuthFeatures())
 	}
 	if reads := engines.Api().RouteCount("GET /sidecar/limits"); reads != 1 {
 		t.Fatalf("prepared a second starter after restart: %d limit reads", reads)
