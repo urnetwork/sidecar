@@ -453,7 +453,9 @@ func TestFakeCalDavSharingReported(t *testing.T) {
 			t.Fatal(err)
 		}
 		_, body := testCalendarDo(t, server, "PROPFIND", "https://"+FakeCalendarCaldavHost+testCalendarPersonalPath,
-			`<?xml version="1.0"?><d:propfind xmlns:d="DAV:" xmlns:cs="http://calendarserver.org/ns/" xmlns:oc="http://owncloud.org/ns"><d:prop><oc:invite/><cs:invite/><cs:publish-url/><d:current-user-privilege-set/></d:prop></d:propfind>`,
+			// the namespaces from the front's own constants: their URIs are identifiers, never hosts reached
+			`<?xml version="1.0"?><d:propfind xmlns:d="DAV:" xmlns:cs="`+fakeCalendarServerNs+`" xmlns:oc="`+fakeOwncloudNamespace+
+				`"><d:prop><oc:invite/><cs:invite/><cs:publish-url/><d:current-user-privilege-set/></d:prop></d:propfind>`,
 			map[string]string{"Depth": "0", "Content-Type": "application/xml", "Authorization": testCaldavAuthorization()})
 		for _, fragment := range want {
 			if !bytes.Contains(body, []byte(fragment)) {
