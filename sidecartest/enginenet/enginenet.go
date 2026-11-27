@@ -296,6 +296,7 @@ func (self *enginesGateSource) wait(ctx context.Context) error {
 	}
 }
 
+// proj/'s entry 0, once the hold lets the read go.
 func (self *enginesGateSource) Genesis(ctx context.Context, networkId sidecar.Id) ([]byte, error) {
 	if err := self.wait(ctx); err != nil {
 		return nil, err
@@ -303,6 +304,7 @@ func (self *enginesGateSource) Genesis(ctx context.Context, networkId sidecar.Id
 	return self.source.Genesis(ctx, networkId)
 }
 
+// The entries after after, once the hold lets the read go.
 func (self *enginesGateSource) Entries(ctx context.Context, networkId sidecar.Id, after *bridge.AuthPin) ([][]byte, error) {
 	if err := self.wait(ctx); err != nil {
 		return nil, err
@@ -310,6 +312,7 @@ func (self *enginesGateSource) Entries(ctx context.Context, networkId sidecar.Id
 	return self.source.Entries(ctx, networkId, after)
 }
 
+// projrows/'s object, once the hold lets the read go.
 func (self *enginesGateSource) Rows(ctx context.Context, networkId sidecar.Id, rowsSha256 []byte) ([]byte, error) {
 	if err := self.wait(ctx); err != nil {
 		return nil, err
