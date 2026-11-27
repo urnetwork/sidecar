@@ -65,8 +65,8 @@ modules:
     leg: [cli]
   - module: github.com/ebitengine/purego
     spdx: Apache-2.0
-    reason: v0.11.2 reaches the macOS Keychain without cgo, from cli (§5.10, D-CORE-12); and, required by the root since CARCH-M11-02, loads LiteRT-LM's and ONNX Runtime's C libraries without cgo in the local engine's helper and the safety classifier (DESIGN-COMPUTE §6.5, §27.5)
-    leg: [cli]
+    reason: v0.11.2 reaches the macOS Keychain without cgo, from cli (§5.10, D-CORE-12); and, required by the root since CARCH-M11-02, loads LiteRT-LM's and ONNX Runtime's C libraries without cgo in the local engine's helper and the safety classifier (DESIGN-COMPUTE §6.5, §27.5), and libproc's socket owners without cgo in the root's macOS listeners discovery, which ur and the macOS app link (DESIGN-COMPUTE §26.5; LSTN-M13-03)
+    leg: [client, cli]
   - module: github.com/emersion/go-ical
     spdx: MIT
     reason: calendars' iCalendar parsing and writing (DESIGN-COMPUTE §23.7, Appendix D), at its newest pseudo-version, v0.0.0-20261112170022-46c5b53a1723, as no release is tagged; read from its LICENSE (CARCH-M11-02)

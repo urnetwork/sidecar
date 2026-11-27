@@ -56,9 +56,11 @@ const (
 	fuzzTestHooksTagForRun = sidecarTestHooksTag
 )
 
+// A task's and a milestone's names: DESIGN.md's M0 to M10, and DESIGN-COMPUTE.md's M11 to M16 (its §19), whose tasks
+// write targets too (LSTN-M13-01's FuzzListenersFile).
 var (
-	fuzzOwnerPattern     = regexp.MustCompile(`^[A-Z][A-Z0-9]*-M([0-9]|10)-[0-9]{2}$`)
-	fuzzMilestonePattern = regexp.MustCompile(`^M([0-9]|10)$`)
+	fuzzOwnerPattern     = regexp.MustCompile(`^[A-Z][A-Z0-9]*-M([0-9]|1[0-6])-[0-9]{2}$`)
+	fuzzMilestonePattern = regexp.MustCompile(`^M([0-9]|1[0-6])$`)
 	fuzzTargetPattern    = regexp.MustCompile(`^Fuzz[A-Z0-9_][A-Za-z0-9_]*$`)
 	fuzzTestPattern      = regexp.MustCompile(`^Test[A-Z0-9_][A-Za-z0-9_]*$`)
 )

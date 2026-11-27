@@ -1,0 +1,120 @@
+// Listeners' formats (DESIGN-COMPUTE §26.4-§26.8; LSTN-M13-01): the list a device publishes as its versionless
+// s/<sidecar_id> in its network's listeners repo, and the live ask's bodies, LISTENERS and LISTENERS_RESULT (0x1901,
+// 0x1902, §6.11, Appendix D), on the control-class contract any two admitted sidecars of a network hold (D-PROTO-18,
+// D-LSTN-7). §26.6 writes the file as JSON whose fields are these, and §26.8 names the ask's fields without numbers:
+// they take numbers in the order written (compute-plan-lstn-file-fields, QD-1249), the file's in its example's key
+// order. The file itself is the JSON form listeners_file.go writes and reads, keys and enum values as named here, so
+// it reaches EVS only sealed, a ciphertext evs sees with its writer, size and write time (§26.11, R-LSTN-7); the ask
+// rides only Required-mode ciphertext between two sidecars. No server reads a field, so none takes a §2.8 row.
+//
+// The file carries no address of its host: readers take the host's overlay address and name from the config (§26.4).
+// An entry's bind is a wildcard there, "0.0.0.0" or "::"; only an own-view entry, which reaches the host's person's own
+// devices by the live ask alone, names the address it binds.
+
+syntax = "proto3";
+package urnetwork.sidecar;
+
+import "protocol/acl.proto";
+
+option go_package = "github.com/urnetwork/sidecar/protocol";
+
+// An entry's kind (§26.4's table). The JSON form is the name's last word, lowercase: "socket", "map" and so on.
+enum ListenersEntryKind {
+  LISTENERS_ENTRY_KIND_UNSPECIFIED = 0;
+  LISTENERS_ENTRY_KIND_SOCKET = 1;         // a TCP socket listening, or a UDP server socket (§26.5)
+  LISTENERS_ENTRY_KIND_MAP = 2;            // a port map of the host's overlay address (BridgeMap)
+  LISTENERS_ENTRY_KIND_FORWARD = 3;        // a local listener carrying each connection to another client or a socket name
+  LISTENERS_ENTRY_KIND_SOCK = 4;           // a socket name the host listens on (ur socket listen)
+  LISTENERS_ENTRY_KIND_TLS = 5;            // a name the host publishes through the TLS edge (ur bridge public-tls)
+  LISTENERS_ENTRY_KIND_SSH = 6;            // an enclave's SSH server (§12.4)
+}
+
+// An entry's protocol. JSON: "tcp", "udp".
+enum ListenersProtocol {
+  LISTENERS_PROTOCOL_UNSPECIFIED = 0;
+  LISTENERS_PROTOCOL_TCP = 1;
+  LISTENERS_PROTOCOL_UDP = 2;
+}
+
+// Where an entry's description came from (§26.4's order, the first found): every source a description takes, not only
+// program and label (QD-1249). JSON: the name after LISTENERS_DESCRIPTION_SOURCE_, lowercase.
+enum ListenersDescriptionSource {
+  LISTENERS_DESCRIPTION_SOURCE_UNSPECIFIED = 0;
+  LISTENERS_DESCRIPTION_SOURCE_LABEL = 1;          // the person's label for the port on the device (§26.6)
+  LISTENERS_DESCRIPTION_SOURCE_PROGRAM = 2;        // the socket's program, as the OS names it to the bridge
+  LISTENERS_DESCRIPTION_SOURCE_OTHER_USER = 3;     // "another user's program": an owner the bridge may not name
+  LISTENERS_DESCRIPTION_SOURCE_SYSTEM = 4;         // "a system program": an owner the OS names to nobody
+  LISTENERS_DESCRIPTION_SOURCE_TARGET_PROGRAM = 5; // a map's, tls's or sock's target's program, on the host
+  LISTENERS_DESCRIPTION_SOURCE_TARGET = 6;         // a map's, tls's or sock's target, off the host or unnamed
+  LISTENERS_DESCRIPTION_SOURCE_FIXED = 7;          // the kind's own words: ssh's "ssh (ur ssh-server)"
+}
+
+// Why a file lists nothing (§26.6); unspecified for a file that publishes, which the JSON writes as null.
+enum ListenersWithheld {
+  LISTENERS_WITHHELD_UNSPECIFIED = 0;
+  LISTENERS_WITHHELD_DISCLOSURE = 1;       // the person has not acknowledged listeners:publish at its current version
+  LISTENERS_WITHHELD_DEVICE = 2;           // a desktop whose own first list its person has not confirmed on it
+  LISTENERS_WITHHELD_NETWORK_ACK = 3;      // a tagged sidecar before an Owner's or Admin's acknowledgment stands
+  LISTENERS_WITHHELD_HIDDEN = 4;           // a device its person hid
+  LISTENERS_WITHHELD_NETWORK = 5;          // a device the document's listeners block leaves out
+}
+
+// Why an entry stays in its person's own view (§26.4's "What leaves the device"); unspecified for an entry listed to
+// the network. Never set in a file.
+enum ListenersOwnView {
+  LISTENERS_OWN_VIEW_UNSPECIFIED = 0;
+  LISTENERS_OWN_VIEW_LOOPBACK = 1;         // a socket on loopback alone: "this device only", with "map it" (Q-LSTN-5)
+  LISTENERS_OWN_VIEW_ONE_ADDRESS = 2;      // a socket on one other address, a LAN's, a container bridge's, the tun's: "map it"
+  LISTENERS_OWN_VIEW_IPV6_ONLY = 3;        // a socket on IPv6 alone: the overlay carries IPv4 alone
+  LISTENERS_OWN_VIEW_DAEMON = 4;           // the daemon's own listener: "never over the overlay" (rule 0, D-BRIDGE-19)
+  LISTENERS_OWN_VIEW_HIDDEN = 5;           // an entry, or a device, its person hid
+  LISTENERS_OWN_VIEW_CONTAINER = 6;        // a socket in an enclave's agents' container, in its sponsor's view (M14)
+}
+
+// One entry, numbered in §26.6's example's key order, then v4_uncertain (§26.5's Windows mark), then what the plan
+// adds for the kinds the example does not show and for the own view.
+message ListenersEntry {
+  ListenersEntryKind kind = 1;
+  ListenersProtocol proto = 2;
+  uint32 port = 3;                         // the host's port: a socket's, a map's or a forward's local one, tls's at
+                                           //   the edge, ssh's 22; none for sock
+  string bind = 4;                         // in a file "0.0.0.0" or "::", or empty for a forward that binds narrower;
+                                           //   an own-view entry's address
+  string target = 5;                       // a map's, tls's or sock's target, ip:port, IPv6 bracketed
+  string to = 6;                           // a forward's: <client>:<port> or sock:<name>
+  string desc = 7;                         // at most DescriptionMaxCharCount characters, the writer's words (R-LSTN-8)
+  ListenersDescriptionSource desc_by = 8;
+  int64 until = 9;                         // when a map, forward or tls entry ends, ms since the epoch; 0 for none
+  bool shared = 10;                        // a second socket binds the port on a narrower address (§26.7)
+  bool v4_uncertain = 11;                  // Windows' "::" socket, whose table does not say it takes IPv4 (§26.5)
+  string name = 12;                        // sock's socket name, tls's host label
+  AclAudience audience = 13;               // tls's audience
+  bool shadowed = 14;                      // a socket on a port a map takes first (rule 1 before rule 3, §26.4)
+  ListenersOwnView own_view = 15;          // an own-view entry's reason; never in a file
+}
+
+// A device's list as it publishes it, s/<sidecar_id> (§26.6), in its example's key order.
+message ListenersFile {
+  uint32 v = 1;                            // 1
+  bytes sidecar = 2;                       // the writer, which the file's path names too, 16 B
+  int64 updated = 3;                       // the writer's clock, ms since the epoch, written to the minute in UTC; it
+                                           //   decides nothing but the age a viewer shows
+  ListenersWithheld withheld = 4;          // set, the file lists no entry
+  bool truncated = 5;                      // past EntryMaxCount
+  repeated ListenersEntry entries = 6;
+}
+
+// LISTENERS (0x1901, §26.8): the live ask, from any admitted sidecar of the host's network on the control class.
+message ListenersRequest {
+  bytes device_scope = 1;                  // the device whose list is asked, the host's sidecar id, 16 B: an ask that
+                                           //   names another device is not the host's to answer
+  bool include_own_view = 2;               // also the host's own-view and hidden entries, which the host gives only a
+                                           //   consented device of its member, or for a tagged host its sponsor's
+}
+
+// LISTENERS_RESULT (0x1902, §26.8): the host's answer, from a dump it made at once.
+message ListenersResult {
+  bytes file = 1;                          // its list as it would publish it: the JSON file's bytes
+  repeated ListenersEntry own_view_entries = 2; // its own-view and hidden entries, own_view set on each, only where
+                                           //   include_own_view asked and the asker may see them
+}
