@@ -8,6 +8,15 @@
 // What a unit is and what installing and removing it runs are written here for every OS, so each OS's golden file
 // and command list is tested on any host; unit_<os>.go gives the host's own environment. Both are idempotent: an
 // install over an install changes nothing, and an uninstall of nothing succeeds.
+//
+// While a gateway grant stands (DESIGN-COMPUTE §8.4, D-GW-3, GW-M12-01) the unit also holds the gateway's port, where
+// the OS holds a socket for a unit, so no other user's process takes the port across the daemon's restarts: launchd's
+// Sockets in the LaunchAgent, one name with the port's two loopback addresses, which the daemon checks in by
+// launch_activate_socket (unit_darwin.go); a systemd user socket unit ur@<i>.socket beside the service, whose two
+// ListenStream sockets the service inherits by name (sd_listen_fds' protocol, unit_linux.go). The daemon takes each
+// socket for the address it is bound to and nothing else (sidecar's gateway_listener.go). Windows' logon task holds no
+// socket, so there the daemon binds the port itself at its start. An uninstall takes the socket unit away whatever it
+// held.
 
 package main
 
@@ -17,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"html"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -32,8 +42,13 @@ const (
 	unitLaunchAgentPrefix = "network.ur.ur."
 	// systemd's user unit, ur@<instance>
 	unitSystemdPrefix = "ur@"
+	// systemd's unit suffixes: the service, and the socket unit that holds the gateway's port beside it
+	unitSystemdServiceSuffix = ".service"
+	unitSystemdSocketSuffix  = ".socket"
 	// Task Scheduler's folder and task prefix
 	unitTaskPrefix = `URnetwork\ur-`
+	// the name the gateway's sockets go by: launchd's Sockets key, and systemd's FileDescriptorName
+	unitGatewaySocketName = "gateway"
 )
 
 // Where and as whom a unit is installed.
@@ -57,6 +72,11 @@ type unitPlan struct {
 	// The unit's file, empty on Windows, where the task is the unit.
 	path    string
 	content []byte
+	// systemd's socket unit, which holds the gateway's port: written where a grant stands, empty otherwise.
+	socketPath    string
+	socketContent []byte
+	// Files an uninstall removes beside path, whether or not this install wrote them: systemd's socket unit.
+	removePaths []string
 	// Run in order after the file is written. A failure stops the install.
 	install [][]string
 	// Before the install, run with failures ignored, so an install over an install replaces it.
@@ -67,9 +87,12 @@ type unitPlan struct {
 	afterUninstall [][]string
 }
 
-// The unit of instance on env's OS, running executable. Refuses an instance name that is not one, and an executable
-// path a unit could not quote.
-func unitPlanFor(env *unitEnv, instance string, executable string) (*unitPlan, error) {
+// The unit of instance on env's OS, running executable, holding the gateway's port where gatewayPort is one (0 for
+// none). Refuses an instance name that is not one, and an executable path a unit could not quote.
+func unitPlanFor(env *unitEnv, instance string, executable string, gatewayPort int) (*unitPlan, error) {
+	if gatewayPort < 0 || 65535 < gatewayPort {
+		return nil, fmt.Errorf("%d is not a port", gatewayPort)
+	}
 	if _, err := sidecar.SidecarInstanceName(instance); err != nil || instance == "" {
 		return nil, fmt.Errorf("%q is not an instance name", instance)
 	}
@@ -89,7 +112,7 @@ func unitPlanFor(env *unitEnv, instance string, executable string) (*unitPlan, e
 		path := filepath.Join(env.home, "Library", "LaunchAgents", label+".plist")
 		return &unitPlan{
 			path:           path,
-			content:        launchAgentPlist(label, executable, instance),
+			content:        launchAgentPlist(label, executable, instance, gatewayPort),
 			reset:          [][]string{{"launchctl", "bootout", domain + "/" + label}},
 			install:        [][]string{{"launchctl", "bootstrap", domain, path}},
 			uninstall:      [][]string{{"launchctl", "bootout", domain + "/" + label}},
@@ -104,12 +127,25 @@ func unitPlanFor(env *unitEnv, instance string, executable string) (*unitPlan, e
 			configHome = filepath.Join(env.home, ".config")
 		}
 		unit := unitSystemdPrefix + instance
+		socketUnit := unit + unitSystemdSocketSuffix
+		socketPath := filepath.Join(configHome, "systemd", "user", socketUnit)
 		plan := &unitPlan{
-			path:           filepath.Join(configHome, "systemd", "user", unit+".service"),
+			path:           filepath.Join(configHome, "systemd", "user", unit+unitSystemdServiceSuffix),
 			content:        systemdUserUnit(executable, instance),
 			install:        [][]string{{"systemctl", "--user", "daemon-reload"}, {"systemctl", "--user", "enable", "--now", unit}},
-			uninstall:      [][]string{{"systemctl", "--user", "disable", "--now", unit}},
+			removePaths:    []string{socketPath},
+			uninstall:      [][]string{{"systemctl", "--user", "disable", "--now", socketUnit}, {"systemctl", "--user", "disable", "--now", unit}},
 			afterUninstall: [][]string{{"systemctl", "--user", "daemon-reload"}},
+		}
+		if 0 < gatewayPort {
+			// the socket first, so the service, started again after it, inherits its sockets by name
+			plan.socketPath, plan.socketContent = socketPath, systemdGatewaySocketUnit(instance, gatewayPort)
+			plan.install = [][]string{
+				{"systemctl", "--user", "daemon-reload"},
+				{"systemctl", "--user", "enable", "--now", socketUnit},
+				{"systemctl", "--user", "enable", unit},
+				{"systemctl", "--user", "restart", unit},
+			}
 		}
 		if env.headless {
 			// a headless host has no login session to start user units at boot without it (§5.8)
@@ -134,8 +170,9 @@ func isWindowsAbsolute(path string) bool {
 	return 3 <= len(path) && path[1] == ':' && (path[2] == '\\' || path[2] == '/')
 }
 
-// The LaunchAgent: the daemon at load, kept alive, as the user, ur by its absolute path.
-func launchAgentPlist(label string, executable string, instance string) []byte {
+// The LaunchAgent: the daemon at load, kept alive, as the user, ur by its absolute path; with a gateway port, launchd's
+// Sockets holding it on both loopback addresses under one name, which the daemon checks in.
+func launchAgentPlist(label string, executable string, instance string, gatewayPort int) []byte {
 	var plist bytes.Buffer
 	plist.WriteString(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -156,10 +193,55 @@ func launchAgentPlist(label string, executable string, instance string) []byte {
 	<true/>
 	<key>ProcessType</key>
 	<string>Background</string>
-</dict>
+`)
+	if 0 < gatewayPort {
+		plist.WriteString(`	<key>Sockets</key>
+	<dict>
+		<key>` + unitGatewaySocketName + `</key>
+		<array>
+`)
+		for _, socket := range []struct {
+			family string
+			node   string
+		}{{family: "IPv4", node: "127.0.0.1"}, {family: "IPv6", node: "::1"}} {
+			plist.WriteString(`			<dict>
+				<key>SockFamily</key>
+				<string>` + socket.family + `</string>
+				<key>SockNodeName</key>
+				<string>` + socket.node + `</string>
+				<key>SockServiceName</key>
+				<string>` + strconv.Itoa(gatewayPort) + `</string>
+				<key>SockType</key>
+				<string>stream</string>
+			</dict>
+`)
+		}
+		plist.WriteString(`		</array>
+	</dict>
+`)
+	}
+	plist.WriteString(`</dict>
 </plist>
 `)
 	return plist.Bytes()
+}
+
+// The systemd socket unit that holds the gateway's port beside ur@<instance>.service, which inherits its two sockets,
+// both named gateway, by sharing its name. ipv6-only keeps [::1]'s socket off IPv4.
+func systemdGatewaySocketUnit(instance string, gatewayPort int) []byte {
+	port := strconv.Itoa(gatewayPort)
+	return []byte(`[Unit]
+Description=URnetwork sidecar gateway port, instance ` + instance + `
+
+[Socket]
+ListenStream=127.0.0.1:` + port + `
+ListenStream=[::1]:` + port + `
+BindIPv6Only=ipv6-only
+FileDescriptorName=` + unitGatewaySocketName + `
+
+[Install]
+WantedBy=sockets.target
+`)
 }
 
 // The systemd user unit: the daemon, restarted on failure, as the user.
@@ -192,20 +274,39 @@ func unitDaemonArguments(executable string, instance string) []string {
 	return []string{executable, "daemon", "--instance", instance, "--unit"}
 }
 
-// Installs the unit: writes its file when its content differs, then runs its reset and install, so a second install
-// changes nothing.
-func installDaemonUnit(ctx context.Context, env *unitEnv, runner unitRunner, instance string, executable string) error {
-	plan, err := unitPlanFor(env, instance, executable)
+// Installs the unit, holding the gateway's port where gatewayPort is one: writes its files when their content
+// differs, takes away a socket unit an earlier install wrote when none is held now, then runs its reset and install,
+// so a second install changes nothing.
+func installDaemonUnit(ctx context.Context, env *unitEnv, runner unitRunner, instance string, executable string, gatewayPort int) error {
+	plan, err := unitPlanFor(env, instance, executable, gatewayPort)
 	if err != nil {
 		return err
 	}
+	write := func(path string, content []byte) error {
+		existing, err := os.ReadFile(path)
+		if err == nil && bytes.Equal(existing, content) {
+			return nil
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return err
+		}
+		return os.WriteFile(path, content, 0o644)
+	}
 	if plan.path != "" {
-		existing, err := os.ReadFile(plan.path)
-		if err != nil || !bytes.Equal(existing, plan.content) {
-			if err := os.MkdirAll(filepath.Dir(plan.path), 0o755); err != nil {
-				return err
-			}
-			if err := os.WriteFile(plan.path, plan.content, 0o644); err != nil {
+		if err := write(plan.path, plan.content); err != nil {
+			return err
+		}
+	}
+	if plan.socketPath != "" {
+		if err := write(plan.socketPath, plan.socketContent); err != nil {
+			return err
+		}
+	} else {
+		for _, path := range plan.removePaths {
+			if err := os.Remove(path); err == nil {
+				// a socket unit no grant needs any more: stopped, so the service it fed no longer takes its sockets
+				runner(ctx, "systemctl", "--user", "disable", "--now", filepath.Base(path))
+			} else if !errors.Is(err, os.ErrNotExist) {
 				return err
 			}
 		}
@@ -224,15 +325,18 @@ func installDaemonUnit(ctx context.Context, env *unitEnv, runner unitRunner, ins
 // Stops and removes the unit, and succeeds when there is none. A command's failure is ignored, since the unit may
 // already be stopped or gone; the file's removal is not.
 func uninstallDaemonUnit(ctx context.Context, env *unitEnv, runner unitRunner, instance string, executable string) error {
-	plan, err := unitPlanFor(env, instance, executable)
+	plan, err := unitPlanFor(env, instance, executable, 0)
 	if err != nil {
 		return err
 	}
 	for _, command := range plan.uninstall {
 		runner(ctx, command[0], command[1:]...)
 	}
-	if plan.path != "" {
-		if err := os.Remove(plan.path); err != nil && !errors.Is(err, os.ErrNotExist) {
+	for _, path := range append([]string{plan.path}, plan.removePaths...) {
+		if path == "" {
+			continue
+		}
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
 	}
@@ -250,4 +354,52 @@ func execUnitRunner(cli *urCli) unitRunner {
 		command.Stderr = cli.stderr
 		return command.Run()
 	}
+}
+
+// sd_listen_fds' protocol, the variables systemd passes a service its sockets by, and the first descriptor it passes.
+const (
+	unitListenPidVariable     = "LISTEN_PID"
+	unitListenFdsVariable     = "LISTEN_FDS"
+	unitListenFdNamesVariable = "LISTEN_FDNAMES"
+	unitListenFdsStart        = 3
+)
+
+// The gateway's sockets systemd passed this process, by sd_listen_fds' protocol: LISTEN_PID naming pid, LISTEN_FDS
+// descriptors from 3, LISTEN_FDNAMES their names, colon-separated; each named gateway is made a listener, its descriptor
+// closed once the listener holds its own copy, and every other descriptor passed is left as it is but marked to close
+// on exec, so no child inherits it. None where the variables name another process or none. file makes the *os.File of
+// a descriptor, os.NewFile unless a test stands one in; closeOnExec marks one, which a test may leave alone.
+func systemdGatewayListeners(getenv func(name string) string, pid int, file func(fd uintptr, name string) *os.File,
+	closeOnExec func(fd int)) ([]net.Listener, error) {
+	listenPid, err := strconv.Atoi(getenv(unitListenPidVariable))
+	if err != nil || listenPid != pid {
+		return nil, nil
+	}
+	count, err := strconv.Atoi(getenv(unitListenFdsVariable))
+	if err != nil || count <= 0 {
+		return nil, nil
+	}
+	names := strings.Split(getenv(unitListenFdNamesVariable), ":")
+	listeners := []net.Listener{}
+	errs := []error{}
+	for i := 0; i < count; i += 1 {
+		fd := unitListenFdsStart + i
+		if i >= len(names) || names[i] != unitGatewaySocketName {
+			closeOnExec(fd)
+			continue
+		}
+		passed := file(uintptr(fd), unitGatewaySocketName)
+		if passed == nil {
+			errs = append(errs, fmt.Errorf("descriptor %d does not open", fd))
+			continue
+		}
+		listener, err := net.FileListener(passed)
+		passed.Close()
+		if err != nil {
+			errs = append(errs, fmt.Errorf("descriptor %d does not listen: %w", fd, err))
+			continue
+		}
+		listeners = append(listeners, listener)
+	}
+	return listeners, errors.Join(errs...)
 }
