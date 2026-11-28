@@ -28,7 +28,7 @@ it: github.com/ebitengine/purego v0.11.2 (Apache-2.0, The Ebitengine Authors); g
 v1.13.12 (BSD-2-Clause, Dave Cheney) with github.com/kr/fs v0.1.0 (BSD-3-Clause, The Go Authors);
 github.com/creack/pty v1.1.24 (MIT, Keith Rarick); github.com/emersion/go-webdav v0.8.0 and
 github.com/emersion/go-ical (MIT, Simon Ser) with github.com/teambition/rrule-go v1.8.2 (MIT,
-Teambition); golang.org/x/image v0.44.0 (BSD-3-Clause, The Go Authors); github.com/cloudflare/circl
+Teambition); golang.org/x/image v0.45.0 (BSD-3-Clause, The Go Authors); github.com/cloudflare/circl
 v1.6.5 (BSD-3-Clause, Cloudflare); github.com/russellhaering/goxmldsig v1.6.1 (Apache-2.0) with
 github.com/beevik/etree v1.7.0 (BSD-2-Clause, Brett Vickers) and github.com/jonboulle/clockwork
 v0.5.0 (Apache-2.0); github.com/google/go-tpm v0.9.8 and github.com/google/logger v1.1.1
