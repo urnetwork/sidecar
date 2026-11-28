@@ -425,7 +425,8 @@ func computeSearchSignRequest(ticket []byte, record *computeSearchTicketRecord, 
 }
 
 // A retry of an admission that stands (step 6): the signer asked again with its ticket, its amount and minute and the
-// sealed payee the retry sent. Nothing is held, released or dropped: the first admission's authorization stands. A
+// sealed payee the retry sent. Nothing is held, released or dropped: the first admission's authorization stands, and a
+// payee the signer refuses now is kept as a sanctions record, suspending the network's search, as at a first request. A
 // request naming another amount, another of the network's devices or another agent under the same request id and
 // attempt is no retry of it, and is refused before the signer is asked.
 func (self *ComputeSearchAdmission) retry(ctx context.Context, caller *ComputeCaller, claim *computeSearchClaim, parsed *computeSearchParsed, clock *computeSearchClock) (*protocol.ComputeSearchAuthorizeResponse, *ComputeRefusal) {
@@ -450,6 +451,13 @@ func (self *ComputeSearchAdmission) retry(ctx context.Context, caller *ComputeCa
 		return nil, self.capacity(ComputeSearchCapacityReasonSigner)
 	}
 	if response.GetRefusal() != protocol.SearchSignRefusal_SEARCH_SIGN_REFUSAL_UNSPECIFIED || len(response.GetSealedAuthorization()) == 0 {
+		if response.GetRefusal() == protocol.SearchSignRefusal_SEARCH_SIGN_REFUSAL_PAYEE_REFUSED {
+			// a payee the screen refuses on a retry is a sanctions record as on a first request, though the first
+			// admission's authorization, signed to a payee the screen passed then, stands and keeps its hold
+			if err := self.suspend.Record(ctx, caller.NetworkId, caller.SidecarId, model.ComputeSearchFlagReasonPayeeRefused, response.GetPayee(), nil); err != nil {
+				self.engine.alarm("search_sanctions_record_write", "a web search sanctions record was not written")
+			}
+		}
 		return nil, self.signerRefusal(response.GetRefusal(), clock)
 	}
 	return &protocol.ComputeSearchAuthorizeResponse{SealedAuthorization: response.GetSealedAuthorization()}, nil

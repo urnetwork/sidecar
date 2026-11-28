@@ -372,6 +372,43 @@ func TestSearchAdmitPayeeRefused(t *testing.T) {
 	}
 }
 
+// The signer refused the payee of a retry, as after its screen listed the payee between the two: the sanctions record
+// is kept and the network's search suspended as at a first request, while the first admission's authorization, signed
+// to a payee the screen passed then, keeps its hold and its ticket.
+func TestSearchAdmitPayeeRefusedOnRetry(t *testing.T) {
+	fixture := newComputeSearchFixture(t, nil)
+	requestId := testSearchRequestId("refused on retry")
+	request := fixture.request(requestId, 1)
+	if recorder, _ := fixture.authorize(request); recorder.Code != http.StatusOK {
+		t.Fatalf("the first request: %d %s", recorder.Code, recorder.Body.String())
+	}
+	payee := bytes.Repeat([]byte{0x6b}, 20)
+	fixture.signer.set(func(signer *fakeSearchSigner) {
+		signer.refusal = protocol.SearchSignRefusal_SEARCH_SIGN_REFUSAL_PAYEE_REFUSED
+		signer.refusePayee = payee
+	})
+	recorder, _ := fixture.authorize(request)
+	requireComputeSearchRefusal(t, recorder, ComputeRefusalPayeeRefused, "")
+	flags := fixture.searchFlags.all()
+	if len(flags) != 1 || flags[0].Reason != model.ComputeSearchFlagReasonPayeeRefused || flags[0].NetworkId != fixture.networkId ||
+		flags[0].SidecarId != fixture.sidecarId || !bytes.Equal(flags[0].Payee, payee) {
+		t.Fatalf("the sanctions record: %+v", flags)
+	}
+	if op := fixture.ledger.op(fixture.opKey(fixture.networkId, requestId, 1)); op == nil || op.state != model.ComputeOpStateOpen {
+		t.Fatalf("the first admission's hold: %+v", op)
+	}
+	signs := fixture.signer.signList()
+	record, err := fixture.admission().tickets.read(fixture.ctx, signs[0].GetTicket())
+	if err != nil || record == nil || record.state != computeSearchTicketAdmitted {
+		t.Fatalf("the first admission's ticket: %+v %v", record, err)
+	}
+	fixture.signer.set(func(signer *fakeSearchSigner) {
+		signer.refusal = protocol.SearchSignRefusal_SEARCH_SIGN_REFUSAL_UNSPECIFIED
+	})
+	recorder, _ = fixture.authorize(fixture.request(testSearchRequestId("after the retry's refusal"), 1))
+	requireComputeSearchRefusal(t, recorder, ComputeRefusalSearchOff, ComputeSearchOffReasonReview)
+}
+
 // Each of the signer's other refusals releases the hold and drops the ticket, answering as the device reads it; an
 // unreachable signer answers capacity with the hold released.
 func TestSearchAdmitSignerRefusals(t *testing.T) {
