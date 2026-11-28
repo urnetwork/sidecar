@@ -200,3 +200,16 @@ assert Q['Q-CTX-2'][1].startswith("The extension's sidecar.wasm") and Q['Q-REPO-
 Q['Q-CTX-2'] = (Q['Q-CTX-2'][0], "The extension's sidecar.wasm in a page Worker, read-only until M13a, labeled as served code.")
 Q['Q-REPO-2'] = (Q['Q-REPO-2'][0], "(b) §4.6's dispositions, amended by owner decisions 85, 86 and 794 (C4 at M13a).")
 Q['Q-TRUST-4'] = (Q['Q-TRUST-4'][0], "Yes, clearly labeled (EX7); from M13a ur.io's page Worker also acts, labeled so.")
+
+# Owner decision 808 (2026-11-27): dnsedge in connect-alt on every edge, two of the edges' addresses the zone's NS; its
+# design raised Q-DNS-8, which owner decision 809 decides (2026-11-28); folded on main as
+# 793 and 794 and renumbered on merging after the track's 793-807.
+assert D['D-DNS-3'].startswith("Only 12.6's self-hosted dns edge serves"), 'D-DNS-3 row moved'
+D['D-DNS-3'] = "dnsedge in connect-alt on every edge serves `<root>`; two edge addresses are its NS (owner decisions 69, 71, 123, 808)."
+assert D['D-OPS-15'].startswith('Addresses and dns edges follow'), 'D-OPS-15 row moved'
+D['D-OPS-15'] = "Addresses and dnsedge in connect-alt on every edge follow 19.4 and 19.5 (owner decisions 34, 69, 71, 123, 124, 808)."
+assert Q['Q-DNS-4'][1].startswith('None: a self-hosted dns edge'), 'Q-DNS-4 row moved'
+Q['Q-DNS-4'] = (Q['Q-DNS-4'][0], "None: dnsedge in connect-alt on every edge, signed online; two edge addresses its NS.")
+assert 'Q-DNS-8' not in Q, 'Q-DNS-8 row exists'
+Q['Q-DNS-8'] = ("Where does the online signing ZSK live, now that dnsedge runs inside connect-alt, which parses untrusted "
+                "transport traffic?", "(a), owner decision 809: a signer per edge host holds it, outside connect's process.")

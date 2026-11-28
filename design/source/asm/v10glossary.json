@@ -47,6 +47,10 @@
   ]
  ],
  "replace": {
+  "dns edge": [
+   "`dnsedge`, the edge role in connect-alt on every edge; two edge addresses are `<root>`'s NS.",
+   "§12.6"
+  ],
   "G0, Gn-in, Gn-out": [
    "The review gates: G0, signed by the owner before code, and each milestone's entry and exit reviews.",
    "§23.8"

@@ -526,7 +526,7 @@
  ],
  "Q-DNS-4": [
   "decided",
-  "decided (owner decisions 69, 71)",
+  "decided (owner decisions 69, 71); amended (owner decision 808, 2026-11-27)",
   "owner"
  ],
  "Q-DNS-5": [
@@ -542,6 +542,11 @@
  "Q-DNS-7": [
   "decided",
   "decided (owner decision 123, 2026-11-04)",
+  "owner"
+ ],
+ "Q-DNS-8": [
+  "decided",
+  "decided (owner decision 809, 2026-11-28)",
   "owner"
  ],
  "Q-TLS-1": [

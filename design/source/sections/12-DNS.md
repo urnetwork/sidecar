@@ -2,7 +2,7 @@
 
 ### 12.1 Purpose and scope
 
-This section owns public naming: the user root (X4), the network label (X5) and X17; the `dns` engine and dns edge; DNSSEC; zone content and reverse zones; the record API; DNS-01; custom domains; private names, and the DNS-SD names devices answer for service discovery across hosts (12.9.1; with §17.7.1; owner decision 778); takedown hooks (§21). §13 owns certificates and CAA, §14 and §15 mail record content, §19 the dns edge hosts, §20 quotas. Notation follows D-ARCH-1.
+This section owns public naming: the user root (X4), the network label (X5) and X17; the `dns` engine and dns edge; DNSSEC; zone content and reverse zones; the record API; DNS-01; custom domains; private names, and the DNS-SD names devices answer for service discovery across hosts (12.9.1; with §17.7.1; owner decision 778); takedown hooks (§21). §13 owns certificates and CAA, §14 and §15 mail record content, §19 connect-alt's hosts, the signers and the NS addresses, §20 quotas. Notation follows D-ARCH-1.
 
 ### 12.2 Requirements
 
@@ -15,9 +15,9 @@ This section owns public naming: the user root (X4), the network label (X5) and 
 | R-DNS-5 | A released name routes nothing to a new owner | §2 I-14 |
 | R-DNS-6 | Labels are issuable LDH labels; platform names are unclaimable | [R:server-identity] §2.2 |
 | R-DNS-7 | Challenge TXT served within 60 s (p99); negative TTL ≤ 60 s | [R:ext-edge] §3; §19 |
-| R-DNS-8 | Nothing collides with WhoDis on public UDP 53 | vault/main/services.yml:345-347 |
+| R-DNS-8 | Nothing collides with WhoDis on public UDP 53 | vault/main/services.yml:345-347; owner decision 808 |
 | R-DNS-9 | Mail policy records per network; the sending addresses' PTRs under bringyour.com | RFC 8461 §3.4; owner decision 124 |
-| R-DNS-10 | Self-hosted DNS, signed online from the first deploy, on two NS at the one site | owner decisions 69, 71, 109, 123 |
+| R-DNS-10 | Self-hosted DNS in connect-alt on every edge, signed online from the first deploy; two edge addresses at the one site, the primary and the secondary, are its NS | owner decisions 69, 71, 109, 123, 808 |
 | R-DNS-11 | DNS-SD names in a network's zone are answered on the device, from what the policy lets it reach, and never leave it | owner decision 778; R-DNS-4 |
 
 ### 12.3 What exists today
@@ -84,47 +84,64 @@ dns API blocks (dns.bringyour.com), every internal route under /dns/internal/ an
   bearer (12.8): GET /dns/internal/journal?root=&after=<applied> (long-poll <= 25 s);
   /dns/internal/snapshot (the rows at one serial); a poll the journal cannot continue (after < serial, no
   row after+1: a 7-day gap, a restore) answers reload, with restore_serial; every answer also names each
-  lb interface's reported custom-host version, with its probe name and the hosts it added, and the
-  map-stale interfaces (§13.4)
+  lb interface's reported custom-host version, with its probe name and the hosts it added, the
+  map-stale interfaces (§13.4), and each interface an edge on another host has failed (below)
   rows and snapshots stay readable across releases N and N+1: N ignores fields N+1 adds, and writes
   N cannot read wait until N+1 serves 100% (§19.11)
-dnsedge on ns1, ns2 (host-pinned; UDP and TCP 53; no proxy in front, so RRL sees resolver addresses):
+dnsedge, the edge role (dnsservice's DnsEdge), in connect-alt (connect's lb_alt front, server/LBALT.md) in
+  every connect block on every edge (§19.5; owner decision 808), each fed and self-checked alike, so any
+  edge address can be an NS; connect-alt owns each lb_alt interface's UDP and TCP 53 with no proxy in
+  front, so RRL sees resolver addresses:
+  on UDP 53 WhoDis's decoder hands every well-formed query outside its encoding tlds to the role
+    (DnsOtherHandler, connect/transport_pt.go:124-130), which admits it to a bounded worker pool and never
+    blocks the decoder: a name under a served root is the role's, any other name answers REFUSED in RRL's
+    error class, WhoDis's names stay WhoDis's and a datagram that is no query is dropped, as today; TCP 53
+    is the role's alone; a served root under an encoding tld, or over one, refuses the front's start
   apply each diff atomically, in serial order --> zone in memory + local snapshot; a reload swaps in
     /dns/internal/snapshot's; a replaced snapshot older than restore_serial is kept only until POST
     /dns/internal/reload-diff takes its diff, at most 24 h, and any other is deleted at once
-  serve a zone build or key set only once its self-check passes, else keep the previous one
-  answer from memory, sign online, rate-limit; SOA serial = root serial
+  serve a zone build or key set only once its self-check passes, else keep the previous one; before the
+    first, answer no zone query, connect's readiness never waiting on it
+  answer from memory, sign through the host's signer behind a signature cache (owner decision 809),
+    rate-limit before signing; SOA serial = root serial; the block's private status reports the served
+    serial (sidecar/dnsservice/edge_rollout.go:9-11)
   probe each lb interface every 10 s (owner decision 34; server/services_lb_inventory.go:11-17,35):
     tlsedge's alert on 443, 8443, 8883 and 5671 (§13.4; owner decision 121);
     on 443 also the route probe of the custom-host version the interface reported (§13.4), posted
       to POST /dns/internal/route-probes;
     the 25 banner on §19.5's router interfaces
-    drop one after 3 failures, or while the journal names it map-stale (§13.4), never all, and the one
-    §19.5's W1 drains
+    post each verdict with the route probes, so a probe of an interface on its own host, which stays on
+      that host, counts only by another host's (owner decision 810)
+    drop one after 3 failures, once the feed names it failed by an edge on another host, or while the
+    journal names it map-stale (§13.4), never all, and the one §19.5's W1 drains
       --> answered from the healthy set at answer time, with no journal write: the A, AAAA at *, @,
           each copy of *'s records and each mx host on router interfaces (12.7)
 certs: GET /dns/internal/ready?serial=s, checked in this order --> stale while restoring or for
   s <= restore_serial (certs writes again at a new serial, §13.8); else API blocks read each running NS's
-  SOA over TCP and hold while any is below s, a running NS that does not answer included; then
+  served serial (below) and hold while any is below s, a running NS that does not answer included; then
   canary_failing while the canary is not clean (monitor, below), which holds an order with no rewrite and
   no new serial; else ready
 running NS: dns_ns(root, ns, state running or stopped, stopped_time, reason), seeded from dns.yml; an NS
   is running whether or not it answers now; the restore step or `sidecarctl dns ns stop|start` writes
-  stopped, and it leaves stopped only once it serves at or above restore_serial (owner decision 418)
+  stopped, and it leaves stopped only once it serves at or above restore_serial (owner decision 418);
+  ready and the restore's end count the two NS alone; an interface splits its sources across connect's
+  blocks, so an NS's served serial is every block's behind its address, read on each block's private
+  status, and every other edge's blocks count toward restore_serial and the monitor's lag check
 restore (§19.10, after the dumps load and the abuse step, before api's replay; Postgres comes back at dump
-  age with an empty journal, while ns1 and ns2 serve newer zones until they reload):
+  age with an empty journal, while every edge serves newer zones until it reloads):
   §19.10 sets dns_root.restoring as the dumps load, before api or the dns blocks serve: every dns write
     gets 503, so the CT replay (12.5) and api's replay of revocations (§7.10), their DKIM and TLSA
     deletions (I-15) included, commit after this step; until the transaction below, 12.9's SuspendZone,
     SuspendHost and Restore set only their rows, taking no serial, so the suspensions and lifts
     §19.10's abuse step re-places (§21.10) are in its snapshot
-  read each running NS's SOA over TCP; an NS that does not answer is written stopped, and serves again
-    only from a reload, its local snapshot taken as the replaced one
-  one transaction: serial := restore_serial := max(restored serial, the SOAs read, {dns}serial:<root>)
+  read every connect block's served serial on every edge; an NS one of whose blocks does not answer is
+    written stopped, and a block that does not answer serves again, and its edge takes an NS, only from a
+    reload, its local snapshot taken as the replaced one
+  one transaction: serial := restore_serial := max(restored serial, the serials read, {dns}serial:<root>)
     + 2^24, above every serial the lost primary issued, since the key lacks only raises that failed or
     that a Redis failover lost (RFC 1982 allows a jump below 2^31); raise the key
-  each edge reloads at restore_serial and posts its diff (POST /dns/internal/reload-diff); once every
-    running NS answers that SOA, restoring := false; the step lists, by network_id, owner and type, each
+  each block reloads at restore_serial and posts its diff (POST /dns/internal/reload-diff); once every
+    block behind each running NS serves that serial, restoring := false; the step lists, by network_id, owner and type, each
     RRset but challenges' and canaries' in a posted diff, and raises the custom-host map's version,
     dns_root.custom_host_map_version, 2^24 above max(every network_dns_custom_host.map_version, every
     version in dns_custom_host_map_applied, 0), both tables being in the dump, every host's map_version
@@ -144,7 +161,9 @@ monitor, at the site and on 1 outside host: the site's copy rewrites canary.<roo
   old; a missing site row reads as failing; a stale outside row alone holds no order and raises a
   visibility alert;
   2 public resolvers check propagation only until the DS, then validate as well;
-  DNSKEY window > 7 d; equal SOA serials
+  DNSKEY window > 7 d; every block behind both NS at one serial; the site's copy also reads every other
+  block's served serial each minute, and one below the serial the root had 60 s earlier (R-DNS-7), or
+  silent, or a host's signer down, for 10 min warns (§19.8), since that edge could not take an NS
   --> incident alert (server/monitor/alert_classes.go:3-8); from M5, both NS failing or a canary
       signature failing pages §19.8's rota at any hour, 30 min to acknowledge (owner decision 143), and
       one running NS failing SOA reads for 1 h pages it in business hours, since orders then wait (owner
@@ -156,25 +175,27 @@ monitor, at the site and on 1 outside host: the site's copy rewrites canary.<roo
 roots: [ur.network]
 reverse: from smtpedge.yml's sending addresses   # M9; HE's classless delegation; unsigned
 delegated: Team customers' _domainkey.<domain> zones   # v1 (§14.6); not roots
-ns: [ns1, ns2]                  # two hosts at the site; IPv4 and IPv6 from different gateway blocks
+ns: [ns1, ns2]                  # ns1 the primary (the SOA's MNAME), ns2 the secondary: two edge interfaces
+                                # on different hosts and gateway blocks, their IPv4 and IPv6 the glue (§19.5)
 ttl: {challenge: 60, edge: 60, mx: 300, mx_host: 300, tlsa: 300, mail_policy: 3600, caa: 3600,
-      user: 300, user_range: [60, 3600], soa_minimum: 60, ns: 86400, ptr: 3600}   # edge: A, AAAA at *, @
+      user: 300, user_range: [60, 3600], soa_minimum: 60, ns: 86400, ns_host: 3600, ptr: 3600}
+      # edge: A, AAAA at *, @; ns: the NS set; ns_host: ns1's and ns2's A, AAAA (owner decision 810)
 rrl: {ipv4_prefix: 24, ipv6_prefix: 56, slip: 2, classes: [answer, denial, error]}
-signatures_per_second: <cap per host>   # cached answers first
+signatures_per_second: <cap per host>   # the host signer's cap (owner decision 809); cached answers first
 edns_udp_size: 1232
 any: minimal                    # RFC 8482
 client_subnet: ignore           # RFC 7871; never echoed or stored
 tcp: {connections_per_source: <cap>, idle_timeout_s: 10}
 ```
 
-**Placement (D-DNS-3; owner decisions 69, 71, 123).** The `dns` engine (`sidecar/dnsservice`, miekg/dns) runs as server/cli/dns: API blocks serve §12.8's routes and the feed; the edge role, `dnsedge`, runs only on §19's dns edge hosts, whose own addresses leave the lb's UDP 53 to WhoDis (R-DNS-8), and deploys one host at a time (§19.11). Edges never query Postgres (I-12), so with the core down they keep serving and signing while writes and ACME wait. Both NS sit at the one site (12.15).
+**Placement (D-DNS-3; owner decisions 69, 71, 123, 808).** The `dns` engine (`sidecar/dnsservice`, miekg/dns) runs as server/cli/dns: API blocks serve §12.8's routes and the feed; the edge role, `dnsedge` (`dnsservice`'s `DnsEdge`, sidecar/dnsservice/edge.go:80), runs in connect-alt, connect's lb_alt front (server/LBALT.md), in every connect block on every edge (§19.5), each holding the zone and its local snapshot, and ships in connect's release (§19.11). connect-alt tells the zone's queries from WhoDis's transport queries by their names on the same UDP 53, so WhoDis keeps 53 on every interface and nothing moves (R-DNS-8; owner decision 808). Every edge address answers the zone, so any edge becomes an NS by a glue change alone (owner decision 810); the NS are two of them, on different hosts and gateway blocks: ns1, the primary and the SOA's MNAME, and ns2, the secondary, both serving the one journal-fed zone, so neither transfers from the other, and any other edge can take a lost NS's place (runbook, below). Edges never query Postgres (I-12), so with the core down they keep serving and signing while writes and ACME wait. Both NS sit at the one site (12.15).
 
 **Signing (D-DNS-5; owner decisions 69, 109)**, online from the first deploy:
 - **Denial.** ECDSA P-256. Compact denial (RFC 9824; NXDOMAIN kept without DNSSEC) and wildcard answers signed as the queried name reveal neither which names exist nor which a wildcard covers.
-- **Keys.** The KSK stays on an offline HSM, backed up in a second safe; a two-person quarterly ceremony pre-signs DNSKEY RRsets (current, next and standby ZSK) in 14-day windows, released one at a time. The current ZSK is a `secret_files` entry (warp/warpctl/run.go:172-204) mounted only on dns edges, rolled quarterly by pre-publication; the standby stays in vault.
+- **Keys.** The KSK stays on an offline HSM, backed up in a second safe; a two-person quarterly ceremony pre-signs DNSKEY RRsets (current, next and standby ZSK) in 14-day windows, released one at a time. The current ZSK is a `secret_files` entry (warp/warpctl/run.go:172-204) that each edge host's signer, `dnssigner`, mounts apart from connect's process, which parses untrusted transport traffic: it signs, at `signatures_per_second`, what its host's connect blocks ask over a local socket and refuses owners outside its roots, so a flaw in connect yields signatures while it lasts but never the key (owner decision 809); every edge host holds the whole vault on disk anyway (xops/main/ansible/playbook-edges.yml:815-823). It rolls quarterly by pre-publication; the standby stays in vault, mounted nowhere.
 - **DS.** Without one, validators treat the zone as insecure, so a fault harms no one and only the anchored monitors prove signing; the DS follows 30 clean canary days, before M7's TLSA, which §15.5's "validated" label checks (owner decision 135).
 
-**Runbook (§19.10).** NS down or flooded: resolvers retry the other; HE null-routes a flooded address. ZSK leak: mount the standby and hold a ceremony; forgery ends with the old windows (≤ 14 days). Both KSK HSMs lost: a new KSK's DS before the last window expires.
+**Runbook (§19.10).** NS down or flooded: resolvers retry the other; HE null-routes a flooded address, which stops its interface's platform traffic too, so W1's drain takes that interface out of platform and user-name answers first (§19.5). An NS edge, or its address, lost for good (owner decision 808): `sidecarctl dns ns stop` that NS, so orders stop waiting on it; name another edge's address in dns.yml, on another host and gateway block than the surviving NS's, once the monitor's lag check reads that edge's blocks current, which rewrites that NS's A and AAAA in one journal write, every edge answering the zone already, so nothing moves on the edges; `sidecarctl dns ns start` it; and change its glue at the registrar, the NS names staying ns1 and ns2. A resolver that took the old address from the zone keeps it for up to 3600 s, its `ns_host` TTL, and one holding only the registry's glue for up to 86400 s, the .network registry's delegation and glue TTL (dig @v0n0.nic.network, 2026-11-27), the NS set keeping `ns`, 86400 s (owner decision 810); each resolves through the surviving NS meanwhile, so for it the zone runs on one NS until then. A host's signer down: its blocks answer from cached signatures and SERVFAIL past them, resolvers retry the other NS, and an NS host's canary pages; restart the signer. ZSK leak: mount the standby and hold a ceremony; forgery ends with the old windows (≤ 14 days). Both KSK HSMs lost: a new KSK's DS before the last window expires.
 
 ### 12.7 Zone content
 
@@ -237,7 +258,7 @@ _smtp._tls         TXT "v=TLSRPTv1; rua=mailto:<report_token>@rpt.bringyour.com"
 _dmarc             TXT the same policy, adkim=s; aspf=s; + psd=y once company mail leaves   §14.6
                    ; strict, since burner From domains fall back to it (RFC 7489 §6.6.3) until the PSL listing
                    ; its rua's local part is root, which no report token can equal (§14.6)
-ns1, ns2           A, AAAA: the dns edges (glue)                                  §12.6
+ns1, ns2           A, AAAA: the two NS edge interfaces (glue)                     §12.6
 _psl, canary, <acme_token>.acme                                                   12.4, 12.6, 12.8
 _spf               TXT: the sending lb addresses (owner decision 124)             §14.6
 
@@ -277,14 +298,14 @@ User records:
 | `POST /dns/label-reclaim` | service token, aud `dns` | `POST /network/dns/label-reclaim`'s tuple and signature for a sidecar, the token's network equal to the tuple's `network_id` |
 | `POST /dns/internal/acme-challenge`, `/dns/internal/caa-canary`; `GET /dns/internal/ready?serial=` | internal: certs | challenges at most 2 values a name, TTL 60, ≤ 10 per name per hour (`dns_challenges_per_name_hour`), a write past them answered 429 with a Retry-After in seconds, when the name's oldest write in the window leaves it, to which certs holds the name's orders (§13.8; owner decision 713), gone after 1 h, at `_acme-challenge` owners and a custom domain's `<acme_token>.acme.<root>` (step 3); canaries per the probe (below); ready long-polls ≤ 25 s and answers `stale`, `ready` or `canary_failing` (12.6) |
 | `GET /dns/internal/custom-host-map?applied=`; `POST /dns/internal/custom-host-map/applied` | internal: each lb interface's `lbmap` (§19.5 W1), naming its interface, which the API holds to the lb inventory | the newest custom-host map (version, digest, hosts), long-polled ≤ 25 s until it differs from `applied`; then the version the caller's interface loaded, with its nginx master, or a failed render, test or reload (§13.4) |
-| `POST /dns/internal/route-probes` | internal: dns edges | each lb interface's route-probe result for the custom-host version it reported (12.6, §13.4) |
+| `POST /dns/internal/route-probes` | internal: dns edges | each lb interface's route-probe result for the custom-host version it reported (12.6, §13.4), and each probe's verdict, which the feed names when an edge on another host has failed the interface (12.6; owner decision 810) |
 | `GET /dns/internal/journal`, `/dns/internal/snapshot`; `POST /dns/internal/reload-diff` | internal: dns edges | the feed (12.6); after a reload across a restore, `{root, replaced_serial, serial, rrsets: [(owner, type)]}`, the RRsets that differ between the replaced snapshot and the new one, which 12.6's restore step maps to networks through `dns_label` |
 | `POST /dns/internal/canary`; `POST /dns/internal/canary-report` | internal: the site's monitor, both; the outside monitor, the report alone | 12.6's canary and its verdicts |
 | `POST /dns/key-record` | service token; §8 `listen` on `sock:smtp/25/mx` or `smtp/25/mx.<scope>`; a member scope takes only its member's consented devices (§8.5; owner decision 126) | TLSA at `_25._tcp.mx` (or `_25._tcp.mx.<scope>`) for the caller's attested key; the body's repeated `retire_spki_sha256` retires, in the same transaction, the caller's own published keys of that host it names, which a receiver sends with a repeat of its new key once that key serves (§15.5; owner decision 443); owners notified |
 
 DKIM comes only through §14's `POST /smtp/dkim-keys`, TLSA only through `/dns/key-record`; user and key writes add a `network_admin_event` (§7.11). Sidecars read their zone through `GET /dns/zone`, for §13.4's and §13.8's readiness, §16.5's `dns_records` and §6.8's `dns` refetch, and file a reclaim through `POST /dns/label-reclaim` (§19.10); `/network/dns*` stay the console's and network credentials'.
 
-**Internal routes (owner decision 417).** Every internal route sits under `/dns/internal/`, where the lb answers 403 to any source off dns's allow list (§19.5 W8). Each caller class holds its own bearer, 256 random bits in one vault file per caller, current and previous values so a rotation needs no downtime, read once at start from `secret_files`: `internal-dnsedge-1.yml` and `internal-dnsedge-2.yml` on the dns edges, `internal-monitor.yml` and `internal-monitor-outside.yml` on the two monitors, `internal-certs.yml` in taskworker's and `internal-lbmap.yml` in the lb's (§19.4). The API block holds only their SHA-256, in `internal-verify.yml`, compares in constant time, and lets each route take only its class: the edges the feed, reload-diff and route-probes; the site's monitor canary and canary-report, the outside monitor canary-report alone; certs acme-challenge, caa-canary and ready; lbmap the custom-host map and its applied route. No secret is per interface, since playbook-edges.yml copies the whole vault to every edge host, and §13.4 counts an interface's report only once a dns edge's route probe of that version passes. An edge needs neither the issuer nor Postgres to keep serving (D-DNS-3).
+**Internal routes (owner decision 417).** Every internal route sits under `/dns/internal/`, where the lb answers 403 to any source off dns's allow list (§19.5 W8). Each caller class holds its own bearer, 256 random bits in one vault file per caller, current and previous values so a rotation needs no downtime, read once at start from `secret_files`: `internal-dnsedge.yml` in connect's blocks on every edge, one for the class, for their edge role (owner decision 810), `internal-monitor.yml` and `internal-monitor-outside.yml` on the two monitors, `internal-certs.yml` in taskworker's and `internal-lbmap.yml` in the lb's (§19.4). The API block holds only their SHA-256, in `internal-verify.yml`, compares in constant time, and lets each route take only its class: the edges the feed, reload-diff and route-probes; the site's monitor canary and canary-report, the outside monitor canary-report alone; certs acme-challenge, caa-canary and ready; lbmap the custom-host map and its applied route. No secret is per interface or per edge host, since playbook-edges.yml copies the whole vault to every edge host, and §13.4 counts an interface's report only once a dns edge's route probe of that version passes. An edge needs neither the issuer nor Postgres to keep serving (D-DNS-3).
 
 **Gates.** Upserts creating a public name (A, AAAA, CNAME, MX or SRV owners) and alias claims need §21.7's `network_verified`, else `QuotaRefusal{limit_key: verification}` (owner decision 96). A name `ScreenName` sends to review is refused with `QuotaRefusal{limit_key: screen_review}` and the case's id, nothing stored in §12's tables and nothing reserved; once a reviewer's `screen_allow` action names the network and the name, the caller's retry passes, and on probation such a name is refused with no case (§21.6; owner decision 534).
 
@@ -397,6 +418,9 @@ On app paths C14's `LocalZone` owns the same names and answers each NODATA, sinc
 | Option | Pros | Cons | Verdict |
 |---|---|---|---|
 | Route 53, or a hidden primary with anycast secondaries | anycast; flood absorption | third parties see every query | ruled out (owner decision 69) |
+| Two dns edge hosts of their own, ns1 and ns2, with addresses of their own | DNS apart from the lb's traffic; WhoDis keeps 53 everywhere | two more hosts; a lost one leaves one NS until it is repaired or replaced | superseded (owner decision 808) |
+| A separate `dnsedge` on each edge host, given UDP and TCP 53 on the two NS addresses, WhoDis keeping 4053 there | DNS apart from connect's process and release | WhoDis loses 53 there; per-interface ports in warp | not taken (owner decision 808): connect-alt answers both on one 53 |
+| The ZSK in connect's process | no hop to a signer | a flaw in connect's transport parsing exposes the key | rejected (Q-DNS-8; owner decision 809) |
 | An offline-signed zone with NSEC3 | no ZSK on public hosts | dictionary attacks on names; health answers need re-signing | rejected (owner decision 69) |
 | A ZSK in a KMS or HSM | no key in host memory | a round trip per random-name query, which a flood exhausts | rejected |
 | `*` CNAME to a shared edge name | one record | excludes the wildcard MX (RFC 2181 §10.1) | rejected |
@@ -411,7 +435,7 @@ On app paths C14's `LocalZone` owns the same names and answers each NODATA, sinc
 
 **D-DNS-2 (proposed).** Labels are random, lazy, immutable and never reused; aliases are copies. `<net>` (§8, §9) resolves label, then alias; legacy network_name resolves only for interactive input. *Why:* a network_name another network later takes captures no grant.
 
-**D-DNS-3 (proposed).** Only 12.6's self-hosted dns edge serves `<root>`, from two NS at the site (owner decisions 69, 71, 123). *Why:* no third party sees queries, and names resolve through core outages.
+**D-DNS-3 (proposed).** Only 12.6's self-hosted edge role, in connect-alt on every edge, serves `<root>`, from two edge addresses at the site, ns1 the primary and ns2 the secondary (owner decisions 69, 71, 123, 808). *Why:* no third party sees queries, names resolve through core outages, WhoDis keeps every 53, and any edge can take a lost NS's place.
 
 **D-DNS-4 (proposed).** TTLs follow 12.6. *Why:* ACME, failover and takedown need short caching.
 
@@ -439,7 +463,7 @@ On app paths C14's `LocalZone` owns the same names and answers each NODATA, sinc
 
 **Q-DNS-3.** [X17] Which roots and keys does recURd use? **Decided by owner 2026-11-03 (owner decisions 15, 108):** ur.io/recurd on the main bringyour.com services, with no dedicated keys; recurd.dev redirects there (§12.4). *Residual:* none.
 
-**Q-DNS-4.** Which providers serve `<root>`? **Decided by owner 2026-11-03 (owner decisions 69, 71):** none: a self-hosted dns edge, signed online, with two NS on separate hosts at the site (§12.6; owner decision 123). *Residual:* none.
+**Q-DNS-4.** Which providers serve `<root>`? **Decided by owner 2026-11-03 (owner decisions 69, 71):** none: a self-hosted dns edge, signed online, with two NS on separate hosts at the site (§12.6; owner decision 123). **Amended by owner 2026-11-27 (owner decision 808):** the edge role runs in connect-alt on every edge, which tells the zone's queries from WhoDis's on the same 53, and the NS are two edge addresses, ns1 the primary and ns2 the secondary, on separate hosts; a lost NS edge gives way to another edge's address and a glue change at the registrar (12.6). *Residual:* none; Q-DNS-8 placed the signing key (owner decision 809).
 
 **Q-DNS-5.** Cross-cutting (§15, X6): when is the root signed? **Decided by owner 2026-11-03 (owner decision 109):** from the dns edge's first deploy (M5, main-dark), soaked before inbound mail relies on DANE (D-DNS-5). *Residual:* none.
 
@@ -447,30 +471,34 @@ On app paths C14's `LocalZone` owns the same names and answers each NODATA, sinc
 
 **Q-DNS-7.** Cross-cutting (§19). Should one NS run outside the site before M7? **Decided by owner 2026-11-04 (owner decision 123):** (b), two NS at the one site only, though RFC 2182 §3.1 and §5 want one well removed. Every gateway block reaches the internet through Hurricane Electric (vault/main/services.yml:82-104), so a site or HE outage stops every `<root>` name and, from M7, inbound mail until restored, bouncing mail whose senders' retries (14 h to 5 d, §15.3) end first (12.15). *Residual:* none.
 
+**Q-DNS-8.** Cross-cutting (§19). Where does the online signing ZSK live, now that the edge role runs inside connect-alt, which parses untrusted transport traffic on the same sockets (owner decision 808)? **Decided by owner 2026-11-28 (owner decision 809):** (a), a signer per edge host, `dnssigner`, a host-pinned service apart from connect's process that alone mounts the current ZSK and signs, at `signatures_per_second`, what its host's connect blocks ask over a local socket (§19.5's W12), refusing owners outside its roots, so a flaw in connect yields signatures while it lasts but never the key; while it is down its host's blocks answer from cached signatures and the canary pages (12.6). The ZSK in connect's process and a KMS or HSM were not taken. *Residual:* none.
+
 ### 12.13 Departures from PLAN.md
 
 - **PLAN.md:25 "`<me>.ur.network`".** The default label is opaque; the name becomes an opt-in alias (owner decision 14; Q-DNS-2).
 - **PLAN.md:25 "owns all entries".** System records are fixed; some types, owners and addresses are refused (owner decision 70; Q-DNS-6).
 - **PLAN.md:104 "`mail.<me>.ur.network`".** The mail host is `mx.<net>.<root>` (owner decision 32; Q-MAIL-3).
-- **Not in PLAN.md.** A self-hosted dns edge replaces Route 53 for ur.network (owner decisions 13, 69, 71), consistent with PLAN.md:80.
+- **Not in PLAN.md.** A self-hosted dns edge, the edge role in connect-alt on every edge, replaces Route 53 for ur.network (owner decisions 13, 69, 71, 808), consistent with PLAN.md:80.
 
 ### 12.14 Interfaces
 
 - **Provides:** `ResolveNetworkLabel(root, text, interactive) (networkId, kind)` (§8, §9, §13, §15); api's `GET /sidecar/label` and a sidecar's own zone view and reclaim, `GET /dns/zone` and `POST /dns/label-reclaim` (12.5, 12.8); certs' DNS-01, canary-CAA and ready routes, ready answering `stale`, `ready` or `canary_failing`, and the canary's routes and verdicts (12.6); each NS's running state; §13-§15's records and reverse zones, direct MX and the custom-host map with each host's state and CAA mode (§13.4, §13.8); label reclaim and the restore step, with its edges' diffs and abuse flags (§19.10, §21); suspension (§21); `LocalZone` (§17, §18); entry counts (§20); `model.DnsSyncEdgeRecords`, which api calls after each accepted delta or projection, and taskworker's hourly reconcile of edge address records (12.7); the DNS-SD names devices answer, in `ur tun`'s resolver and, as NODATA, in `LocalZone`, with their watch messages (12.9.1).
-- **Consumes:** §17.7.1's discovery view; §7's DNS permission, `network_domain`, `RenameNetwork`, admin events, client names; §8 grants, owner consent, scope labels, §8.10's gate; §13 certs and its CAA walk; §14, §15 record content, the direct-MX check; §16 decisions, the spend check and `approval_use` (D-MCP-11, D-MCP-12); §6 topic `dns`; §4 C14; §19 dns edge hosts, router interfaces, W1's reload and drain, the restore (§19.10), the rota (owner decision 143); §20 quotas; §21 `ScreenName`, `network_verified`, probation caps, open cases.
+- **Consumes:** §17.7.1's discovery view; §7's DNS permission, `network_domain`, `RenameNetwork`, admin events, client names; §8 grants, owner consent, scope labels, §8.10's gate; §13 certs and its CAA walk; §14, §15 record content, the direct-MX check; §16 decisions, the spend check and `approval_use` (D-MCP-11, D-MCP-12); §6 topic `dns`; §4 C14; §19's connect-alt, signers and NS addresses, router interfaces, W1's reload and drain, the restore (§19.10), the rota (owner decision 143); §20 quotas; §21 `ScreenName`, `network_verified`, probation caps, open cases.
 - **Subprotocol messages:** `DnsZoneChanged` (0x1B01, §6.11) on push topic `dns` (§6.8), versioned by the zone serial; `DnsSdWatch` and `DnsSdWatchResult` (`DNS_SD_WATCH` 0x1B02, `DNS_SD_WATCH_RESULT` 0x1B03; 12.9.1), peer RPC between sidecars on data-class contracts for §17.7.1's watches.
 - **API routes:** §12.8.
 - **Tables** (migrations 926+; `dns_label` in MG2, the rest in MG5, §19.7): `dns_root` (root, serial, restore_serial, restoring, custom_host_map_version bigint, restore_incident_id), `dns_label` (primary key (root, label); network_id, kind, state; never deleted; a restore's CT rows start without a network), `network_dns_zone` (with a zone suspension's reason and until, and its `report_token`, unique, §14.6), `network_dns_record` (with `create_time`, `expire_time` and `withheld_time`), `network_dns_host_suspension` (network_id, host, create_time; 12.9), `dns_zone_journal` (diffs, 7 d), `dns_canary_verdict` (root, source, serial, ok, report_time; primary key (root, source); 12.6), `dns_ns` (root, ns, `state enum{running,stopped}`, stopped_time, reason; seeded from dns.yml; owner decision 418), `network_dns_custom_host` (with `state enum{pending,active,withheld}`, `withheld` a web host a downgrade keeps out of the map (owner decision 420), `caa_mode enum{strong,weak}`, `effective_caa_chain_ok bool`, `map_version` and `ready_time`), `dns_custom_host_map` (version, digest, create time; 7 d) and `dns_custom_host_map_applied` (interface, reported version, digest, nginx master, poll time, the last passing route probe's version and time, and the latest probe result of each added host probed for the reported version; while the interface is in the lb inventory); Redis `{dns}serial:<root>`, the last committed serial.
-- **Services and config:** `dns` (server/cli/dns; `sidecar/dnsservice`): API blocks on `dns.bringyour.com`, `dnsedge` on the dns edge hosts (UDP and TCP 53); `config/<env>/dns.yml`; vault (ZSKs, DNSKEY windows, each internal caller class's bearer, and their SHA-256 in `internal-verify.yml`, 12.8); two offline KSK HSMs; taskworker (challenge and canary-CAA expiry, the restore's CT replay); `monitor` (canary); `sidecarctl dns ns stop|start` (12.6; owner decision 274).
-- **Assumptions about other sections:** §19.4 mounts each internal caller class's bearer and the API block's `internal-verify.yml`, and §19.5's W8 answers 403 on `/dns/internal/` outside dns's allow list (12.8); §19.8 pages a running NS that fails SOA reads for 1 h in business hours (12.6); §19.5 lists the router interfaces, publishes `rpt.bringyour.com`, its `_report` wildcard and the HELO names' A records (owner decision 124), serves recurd.dev's redirect, tells the dns edges which interface W1 drains, runs `lbmap` beside each lb interface's nginx and returns the hosts a restore's regeneration adds or drops (§13.4); §19.10 sets `dns_root.restoring` as the dumps load and runs its abuse step (§21.10), then 12.6's restore step, before api's replay and its labels step, starting a stopped NS only from a reload; §2.8 dns-1 holds the replaced snapshot and the restore's listings to 12.6's ttls; §13.8 re-checks custom hosts on its schedule and writes again on `stale`. §22 tests the zone lint (CNAMEs beside data, `ruf`, `fo`, report mail into `<root>`), cross-network burner DMARC, role mail without SNI, private names per qtype, FCrDNS, the member-scope key-record check, the anchored soak, a replying burner's MX and A across its first and last selector, a drained or failed interface leaving `*`, `@`, every copy and `mx` on both NS, an operator CAA at a custom host's target behind a CNAME or a CAA-flattening ALIAS, an apex host's included, refused while it is still pending (FS-32), a direct MX redirected by operator records (FS-33), a custom host's ClientHello through the split (FS-35), label reclaim after a restore (FS-41, FS-42) and FS-42's dns step: a post-restore write; challenges committed before the loss, above every SOA or not, reading stale; an NS that misses the SOA read written stopped and reloading, uncounted by `/dns/internal/ready` until it serves restore_serial; custom hosts added or removed after the dump leaving or rejoining the map, listed (M6); and the TLSA and DKIM selectors of sidecars revoked after it gone from both NS once api's replay ends (M7, M9).
+- **Services and config:** `dns` (server/cli/dns; `sidecar/dnsservice`): API blocks on `dns.bringyour.com`, the edge role in connect-alt on every edge (UDP and TCP 53, beside WhoDis; owner decision 808) and each edge host's signer (owner decision 809); `config/<env>/dns.yml`; vault (ZSKs, DNSKEY windows, each internal caller class's bearer, and their SHA-256 in `internal-verify.yml`, 12.8); two offline KSK HSMs; taskworker (challenge and canary-CAA expiry, the restore's CT replay); `monitor` (canary); `sidecarctl dns ns stop|start` (12.6; owner decision 274).
+- **Assumptions about other sections:** §19.4 mounts each internal caller class's bearer and the API block's `internal-verify.yml`, and §19.5's W8 answers 403 on `/dns/internal/` outside dns's allow list (12.8); §19.8 pages a running NS that fails SOA reads for 1 h in business hours, and warns at a connect block whose edge role lags the root's serial (12.6); §19.5 adds TCP 53 to lb_alt's ports, keeps each block's snapshot in connect's data volume and runs each edge host's signer (owner decision 809); §19.5 lists the router interfaces, publishes `rpt.bringyour.com`, its `_report` wildcard and the HELO names' A records (owner decision 124), serves recurd.dev's redirect, tells the dns edges which interface W1 drains, runs `lbmap` beside each lb interface's nginx and returns the hosts a restore's regeneration adds or drops (§13.4); §19.10 sets `dns_root.restoring` as the dumps load and runs its abuse step (§21.10), then 12.6's restore step, before api's replay and its labels step, starting a stopped NS only from a reload; §2.8 dns-1 holds the replaced snapshot and the restore's listings to 12.6's ttls; §13.8 re-checks custom hosts on its schedule and writes again on `stale`. §22 tests the zone lint (CNAMEs beside data, `ruf`, `fo`, report mail into `<root>`), cross-network burner DMARC, role mail without SNI, private names per qtype, FCrDNS, the member-scope key-record check, the anchored soak, a replying burner's MX and A across its first and last selector, a drained or failed interface leaving `*`, `@`, every copy and `mx` on both NS, an operator CAA at a custom host's target behind a CNAME or a CAA-flattening ALIAS, an apex host's included, refused while it is still pending (FS-32), a direct MX redirected by operator records (FS-33), a custom host's ClientHello through the split (FS-35), label reclaim after a restore (FS-41, FS-42) and FS-42's dns step: a post-restore write; challenges committed before the loss, above every SOA or not, reading stale; an NS that misses the SOA read written stopped and reloading, uncounted by `/dns/internal/ready` until it serves restore_serial; custom hosts added or removed after the dump leaving or rejoining the map, listed (M6); and the TLSA and DKIM selectors of sidecars revoked after it gone from both NS once api's replay ends (M7, M9).
 
 ### 12.15 Risks
 
 | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|
 | A site or Hurricane Electric outage, or a flood, stops both NS: every `<root>` name, ACME DNS-01, DANE and, from M7, inbound mail fail until restored; paged out of hours, 30 min to acknowledge, it can still outlast senders' retries (14 h to 5 d, §15.3), bouncing their mail | Medium | Critical | Accepted (owner decisions 123, 143); separate hosts and blocks; RRL |
+| An NS address is an edge interface's and its edge role lives in connect's process: a flood there, or HE's null route of it, also stops that interface's platform traffic; a flood of zone queries takes WhoDis's decoder and connect's CPU on that address; a connect fault or bad release there stops the NS; a lost NS edge leaves resolvers that cached its address on one NS for up to 3600 s, or 86400 s where they hold only the registry's glue | Medium | High | Accepted (owner decision 808), as owner decision 124's shared sending addresses are; W1's drain of a flooded interface; the role's bounded workers, RRL before signing and the signer's cap (§19.5); Q-OPS-5's stop rule on every step of connect's releases, a panic ending its query alone (§19.11; owner decision 810); the NS on two hosts and gateway blocks, every edge ready to take one (12.6) |
+| An edge's probe of an interface on its own host is delivered on that host, so it proves the host's services but not the router's path | Low | Medium | each edge posts its verdicts, and every edge drops an interface an edge on another host has failed (12.6; owner decision 810); the interface's platform names drop by §19.5's W7 checks |
 | A signing fault or lost KSK breaks validation; CAs refuse issuance | Low | Critical | self-check, canary (paged from M5), soak, standby ZSK, backup HSM |
-| A leaked ZSK, URnetwork or a registrar hijacker forges records | Low | High | zone watch (D-TRUST-9), CT watch, 14-day windows, registrar lock (12.4) |
+| A leaked ZSK, URnetwork or a registrar hijacker forges records; a compromised connect block forges through its host's signer while the compromise lasts (owner decision 809) | Low | High | zone watch (D-TRUST-9), CT watch, 14-day windows, registrar lock (12.4) |
 | A weak-mode custom host, or an ALIAS that also flattens CAA, lets URnetwork publish the CAA that governs it; the canary probe is URnetwork's own, so a compelled operator can pass such an ALIAS at setup or renewal, leaving it as exposed as weak mode (§2.8 EX1) | Low | High | strong mode by default and for every apex; the probe refuses CAA flattening unless the operator is compelled (12.8); setup discloses §2.8 EX1; zone watches (D-TRUST-9) and the CT watch (D-TLS-8), the only control against a compelled operator |
 | Safe Browsing flags, or a registrar holds, the whole root | Medium | Critical | takedown hooks; §19.8's pager carries registrar and registry notices from M5 (owner decisions 134, 143); PSL; nothing critical on the apex |
 | The PSL declines or lags; Talos keeps "Personal VPN" | High | Medium | §12.4's interim rules; recategorization; custom domains |
@@ -483,4 +511,4 @@ Milestones and the v0 and v1 sets are §23.4's.
 - **v1:** aliases, custom domains in both CAA modes, Team scopes, 12.9.1's DNS-SD names in `ur tun`'s resolver with §17.7.1's discovery (M6; owner decision 778); `LocalZone` owning those names on app paths (M8); direct MX and strict-mode MX hosts (M7); scope mail hosts with §15 (M8).
 - **Later:** [the PSL application](DESIGN-DEFER.md#dns-psl-listing) once eligible, then §14.6's cut-over; [bring-your-own NS](DESIGN-DEFER.md#dns-bring-your-own-ns); [HTTPS/SVCB](DESIGN-DEFER.md#dns-https-svcb-records); [a Team scope's MTA-STS publish](DESIGN-DEFER.md#dns-scope-mta-sts) (owner decision 715); [DNS Push for DNS-SD](DESIGN-DEFER.md#dns-push-notifications) and [DNS-SD answers on app paths](DESIGN-DEFER.md#dns-service-discovery-app-paths) (owner decision 778).
 - **Deferred:** DESIGN-DEFER.md holds an entry for each Later item, linked above, and for [this section's v1 set](DESIGN-DEFER.md#dns-v1) (owner decision 587).
-- **Blocking:** §19's dns edge hosts block M5; the soak blocks the DS and M7's DANE; §13.4's generated split map blocks M6's custom hosts; HE's reverse delegation blocks M9's PTRs.
+- **Blocking:** connect-alt's edge role, TCP 53 on lb_alt (§19.5's W9) and the signers (W12) block M5; the soak blocks the DS and M7's DANE; §13.4's generated split map blocks M6's custom hosts; HE's reverse delegation blocks M9's PTRs.

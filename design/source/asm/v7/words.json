@@ -20,20 +20,20 @@
  {
   "num": 3,
   "code": "ARCH",
-  "words": 4592,
-  "code_words": 6801,
+  "words": 4600,
+  "code_words": 6800,
   "ceiling": 3000,
-  "over": 1592,
-  "over_pct": 53.1
+  "over": 1600,
+  "over_pct": 53.3
  },
  {
   "num": 4,
   "code": "REPO",
-  "words": 10063,
+  "words": 10080,
   "code_words": 2469,
   "ceiling": 2800,
-  "over": 7263,
-  "over_pct": 259.4
+  "over": 7280,
+  "over_pct": 260.0
  },
  {
   "num": 5,
@@ -101,11 +101,11 @@
  {
   "num": 12,
   "code": "DNS",
-  "words": 7789,
-  "code_words": 2646,
+  "words": 8879,
+  "code_words": 3007,
   "ceiling": 3000,
-  "over": 4789,
-  "over_pct": 159.6
+  "over": 5879,
+  "over_pct": 196.0
  },
  {
   "num": 13,
@@ -128,11 +128,11 @@
  {
   "num": 15,
   "code": "MAIL",
-  "words": 11952,
+  "words": 11949,
   "code_words": 2356,
   "ceiling": 4500,
-  "over": 7452,
-  "over_pct": 165.6
+  "over": 7449,
+  "over_pct": 165.5
  },
  {
   "num": 16,
@@ -164,11 +164,11 @@
  {
   "num": 19,
   "code": "OPS",
-  "words": 11096,
-  "code_words": 11130,
+  "words": 11698,
+  "code_words": 11191,
   "ceiling": 3500,
-  "over": 7596,
-  "over_pct": 217.0
+  "over": 8198,
+  "over_pct": 234.2
  },
  {
   "num": 20,
@@ -192,7 +192,7 @@
   "num": 22,
   "code": "TEST",
   "words": 8130,
-  "code_words": 42362,
+  "code_words": 42449,
   "ceiling": 2500,
   "over": 5630,
   "over_pct": 225.2
@@ -200,10 +200,10 @@
  {
   "num": 23,
   "code": "PHASE",
-  "words": 8031,
-  "code_words": 1185,
+  "words": 8082,
+  "code_words": 1187,
   "ceiling": 2500,
-  "over": 5531,
-  "over_pct": 221.2
+  "over": 5582,
+  "over_pct": 223.3
  }
 ]

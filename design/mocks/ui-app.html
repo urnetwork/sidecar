@@ -1082,6 +1082,7 @@ mark{background:rgba(237,143,255,.28);color:var(--ink);border-radius:3px;padding
 .appr .f{font-size:12px;color:var(--muted);margin-top:8px}
 .meta{display:flex;align-items:center;gap:7px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin:10px 0 2px}
 .tee{display:inline-flex;align-items:center;gap:5px;color:var(--green);background:var(--green-soft);border-radius:6px;padding:3px 7px;font-size:11.5px}
+.tee.ap{color:var(--ink-2);background:var(--card-3)} /* Q-UI-48: a neutral chip, not a green check: the TEE proves the machine, and the provider is trusted */
 .tee svg{width:12px;height:12px;stroke-width:2.4}
 .comp{flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:8px 12px;background:#101010;border-top:1px solid #1f1f1f;position:relative;z-index:6}
 .comp .plus{width:38px;height:38px;border-radius:50%;background:var(--card);display:grid;place-items:center;color:var(--ink-2);flex:0 0 auto}
@@ -1242,7 +1243,7 @@ details.tbl td:last-child,details.tbl th:last-child{text-align:right}
 <section class="tab" id="bot">
 <header>
   <h2>Bot</h2>
-  <p>The Harness as a CLI made for a phone. Four pills across the top: the current harness, the current model, the agent count and the compute balance. Each opens its own screen: harnesses (switch, or create a remote one), models (modes, names and cost), the agents' feed (every agent's updates, with a chat that can @mention one agent or speak to all) and where the balance went (30 days and all time). Each agent is tagged with its harness, the device or client name it runs on, and its card shows its IP, email address and public TLS names (UI-4). The person and every agent can search the web privately, through Parallel (UI-17). A session pill shows the current session and opens every session, by recency, with the harnesses using each; a harness can switch into a session no harness is using, sessions can be shared by several harnesses, started and compacted (UI-8, UI-9).</p>
+  <p>The Harness as a CLI made for a phone. Four pills across the top: the current harness, the current model, the agent count and the compute balance. Each opens its own screen: harnesses (switch, or create a remote one), models (modes, names and cost), the agents' feed (every agent's updates, with a chat that can @mention one agent or speak to all) and where the balance went (30 days and all time). Each agent is tagged with its harness, the device or client name it runs on, and its card shows its IP, email address and public TLS names (UI-4). The person and every agent can search the web without an account, through Parallel (UI-17; Q-OB-18). A session pill shows the current session and opens every session, by recency, with the harnesses using each; a harness can switch into a session no harness is using, sessions can be shared by several harnesses, started and compacted (UI-8, UI-9).</p>
 </header>
 <div class="shots">
 
@@ -1280,7 +1281,7 @@ FAIL  3 of 20 runs</pre><div class="more">Show 14 more lines</div></div>
       <div class="r2"><div class="btn">Approve</div><div class="btn s">Deny</div></div>
       <div class="f">Also waiting on sam-laptop. The run pauses until one of you answers.</div>
     </div>
-    <div class="meta"><span class="tee"><svg class="i"><use href="#i-check"/></svg>TEE verified · Chutes · AP</span><span>this run $0.04</span></div>
+    <div class="meta"><span class="tee ap"><svg class="i"><use href="#i-chip"/></svg>Chutes · AP: provider trusted</span><span>this run $0.04</span></div>
   </div>
   <div class="cmds"><span>/new</span><span>/sessions</span><span>/compact</span><span>/model</span></div>
   <div class="comp"><span class="plus"><svg class="i"><use href="#i-plus"/></svg></span><span class="in">Reply to limiter-fix</span><span class="go"><svg class="i"><use href="#i-up"/></svg></span></div>
@@ -1356,9 +1357,9 @@ FAIL  3 of 20 runs</pre><div class="more">Show 14 more lines</div></div>
       <div class="mdl"><div class="n">local-gemma-4-e4b-off<span class="r link"><svg class="i"><use href="#i-down"/></svg>3.1 GB</span></div><div class="d">About 9 tokens a second here</div></div>
       <div class="mdl off"><div class="n">local-gemma-4-12b-off</div><div class="d">Needs 12 GB of memory; this phone has 8</div></div>
     </div>
-    <div class="lbl">TEE · sealed to attested hardware</div>
+    <div class="lbl">TEE · on the provider's hardware</div>
     <div class="card">
-      <div class="mdl sel"><div class="n">chutes-qwen3.8-27b-tee-high<span class="r pinkt"><svg class="i"><use href="#i-check"/></svg></span></div><div class="d">$0.15 in · $0.60 out per million tokens</div><div class="cl"><span class="chip g">AP</span><span class="chip">Intel TDX · H200</span></div><div class="dl1">Chutes runs the GPU and is trusted not to attack it. <a>Read more</a></div></div>
+      <div class="mdl sel"><div class="n">chutes-qwen3.8-27b-tee-high<span class="r pinkt"><svg class="i"><use href="#i-check"/></svg></span></div><div class="d">$0.15 in · $0.60 out per million tokens</div><div class="cl"><span class="chip g">AP</span><span class="chip">Intel TDX · H200</span></div><div class="dl1">Chutes' TEE hardware proves the machine, not the code that reads your words, and Chutes is trusted not to attack it. <a>Read more</a></div></div>
       <div class="mdl"><div class="n">chutes-deepseek-v3.3-tee-high</div><div class="d">$0.30 in · $1.20 out per million tokens</div><div class="cl"><span class="chip g">AP</span><span class="chip">Intel TDX · B200</span></div></div>
     </div>
     <div class="lbl">Direct · not in a TEE</div>
@@ -1367,12 +1368,12 @@ FAIL  3 of 20 runs</pre><div class="more">Show 14 more lines</div></div>
     </div>
     <div class="lbl">Web search</div>
     <div class="card">
-      <div class="mdl"><div class="n">search/parallel/fast</div><div class="d">$0.012 a search · for you and your agents</div><div class="dl1">Parallel reads each search and may train on it; URnetwork doesn't see it. Asks you to read the disclosure before the first search. <a>Read it</a></div></div>
+      <div class="mdl"><div class="n">search/parallel/fast</div><div class="d">$0.012 a search · for you and your agents</div><div class="dl1">Parallel and Vercel read each search, and Parallel may train on it; URnetwork doesn't see it. Asks you to read the disclosure before the first search. <a>Read it</a></div></div>
     </div>
   </div>
   <nav class="tabs" data-on="bot"></nav><i class="home"></i>
 </div></div>
-<figcaption><b><span class="id">T4</span>Models</b>The model pill opens the catalog by mode (local, TEE, direct) with each model's full name and price per million tokens; local ones show size and speed on this device, and ones it can't run say why. Every remote model shows its label and its provider's disclosure line. Web search is listed with its price per search.<span class="src">COMPUTE §6.3 (catalog: kind, label, prices), §6.5, §16.4 (TEE only), §2.8 · names and prices illustrative</span></figcaption>
+<figcaption><b><span class="id">T4</span>Models</b>The model pill opens the catalog by mode (local, TEE, direct) with each model's full name and price per million tokens; local ones show size and speed on this device, and ones it can't run say why. Every remote model shows its label and its provider's disclosure line. Web search is listed with its price per search.<span class="src">COMPUTE §6.3 (catalog: kind, label, prices), §6.5, §16.4 (TEE only), §2.8 · the TEE wording as on ur.io's Bot page (mmm/outbound/PLAN.md Q-OB-10), the search line naming Vercel (Q-OB-18) · names and prices illustrative</span></figcaption>
 </figure>
 
 <!-- T5 feed -->
@@ -1566,16 +1567,16 @@ FAIL  3 of 20 runs</pre><div class="more">Show 14 more lines</div></div>
         <div class="sr"><div class="t">Token buckets under NTP slew</div><div class="h">notes.cobaltlabs.io · Nov 2025</div><div class="x">When the clock steps backward, a naive bucket refuses traffic until it catches up.</div></div>
         <div class="sr"><div class="t">Testing limiters with an injected clock</div><div class="h">docs.quarry.sh · Mar 2026</div><div class="x">Pass a clock interface so tests move time deterministically.</div></div>
       </div>
-      <div class="sfoot">Parallel reads this search and may train on it; URnetwork does not see it. <a>Read more</a> · $0.012</div>
+      <div class="sfoot">Parallel and Vercel read this search, and Parallel may train on it; URnetwork doesn't see it. <a>Read more</a> · $0.012</div>
     </div>
     <div class="say">Both write-ups say the same thing: refill from a monotonic clock and inject it for tests. That matches the fix; I'll cite the first in the PR.</div>
-    <div class="meta"><span class="tee"><svg class="i"><use href="#i-check"/></svg>TEE verified · Chutes · AP</span><span>this run $0.06</span></div>
+    <div class="meta"><span class="tee ap"><svg class="i"><use href="#i-chip"/></svg>Chutes · AP: provider trusted</span><span>this run $0.06</span></div>
   </div>
   <div class="cmds"><span>/new</span><span>/sessions</span><span>/compact</span><span>/model</span></div>
   <div class="comp"><span class="plus"><svg class="i"><use href="#i-plus"/></svg></span><span class="in">Reply to limiter-fix</span><span class="go"><svg class="i"><use href="#i-up"/></svg></span></div>
   <nav class="tabs" data-on="bot"></nav><i class="home"></i>
 </div></div>
-<figcaption><b><span class="id">T12</span>Private web search</b>Agents and the person search the web through Parallel. A search shows as a results card with titles, sites and excerpts, each link opened only when tapped. Under the results, the disclosure's one line: Parallel reads the search and may train on it, and URnetwork doesn't see it. Parallel never learns who asked; the history keeps the search, not its results; each search costs $0.012. Before the first search, the person accepts the disclosure, which also names Vercel, the gateway's host.<span class="src">UI-17 · COMPUTE §21 (Parallel's keyless gateway, CO-28), §21.6 (the tool), §21.8 ($0.012), §7.6 (results list; no remote loads)</span></figcaption>
+<figcaption><b><span class="id">T12</span>Web search without an account</b>Agents and the person search the web through Parallel, with no account and no address of theirs. A search shows as a results card with titles, sites and excerpts, each link opened only when tapped. Under the results, the disclosure's one line: Parallel and Vercel, the gateway's host, read the search, Parallel may train on it, and URnetwork doesn't see it. Neither Parallel nor Vercel learns who asked; the history keeps the search, not its results; each search costs $0.012. Before the first search, the person accepts the disclosure.<span class="src">UI-17; the title and the line naming Vercel are mmm/outbound/PLAN.md Q-OB-18's · COMPUTE §21 (Parallel's keyless gateway, CO-28), §21.6 (the tool), §21.8 ($0.012), §7.6 (results list; no remote loads)</span></figcaption>
 </figure>
 
 <!-- T7 compute -->
@@ -1758,11 +1759,11 @@ FAIL  3 of 20 runs</pre><div class="more">Show 14 more lines</div></div>
     <div class="bub me">Can I export my categories to another password manager?</div>
     <div class="itm r">#482511<span class="chip b">Received</span></div>
   </div>
-  <div style="padding:0 12px;background:#101010"><div class="supdisc"><svg class="i"><use href="#i-info"/></svg><span>URnetwork's support team reads what you send here. <a>Read more</a></span></div></div>
+  <div style="padding:0 12px;background:#101010"><div class="supdisc"><svg class="i"><use href="#i-info"/></svg><span>URnetwork's support team reads what you send here. A person runs and reviews support every day and is copied on every message, and an AI agent helps sort and answer. <a>Read more</a></span></div></div>
   <div class="comp"><span class="plus"><svg class="i"><use href="#i-clip"/></svg></span><span class="in">Write to support</span><span class="go"><svg class="i"><use href="#i-up"/></svg></span></div>
   <nav class="tabs" data-on="support"></nav><i class="home"></i>
 </div></div>
-<figcaption><b><span class="id">S1</span>The conversation</b>The person's messages and their agents' sit on the right, each agent's under its name with how it was sent; support's replies on the left. Each item carries its number and status: Received, In progress, Fixed in a version, or Not planned. The disclosure line stays above the composer.<span class="src">COMPUTE §28.5 (the conversation, tiers), §28.13 (the disclosure), §15.4 · FEEDBACK-SYSTEM.md §6 (statuses)</span></figcaption>
+<figcaption><b><span class="id">S1</span>The conversation</b>The person's messages and their agents' sit on the right, each agent's under its name with how it was sent; support's replies on the left. Each item carries its number and status: Received, In progress, Fixed in a version, or Not planned. The disclosure line stays above the composer, saying who reads what is sent: the support team, a person who runs and reviews support every day and is copied on every message, and an AI agent that helps sort and answer.<span class="src">COMPUTE §28.5 (the conversation, tiers), §28.13 (the disclosure), §15.4 · FEEDBACK-SYSTEM.md §6 (statuses) · the person and the AI agent: mmm/outbound/PLAN.md Q-OB-21</span></figcaption>
 </figure>
 
 <!-- S2 attach -->
@@ -1798,19 +1799,20 @@ FAIL  3 of 20 runs</pre><div class="more">Show 14 more lines</div></div>
   <div class="sheet">
     <div class="grab"></div>
     <h3>Before your first message</h3>
-    <p>Everything else in URnetwork is end-to-end encrypted. Support is the exception: you're writing to people at URnetwork, so they read what you send.</p>
+    <p>Support isn't end-to-end encrypted: you're writing to people at URnetwork, so they read what you send here, and no other data of yours.</p>
     <ul class="ticks">
       <li class="ok"><svg class="i"><use href="#i-check"/></svg>The support team reads your messages, files and logs</li>
-      <li class="ok"><svg class="i"><use href="#i-check"/></svg>A triage model sorts new messages; its provider sees what triage sends it</li>
+      <li class="ok"><svg class="i"><use href="#i-check"/></svg>A person runs and reviews support every day and is copied on every message</li>
+      <li class="ok"><svg class="i"><use href="#i-check"/></svg>An AI agent helps sort and answer messages; its model's provider sees what the agent gives it</li>
       <li class="ok"><svg class="i"><use href="#i-check"/></svg>You can delete any message you sent</li>
-      <li class="ok"><svg class="i"><use href="#i-check"/></svg>Your agents write here only if you let them, in Settings</li>
+      <li class="ok"><svg class="i"><use href="#i-check"/></svg>Your agents can write here too, under their names; you can stop them in Settings</li>
     </ul>
-    <p class="muted small" style="margin:4px 0 0">support:urnetwork, version 1 · <span class="link">Read the full text</span></p>
+    <p class="muted small" style="margin:4px 0 0">support:urnetwork, version 2 · <span class="link">Read the full text</span></p>
     <div class="btns"><div class="btn">I understand</div><div class="btn q">Not now</div></div>
   </div>
   <i class="home"></i>
 </div></div>
-<figcaption><b><span class="id">S3</span>The first time</b>Before the first message the whole disclosure shows once, and the person acknowledges it; after that, its line stays above the composer.<span class="src">COMPUTE §28.13, CO-46 (the support conversation is the one exception to the owner directive)</span></figcaption>
+<figcaption><b><span class="id">S3</span>The first time</b>Before the first message the whole disclosure shows once, and the person acknowledges it; after that, its line stays above the composer. Version 2 adds that a person runs and reviews support every day and is copied on every message, and that an AI agent helps sort and answer. Agents may write once it's acknowledged, until the person stops them in Settings.<span class="src">COMPUTE §28.13, CO-46 (the support conversation is the one exception to the owner directive), §28.6 (agents and their logs on by default) · version 2: mmm/outbound/PLAN.md Q-OB-21</span></figcaption>
 </figure>
 
 </div>
@@ -2079,10 +2081,15 @@ FAIL  3 of 20 runs</pre><div class="more">Show 14 more lines</div></div>
       <div class="row"><span class="ic"><svg class="i"><use href="#i-note"/></svg></span><div class="m"><div class="t">Audit log</div><div class="d">Every admission, role and rule change</div></div><span class="cv"><svg class="i"><use href="#i-chev"/></svg></span></div>
       <div class="row"><span class="ic"><svg class="i"><use href="#i-wallet"/></svg></span><div class="m"><div class="t">Seats and billing</div><div class="d">42 seats, 2 free · add seats on ur.io</div></div><span class="cv"><svg class="i"><use href="#i-chev"/></svg></span></div>
     </div>
+    <div class="create" style="margin-top:20px;box-shadow:inset 0 0 0 1.5px rgba(80,140,255,.4)">
+      <h4>Plan it with us</h4>
+      <p>Setting it up across several sites, moving off a setup you host, or hosting an app for people outside your team? We'll do it with you, under a contract.</p>
+      <div class="link" style="display:flex;align-items:center;gap:4px;font-size:15px">See services on ur.io<svg class="i" style="width:16px;height:16px"><use href="#i-chev"/></svg></div>
+    </div>
   </div>
   <nav class="tabs" data-on="account"></nav><i class="home"></i>
 </div></div>
-<figcaption><b><span class="id">TM1</span>Team</b>One place to run the team: what needs the person now, the people and devices and the credentials that bring them in, permissions as roles and rules, the signatures admin changes need, and the team-only features.<span class="src">UI-3 · DESIGN §7.5-7.9, §7.11, §20.9</span></figcaption>
+<figcaption><b><span class="id">TM1</span>Team</b>One place to run the team: what needs the person now, the people and devices and the credentials that bring them in, permissions as roles and rules, the signatures admin changes need, and the team-only features. At the end, admins alone see a small card, Plan it with us, which opens ur.io/services; the services are paid add-ons, each under its own contract. Hosting apps for people outside the team is in the first release, with "Sign in with URnetwork" on every TLS edge (the owner).<span class="src">UI-3 · DESIGN §7.5-7.9, §7.11, §20.9 · the card: mmm/outbound/PLAN.md Q-SVC-8 (Q-SVC-1, Q-SVC-4)</span></figcaption>
 </figure>
 
 <!-- TM2 add -->
