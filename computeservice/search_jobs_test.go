@@ -49,23 +49,38 @@ func (self *fakeComputeSearchRetention) PruneOutcomeHours(ctx context.Context, b
 	return self.outcomeHourCount, nil
 }
 
-// The jobs over the fixture's ledger, clock and metrics.
-func (self *computeSearchFixture) jobs(t testing.TB, retention computeSearchRetention) *ComputeSearchJobs {
-	t.Helper()
+// The jobs' args over the fixture's ledger, clock and metrics.
+func (self *computeSearchFixture) jobArgs(retention computeSearchRetention) *ComputeSearchJobArgs {
 	if retention == nil {
 		retention = &fakeComputeSearchRetention{}
 	}
-	jobs, err := NewComputeSearchJobs(&ComputeSearchJobArgs{
+	return &ComputeSearchJobArgs{
 		Env:           &refusingSearchEnv{},
 		Ledger:        self.ledger,
 		Clock:         self.clock,
 		Metrics:       self.metrics,
 		testRetention: retention,
-	})
+	}
+}
+
+// compute_search_tickets over the fixture.
+func (self *computeSearchFixture) ticketsJob(t testing.TB) *ComputeSearchTicketsJob {
+	t.Helper()
+	job, err := NewComputeSearchTicketsJob(self.jobArgs(nil))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return jobs
+	return job
+}
+
+// compute_search_purge over the fixture.
+func (self *computeSearchFixture) purgeJob(t testing.TB, retention computeSearchRetention) *ComputeSearchPurgeJob {
+	t.Helper()
+	job, err := NewComputeSearchPurgeJob(self.jobArgs(retention))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return job
 }
 
 // An admission no report reached is released an hour past its window, not a moment before.
@@ -75,11 +90,11 @@ func TestSearchTicketsReleaseAfterHour(t *testing.T) {
 	fixture.admitTicket(t, requestId, 1)
 	opKey := fixture.opKey(fixture.networkId, requestId, 1)
 	minute := fixture.clock.Now().UTC().Truncate(time.Minute)
-	jobs := fixture.jobs(t, nil)
+	job := fixture.ticketsJob(t)
 	settings := DefaultComputeSearchSettings()
 	due := minute.Add(settings.webSearch().WindowAfter + settings.TicketReportGrace)
 	fixture.clock.AdvanceTo(due)
-	result, err := jobs.Tickets(context.Background())
+	result, err := job.Run(context.Background())
 	if err != nil || result.ReleasedCount != 0 {
 		t.Fatalf("released %+v at the hour's end, %v", result, err)
 	}
@@ -87,7 +102,7 @@ func TestSearchTicketsReleaseAfterHour(t *testing.T) {
 		t.Fatal("the admission was released within its hour")
 	}
 	fixture.clock.Advance(time.Millisecond)
-	result, err = jobs.Tickets(context.Background())
+	result, err = job.Run(context.Background())
 	if err != nil || result.ReleasedCount != 1 {
 		t.Fatalf("released %+v past the hour, %v", result, err)
 	}
@@ -104,7 +119,7 @@ func TestSearchTicketsLateReportUnknown(t *testing.T) {
 	minuteS := fixture.minuteS()
 	settings := DefaultComputeSearchSettings()
 	fixture.clock.Advance(settings.webSearch().WindowAfter + settings.TicketReportGrace + time.Minute)
-	if result, err := fixture.jobs(t, nil).Tickets(context.Background()); err != nil || result.ReleasedCount != 1 {
+	if result, err := fixture.ticketsJob(t).Run(context.Background()); err != nil || result.ReleasedCount != 1 {
 		t.Fatalf("%+v %v", result, err)
 	}
 	fixture.signer.report(ticket, 1, minuteS, nil, nil)
@@ -123,14 +138,14 @@ func TestSearchPurgeBoundary(t *testing.T) {
 	fixture.pull(t)
 	minute := fixture.clock.Now().UTC().Truncate(time.Minute)
 	ledgerSettings := model.DefaultComputeLedgerSettings()
-	jobs := fixture.jobs(t, nil)
+	job := fixture.purgeJob(t, nil)
 	fixture.clock.AdvanceTo(minute.Add(71*time.Hour + 54*time.Minute))
-	result, err := jobs.Purge(context.Background())
+	result, err := job.Run(context.Background())
 	if err != nil || result.SearchCount != 0 || len(fixture.ledger.chargeList()) != 1 {
 		t.Fatalf("the purge at 71 h 54 min: %+v %v", result, err)
 	}
 	fixture.clock.AdvanceTo(minute.Add(ledgerSettings.SearchChargePurgeAge).Add(time.Second))
-	result, err = jobs.Purge(context.Background())
+	result, err = job.Run(context.Background())
 	if err != nil || result.SearchCount != 1 || len(fixture.ledger.chargeList()) != 0 || result.Retained {
 		t.Fatalf("the purge from 71 h 55 min: %+v %v", result, err)
 	}
@@ -142,7 +157,7 @@ func TestSearchPurgeBoundary(t *testing.T) {
 		defer fixture.ledger.stateLock.Unlock()
 		fixture.ledger.deleteLimit = 1
 	}()
-	result, err = jobs.Purge(context.Background())
+	result, err = job.Run(context.Background())
 	if err != nil || !result.Retained {
 		t.Fatalf("a row past 72 hours did not page: %+v %v", result, err)
 	}
@@ -156,7 +171,7 @@ func TestSearchPurgeBoundary(t *testing.T) {
 func TestSearchPurgeRecordsRetention(t *testing.T) {
 	fixture := newComputeSearchFixture(t, nil)
 	retention := &fakeComputeSearchRetention{flagCount: 2, outcomeHourCount: 4}
-	result, err := fixture.jobs(t, retention).Purge(context.Background())
+	result, err := fixture.purgeJob(t, retention).Run(context.Background())
 	if err != nil || result.FlagCount != 2 || result.OutcomeHourCount != 4 {
 		t.Fatalf("%+v %v", result, err)
 	}
@@ -172,7 +187,7 @@ func TestSearchPurgeRecordsRetention(t *testing.T) {
 // keeping the records to their ttls, so taskworker retries it on its backoff.
 func TestSearchPurgeUnbuiltLedger(t *testing.T) {
 	retention := &fakeComputeSearchRetention{}
-	jobs, err := NewComputeSearchJobs(&ComputeSearchJobArgs{
+	job, err := NewComputeSearchPurgeJob(&ComputeSearchJobArgs{
 		Env:           &refusingSearchEnv{},
 		Ledger:        NewComputeSearchLedger(nil, nil),
 		Clock:         sidecartest.NewFakeClock(sidecartest.DefaultClockStart()),
@@ -181,7 +196,7 @@ func TestSearchPurgeUnbuiltLedger(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := jobs.Purge(context.Background()); !errors.Is(err, ErrComputeSearchLedgerUnbuilt) {
+	if _, err := job.Run(context.Background()); !errors.Is(err, ErrComputeSearchLedgerUnbuilt) {
 		t.Fatalf("the purge answered %v", err)
 	}
 	if len(retention.flagBefores) != 1 || len(retention.outcomeBefores) != 1 {

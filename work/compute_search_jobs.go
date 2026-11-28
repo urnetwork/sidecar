@@ -1,11 +1,11 @@
 // compute_search_tickets' and compute_search_purge's runs (DESIGN-COMPUTE §14.5, §21.5; SRCH-M13-08): every minute,
 // the holds of the search admissions no report reached an hour past their window released; every 5 minutes, each web
 // search's rows deleted once their minute is 71 h 55 min old, and a row past 72 hours paged. The logic is
-// computeservice's ComputeSearchJobs (Tickets and Purge), which sidecar/work may not import, an engine being no client
-// package's to import (§4.4): the process that runs taskworker builds them over its Env and installs their runs here
-// (InstallComputeSearchJobs), as compute_provider_prices' is. A process that installed none fails each run with
-// ErrComputeJobDepsNotInstalled, which waits on server/task's backoff, so nothing is released or deleted from a
-// process that cannot reach the ledger.
+// computeservice's ComputeSearchTicketsJob and ComputeSearchPurgeJob, which sidecar/work may not import, an engine
+// being no client package's to import (§4.4): the process that runs taskworker builds them over its Env and installs
+// their runs here (InstallComputeSearchJobs), as compute_provider_prices' is. A process that installed none fails each
+// run with ErrComputeJobDepsNotInstalled, which waits on server/task's backoff, so nothing is released or deleted
+// from a process that cannot reach the ledger.
 //
 // The install is read at each run, so it is safe for concurrent use.
 
@@ -19,9 +19,9 @@ import (
 
 // The search jobs' runs, each computeservice's.
 type ComputeSearchJobRuns struct {
-	// One compute_search_tickets run: ComputeSearchJobs.Tickets.
+	// One compute_search_tickets run: ComputeSearchTicketsJob.Run.
 	Tickets func(ctx context.Context) error
-	// One compute_search_purge run: ComputeSearchJobs.Purge.
+	// One compute_search_purge run: ComputeSearchPurgeJob.Run.
 	Purge func(ctx context.Context) error
 }
 

@@ -1,6 +1,7 @@
 // Web search's two taskworker jobs (DESIGN-COMPUTE §14.5, §21.5, D-SRCH-13, compute-10, compute-11; SRCH-M13-08),
-// whose logic is here and whose names sidecar/work registers (compute_search_jobs.go there), installed by the process
-// that runs taskworker, as compute_provider_prices' is, since sidecar/work may not import an engine (§4.4):
+// ComputeSearchTicketsJob and ComputeSearchPurgeJob, whose logic is here and whose names sidecar/work registers
+// (compute_search_jobs.go there), installed by the process that runs taskworker, as compute_provider_prices' is, since
+// sidecar/work may not import an engine (§4.4):
 //
 //	compute_search_tickets  each minute: every search admission no report reached an hour past its window, as after
 //	                        the signer's failover (§21.5), has its hold released and its operation row voided, oldest
@@ -80,8 +81,8 @@ type ComputeSearchJobArgs struct {
 	testRetention computeSearchRetention
 }
 
-// The jobs over args. See the file header.
-type ComputeSearchJobs struct {
+// What both jobs read, from their args.
+type computeSearchJob struct {
 	env            operator.Env
 	ledger         ComputeSearchLedger
 	settings       *ComputeSearchSettings
@@ -92,8 +93,36 @@ type ComputeSearchJobs struct {
 	alarms         sidecar.MetricsCounter
 }
 
-// The jobs over args: settings that do not validate refuse them.
-func NewComputeSearchJobs(args *ComputeSearchJobArgs) (*ComputeSearchJobs, error) {
+// compute_search_tickets' run. See the file header.
+type ComputeSearchTicketsJob struct {
+	computeSearchJob
+}
+
+// compute_search_purge's run. See the file header.
+type ComputeSearchPurgeJob struct {
+	computeSearchJob
+}
+
+// compute_search_tickets over args: settings that do not validate refuse it.
+func NewComputeSearchTicketsJob(args *ComputeSearchJobArgs) (*ComputeSearchTicketsJob, error) {
+	job, err := newComputeSearchJob(args)
+	if err != nil {
+		return nil, err
+	}
+	return &ComputeSearchTicketsJob{computeSearchJob: *job}, nil
+}
+
+// compute_search_purge over args: settings that do not validate refuse it.
+func NewComputeSearchPurgeJob(args *ComputeSearchJobArgs) (*ComputeSearchPurgeJob, error) {
+	job, err := newComputeSearchJob(args)
+	if err != nil {
+		return nil, err
+	}
+	return &ComputeSearchPurgeJob{computeSearchJob: *job}, nil
+}
+
+// What a job reads, from args.
+func newComputeSearchJob(args *ComputeSearchJobArgs) (*computeSearchJob, error) {
 	if args == nil {
 		args = &ComputeSearchJobArgs{}
 	}
@@ -137,7 +166,7 @@ func NewComputeSearchJobs(args *ComputeSearchJobArgs) (*ComputeSearchJobs, error
 			metrics = envMetrics
 		}
 	}
-	self := &ComputeSearchJobs{
+	self := &computeSearchJob{
 		env:            env,
 		ledger:         ledger,
 		settings:       settings,
@@ -153,7 +182,7 @@ func NewComputeSearchJobs(args *ComputeSearchJobArgs) (*ComputeSearchJobs, error
 }
 
 // Raises kind's alarm, with its line, which names no network.
-func (self *ComputeSearchJobs) alarm(kind string, format string, args ...any) {
+func (self *computeSearchJob) alarm(kind string, format string, args ...any) {
 	if self.alarms != nil {
 		self.alarms.Add(1, kind)
 	}
@@ -170,7 +199,7 @@ type ComputeSearchTicketsResult struct {
 }
 
 // One compute_search_tickets run (see the file header).
-func (self *ComputeSearchJobs) Tickets(ctx context.Context) (*ComputeSearchTicketsResult, error) {
+func (self *ComputeSearchTicketsJob) Run(ctx context.Context) (*ComputeSearchTicketsResult, error) {
 	now := self.clock.Now()
 	before := now.Add(-(self.settings.webSearch().WindowAfter + self.settings.TicketReportGrace))
 	ops, err := self.ledger.OpenBefore(ctx, before, self.settings.TicketsBatchMaxCount)
@@ -208,7 +237,7 @@ type ComputeSearchPurgeResult struct {
 
 // One compute_search_purge run (see the file header). The records' retention runs first, so a purge whose deletion
 // BAL has not landed (ErrComputeSearchLedgerUnbuilt) still keeps them to their ttls.
-func (self *ComputeSearchJobs) Purge(ctx context.Context) (*ComputeSearchPurgeResult, error) {
+func (self *ComputeSearchPurgeJob) Run(ctx context.Context) (*ComputeSearchPurgeResult, error) {
 	now := self.clock.Now()
 	result := &ComputeSearchPurgeResult{}
 	flagCount, err := self.retention.PruneFlags(ctx, now.Add(-self.settings.FlagRetention), self.settings.PurgeBatchMaxCount)
