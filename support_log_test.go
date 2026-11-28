@@ -448,14 +448,9 @@ func TestSupportLogEventNeverWaitsAndDropsPastItsBound(t *testing.T) {
 	}
 }
 
-func TestSupportLogReadsUpToATornRecordAndSaysSo(t *testing.T) {
-	directory := t.TempDir()
-	clock := newSupportLogTestClock()
-	log := openTestSupportLog(t, directory, nil, clock)
-	log.Event(SupportLogCodeAppStarted, SupportLogFieldRelease("1.0"))
-	log.Event(SupportLogCodeAppStarted, SupportLogFieldRelease("2.0"))
-	log.Close()
-	// a crash mid-write: the last record's checksum is cut off
+// A crash mid-write in the ring's newest segment: its last record's checksum is cut off.
+func testSupportLogTearNewestSegment(t *testing.T, directory string) {
+	t.Helper()
 	segments := []string{}
 	for name := range testSupportLogRingFiles(t, directory) {
 		if strings.HasSuffix(name, ".seg") {
@@ -471,6 +466,16 @@ func TestSupportLogReadsUpToATornRecordAndSaysSo(t *testing.T) {
 	if err := os.WriteFile(path, data[:len(data)-2], 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestSupportLogReadsUpToATornRecordAndSaysSo(t *testing.T) {
+	directory := t.TempDir()
+	clock := newSupportLogTestClock()
+	log := openTestSupportLog(t, directory, nil, clock)
+	log.Event(SupportLogCodeAppStarted, SupportLogFieldRelease("1.0"))
+	log.Event(SupportLogCodeAppStarted, SupportLogFieldRelease("2.0"))
+	log.Close()
+	testSupportLogTearNewestSegment(t, directory)
 	clock.advance(time.Second)
 	reopened := openTestSupportLog(t, directory, nil, clock)
 	bundle := testSupportLogBundle(t, reopened, nil)
@@ -484,6 +489,60 @@ func TestSupportLogReadsUpToATornRecordAndSaysSo(t *testing.T) {
 	unreadable := testSupportLogEvents(testSupportLogBundle(t, reopened, nil).Document, "support_log.segment_unreadable")
 	if len(unreadable) != 1 || unreadable[0].Fields["unreadable_reason"] != "truncated" {
 		t.Fatalf("segment_unreadable reads %+v", unreadable)
+	}
+}
+
+// A bundle of a ring Close has closed, as an app's support screen or ur support logs can ask for while its process
+// stops: it reads what is on disk and writes nothing, neither the segment_unreadable a torn segment an earlier run left
+// takes on a ring's first read nor a count a failed last flush left, and it opens no file again, so nothing reaches
+// the ring's directory once Close has returned (QD-1451's file work after a close, by a bundle's read).
+func TestSupportLogBundleOfAClosedRingWritesNothing(t *testing.T) {
+	directory := t.TempDir()
+	clock := newSupportLogTestClock()
+	earlier := openTestSupportLog(t, directory, nil, clock)
+	earlier.Event(SupportLogCodeAppStarted, SupportLogFieldRelease("1.0"))
+	earlier.Event(SupportLogCodeAppStarted, SupportLogFieldRelease("2.0"))
+	earlier.Close()
+	testSupportLogTearNewestSegment(t, directory)
+	clock.advance(time.Second)
+	log := openTestSupportLog(t, directory, nil, clock)
+	log.Event(SupportLogCodeAppStopped, SupportLogFieldUptime(time.Minute))
+	log.Close()
+	// what a last flush whose write failed leaves for the next flush to record
+	func() {
+		log.stateLock.Lock()
+		defer log.stateLock.Unlock()
+		log.writeFailedCount += 1
+	}()
+	before := testSupportLogRingFiles(t, directory)
+
+	bundle, err := log.Bundle(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := []any{}
+	for _, event := range testSupportLogEvents(bundle.Document, "app.started") {
+		got = append(got, event.Fields["release"])
+	}
+	if !slices.Equal(got, []any{"1.0"}) || len(testSupportLogEvents(bundle.Document, "app.stopped")) != 1 {
+		t.Fatalf("a closed ring's bundle reads %v and %+v", got, testSupportLogEvents(bundle.Document, "app.stopped"))
+	}
+	after := testSupportLogRingFiles(t, directory)
+	if len(after) != len(before) {
+		t.Fatalf("%d files after a closed ring's bundle, %d before", len(after), len(before))
+	}
+	for name, data := range after {
+		if !bytes.Equal(data, before[name]) {
+			t.Fatalf("a closed ring's bundle changed %s", name)
+		}
+	}
+	current := func() *os.File {
+		log.fileLock.Lock()
+		defer log.fileLock.Unlock()
+		return log.current
+	}()
+	if current != nil {
+		t.Fatal("a closed ring's bundle left a segment open")
 	}
 }
 

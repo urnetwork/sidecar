@@ -309,8 +309,8 @@ type SupportLog struct {
 	segments    []*supportLogSegment
 	current     *os.File
 	unreadables map[string]bool
-	// guarded by fileLock: whether the ring writes to disk, false for a deferred one until Start; and whether its key
-	// was drawn and is not on disk yet
+	// guarded by fileLock: whether the ring writes to disk, from Start until Close closes its file, so false for a
+	// deferred one until Start; and whether its key was drawn and is not on disk yet
 	started    bool
 	keyUnsaved bool
 
@@ -654,7 +654,7 @@ func (self *SupportLog) flush() {
 }
 
 // flush's work, its caller holding fileLock: a bundle flushes so it reads every event written before it. A deferred
-// ring not yet started keeps what it holds.
+// ring not yet started keeps what it holds, and a closed one writes nothing more.
 func (self *SupportLog) flushWithFileLock() {
 	if !self.started {
 		return
@@ -826,7 +826,8 @@ type supportLogRecordField struct {
 }
 
 // Every event of the ring from from to to, in seconds and inclusive, oldest first, after a flush. A segment that
-// cannot be read whole is read up to its fault, once recorded as segment_unreadable.
+// cannot be read whole is read up to its fault, once recorded as segment_unreadable by a ring that writes: none before
+// Start or once Close has closed its file.
 func (self *SupportLog) read(from int64, to int64) []*supportLogRecord {
 	self.fileLock.Lock()
 	defer self.fileLock.Unlock()
@@ -991,7 +992,8 @@ func (self *SupportLog) Occurrences(code SupportLogCode) (int, int64) {
 	return count, first
 }
 
-// Flushes what Event holds, stops the writer and closes the ring. Later events are dropped. Safe to call twice.
+// Flushes what Event holds, stops the writer and closes the ring. Later events are dropped, and a bundle read once it
+// has returned reads what is on disk and writes nothing. Safe to call twice.
 func (self *SupportLog) Close() {
 	if self == nil {
 		return
@@ -1010,6 +1012,9 @@ func (self *SupportLog) Close() {
 			self.current.Close()
 			self.current = nil
 		}
+		// the ring writes nothing more: a later read neither flushes what a failed last write left to count nor
+		// records a segment it cannot read, so no file opens again once Close returns
+		self.started = false
 	})
 }
 
