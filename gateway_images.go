@@ -6,12 +6,12 @@
 // sent, and the session entries record what was sent and dedupe it across turns (§24.8).
 //
 //	read      the image's own bytes say its format, whatever its data URL claims: PNG, JPEG and GIF through the
-//	          standard library; its header's size is read first, and one past ImageDecodePixelCount is refused unread,
-//	          so a small file that declares a vast image takes nothing
-//	webp      a WebP's size is read from its own header (VP8, VP8L or VP8X), and one within the input size is sent as
-//	          it came; one past it is refused 400 until a WebP decoder is linked, since golang.org/x/image v0.44.0's,
-//	          the version every repository requires, allocates without bound decoding VP8L (GO-2026-6222, fixed in
-//	          v0.45.0), and nothing it could be handed by a harness may reach that
+//	          standard library, WebP through golang.org/x/image's decoder; its header's size is read first, and one
+//	          past ImageDecodePixelCount is refused unread, so a small file that declares a vast image takes nothing
+//	webp      at golang.org/x/image v0.45.0 or later, every repository's version since QD-1454: v0.44.0's decoder
+//	          allocated every prefix code group up to the highest a VP8L image named, of 2^16, about 170 MiB from a file
+//	          of a few bytes (GO-2026-6222), and v0.45.0's refuses one naming more than libwebp's 2600; a frame must
+//	          match the VP8X canvas it follows, so the size the header gives bounds what decodes
 //	fits      an image within both bounds is sent as it came, byte for byte
 //	shrink    otherwise the largest size within both bounds that keeps its proportions, counted in integers alone, and
 //	          each output pixel the average of the whole source pixels its box covers, in premultiplied 16-bit
@@ -33,6 +33,8 @@ import (
 	"image/jpeg"
 	"image/png"
 	"strings"
+
+	"golang.org/x/image/webp"
 )
 
 // The formats an image is read in and written as: identifiers.
@@ -99,41 +101,12 @@ var gatewayImageFormats = []*gatewayImageFormat{
 		magic: func(data []byte) bool {
 			return 12 <= len(data) && string(data[0:4]) == "RIFF" && string(data[8:12]) == "WEBP"
 		},
-		decodeConfig: gatewayWebpConfig,
-		// no WebP decoder is linked (see the file header's webp row)
-		decode: nil,
+		// the canvas when a VP8X chunk leads, which the decoder holds every frame to (see the file header's webp row)
+		decodeConfig: func(data []byte) (image.Config, error) {
+			return webp.DecodeConfig(bytes.NewReader(data))
+		},
+		decode: func(data []byte) (image.Image, error) { return webp.Decode(bytes.NewReader(data)) },
 	},
-}
-
-// A WebP's size from its first chunk's header, VP8's frame header, VP8L's packed size or VP8X's canvas, with no decoder.
-func gatewayWebpConfig(data []byte) (image.Config, error) {
-	if len(data) < 30 {
-		return image.Config{}, fmt.Errorf("a WebP too short for its header")
-	}
-	chunk := data[20:]
-	switch string(data[12:16]) {
-	case "VP8 ":
-		// a key frame's tag, its start code, then 14-bit width and height, little-endian
-		if chunk[3] != 0x9d || chunk[4] != 0x01 || chunk[5] != 0x2a {
-			return image.Config{}, fmt.Errorf("a VP8 WebP without its start code")
-		}
-		width := int(chunk[6]) | int(chunk[7]&0x3f)<<8
-		height := int(chunk[8]) | int(chunk[9]&0x3f)<<8
-		return image.Config{Width: width, Height: height}, nil
-	case "VP8L":
-		// the signature, then 14 bits of width less one and 14 of height less one
-		if chunk[0] != 0x2f {
-			return image.Config{}, fmt.Errorf("a VP8L WebP without its signature")
-		}
-		bits := uint32(chunk[1]) | uint32(chunk[2])<<8 | uint32(chunk[3])<<16 | uint32(chunk[4])<<24
-		return image.Config{Width: int(bits&0x3fff) + 1, Height: int(bits>>14&0x3fff) + 1}, nil
-	case "VP8X":
-		// flags and three reserved bytes, then the canvas's 24-bit width and height less one, little-endian
-		width := int(chunk[4]) | int(chunk[5])<<8 | int(chunk[6])<<16
-		height := int(chunk[7]) | int(chunk[8])<<8 | int(chunk[9])<<16
-		return image.Config{Width: width + 1, Height: height + 1}, nil
-	}
-	return image.Config{}, fmt.Errorf("a WebP whose first chunk is none of VP8, VP8L and VP8X")
 }
 
 // The format data is in, by its magic bytes; nil for none the gateway reads.
@@ -281,11 +254,6 @@ func gatewayReencodeImage(settings *GatewaySettings, data []byte) (string, []byt
 	if settings.ImageDecodePixelCount <= 0 || uint64(settings.ImageDecodePixelCount) < uint64(config.Width)*uint64(config.Height) {
 		return "", nil, gatewayInvalidRequest(GatewayErrorCodeInvalidImage, "",
 			"a %dx%d image, past the %d pixels the gateway reads", config.Width, config.Height, settings.ImageDecodePixelCount)
-	}
-	if format.decode == nil {
-		return "", nil, gatewayInvalidRequest(GatewayErrorCodeInvalidImage, "",
-			"a %dx%d %s image past the %d pixel input size: send it as a PNG or JPEG, which the gateway re-encodes", config.Width,
-			config.Height, format.name, settings.ImageMaxEdgePixelCount)
 	}
 	source, err := format.decode(data)
 	if err != nil {

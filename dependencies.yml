@@ -420,9 +420,8 @@ modules:
     leg: [client, engine, cli, test]
   - module: golang.org/x/image
     spdx: BSD-3-Clause
-    reason: its webp decoder, for the gateway's re-encoding of oversized WebP images (DESIGN-COMPUTE §8.5; QD-1254), at v0.45.0, the first release past GO-2026-6222's unbounded VP8L allocation, as server, sdk and sn require it (QD-1454); read from its LICENSE, the Go Authors' (CARCH-M11-02); not linked until the gateway's WebP row links webp.Decode again, so the gateway refuses an oversized WebP meanwhile (GW-M12-03)
+    reason: its webp decoder, for the gateway's re-encoding of oversized WebP images (DESIGN-COMPUTE §8.5; QD-1254), at v0.45.0, the first release past GO-2026-6222's unbounded VP8L allocation, as server, sdk and sn require it (QD-1454); read from its LICENSE, the Go Authors' (CARCH-M11-02); linked by the gateway's WebP row (gateway_images.go) since GW-M12-03, unlinked while v0.44.0 was required and linked again at v0.45.0 (x-image-vuln-bump)
     leg: [client, engine, cli, test]
-    planned: true
   - module: golang.org/x/net
     spdx: BSD-3-Clause
     reason: connect's and quic-go's networking
