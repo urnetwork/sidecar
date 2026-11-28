@@ -44,16 +44,23 @@ type ComputeDisclosureSettings struct {
 	// The largest marks file the store reads back, in bytes: 64 KiB, room for MarksMaxCount ids with their versions.
 	// A larger one reads as no marks, and each id is listed anew.
 	MarksMaxByteCount int
+
+	// The network's acknowledgments (CTRUST-M12-02). How often an Owner's or Admin's device looks for an id whose
+	// network acknowledgment names an older version than the newest verified policy's, to raise disclosure_changed:
+	// 15 min, a reading, so the notice follows a new policy within a quarter hour while the check costs nothing between.
+	// Non-positive looks once, as the Sidecar starts.
+	NetworkNoticeInterval time.Duration
 }
 
 // The component's defaults, the only place one is set.
 func DefaultComputeDisclosureSettings() *ComputeDisclosureSettings {
 	return &ComputeDisclosureSettings{
-		IdSlugMaxByteCount:   63,
-		LocaleMaxByteCount:   35,
-		AwaitRecheckInterval: 15 * time.Second,
-		SourceReadTimeout:    30 * time.Second,
-		MarksMaxCount:        256,
-		MarksMaxByteCount:    64 * 1024,
+		IdSlugMaxByteCount:    63,
+		LocaleMaxByteCount:    35,
+		AwaitRecheckInterval:  15 * time.Second,
+		SourceReadTimeout:     30 * time.Second,
+		MarksMaxCount:         256,
+		MarksMaxByteCount:     64 * 1024,
+		NetworkNoticeInterval: 15 * time.Minute,
 	}
 }

@@ -88,8 +88,8 @@ var testFenceBlockComment = regexp.MustCompile(`(?s)/\*.*?\*/`)
 // Written so a fence's string, identifier, number and punctuation each stay one token.
 var testFenceToken = regexp.MustCompile(`"[^"]*"|[A-Za-z_][A-Za-z0-9_.]*|0x[0-9A-Fa-f]+|[0-9]+|[{};=,<>]`)
 
-// The file a fence's comment names.
-var testFenceFile = regexp.MustCompile(`sidecar/protocol/[a-z/]*[a-z]+\.proto`)
+// The file a fence's comment names, compute_disclosure.proto's underscore among its letters.
+var testFenceFile = regexp.MustCompile(`sidecar/protocol/[a-z_/]*[a-z]+\.proto`)
 
 // The opening of a message or enum, and its name.
 var testFenceDeclaration = regexp.MustCompile(`\b(?:message|enum)\s+([A-Za-z_][A-Za-z0-9_]*)`)

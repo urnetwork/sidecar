@@ -1,7 +1,8 @@
 //go:build !js && !ios && !android && !sdk_mobile_bind && !sidecar_http && !ios_extension
 
-// The daemon's disclosure methods (DESIGN-COMPUTE §2.8, §15.1, §15.3; CTRUST-M11-01): what `ur disclosures` and a
-// remote-mode app's Disclosures() call, on desktop legs only, each on its call's network (§5.8's network rule):
+// The daemon's disclosure methods (DESIGN-COMPUTE §2.8, §15.1, §15.3; CTRUST-M11-01, CTRUST-M12-01, CTRUST-M12-02):
+// what `ur disclosures` and a remote-mode app's Disclosures() call, on desktop legs only, each on its call's network
+// (§5.8's network rule):
 //
 //	compute.disclosure.list  every disclosure of the newest verified policy in the caller's locale, each with the
 //	                         version the acknowledgments that cover this sidecar hold and its changed mark, no Confirm;
@@ -13,6 +14,15 @@
 //	                         answers disclosure_changed as the reply's refusal, with nothing written
 //	compute.disclosure.open  that the person opened an id's whole text at its current version, which ends its lines'
 //	                         changed mark: a Confirm method under the same rules
+//	compute.disclosure.ack_network
+//	                         an Owner's or Admin's acknowledgment for the network's tagged and cloud sidecars
+//	                         (CTRUST-M12-02): a Confirm method under the same rules, with the version, locale and
+//	                         revision the person was shown; the act then refuses, naming who can, on any device but an
+//	                         Owner's or Admin's approval-capable one that runs the network's config writer, and answers
+//	                         disclosure_changed for a text that is not the current version's
+//	compute.disclosure.remove_network
+//	                         that acknowledgment taken out of the compute block, which only narrows: a Confirm method
+//	                         under the same rules
 //
 // Params are read strictly. A reply carries the policy's printable texts and the device's words, nothing else. ur daemon
 // registers the methods (cli/cmd_disclosures.go); ur native-host relays none of them. Safe for concurrent use.
@@ -27,9 +37,11 @@ import (
 
 // The methods.
 const (
-	DaemonMethodComputeDisclosureList = "compute.disclosure.list"
-	DaemonMethodComputeDisclosureAck  = "compute.disclosure.ack"
-	DaemonMethodComputeDisclosureOpen = "compute.disclosure.open"
+	DaemonMethodComputeDisclosureList          = "compute.disclosure.list"
+	DaemonMethodComputeDisclosureAck           = "compute.disclosure.ack"
+	DaemonMethodComputeDisclosureOpen          = "compute.disclosure.open"
+	DaemonMethodComputeDisclosureAckNetwork    = "compute.disclosure.ack_network"
+	DaemonMethodComputeDisclosureRemoveNetwork = "compute.disclosure.remove_network"
 )
 
 // compute.disclosure.list's params.
@@ -45,6 +57,22 @@ type DaemonComputeDisclosureActParams struct {
 	Network string `json:"network,omitempty"`
 	Id      string `json:"id"`
 	Version uint32 `json:"version"`
+}
+
+// compute.disclosure.ack_network's params: the id, and the version, locale and revision of the text the person was
+// shown.
+type DaemonComputeDisclosureNetworkActParams struct {
+	Network  string `json:"network,omitempty"`
+	Id       string `json:"id"`
+	Version  uint32 `json:"version"`
+	Locale   string `json:"locale"`
+	Revision uint32 `json:"revision"`
+}
+
+// compute.disclosure.remove_network's params: the id whose network acknowledgment is taken out.
+type DaemonComputeDisclosureRemoveParams struct {
+	Network string `json:"network,omitempty"`
+	Id      string `json:"id"`
 }
 
 // compute.disclosure.ack's and compute.disclosure.open's reply: the id and version the act recorded, or the refusal's
@@ -66,13 +94,16 @@ var (
 )
 
 // What the disclosure methods act through: a nil List takes the call's Sidecar's ComputeDisclosures, a nil Ack its
-// AckComputeDisclosure, a nil Open its OpenedComputeDisclosure and a nil UnderHarness its HarnessAncestor on the peer's
-// pid, true where the caller cannot be named.
+// AckComputeDisclosure, a nil Open its OpenedComputeDisclosure, a nil AckNetwork its AckNetworkDisclosure, a nil
+// RemoveNetwork its RemoveNetworkDisclosure and a nil UnderHarness its HarnessAncestor on the peer's pid, true where the
+// caller cannot be named.
 type DaemonComputeDisclosureBackends struct {
-	List         func(ctx context.Context, sidecar *Sidecar, locale string) (*ComputeDisclosureList, error)
-	Ack          func(ctx context.Context, sidecar *Sidecar, args *ComputeDisclosureAckArgs) error
-	Open         func(ctx context.Context, sidecar *Sidecar, id string, version uint32) error
-	UnderHarness func(ctx context.Context, call *DaemonCall) bool
+	List          func(ctx context.Context, sidecar *Sidecar, locale string) (*ComputeDisclosureList, error)
+	Ack           func(ctx context.Context, sidecar *Sidecar, args *ComputeDisclosureAckArgs) error
+	Open          func(ctx context.Context, sidecar *Sidecar, id string, version uint32) error
+	AckNetwork    func(ctx context.Context, sidecar *Sidecar, args *ComputeNetworkDisclosureAckArgs) error
+	RemoveNetwork func(ctx context.Context, sidecar *Sidecar, args *ComputeNetworkDisclosureRemoveArgs) error
+	UnderHarness  func(ctx context.Context, call *DaemonCall) bool
 }
 
 // The act's refusal as its reply's code, nil for any other error, which stands.
@@ -111,6 +142,20 @@ func DaemonComputeDisclosureMethods(backends *DaemonComputeDisclosureBackends) [
 			return sidecar.OpenedComputeDisclosure(ctx, id, version, SidecarActConfirmed)
 		}
 	}
+	ackNetworkOf := backends.AckNetwork
+	if ackNetworkOf == nil {
+		ackNetworkOf = func(ctx context.Context, sidecar *Sidecar, args *ComputeNetworkDisclosureAckArgs) error {
+			_, err := sidecar.AckNetworkDisclosure(ctx, args)
+			return err
+		}
+	}
+	removeNetworkOf := backends.RemoveNetwork
+	if removeNetworkOf == nil {
+		removeNetworkOf = func(ctx context.Context, sidecar *Sidecar, args *ComputeNetworkDisclosureRemoveArgs) error {
+			_, err := sidecar.RemoveNetworkDisclosure(ctx, args)
+			return err
+		}
+	}
 	underHarness := backends.UnderHarness
 	if underHarness == nil {
 		underHarness = func(ctx context.Context, call *DaemonCall) bool {
@@ -120,20 +165,26 @@ func DaemonComputeDisclosureMethods(backends *DaemonComputeDisclosureBackends) [
 			return call.Sidecar.HarnessAncestor(ctx, int(call.Hello.PeerPid))
 		}
 	}
-	// a Confirm method's guard and params: the person's confirmed act, from no harness process
-	act := func(ctx context.Context, call *DaemonCall) (*DaemonComputeDisclosureActParams, error) {
+	// a Confirm method's guard, decoding its params into params: the person's confirmed act, from no harness process
+	confirmed := func(ctx context.Context, call *DaemonCall, params any) error {
 		if !call.Confirmed {
-			return nil, errDaemonComputeDisclosureUnconfirmed
+			return errDaemonComputeDisclosureUnconfirmed
 		}
-		params := &DaemonComputeDisclosureActParams{}
 		if err := decodeDaemonSocketParams(call, params); err != nil {
-			return nil, fmt.Errorf("%w: %w", errDaemonComputeDisclosureParams, err)
+			return fmt.Errorf("%w: %w", errDaemonComputeDisclosureParams, err)
 		}
 		if call.Sidecar == nil {
-			return nil, fmt.Errorf("%w: no network's sidecar", errDaemonComputeDisclosureParams)
+			return fmt.Errorf("%w: no network's sidecar", errDaemonComputeDisclosureParams)
 		}
 		if underHarness(ctx, call) {
-			return nil, errDaemonComputeDisclosureUnderHarness
+			return errDaemonComputeDisclosureUnderHarness
+		}
+		return nil
+	}
+	act := func(ctx context.Context, call *DaemonCall) (*DaemonComputeDisclosureActParams, error) {
+		params := &DaemonComputeDisclosureActParams{}
+		if err := confirmed(ctx, call, params); err != nil {
+			return nil, err
 		}
 		return params, nil
 	}
@@ -174,6 +225,42 @@ func DaemonComputeDisclosureMethods(backends *DaemonComputeDisclosureBackends) [
 					return nil, err
 				}
 				return &DaemonComputeDisclosureActReply{Id: params.Id, Version: params.Version}, nil
+			},
+		},
+		{
+			Name:    DaemonMethodComputeDisclosureAckNetwork,
+			Network: true,
+			Confirm: true,
+			Handler: func(ctx context.Context, call *DaemonCall) (any, error) {
+				params := &DaemonComputeDisclosureNetworkActParams{}
+				if err := confirmed(ctx, call, params); err != nil {
+					return nil, err
+				}
+				err := ackNetworkOf(ctx, call.Sidecar, &ComputeNetworkDisclosureAckArgs{
+					Id: params.Id, Version: params.Version, Locale: params.Locale, Revision: params.Revision, Origin: SidecarActConfirmed,
+				})
+				if refusal := daemonComputeDisclosureRefusal(params.Id, err); refusal != nil {
+					return refusal, nil
+				}
+				if err != nil {
+					return nil, err
+				}
+				return &DaemonComputeDisclosureActReply{Id: params.Id, Version: params.Version}, nil
+			},
+		},
+		{
+			Name:    DaemonMethodComputeDisclosureRemoveNetwork,
+			Network: true,
+			Confirm: true,
+			Handler: func(ctx context.Context, call *DaemonCall) (any, error) {
+				params := &DaemonComputeDisclosureRemoveParams{}
+				if err := confirmed(ctx, call, params); err != nil {
+					return nil, err
+				}
+				if err := removeNetworkOf(ctx, call.Sidecar, &ComputeNetworkDisclosureRemoveArgs{Id: params.Id, Origin: SidecarActConfirmed}); err != nil {
+					return nil, err
+				}
+				return &DaemonComputeDisclosureActReply{Id: params.Id}, nil
 			},
 		},
 		{
