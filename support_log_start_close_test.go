@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -23,10 +24,13 @@ type supportLogStartBarriers struct {
 	proceed chan struct{}
 	// frees a Start held at a barrier once the test ends
 	done chan struct{}
+	// the Starts begun on their own goroutines, which the test's end waits for
+	group sync.WaitGroup
 }
 
-// Holds every Start at its barriers until the test's end. Install it after opening the ring, so its cleanup, which
-// frees a held Start, runs before the ring's Close, which would wait for that Start's fileLock.
+// Holds every Start at its barriers until the test's end, which frees and waits for any it holds. Install it after
+// opening the ring, so that cleanup runs before the ring's Close, which would wait for a held Start's fileLock, and
+// before the test's directory is removed.
 func holdSupportLogStart(t *testing.T) *supportLogStartBarriers {
 	barriers := &supportLogStartBarriers{reached: make(chan string), proceed: make(chan struct{}), done: make(chan struct{})}
 	SetTestHooks(&TestHooks{Barrier: func(name string, key string) {
@@ -46,8 +50,18 @@ func holdSupportLogStart(t *testing.T) *supportLogStartBarriers {
 	t.Cleanup(func() {
 		SetTestHooks(nil)
 		close(barriers.done)
+		barriers.group.Wait()
 	})
 	return barriers
+}
+
+// Starts log on a goroutine of its own, answering on the channel returned.
+func (self *supportLogStartBarriers) start(log *SupportLog) <-chan error {
+	started := make(chan error, 1)
+	self.group.Go(func() {
+		started <- log.Start()
+	})
+	return started
 }
 
 // Waits for Start to reach want, the next barrier it must reach.
@@ -104,10 +118,7 @@ func TestSupportLogStartRefusesOnceACloseLandsBetweenItsReads(t *testing.T) {
 	log.Event(SupportLogCodeAppStarted, SupportLogFieldRelease("2026.11.27-1"))
 	barriers := holdSupportLogStart(t)
 
-	started := make(chan error, 1)
-	go func() {
-		started <- log.Start()
-	}()
+	started := barriers.start(log)
 	barriers.await(t, "support_log.start.before")
 	// the app's stop and the whole close, whose last flush keeps what a ring not started holds
 	log.Event(SupportLogCodeAppStopped, SupportLogFieldUptime(time.Minute))
@@ -153,10 +164,7 @@ func TestSupportLogCloseWaitsForAStartWhoseFileWorkBeganFirst(t *testing.T) {
 	log.Event(SupportLogCodeAppStarted, SupportLogFieldRelease("2026.11.27-1"))
 	barriers := holdSupportLogStart(t)
 
-	started := make(chan error, 1)
-	go func() {
-		started <- log.Start()
-	}()
+	started := barriers.start(log)
 	barriers.await(t, "support_log.start.before")
 	barriers.release(t)
 	barriers.await(t, "support_log.start.after")
