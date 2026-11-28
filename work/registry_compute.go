@@ -226,8 +226,6 @@ var computeJobUnbuilt = []string{
 	ComputeJobGammaSpend,
 	ComputeJobGammaWatch,
 	ComputeJobReconcile,
-	ComputeJobSearchTickets,
-	ComputeJobSearchPurge,
 	ComputeJobDirectSettle,
 	ComputeJobSearchOutcomes,
 }
