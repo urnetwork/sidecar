@@ -1,8 +1,8 @@
 package computeservice
 
-// SRCH-M13-08: compute_search_tickets and compute_search_purge (search_jobs.go) on the search fixture's fake ledger and
-// clock. The purge's deletion itself is BAL-M13-02's ComputeDeleteSearchRows, which has not landed: the fake ledger
-// deletes as it will, and the real one answers ErrComputeSearchLedgerUnbuilt.
+// SRCH-M13-08: compute_search_tickets, compute_search_purge and compute_op_recover's web search source (search_jobs.go)
+// on the search fixture's fake ledger and clock. The purge's deletion itself is BAL-M13-02's ComputeDeleteSearchRows,
+// which has not landed: the fake ledger deletes as it will, and the real one answers ErrComputeSearchLedgerUnbuilt.
 
 import (
 	"context"
@@ -13,6 +13,7 @@ import (
 
 	operator "github.com/urnetwork/operator-core"
 
+	"github.com/urnetwork/sidecar/controller"
 	"github.com/urnetwork/sidecar/model"
 	"github.com/urnetwork/sidecar/sidecartest"
 )
@@ -108,6 +109,49 @@ func TestSearchTicketsReleaseAfterHour(t *testing.T) {
 	}
 	if op := fixture.ledger.op(opKey); op == nil || op.state != model.ComputeOpStateVoid {
 		t.Fatal("the admission was not released past its hour")
+	}
+}
+
+// compute_op_recover's web search source: an open search row waits for its report until an hour past its window, then
+// is released at no charge, never settled; a row of another kind waits, as no search's.
+func TestSearchRecoverSourceReleasesAfterHour(t *testing.T) {
+	fixture := newComputeSearchFixture(t, nil)
+	source, err := NewComputeSearchRecoverSource(fixture.jobArgs(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	minute := fixture.clock.Now().UTC().Truncate(time.Minute)
+	search := &model.ComputeOp{Kind: model.ComputeChargeKindWebSearch, StartTime: minute, State: model.ComputeOpStateOpen}
+	inference := &model.ComputeOp{Kind: model.ComputeChargeKindInference, StartTime: minute, State: model.ComputeOpStateOpen}
+	stateOf := func(op *model.ComputeOp) controller.ComputeRecoverState {
+		t.Helper()
+		answer, err := source.Recover(nil, context.Background(), op)
+		if err != nil || answer == nil {
+			t.Fatalf("the source answered %+v, %v", answer, err)
+		}
+		if answer.Outcome != nil {
+			t.Fatal("the source settled a search, whose outcome only its report gives")
+		}
+		return answer.State
+	}
+	settings := DefaultComputeSearchSettings()
+	fixture.clock.AdvanceTo(minute.Add(settings.webSearch().WindowAfter + settings.TicketReportGrace))
+	if state := stateOf(search); state != controller.ComputeRecoverWait {
+		t.Fatalf("a search at its hour's end answered %d", state)
+	}
+	fixture.clock.Advance(time.Millisecond)
+	if state := stateOf(search); state != controller.ComputeRecoverUnknown {
+		t.Fatalf("a search past its hour answered %d", state)
+	}
+	if state := stateOf(inference); state != controller.ComputeRecoverWait {
+		t.Fatalf("another kind's row answered %d", state)
+	}
+	invalid := DefaultComputeSearchSettings()
+	invalid.TicketReportGrace = 0
+	args := fixture.jobArgs(nil)
+	args.Settings = invalid
+	if _, err := NewComputeSearchRecoverSource(args); err == nil {
+		t.Fatal("a source was built on settings that do not validate")
 	}
 }
 

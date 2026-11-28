@@ -3,9 +3,11 @@
 // search's rows deleted once their minute is 71 h 55 min old, and a row past 72 hours paged. The logic is
 // computeservice's ComputeSearchTicketsJob and ComputeSearchPurgeJob, which sidecar/work may not import, an engine
 // being no client package's to import (§4.4): the process that runs taskworker builds them over its Env and installs
-// their runs here (InstallComputeSearchJobs), as compute_provider_prices' is. A process that installed none fails each
-// run with ErrComputeJobDepsNotInstalled, which waits on server/task's backoff, so nothing is released or deleted
-// from a process that cannot reach the ledger.
+// their runs here (InstallComputeSearchJobs), as compute_provider_prices' is, registering computeservice's
+// ComputeSearchRecoverSource for kind web_search beside them (controller.RegisterComputeRecoverSource), so
+// compute_op_recover releases what compute_search_tickets would. A process that installed none fails each run with
+// ErrComputeJobDepsNotInstalled, which waits on server/task's backoff, so nothing is released or deleted from a
+// process that cannot reach the ledger; compute_op_recover then releases an open search row at its day.
 //
 // The install is read at each run, so it is safe for concurrent use.
 

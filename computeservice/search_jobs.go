@@ -15,6 +15,10 @@
 //	                        the purge keeps the search's own records to their ttls: a reviewed sanctions record past
 //	                        FlagRetention, and an hourly outcome row past OutcomeHourRetention, are deleted
 //
+// Beside them, ComputeSearchRecoverSource is web search's row of compute_op_recover (controller/compute_recover.go):
+// the same release, for a row no compute_search_tickets run reached, which the installing process registers for kind
+// web_search beside the two runs.
+//
 // Each run reads its clock once, is bounded by its batches, and is idempotent: a run that stops partway is the next
 // run's work. Both read Postgres alone, never {cmpa}, which only the compute block reaches. The purge deletes by kind
 // and age alone, returning nothing to lots, and never a row of another kind. Safe for concurrent use, though each
@@ -222,6 +226,38 @@ func (self *ComputeSearchTicketsJob) Run(ctx context.Context) (*ComputeSearchTic
 		}
 	}
 	return result, nil
+}
+
+// Web search's ComputeRecoverSource. See NewComputeSearchRecoverSource.
+type ComputeSearchRecoverSource struct {
+	computeSearchJob
+}
+
+// The source compute_op_recover asks of an open search row whose producer stopped, "a search as §21.5 says": a row
+// whose window ended TicketReportGrace ago with no report is released at no charge (unknown), as
+// compute_search_tickets releases it, its settlement, should one come, URnetwork's unattributed expense; a younger one
+// waits for the signer's report. A search's outcome comes from that report alone, so the source never answers
+// finished. The process that installs the search jobs registers it for kind web_search
+// (controller.RegisterComputeRecoverSource), so a row no compute_search_tickets run reached is released within the
+// hour rather than at compute_op_recover's day. Settings that do not validate refuse it.
+func NewComputeSearchRecoverSource(args *ComputeSearchJobArgs) (*ComputeSearchRecoverSource, error) {
+	job, err := newComputeSearchJob(args)
+	if err != nil {
+		return nil, err
+	}
+	return &ComputeSearchRecoverSource{computeSearchJob: *job}, nil
+}
+
+// See controller.ComputeRecoverSource. A row of another kind is no search's, and waits.
+func (self *ComputeSearchRecoverSource) Recover(env operator.Env, ctx context.Context, op *model.ComputeOp) (*controller.ComputeRecoverAnswer, error) {
+	if op == nil || op.Kind != model.ComputeChargeKindWebSearch {
+		return &controller.ComputeRecoverAnswer{State: controller.ComputeRecoverWait}, nil
+	}
+	reportBy := op.StartTime.Add(self.settings.webSearch().WindowAfter + self.settings.TicketReportGrace)
+	if !self.clock.Now().After(reportBy) {
+		return &controller.ComputeRecoverAnswer{State: controller.ComputeRecoverWait}, nil
+	}
+	return &controller.ComputeRecoverAnswer{State: controller.ComputeRecoverUnknown}, nil
 }
 
 // What one compute_search_purge run did.
