@@ -412,7 +412,8 @@ func (self *SupportLog) Start() error {
 	if closed() {
 		return errSupportLogClosed
 	}
-	testHookBarrier("support_log.start.before", "")
+	// keyed by the ring's directory, so a test holds its own ring's Start and no other's
+	testHookBarrier("support_log.start.before", self.directory)
 	segmentCount, byteCount, err := func() (int, int64, error) {
 		self.fileLock.Lock()
 		defer self.fileLock.Unlock()
@@ -425,7 +426,7 @@ func (self *SupportLog) Start() error {
 		}
 		// with fileLock held, which stalls the writer, a bundle and Close's last step but never Event: a Close begun
 		// from here waits for this Start's file work
-		testHookBarrier("support_log.start.after", "")
+		testHookBarrier("support_log.start.after", self.directory)
 		if err := os.MkdirAll(self.directory, 0o700); err != nil {
 			return 0, 0, fmt.Errorf("support log: %w", err)
 		}

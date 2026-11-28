@@ -28,13 +28,14 @@ type supportLogStartBarriers struct {
 	group sync.WaitGroup
 }
 
-// Holds every Start at its barriers until the test's end, which frees and waits for any it holds. Install it after
-// opening the ring, so that cleanup runs before the ring's Close, which would wait for a held Start's fileLock, and
-// before the test's directory is removed.
-func holdSupportLogStart(t *testing.T) *supportLogStartBarriers {
+// Holds the Start of the ring in directory at its barriers until the test's end, which frees and waits for any it
+// holds; another ring's Start passes, since the barriers are keyed by the ring's directory. Install it after opening
+// the ring, so that cleanup runs before the ring's Close, which would wait for a held Start's fileLock, and before the
+// test's directory is removed.
+func holdSupportLogStart(t *testing.T, directory string) *supportLogStartBarriers {
 	barriers := &supportLogStartBarriers{reached: make(chan string), proceed: make(chan struct{}), done: make(chan struct{})}
 	SetTestHooks(&TestHooks{Barrier: func(name string, key string) {
-		if !strings.HasPrefix(name, "support_log.start.") {
+		if !strings.HasPrefix(name, "support_log.start.") || key != directory {
 			return
 		}
 		select {
@@ -116,7 +117,7 @@ func TestSupportLogStartRefusesOnceACloseLandsBetweenItsReads(t *testing.T) {
 	directory := filepath.Join(t.TempDir(), "support-log")
 	log := openTestDeferredSupportLog(t, directory, clock)
 	log.Event(SupportLogCodeAppStarted, SupportLogFieldRelease("2026.11.27-1"))
-	barriers := holdSupportLogStart(t)
+	barriers := holdSupportLogStart(t, directory)
 
 	started := barriers.start(log)
 	barriers.await(t, "support_log.start.before")
@@ -148,8 +149,17 @@ func TestSupportLogStartRefusesOnceACloseLandsBetweenItsReads(t *testing.T) {
 	if isStarted {
 		t.Fatal("a Start that Close overtook started the ring")
 	}
-	if err := log.Start(); !errors.Is(err, errSupportLogClosed) {
-		t.Fatalf("a Start after Close answers %v", err)
+	// on a goroutine of its own, so one that passed its first read would fail here at a barrier rather than hold the test
+	again := barriers.start(log)
+	select {
+	case err := <-again:
+		if !errors.Is(err, errSupportLogClosed) {
+			t.Fatalf("a Start after Close answers %v", err)
+		}
+	case name := <-barriers.reached:
+		t.Fatalf("a Start after Close reached %s", name)
+	case <-time.After(30 * time.Second):
+		t.Fatal("a Start after Close never returned")
 	}
 }
 
@@ -162,7 +172,7 @@ func TestSupportLogCloseWaitsForAStartWhoseFileWorkBeganFirst(t *testing.T) {
 	log := openTestDeferredSupportLog(t, directory, clock)
 	held := clock.Now()
 	log.Event(SupportLogCodeAppStarted, SupportLogFieldRelease("2026.11.27-1"))
-	barriers := holdSupportLogStart(t)
+	barriers := holdSupportLogStart(t, directory)
 
 	started := barriers.start(log)
 	barriers.await(t, "support_log.start.before")
