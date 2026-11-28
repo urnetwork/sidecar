@@ -136,6 +136,14 @@ barrier compute.provider.status.after computeservice/provider_store.go
 barrier compute.provider.status.before computeservice/provider_store.go
 barrier compute.request.admit.after computeservice/engine.go
 barrier compute.request.admit.before computeservice/engine.go
+barrier compute.search.answer.after computeservice/search_settle.go
+barrier compute.search.answer.before computeservice/search_settle.go
+barrier compute.search.claim.after computeservice/search_admit.go
+barrier compute.search.claim.before computeservice/search_admit.go
+barrier compute.search.hold.after computeservice/search_admit.go
+barrier compute.search.hold.before computeservice/search_admit.go
+barrier compute.search.sign.after computeservice/search_admit.go
+barrier compute.search.sign.before computeservice/search_admit.go
 barrier compute.stream.comment.after computeservice/engine_stream.go
 barrier compute.stream.comment.before computeservice/engine_stream.go
 barrier compute_abuse_hold.commit.after controller/compute_abuse_hold.go
@@ -1086,6 +1094,7 @@ secret record_slot_row evs_slot.go
 secret recovery_code keys_recovery.go
 secret recovery_ed25519_seed keys_recovery.go
 secret recovery_xwing_seed keys_recovery.go
+secret searchsigner_client_key computeservice/search_signer_client.go
 secret service_token api_routes_core.go
 secret share_secret socket_share.go
 secret smtp_x_ur_ref_key smtpedgeservice/attribution.go
