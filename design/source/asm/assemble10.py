@@ -19,7 +19,7 @@ design = pathlib.Path(sys.argv[1])
 asm = pathlib.Path(sys.argv[2])
 out_path = pathlib.Path(sys.argv[3])
 research_rel = sys.argv[4].rstrip('/')
-MAXD = 792
+MAXD = 795
 VDIR = asm / 'v7'
 
 
@@ -175,7 +175,7 @@ for d in EX:
     for it in d['items']:
         items_by_id[it['id']] = (d['num'], it)
 
-DECIDED = re.compile(r'\*\*Decided by owner (2026-11-(?:[01]\d|2[0-4])) \(([^)]*)\):\*\*')
+DECIDED = re.compile(r'\*\*Decided by owner (2026-11-(?:[01]\d|2\d|30)) \(([^)]*)\):\*\*')
 AMENDED = re.compile(r'\*\*Amended by owner (2026-11-(?:0[1-9]|[12]\d|30)) \(([^)]*)\)[^*]*:\*\*')
 
 

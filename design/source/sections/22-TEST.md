@@ -179,6 +179,11 @@ Parentheses hold T1 tests; the rest run in T2 and T3. Inline server paths (contr
        remote search's serving side: FS-83
 §12   (validator; labels; compact denial; CNAME lint) both NS alike at one serial, a drained or failed interface
       dropped from *, @, every copy of *'s records and each mx on both; a key set failing self-check never serves;
+      every connect block's dnsedge fed to the root's serial, a lagging or silent one warned; on one UDP 53 a
+      zone name answered by dnsedge, a WhoDis name carried by WhoDis and any other name REFUSED, the decoder
+      never blocked; no signature made but by the host's signer (owner decision 794); an NS moved to another
+      edge (owner decision 793); an interface an edge on another host failed left out of every edge's answers,
+      and ns1's and ns2's A and AAAA at 3600 s (owner decision 795);
       §12.5's label uniqueness; §12.8's verification gate; from M6, 12.9.1's DNS-SD names (owner decision 778):
       each of its forms, in the zone and the block's reverse zone, answered on the device per qtype with 10 s
       TTLs, b and db naming the zone and lb, r and dr empty, and not one query reaching the fake upstream

@@ -108,7 +108,7 @@ operator-core/      github.com/urnetwork/operator-core, package operator, its ow
 | gkm (§10) | `mls_`, `gkm_`, `gkmservice` | server/cli/gkm from v0 (D-OPS-2); reconciler in taskworker |
 | evs (§11) | `evs_`, `evsservice` | server/cli/evs; GC, packing, drop jobs and the metadata write budget's loop in taskworker (§19.4) |
 | File cluster (§19.6; owner decision 195) | `ServiceHost.Blobs`, an interface only | `urnetwork/minio`, a public fork, holds D-OPS-20's build and MinIO's AGPL source; no module here imports it, and server's Blobs client is minio-go, Apache-2.0 (server/blob.go) |
-| dns (§12) | `dns_`, `dnsservice` | server/cli/dns on the dns edge (owner decision 71) |
+| dns (§12) | `dns_`, `dnsservice` | server/cli/dns; its edge role, `dnsedge`, in server/connect's lb_alt front on every edge (owner decisions 71, 793), and server/cli/dnssigner on each such host (owner decision 794) |
 | tlsedge, certs (§13) | `tls_`, `tlsedgeservice`, `certsservice` | server/cli/tlsedge; taskworker |
 | smtpedge (§14) | `smtp_`, `smtpedgeservice`, `smtpproof` | server/cli/smtpedge |
 | mail, mxedge (§15) | `mail_`, `mxedgeservice` | server/cli/mxedge |

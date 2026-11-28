@@ -188,3 +188,15 @@ Q['Q-BRIDGE-11'] = ("How does the advertising proxy name a remote instance whose
 assert D['D-CTX-4'].startswith('The feedback service is out of scope'), 'D-CTX-4 moved'
 D['D-CTX-4'] = ("The feedback service stays FB's, out of scope; the sidecar's agent surface onto it, the support skill, is "
                 "in scope.")
+
+# Owner decision 793 (2026-11-27): dnsedge in connect-alt on every edge, two of the edges' addresses the zone's NS; its
+# design raised Q-DNS-8, which owner decision 794 decides (2026-11-28).
+assert D['D-DNS-3'].startswith("Only 12.6's self-hosted dns edge serves"), 'D-DNS-3 row moved'
+D['D-DNS-3'] = "dnsedge in connect-alt on every edge serves `<root>`; two edge addresses are its NS (owner decisions 69, 71, 123, 793)."
+assert D['D-OPS-15'].startswith('Addresses and dns edges follow'), 'D-OPS-15 row moved'
+D['D-OPS-15'] = "Addresses and dnsedge in connect-alt on every edge follow 19.4 and 19.5 (owner decisions 34, 69, 71, 123, 124, 793)."
+assert Q['Q-DNS-4'][1].startswith('None: a self-hosted dns edge'), 'Q-DNS-4 row moved'
+Q['Q-DNS-4'] = (Q['Q-DNS-4'][0], "None: dnsedge in connect-alt on every edge, signed online; two edge addresses its NS.")
+assert 'Q-DNS-8' not in Q, 'Q-DNS-8 row exists'
+Q['Q-DNS-8'] = ("Where does the online signing ZSK live, now that dnsedge runs inside connect-alt, which parses untrusted "
+                "transport traffic?", "(a), owner decision 794: a signer per edge host holds it, outside connect's process.")

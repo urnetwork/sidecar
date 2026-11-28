@@ -399,6 +399,7 @@ mark{background:rgba(237,143,255,.28);color:var(--ink);border-radius:3px;padding
 .appr .f{font-size:12px;color:var(--muted);margin-top:8px}
 .meta{display:flex;align-items:center;gap:7px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin:10px 0 2px}
 .tee{display:inline-flex;align-items:center;gap:5px;color:var(--green);background:var(--green-soft);border-radius:6px;padding:3px 7px;font-size:11.5px}
+.tee.ap{color:var(--ink-2);background:var(--card-3)} /* Q-UI-48: a neutral chip, not a green check: the TEE proves the machine, and the provider is trusted */
 .tee svg{width:12px;height:12px;stroke-width:2.4}
 .comp{flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:8px 12px;background:#101010;border-top:1px solid #1f1f1f;position:relative;z-index:6}
 .comp .plus{width:38px;height:38px;border-radius:50%;background:var(--card);display:grid;place-items:center;color:var(--ink-2);flex:0 0 auto}
@@ -991,6 +992,30 @@ footer.end{max-width:1180px;margin:0 auto;padding:0 24px 60px;color:var(--muted)
 .ent b{display:block;color:var(--s-white);font-size:20px;margin:4px 0 4px}
 .ent span{font-size:15px}
 .ent .s-btn{flex:0 0 auto}
+/* links to the Services page (Q-SVC-8) */
+.site a.s-btn,.site a.plink,.site a.more{text-decoration:none}
+.site a.s-btn{color:#fff}
+.site a.s-btn.o{color:var(--s-white)}
+.plan .plink{display:inline-flex;align-items:center;gap:6px;margin:0 0 16px;color:var(--s-blue);font-size:14.5px;font-weight:700}
+.plan .plink svg{width:15px;height:15px}
+.s-sec > p > .plink{display:inline-flex;align-items:center;gap:6px;color:var(--s-blue);font-size:15px;font-weight:700}
+.s-sec > p > .plink svg{width:15px;height:15px}
+/* services page (Q-SVC-3, Q-SVC-7, Q-SVC-8) */
+.fc .soon{display:inline-block;vertical-align:3px;margin-left:8px;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#101010;background:var(--s-yel);border-radius:6px;padding:3px 7px}
+.lab2{font-size:13px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--s-muted);margin:34px 0 14px}
+.sform{background:var(--s-card);border:1px solid #232323;border-radius:22px;padding:28px;display:flex;flex-direction:column;gap:18px;max-width:960px}
+.sform .fr{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.sform .fr.three{grid-template-columns:repeat(3,minmax(0,1fr))}
+.sform .fl{display:block;font-size:14px;font-weight:700;color:var(--s-white);margin-bottom:7px}
+.sform .fh{font-size:13.5px;color:var(--s-muted);margin:-3px 0 8px}
+.sform .in{min-height:46px;border-radius:12px;background:#0f0f0f;box-shadow:inset 0 0 0 1px #2e2e2e;padding:11px 14px;font-size:15px;line-height:1.5;color:var(--s-ink)}
+.sform .in.ta{min-height:86px}
+.sform .types{display:flex;flex-wrap:wrap;gap:8px}
+.sform .types span{height:40px;padding:0 16px;border-radius:999px;box-shadow:inset 0 0 0 1px #3a3a3a;display:inline-flex;align-items:center;font-size:14.5px;color:var(--s-white)}
+.sform .types span.on{background:rgba(0,153,255,.14);box-shadow:inset 0 0 0 1.5px var(--s-blue)}
+.sform .s-btn{align-self:flex-start;height:50px}
+.terms2{font-size:14px;color:var(--s-muted);margin:16px 0 0}
+.terms2 a{color:var(--s-blue)}
 /* mini phone used in the site heroes */
 .mini-phone{width:330px;padding:8px;background:#000;border-radius:48px;box-shadow:0 0 0 1.5px #2c2c2c,0 40px 80px rgba(0,0,0,.6);transform:rotate(-2deg)}
 .mini-phone .screen{height:640px;border-radius:40px}
@@ -1083,9 +1108,9 @@ footer.end{max-width:1180px;margin:0 auto;padding:0 24px 60px;color:var(--muted)
 <div class="top">
   <span class="kick">Mockup · 2026-11-25</span>
   <h1>ur.io: the new<br>sections</h1>
-  <p>The site's header becomes Products, Install, CLI, Burner and Bot, and Agents moves to the footer (UI-1 in DESIGN-UI.md). Below: the three new pages, each in a laptop-width window with the new header; the footer; the web app's Burner and Bot sections, where the pages' buttons lead on a computer; and on a phone, the Burner page, the menu and the web app, which refers people to the apps (UI-7). Products shows the new plans (Q-UI-19); Install keeps its page (Q-UI-20).</p>
+  <p>The site's header becomes Products, Install, CLI, Burner and Bot, and Agents moves to the footer (UI-1 in DESIGN-UI.md). Below: the three new pages, each in a laptop-width window with the new header; the footer; the web app's Burner and Bot sections, where the pages' buttons lead on a computer; and on a phone, the Burner page, the menu and the web app, which refers people to the apps (UI-7). Products shows the new plans (Q-UI-19) and links to Services, which now leads with deployments for teams, sold by contract (UI-18; mmm/outbound/PLAN.md Q-SVC-8); Install keeps its page (Q-UI-20).</p>
   <p class="meta">Sample data. Companion: ui-app.html (the apps' five tabs and the questions). Each page must also be checked at a phone, a 13-inch laptop and a 24-inch monitor (mmm/DESIGNSTYLE.md "Supported form factors"); these frames show the laptop width.</p>
-  <nav class="toc" aria-label="Sections"><a href="#w-products">Products page</a><a href="#w-cli">CLI page</a><a href="#w-burner">Burner page</a><a href="#w-bot">Bot page</a><a href="#w-footer">Footer</a><a href="#w-app-burner">Web app: Burner</a><a href="#w-app-bot">Web app: Bot</a><a href="#w-mobile">On a phone</a></nav>
+  <nav class="toc" aria-label="Sections"><a href="#w-products">Products page</a><a href="#w-services">Services page</a><a href="#w-cli">CLI page</a><a href="#w-burner">Burner page</a><a href="#w-bot">Bot page</a><a href="#w-footer">Footer</a><a href="#w-app-burner">Web app: Burner</a><a href="#w-app-bot">Web app: Bot</a><a href="#w-mobile">On a phone</a></nav>
 </div>
 <!-- ============================== PRODUCTS PAGE ============================== -->
 <section class="gal" id="w-products">
@@ -1097,7 +1122,7 @@ footer.end{max-width:1180px;margin:0 auto;padding:0 24px 60px;color:var(--muted)
     <div class="s-hero" style="padding-bottom:10px">
       <span class="s-kick blue">Products</span>
       <h1 class="s-h1">Transparent all<br>the way down</h1>
-      <p class="s-sub">Build on transparent, end-to-end encrypted infrastructure. Every plan gets every privacy feature; plans differ in how much.</p>
+      <p class="s-sub">Build on transparent, end-to-end encrypted infrastructure. Every plan gets the VPN, Burner, Bot and the CLI. Pro adds WireGuard profiles, a SOCKS proxy and higher caps.</p>
     </div>
     <div class="plans">
       <div class="plan">
@@ -1105,10 +1130,10 @@ footer.end{max-width:1180px;margin:0 auto;padding:0 24px 60px;color:var(--muted)
         <div class="pp">Free</div>
         <div class="pd">For one person, on every device.</div>
         <ul>
-          <li><svg class="i"><use href="#i-check"/></svg>Every VPN feature, 1 TB of data a month</li>
+          <li><svg class="i"><use href="#i-check"/></svg>The VPN, with 30 GiB of data a day</li>
           <li><svg class="i"><use href="#i-check"/></svg>100 MB of encrypted, versioned storage</li>
           <li><svg class="i"><use href="#i-check"/></svg>Burner: as many addresses as you want, the password manager</li>
-          <li><svg class="i"><use href="#i-check"/></svg>Bot: local models free; remote models and private web search from your compute balance</li>
+          <li><svg class="i"><use href="#i-check"/></svg>Bot: local models free; remote models and web search from your compute balance</li>
           <li><svg class="i"><use href="#i-check"/></svg>The CLI: storage, IPs, forwarding, the TLS edge, email, the model router</li>
         </ul>
         <span class="s-btn o pbtn">Get Connected</span>
@@ -1118,8 +1143,8 @@ footer.end{max-width:1180px;margin:0 auto;padding:0 24px 60px;color:var(--muted)
         <div class="pp">$5<small>/month</small></div>
         <div class="pd">or $40 a year</div>
         <ul>
-          <li><svg class="i"><use href="#i-check"/></svg>Everything in Community, with higher caps</li>
-          <li><svg class="i"><use href="#i-check"/></svg>10 TB of data a month</li>
+          <li><svg class="i"><use href="#i-check"/></svg>Everything in Community, plus WireGuard profiles and a SOCKS proxy</li>
+          <li><svg class="i"><use href="#i-check"/></svg>10 TiB of data a month, plus 30 GiB a day</li>
           <li><svg class="i"><use href="#i-check"/></svg>100 GB of encrypted, versioned storage</li>
           <li><svg class="i"><use href="#i-check"/></svg>More mail sent a day and more public names</li>
         </ul>
@@ -1136,15 +1161,100 @@ footer.end{max-width:1180px;margin:0 auto;padding:0 24px 60px;color:var(--muted)
           <li><svg class="i"><use href="#i-check"/></svg>Your own sign-in: your identity provider, directory sync</li>
           <li><svg class="i"><use href="#i-check"/></svg>Your own domain for mail and web names</li>
         </ul>
+        <a class="plink" href="#w-services" title="ur.io/services">Add a deployment<svg class="i"><use href="#i-arrow"/></svg></a>
         <span class="s-btn o pbtn">Start a team</span>
       </div>
     </div>
     <p class="s-hint" style="text-align:center;margin-top:16px">On every plan, remote models, enclaves and web search draw on a compute balance you top up. Local models are free.</p>
-    <div class="ent"><div><div class="lab" style="color:var(--s-yel);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase">Enterprise</div><b>Custom services</b><span>Networks and users created through the API, custom features and support, for organizations that build on URnetwork.</span></div><span class="s-btn o">See services<svg class="i"><use href="#i-arrow"/></svg></span></div>
+    <div class="ent"><div><div class="lab" style="color:var(--s-yel);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase">Enterprise</div><b>Custom services</b><span>Your private network, planned with us and set up on your own machines, wherever they are, under a contract for each service. Or build URnetwork into your product.</span></div><a class="s-btn o" href="#w-services" title="ur.io/services">See services<svg class="i"><use href="#i-arrow"/></svg></a></div>
   </div>
   <div class="s-foot"></div>
 </div></div>
-<p class="note"><b>Notes.</b> The plans and prices are the owner's (the answer to Q-UI-19 and UI-16): Team's first three seats for one seat's price, $10 a month or $80 a year, then $10 a month or $80 a year a seat; storage of 100 MB on Community and 100 GB on Pro. Community's and Pro's data and prices are today's site's. The other per-plan caps (mail sent a day, public names) stay DESIGN.md §20.4's; per-use addresses are unlimited on every plan (Q-UI-23) until its track takes the new plans (DESIGN-UI.md, "What this changes in other documents"); whether a team's caps are pooled is Q-UI-40.</p>
+<p class="note"><b>Notes.</b> The plans and prices are the owner's (the answer to Q-UI-19 and UI-16): Team's first three seats for one seat's price, $10 a month or $80 a year, then $10 a month or $80 a year a seat; storage of 100 MB on Community and 100 GB on Pro. Community's and Pro's data, prices and VPN features are today's site's (mmm/outbound/PLAN.md Q-OB-20): every account's 30 GiB a day (config/all/pro.yml), Pro's 10 TiB a month on top of it, and WireGuard profiles and the SOCKS proxy on Pro alone, so the line under the title no longer says every plan gets every privacy feature. Enterprise now names team deployments sold by contract, and its See services and the Team card's Add a deployment link to the Services page (Q-SVC-8); services are paid add-ons, each under its own contract, and Team includes none (Q-SVC-1). The other per-plan caps (mail sent a day, public names) stay DESIGN.md §20.4's; per-use addresses are unlimited on every plan (Q-UI-23) until its track takes the new plans (DESIGN-UI.md, "What this changes in other documents"); whether a team's caps are pooled is Q-UI-40.</p>
+</section>
+
+<!-- ============================== SERVICES PAGE ============================== -->
+<section class="gal" id="w-services">
+<header><h2>Services page · ur.io/services</h2><p>Teams first: five add-on services, each sold under its own fixed-scope contract; an inquiry for self-hosted and air-gapped installs; what we never do; today's Embed section, whole; and one form with a type selector (UI-18; mmm/outbound/PLAN.md Q-SVC-1 to Q-SVC-8).</p></header>
+<div class="browser"><div class="bar"><i></i><i></i><i></i><span class="url"><svg class="i"><use href="#i-lock"/></svg>ur.io/services</span><span class="sp"></span></div>
+<div class="site">
+  <div class="s-head" data-on="services"></div>
+  <div class="s-wrap">
+    <div class="s-hero">
+      <span class="s-kick lime">Services</span>
+      <h1 class="s-h1">Your team's network,<br>set up with you</h1>
+      <p class="s-sub">Tell us what your team runs and where. We plan your private network with your admins, guide each step on your own machines, wherever they are, and check that it works. Each service is its own contract. Or build URnetwork into your product.</p>
+      <div class="s-cta"><a class="s-btn" href="#svc-form">Plan my network<svg class="i"><use href="#i-arrow"/></svg></a><a class="s-btn o" href="#svc-embed">Build it into my product</a></div>
+    </div>
+    <div class="s-sec">
+      <h2 class="s-h2">What we set up with your team</h2>
+      <p class="s-lead">Each service is an add-on to Team, sold under its own contract.</p>
+      <div class="fgrid">
+        <div class="fc"><span class="fic blue"><svg class="i"><use href="#i-route"/></svg></span><h3>Network deployment</h3><p>Your team's private network across its machines and sites, wherever they are: sign-in through your identity provider, roles, devices your admins approve, private addresses, and exits from servers you run where you work.</p></div>
+        <div class="fc"><span class="fic lime"><svg class="i"><use href="#i-server"/></svg></span><h3>Moving off self-hosting</h3><p>A mesh, tunnel, mail server or password vault you host yourself, moved over with its machines, names and rules. You keep a full export.</p></div>
+        <div class="fc"><span class="fic yel"><svg class="i"><use href="#i-at"/></svg></span><h3>Domain services and mail</h3><p>Your services online at your domain, with the TLS keys kept on your machines, and mail at your domain, received on a machine you run.</p></div>
+        <div class="fc"><span class="fic mag"><svg class="i"><use href="#i-bot"/></svg></span><h3>Agent workspaces</h3><p>Each agent gets an address, HTTPS on your domain and a mailbox, with encrypted enclaves where needed. Tokens stay out of the agents' hands.</p></div>
+        <div class="fc" style="grid-column:1 / -1"><span class="fic coral"><svg class="i"><use href="#i-globe"/></svg></span><h3>Hosting vibe-coded projects</h3><p>Apps your team built with AI coding tools, hosted on your own machines and published at your domain for people outside your team. They sign in with URnetwork accounts of their own, and you choose whose: anyone's, or only people you invite. Our servers see which account signed in to which name, and when, never the app's traffic.</p></div>
+      </div>
+      <div class="lab2">How each contract works</div>
+      <div class="trust">
+        <div><b>A written scope</b><span>The places, machines, services and domains, or the move, set down before any work starts.</span></div>
+        <div><b>One fixed price</b><span>Quoted for your scope. Half when you sign, and half when the check passes. No hourly billing.</span></div>
+        <div><b>A check before it's done</b><span>An agreed pass-or-fail check of every machine, name and mailbox, then a runbook and a list of what our servers see.</span></div>
+      </div>
+    </div>
+    <div class="ent" style="margin:0 0 70px"><div><div class="lab" style="color:var(--s-lime);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase">Self-hosted or air-gapped</div><b>On your own servers, or offline</b><span>We take a few of these by contract. There's no install bundle today, so we'll tell you plainly what's ready and what we'd build.</span></div><a class="s-btn o" href="#svc-form">Ask about an install<svg class="i"><use href="#i-arrow"/></svg></a></div>
+    <div class="s-sec">
+      <h2 class="s-h2">What we never do</h2>
+      <div class="trust" style="grid-template-columns:repeat(2,minmax(0,1fr))">
+        <div><b>We never ask for your keys or passwords</b><span>Send us settings, never secrets. Your keys stay on your devices.</span></div>
+        <div><b>Our people never join your network</b><span>So only your admins add devices and members. Every contract says so in writing.</span></div>
+      </div>
+      <p class="s-lead" style="margin:26px 0 0;font-size:16px">A person runs and reviews our support every day and is copied on every message, and an AI agent helps sort and answer mail.</p>
+    </div>
+    <div class="s-sec" id="svc-embed">
+      <h2 class="s-h2">Build URnetwork into your product</h2>
+      <p class="s-lead">Embed the privacy network in your app, ship it under your own brand, or plan a custom integration. Tell us what you're building.</p>
+      <div class="lab2">What you can build</div>
+      <div class="fgrid three">
+        <div class="fc"><h3>Embed the SDK in your app</h3><p>Your backend provisions a URnetwork client for each installation of your app, and your app sends its own traffic through the network with the SDK.</p><a class="more">Read the Embed guide<svg class="i"><use href="#i-arrow"/></svg></a></div>
+        <div class="fc"><h3>Ship it under your brand</h3><p>Your users sign in to your app, not to URnetwork, and never need a URnetwork account.</p></div>
+        <div class="fc"><h3>Custom integrations</h3><p>Have a different use in mind? Describe what you're building and what it needs.</p></div>
+      </div>
+      <div class="lab2">How it works</div>
+      <div class="fgrid three">
+        <div class="fc"><h3>The Embed plan</h3><p>Each installation of your app is one client in your network. An Embed plan starts with a review of your project and a contract; then our team enables Embed for your network and sets how many active installations it can have. An installation that hasn't connected for 30 days stops counting, and a user with a phone and a laptop counts twice.</p></div>
+        <div class="fc"><h3>Data caps for each installation</h3><p>Give each installation a monthly data cap that resets at 00:00 UTC on the first of the month, a running total that you reset yourself, or both. Your backend sets the caps, so it can split a user's budget across their installations, and it reads each installation's usage through the API.</p><a class="more">Read the Embed guide<svg class="i"><use href="#i-arrow"/></svg></a></div>
+        <div class="fc"><h3>Your keys stay on your servers</h3><p>Your backend keeps your network's root credential and gives each installation only its own scoped client token, so nothing secret ships in your app.</p></div>
+      </div>
+    </div>
+    <div class="s-sec" id="svc-form">
+      <h2 class="s-h2">Tell us about your project</h2>
+      <p class="s-lead">Choose what you need and share a few details. We'll follow up by email.</p>
+      <div class="sform" role="img" aria-label="The inquiry form, with Set up my team's network chosen">
+        <div class="fr three">
+          <div><span class="fl">Name</span><div class="in">Dana Okafor</div></div>
+          <div><span class="fl">Work email</span><div class="in">dana@acme.com</div></div>
+          <div><span class="fl">Company</span><div class="in">Acme</div></div>
+        </div>
+        <div><span class="fl">What do you need?</span><div class="types"><span class="on">Set up my team's network</span><span>Build URnetwork into my product</span><span>Self-hosted or air-gapped</span><span>Something else</span></div></div>
+        <div class="fr">
+          <div><span class="fl">People on your team</span><div class="in">14</div></div>
+          <div><span class="fl">Where your machines are</span><div class="in">An office in Lisbon, two cloud servers, laptops at home</div></div>
+        </div>
+        <div class="fr">
+          <div><span class="fl">What should be online</span><div class="in">Our wiki and Git at acme.com, and mail at acme.com</div></div>
+          <div><span class="fl">What you use today</span><div class="in">A mesh network and a mail server we host ourselves</div></div>
+        </div>
+        <div><span class="fl">Anything else</span><p class="fh">Never include passwords or keys.</p><div class="in ta"></div></div>
+        <span class="s-btn">Send</span>
+      </div>
+      <p class="terms2">Each team service is under its own contract. Using URnetwork in your product is covered by our <a>Terms of Service</a>.</p>
+    </div>
+  </div>
+  <div class="s-foot"></div>
+</div></div>
+<p class="note"><b>Notes.</b> The page follows mmm/outbound/PLAN.md Q-SVC-1 to Q-SVC-8, from the owner's request in UI-18. Services are paid add-ons, each under its own contract, and Team includes none (Q-SVC-1). Each contract has a written scope and one fixed price, half at signing and half when an agreed pass-or-fail check passes, with no hourly billing; no price is shown, since prices are quoted per contract and published only after the first five (Q-SVC-2). The five services are Q-SVC-3's, each offered once the feature it relies on has shipped; hosting comes in the first release, with "Sign in with URnetwork" opened to people outside the team (Q-SVC-4; the owner). "Wherever they are" is Q-SVC-6's "global": the team's own machines, and exits from servers it runs, with no URnetwork regions, dedicated addresses or data residency. The install inquiry claims no install bundle (Q-SVC-7). Our people never join a customer's network (Q-SVC-5). The support line is Q-OB-21's. The check, the runbook and the list of what our servers see are the guided setup's (Q-SVC-10). The Embed section is today's page word for word (mmm/ur.io/react/src/pages/Services.jsx; en.json's <span class="mono">services</span> keys), under today's hero heading and line. The form keeps the page's address and <span class="mono">POST /services/contact-sales</span>; its type selector and team fields need a server change, and "Build URnetwork into my product" keeps today's fields (monthly active users and the monthly data budget). No competitor is named, and the header gets no Services link yet.</p>
 </section>
 
 <!-- ============================== CLI PAGE ============================== -->
@@ -1189,6 +1299,7 @@ ur login</pre>
     <div class="s-sec">
       <h2 class="s-h2">Give your team the CLI</h2>
       <p class="s-lead">Admins decide who gets in and what each device can reach. Each admission is signed by an admin's own device, so no server, ours included, can add a member or a device.</p>
+      <p style="margin:-4px 0 18px"><a class="plink" href="#w-services" title="ur.io/services">Want it set up with you? Plan it with us.<svg class="i"><use href="#i-arrow"/></svg></a></p>
       <div class="team">
         <ol class="steps">
           <li><b>Connect your sign-in</b><span>Connect your identity provider over OIDC and verify your domain, or invite people by email, each with a role. With SCIM, someone your directory turns off loses access at once.</span></li>
@@ -1302,7 +1413,7 @@ ur login</pre>
 
 <!-- ============================== BOT PAGE ============================== -->
 <section class="gal" id="w-bot">
-<header><h2>Bot page · ur.io/bot</h2><p>A fully private bot: local models or TEE remote models, remote encrypted enclaves, and visibility into the work of every agent and what they say to each other.</p></header>
+<header><h2>Bot page · ur.io/bot</h2><p>A private bot that remembers (Q-OB-17): local models or TEE remote models, remote encrypted enclaves, and visibility into the work of every agent and what they say to each other.</p></header>
 <div class="browser"><div class="bar"><i></i><i></i><i></i><span class="url"><svg class="i"><use href="#i-lock"/></svg>ur.io/bot</span><span class="sp"></span></div>
 <div class="site">
   <div class="s-head" data-on="bot"></div>
@@ -1310,8 +1421,8 @@ ur login</pre>
     <div class="s-split">
       <div>
         <span class="s-kick mag">Bot</span>
-        <h1 class="s-h1">A fully<br>private bot</h1>
-        <p class="s-sub">Run models on your own device, or remote ones sealed inside TEEs. Search the web privately. Give your agents encrypted enclaves of their own. And see everything they do, in one place only you can see.</p>
+        <h1 class="s-h1">A private<br>bot that<br>remembers</h1>
+        <p class="s-sub">Your chats and your agents' work follow you from device to device, stored so only your devices can read them. Run models on your own device for free, or larger ones on a provider's TEE hardware, search the web, and give your agents encrypted enclaves of their own.</p>
         <div class="s-cta"><span class="s-btn">Open Bot<svg class="i"><use href="#i-arrow"/></svg></span><span class="s-btn o">Install the CLI</span></div>
         <p class="s-hint">On a computer, opens Bot at ur.io/app/bot; on a phone, the app. Or run <span class="mono" style="color:var(--s-white)">ur harness</span> in a terminal.</p>
       </div>
@@ -1336,13 +1447,22 @@ ur login</pre>
       </div>
     </div>
     <div class="s-sec">
-      <h2 class="s-h2">Private at every step</h2>
+      <h2 class="s-h2">What Bot does</h2>
       <div class="fgrid">
         <div class="fc"><span class="fic lime"><svg class="i"><use href="#i-phone"/></svg></span><h3>Local models</h3><p>Small models run on your phone, your computer or your browser, free, and nothing leaves the device.</p></div>
         <div class="fc"><span class="fic blue"><svg class="i"><use href="#i-shield"/></svg></span><h3>TEE models</h3><p>Larger models run on a provider's TEE hardware, which proves the machine, not the code that reads your words.</p></div>
         <div class="fc"><span class="fic mag"><svg class="i"><use href="#i-chip"/></svg></span><h3>Encrypted enclaves</h3><p>Start a remote harness in a confidential VM. Its keys are made inside it, it keeps working while your phone sleeps, and you attach from any device.</p></div>
         <div class="fc"><span class="fic yel"><svg class="i"><use href="#i-users"/></svg></span><h3>Every agent in view</h3><p>One feed shows each agent's status, summaries, approvals and messages to other agents. Mention one with @, or message them all.</p></div>
-        <div class="fc" style="grid-column:1 / -1"><span class="fic coral"><svg class="i"><use href="#i-search"/></svg></span><h3>Private web search</h3><p>You and your agents search the web through Parallel, with no account and no address of yours. Parallel never learns who asked, and no URnetwork server sees a search. Parallel may keep searches and train on them, so never search for passwords or personal details. Each search costs about a cent from your compute balance.</p></div>
+        <div class="fc" style="grid-column:1 / -1"><span class="fic coral"><svg class="i"><use href="#i-search"/></svg></span><h3>Web search without an account</h3><p>You and your agents search the web with no account and no address of yours. Parallel, and Vercel, which hosts its gateway, read each search, but neither learns who asked, and no URnetwork server sees it. Parallel may keep searches and train on them, so never search for passwords or personal details. Each search costs about a cent from your compute balance.</p></div>
+      </div>
+    </div>
+    <div class="s-sec" style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:40px;align-items:center">
+      <div><h2 class="s-h2">Your own data, organized on your device</h2><p class="s-lead" style="margin:0">With a local model, Bot can sort, search and sum up your own mail, files and notes. None of it leaves your device, so you can give it everything.</p></div>
+      <div class="rec" role="img" aria-label="A local model sorting the person's own mail, files and notes on their phone">
+        <div class="rh"><b>local-gemma-4-e4b-off · this phone</b><span class="lock"><svg class="i"><use href="#i-lock"/></svg>Nothing leaves this device</span></div>
+        <div class="e"><span class="tm">Mail</span><span class="aa" style="background:#ffd764"><svg class="i" style="width:16px;height:16px"><use href="#i-mail"/></svg></span><span class="x">Sorted today's 38 messages; <b>3 need you</b></span></div>
+        <div class="e"><span class="tm">Files</span><span class="aa" style="background:#9ad1ff"><svg class="i" style="width:16px;height:16px"><use href="#i-file"/></svg></span><span class="x">Found the signed lease in <code>Documents/Home</code></span></div>
+        <div class="e"><span class="tm">Notes</span><span class="aa" style="background:#c7b8ff"><svg class="i" style="width:16px;height:16px"><use href="#i-note"/></svg></span><span class="x">Summed up this week's notes in five lines</span></div>
       </div>
     </div>
     <div class="s-sec">
@@ -1372,7 +1492,7 @@ ur login</pre>
   </div>
   <div class="s-foot"></div>
 </div></div>
-<p class="note"><b>Notes.</b> UI-2 widens "Agents talk in the open" to every agent action, visible only to the person; in a team network, admins also read actions and approvals (DESIGN R-KEYS-9; Q-UI-24). The table follows DESIGN-COMPUTE §2.3 and §4.3's labels (local; a TEE at AP, where the provider company is inside the boundary; none). Browsers run local models on desktops with WebGPU (CO-47, CO-48). Chats live in encrypted storage and continue on the person's other devices (DESIGN-COMPUTE §7.7, §24.7). Web search is DESIGN-COMPUTE §21's: Parallel's keyless gateway, paid per search, $0.012, with no URnetwork server in the query's path (UI-17).</p>
+<p class="note"><b>Notes.</b> The headline is "A private bot that remembers" (mmm/outbound/PLAN.md Q-OB-17). UI-1 asked for "a fully private bot", but the table below doesn't support it: only a local model keeps a prompt on the device. For the same reason the features' heading says what Bot does, in place of "Private at every step". What Bot remembers is DESIGN-COMPUTE §7.7 and §24.7's: chats live in encrypted storage and continue on the person's other devices. The section "Your own data, organized on your device" is Q-OB-25's, on the owner's view in UI-19: Bot's agents read the person's mail (DESIGN-COMPUTE §23) and files in encrypted storage with the model the person picks, and with a local model none of it leaves the device. Each of its claims waits for the release in which local models read the person's mail and files. UI-2 widens "Agents talk in the open" to every agent action, visible only to the person; in a team network, admins also read actions and approvals (DESIGN R-KEYS-9; Q-UI-24). The table follows DESIGN-COMPUTE §2.3 and §4.3's labels (local; a TEE at AP, where the provider company is inside the boundary; none). Browsers run local models on desktops with WebGPU (CO-47, CO-48). Web search, titled "Web search without an account" (Q-OB-18), is DESIGN-COMPUTE §21's: Parallel's keyless gateway, which Vercel hosts, paid per search, $0.012, with no URnetwork server in the query's path (UI-17). Parallel and Vercel read each search; what stays private is who asked.</p>
 </section>
 
 <!-- ============================== FOOTER ============================== -->
@@ -1474,7 +1594,7 @@ FAIL  3 of 20 runs</pre></div>
 <span class="ad">+  now := l.clock.Now()</span></pre></div>
       <div class="tc"><div class="th"><b>bash</b><span class="cmd">go test ./limiter/... -race -count=50</span><span class="st">ok · 6.4s</span></div><pre>ok   example.dev/api/limiter   6.412s</pre></div>
       <div class="appr"><div class="h"><svg class="i"><use href="#i-warn"/></svg>Approval needed</div><div class="w">limiter-fix wants to push a branch</div><code>git push origin fix/limiter-burst</code><div class="r2" style="max-width:360px"><div class="btn">Approve</div><div class="btn s">Deny</div></div><div class="f">Also waiting on sam-laptop and your phone.</div></div>
-      <div class="meta"><span class="tee"><svg class="i"><use href="#i-check"/></svg>TEE verified · Chutes · AP</span><span>this run $0.04</span></div>
+      <div class="meta"><span class="tee ap"><svg class="i"><use href="#i-chip"/></svg>Chutes · AP: provider trusted</span><span>this run $0.04</span></div>
     </div>
     <div class="cmds"><span>/model</span><span>/new</span><span>/runs</span><span>/attach</span></div>
     <div class="comp"><span class="plus"><svg class="i"><use href="#i-plus"/></svg></span><span class="in">Reply to limiter-fix</span><span class="go"><svg class="i"><use href="#i-up"/></svg></span></div>
@@ -1587,7 +1707,7 @@ FAIL  3 of 20 runs</pre></div>
   document.querySelectorAll(".s-foot").forEach(function(f){
     f.innerHTML='<footer class="sf"><div class="s-wrap"><div class="g">'
       +'<div class="brand"><span class="s-logo"><i></i>URnetwork</span><p>We’re building an internet that gives, not takes.</p><div class="stores"><span>Google Play</span><span>App Store</span><span>Chrome Web Store</span><span>More</span></div></div>'
-      +col("Product",["Products","Install",["CLI","new"],["Burner","new"],["Bot","new"],["Agents","moved"],"Buy data"])
+      +col("Product",["Products","Install",["CLI","new"],["Burner","new"],["Bot","new"],["Agents","moved"],"Buy data","Services"])
       +col("Explore",["About","Protocol","URnode","Locations","Blog","Docs"])
       +col("Resources",["Support","Feedback","Stats","Changelog"])
       +col("Legal",["Privacy Policy","Terms of Service","Vulnerability Disclosure"])

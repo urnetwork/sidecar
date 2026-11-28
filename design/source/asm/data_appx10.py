@@ -600,3 +600,12 @@ ROUTES = _replace(ROUTES, '`POST /dns/acme-challenge`; `GET /dns/ready?serial=`'
      'Internal (certs)', 'Set or clear DNS-01 challenges and canary CAA records; wait for propagation', '§12.8'))
 ROUTES = _replace(ROUTES, '`GET /dns/journal`, `/dns/snapshot`',
     ('`GET /dns/internal/journal`, `/dns/internal/snapshot`', 'Internal (dns edges)', 'The zone feed', '§12.8'))
+
+# Owner decision 793 (2026-11-27): `dnsedge`, the edge role, runs in connect-alt on every edge beside WhoDis on UDP 53,
+# two edge addresses the NS (§12.6, §19.4, §19.5); a signer per edge host holds the ZSK (owner decision 794).
+SERVICES = _replace(SERVICES, 'dns, dnsedge',
+    ('dns, dnsedge', 'API on `dns.bringyour.com` (port 80); `dnsedge` in connect-alt on every edge, on each lb_alt '
+                     "interface's UDP 53 beside WhoDis and TCP 53 (W9); a signer per edge host (W12; owner "
+                     'decision 794); engine `sidecar/dnsservice`',
+     'Record API and journal; authoritative, online-signed `<root>`; ZSKs in vault, KSK in two offline HSMs',
+     '§12.14, §19.5'))

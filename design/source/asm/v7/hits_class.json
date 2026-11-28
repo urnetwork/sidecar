@@ -2004,28 +2004,28 @@
  {
   "family": "window_14d_weekly",
   "file": "12-DNS.md",
-  "line": 174,
+  "line": 195,
   "col": 164,
   "match": "14-day",
-  "snippet": "- **Keys.** The KSK stays on an offline HSM, backed up in a second safe; a two-person quarterly ceremony pre-signs DNSKEY RRsets (current, next and standby ZSK) in 14-day windows, released one at a time. The current ZSK is a `secret_files` entry (warp/warpctl/run.go:172-204) mounted only on dns edges, rolled quarterly by pre-publication; ",
+  "snippet": "- **Keys.** The KSK stays on an offline HSM, backed up in a second safe; a two-person quarterly ceremony pre-signs DNSKEY RRsets (current, next and standby ZSK) in 14-day windows, released one at a time. The current ZSK is a `secret_files` entry (warp/warpctl/run.go:172-204) that each edge host's signer, `dnssigner`, mounts apart from con",
   "reading": "DNSSEC 14-day DNSKEY windows, unrelated",
   "live": false,
   "gap": false,
   "stated": false,
-  "source": "carried"
+  "source": "hand-2026-11-28"
  },
  {
   "family": "window_14d_weekly",
   "file": "12-DNS.md",
-  "line": 177,
-  "col": 189,
+  "line": 198,
+  "col": 1408,
   "match": "14 days",
-  "snippet": "** NS down or flooded: resolvers retry the other; HE null-routes a flooded address. ZSK leak: mount the standby and hold a ceremony; forgery ends with the old windows (≤ 14 days). Both KSK HSMs lost: a new KSK's DS before the last window expires.",
+  "snippet": "m, resolvers retry the other NS, and an NS host's canary pages; restart the signer. ZSK leak: mount the standby and hold a ceremony; forgery ends with the old windows (≤ 14 days). Both KSK HSMs lost: a new KSK's DS before the last window expires.",
   "reading": "DNSSEC 14-day DNSKEY windows, unrelated",
   "live": false,
   "gap": false,
   "stated": false,
-  "source": "carried"
+  "source": "hand-2026-11-28"
  },
  {
   "family": "window_14d_weekly",
@@ -2043,15 +2043,15 @@
  {
   "family": "window_14d_weekly",
   "file": "12-DNS.md",
-  "line": 460,
-  "col": 114,
+  "line": 501,
+  "col": 224,
   "match": "14-day",
-  "snippet": "| A leaked ZSK, URnetwork or a registrar hijacker forges records | Low | High | zone watch (D-TRUST-9), CT watch, 14-day windows, registrar lock (12.4) |",
+  "snippet": "es records; a compromised connect block forges through its host's signer while the compromise lasts (owner decision 794) | Low | High | zone watch (D-TRUST-9), CT watch, 14-day windows, registrar lock (12.4) |",
   "reading": "DNSSEC 14-day DNSKEY windows, unrelated",
   "live": false,
   "gap": false,
   "stated": false,
-  "source": "carried"
+  "source": "hand-2026-11-28"
  },
  {
   "family": "edge_termination",
@@ -2680,15 +2680,15 @@
  {
   "family": "offsite",
   "file": "19-OPS.md",
-  "line": 100,
-  "col": 448,
+  "line": 102,
+  "col": 1375,
   "match": "off-site",
-  "snippet": "rts, like fireside's (:449-464). They run only `dnsedge` (UDP 53 by `external_udp_ports`, TCP 53 by W9, no nginx), so §12.6's RRL sees resolvers, and are probed from the off-site VPN host (xops/main/ansible/inventory.yml:267-276).",
-  "reading": "The dns edges are probed from the existing off-site VPN host, a monitoring vantage point; both nameservers stay at the site, so this is neither an off-site storage copy (owner decision 94) nor an off-site NS (owner decision 123).",
+  "snippet": "inned warp service that alone mounts the current ZSK and signs for its host's connect blocks over W12's socket (owner decision 794). The NS addresses are probed from the off-site VPN host (xops/main/ansible/inventory.yml:385-394). **Capacity.** The role shares connect's process: WhoDis's decoder reads and parses each datagram of a zone query befo",
+  "reading": "The NS addresses, two edge addresses at the site (owner decision 793), are probed from the existing off-site VPN host, a monitoring vantage point; both NS stay at the site, so this is neither an off-site storage copy (owner decision 94) nor an off-site NS (owner decision 123).",
   "live": false,
   "gap": false,
   "stated": false,
-  "source": "hand-2026-11-06"
+  "source": "hand-2026-11-28"
  },
  {
   "family": "pools",
@@ -4158,5 +4158,18 @@
   "gap": false,
   "stated": false,
   "source": "hand-2026-11-06"
+ },
+ {
+  "family": "pools",
+  "file": "12-DNS.md",
+  "line": 96,
+  "col": 92,
+  "match": "pool",
+  "snippet": "    (DnsOtherHandler, connect/transport_pt.go:124-130), which admits it to a bounded worker pool and never",
+  "reading": "A bounded pool of worker goroutines in connect-alt, which admits the zone's queries so WhoDis's decoder never blocks (owner decision 793); not a MinIO pool, which owner decision 145 rules out.",
+  "live": false,
+  "gap": false,
+  "stated": false,
+  "source": "hand-2026-11-28"
  }
 ]

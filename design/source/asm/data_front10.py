@@ -2978,3 +2978,49 @@ _S789 = "and the build's answers after it, owner decisions 785 to 789. "
 assert STATUS.count(_S789) == 1, 'status moved'
 STATUS = STATUS.replace(_S789, "and the build's answers after it, owner decisions 785 to 789, and the build's answers "
                         "of 2026-11-25, owner decisions 790 to 792. ")
+
+# Owner decision 793 (2026-11-27): the owner's statements on the dns service's hosting, `dnsedge` in connect-alt on
+# every edge, beside WhoDis on UDP 53, and two of the edges' addresses as the zone's NS, primary and secondary,
+# superseding owner decision 71's dns edge hosts. Its design raised Q-DNS-8, where the online signing key lives, and
+# four questions with one reading; the owner answered them on 2026-11-28 as owner decisions 794 (Q-DNS-8: a separate
+# signer per host) and 795 (the rest, accepted as recommended), so Q-REPO-6 is again the one open owner question.
+INDEX += [
+    (793, 'dns hosting (Q-DNS-4)',
+     "DNS runs in connect-alt on every edge, told from WhoDis's queries on one 53; two edge addresses are the "
+     "zone's primary and secondary NS."),
+    (794, 'Q-DNS-8',
+     "A separate signer per edge host holds the online signing key outside connect's process and signs over a "
+     "local socket."),
+    (795, "dns in connect-alt: the fold's other answers",
+     "ns1's and ns2's addresses at 3600 s; shared probe verdicts; one edge bearer; connect's rollout; every edge "
+     "answering the zone."),
+]
+for _n, _note in [
+        (69, ' Amended by @@OD:793@@: DNS runs in connect-alt on every edge, sharing UDP 53 with WhoDis.'),
+        (71, ' Superseded by @@OD:793@@: no dns edge hosts; DNS runs in connect-alt on every edge.'),
+        (123, ' Amended by @@OD:793@@: the two nameservers are two edge addresses.'),
+        (793, ' Extended by @@OD:794@@, the signer, and amended by @@OD:795@@: the NS addresses at 3600 s and '
+              'shared probe verdicts.'),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 796))
+DATES.update({793: '2026-11-27', 794: '2026-11-28', 795: '2026-11-28'})
+_D792 = "and a listen's grant lifetime in the sdk (792), extending @@OD:687@@. "
+assert DECISIONS_INTRO.count(_D792) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D792, _D792 + "The owner's decision of 2026-11-27 then runs dns in connect-alt on every edge, beside WhoDis on "
+    "UDP 53, two of the edges' addresses the zone's NS (793), superseding @@OD:71@@'s dns edge hosts; on 2026-11-28 "
+    "the owner answers its questions: a separate signer per edge host for the online signing key (794), and the NS "
+    "addresses' TTL, shared probe verdicts, one edge bearer, the rollout and every edge answering the zone (795). ")
+_S792 = "and the build's answers of 2026-11-25, owner decisions 790 to 792. "
+assert STATUS.count(_S792) == 1, 'status moved'
+STATUS = STATUS.replace(_S792, "and the build's answers of 2026-11-25, owner decisions 790 to 792, and on 2026-11-27 "
+                        "with owner decision 793, dns in connect-alt on every edge, and on 2026-11-28 with its answers, "
+                        "owner decisions 794 and 795. ")
+_O213 = ("The sections are written to its recommendation, marked \"proposed, Q-REPO-6\". ")
+assert OPEN_INTRO.count(_O213) == 1, 'open-questions lead moved'
+OPEN_INTRO = OPEN_INTRO.replace(
+    _O213, _O213 + "Q-DNS-8 (where the online signing key lives, now that dns runs in connect-alt), which owner "
+    "decision 793's design raised, is decided (owner decision 794). ")
