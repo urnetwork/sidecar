@@ -1,0 +1,238 @@
+{
+  "session_id": "0d0c0de0-0168-4000-8000-000000000001",
+  "title": "a read and an answer over two turns, the second sending back the first's reasoning",
+  "requests": [
+    {
+      "name": "turn-1",
+      "headers": {
+        "x-client-request-id": "0d0c0de0-0168-4000-8000-0000000000a1"
+      },
+      "body": {
+        "model": "local-scripted-off",
+        "input": [
+          {
+            "type": "message",
+            "id": "msg_c0de0168000001",
+            "role": "developer",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "You are a coding agent in /work/example. Use the shell tool to run commands. (synthetic base instructions, Codex 0.168.0)"
+              }
+            ]
+          },
+          {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "What does scripts/build.sh do?"
+              }
+            ]
+          }
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "name": "shell",
+            "description": "Runs a shell command and returns its output.",
+            "strict": false,
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "command": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "workdir": {
+                  "type": "string"
+                },
+                "timeout_ms": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "command"
+              ],
+              "additionalProperties": false
+            }
+          },
+          {
+            "type": "web_search",
+            "external_web_access": false
+          }
+        ],
+        "tool_choice": "auto",
+        "parallel_tool_calls": false,
+        "reasoning": {
+          "effort": "high",
+          "summary": "auto"
+        },
+        "store": false,
+        "stream": true,
+        "include": [
+          "reasoning.encrypted_content"
+        ],
+        "prompt_cache_key": "0d0c0de0-0168-4000-8000-0000000000c1"
+      },
+      "model": {
+        "reasoning": [
+          "Read the script first."
+        ],
+        "tool_calls": [
+          {
+            "id": "call_c0de0168_1",
+            "name": "shell",
+            "arguments": "{\"command\":[\"cat\",\"scripts/build.sh\"],\"workdir\":\"/work/example\"}"
+          }
+        ],
+        "usage": {
+          "input_tokens": 640,
+          "output_tokens": 40
+        }
+      },
+      "expect": {
+        "status": 200,
+        "output": [
+          "reasoning",
+          "function_call"
+        ],
+        "function_calls": [
+          {
+            "id": "call_c0de0168_1",
+            "name": "shell"
+          }
+        ],
+        "dropped_tools": [
+          "web_search"
+        ]
+      }
+    },
+    {
+      "name": "turn-2",
+      "headers": {
+        "x-client-request-id": "0d0c0de0-0168-4000-8000-0000000000a2"
+      },
+      "body": {
+        "model": "local-scripted-off",
+        "input": [
+          {
+            "type": "message",
+            "id": "msg_c0de0168000001",
+            "role": "developer",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "You are a coding agent in /work/example. Use the shell tool to run commands. (synthetic base instructions, Codex 0.168.0)"
+              }
+            ]
+          },
+          {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "What does scripts/build.sh do?"
+              }
+            ]
+          },
+          {
+            "type": "reasoning",
+            "id": "rs_c0de0168000001",
+            "summary": [
+              {
+                "type": "summary_text",
+                "text": "(the summary Codex kept of turn 1)"
+              }
+            ],
+            "encrypted_content": "{{reasoning:turn-1}}"
+          },
+          {
+            "type": "function_call",
+            "id": "fc_c0de0168000001",
+            "call_id": "call_c0de0168_1",
+            "name": "shell",
+            "arguments": "{\"command\":[\"cat\",\"scripts/build.sh\"],\"workdir\":\"/work/example\"}"
+          },
+          {
+            "type": "function_call_output",
+            "call_id": "call_c0de0168_1",
+            "output": "{\"output\":\"#!/bin/sh\\ngo build ./...\\n\",\"metadata\":{\"exit_code\":0,\"duration_seconds\":0.1}}"
+          }
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "name": "shell",
+            "description": "Runs a shell command and returns its output.",
+            "strict": false,
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "command": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "workdir": {
+                  "type": "string"
+                },
+                "timeout_ms": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "command"
+              ],
+              "additionalProperties": false
+            }
+          },
+          {
+            "type": "web_search",
+            "external_web_access": false
+          }
+        ],
+        "tool_choice": "auto",
+        "parallel_tool_calls": false,
+        "reasoning": {
+          "effort": "high",
+          "summary": "auto"
+        },
+        "store": false,
+        "stream": true,
+        "include": [
+          "reasoning.encrypted_content"
+        ],
+        "prompt_cache_key": "0d0c0de0-0168-4000-8000-0000000000c1"
+      },
+      "model": {
+        "reasoning": [
+          "It builds every package."
+        ],
+        "text": [
+          "It builds every package ",
+          "with go build."
+        ],
+        "usage": {
+          "input_tokens": 700,
+          "output_tokens": 22
+        }
+      },
+      "expect": {
+        "status": 200,
+        "output": [
+          "reasoning",
+          "message"
+        ],
+        "dropped_tools": [
+          "web_search"
+        ]
+      }
+    }
+  ]
+}

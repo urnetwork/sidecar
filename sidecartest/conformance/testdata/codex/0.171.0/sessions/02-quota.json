@@ -1,0 +1,94 @@
+{
+  "session_id": "0d0c0de0-0171-4000-8000-000000000002",
+  "title": "an empty balance met as the call runs: the stream's terminal response.failed with insufficient_quota, which Codex does not retry, ending the turn",
+  "requests": [
+    {
+      "name": "turn-1",
+      "headers": {
+        "x-client-request-id": "0d0c0de0-0171-4000-8000-0000000000b1"
+      },
+      "body": {
+        "model": "local-scripted-off",
+        "input": [
+          {
+            "type": "message",
+            "id": "msg_c0de0171000002",
+            "role": "developer",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "You are a coding agent in /work/example. Use the shell tool to run commands. (synthetic base instructions, Codex 0.171.0)"
+              }
+            ]
+          },
+          {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Summarize the README."
+              }
+            ]
+          }
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "name": "shell",
+            "description": "Runs a shell command and returns its output.",
+            "strict": false,
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "command": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "workdir": {
+                  "type": "string"
+                },
+                "timeout_ms": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "command"
+              ],
+              "additionalProperties": false
+            }
+          },
+          {
+            "type": "web_search",
+            "external_web_access": false
+          }
+        ],
+        "tool_choice": "auto",
+        "parallel_tool_calls": false,
+        "reasoning": {
+          "effort": "high",
+          "summary": "auto"
+        },
+        "store": false,
+        "stream": true,
+        "include": [
+          "reasoning.encrypted_content"
+        ],
+        "prompt_cache_key": "0d0c0de0-0171-4000-8000-0000000000c2",
+        "client_metadata": {
+          "turn": "1"
+        },
+        "request_country": "US"
+      },
+      "model": {
+        "fail_code": "insufficient_quota"
+      },
+      "expect": {
+        "status": 200,
+        "error_code": "insufficient_quota"
+      }
+    }
+  ]
+}

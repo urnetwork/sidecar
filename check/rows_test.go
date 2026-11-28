@@ -433,12 +433,13 @@ var failsOnRows = []failsOnRow{
 		},
 	},
 	{
-		row: "hygiene", item: "§22.9's conformance ledger: a row with no entry, a peer list the design changed, a pin that is no version, or one moved with no run since (D-TEST-7)",
+		row: "hygiene", item: "§22.9's conformance ledger: a row with no entry, a peer list the design changed, a pin that is no version, or one moved with no run since (D-TEST-7); and DESIGN-COMPUTE §18's pinned peers: an entry naming no §18 row, or quoting words its row no longer holds",
 		checkoutTest: "TestConformanceLedger",
 		plantedTests: []string{
 			"TestConformanceLedgerFailsOnAChangedPinWithNoRun", "TestConformanceLedgerFailsOnASection229RowWithNoEntry",
 			"TestConformanceLedgerFailsOnAChangedPeerList", "TestConformanceLedgerFailsOnARowTheDesignDoesNotHold",
 			"TestConformanceLedgerFailsOnLatestAsAPin", "TestConformanceLedgerFailsOnARunMissingWhatItMustRecord",
+			"TestConformanceLedgerFailsOnAComputeQuoteTheDesignDropped", "TestConformanceLedgerFailsOnAComputeRowTheDesignDoesNotHold",
 		},
 	},
 	{

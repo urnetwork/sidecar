@@ -1,0 +1,74 @@
+{
+  "session_id": "0d0c0de0-0168-4000-8000-000000000002",
+  "title": "previous_response_id, refused before any model",
+  "requests": [
+    {
+      "name": "chained",
+      "headers": {
+        "x-client-request-id": "0d0c0de0-0168-4000-8000-0000000000b1"
+      },
+      "body": {
+        "model": "local-scripted-off",
+        "input": [
+          {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Again, please."
+              }
+            ]
+          }
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "name": "shell",
+            "description": "Runs a shell command and returns its output.",
+            "strict": false,
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "command": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "workdir": {
+                  "type": "string"
+                },
+                "timeout_ms": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "command"
+              ],
+              "additionalProperties": false
+            }
+          }
+        ],
+        "tool_choice": "auto",
+        "parallel_tool_calls": false,
+        "reasoning": {
+          "effort": "high",
+          "summary": "auto"
+        },
+        "store": false,
+        "stream": true,
+        "include": [
+          "reasoning.encrypted_content"
+        ],
+        "previous_response_id": "resp_c0de0168000002"
+      },
+      "model": null,
+      "expect": {
+        "status": 400,
+        "error_code": "unsupported_parameter",
+        "error_param": "previous_response_id"
+      }
+    }
+  ]
+}

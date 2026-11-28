@@ -1,0 +1,153 @@
+{
+  "session_id": "0d0c0de0-0171-4000-8000-000000000003",
+  "title": "what the gateway keeps no state for: store true and previous_response_id, each refused before any model",
+  "requests": [
+    {
+      "name": "stored",
+      "headers": {
+        "x-client-request-id": "0d0c0de0-0171-4000-8000-0000000000c4"
+      },
+      "body": {
+        "model": "local-scripted-off",
+        "input": [
+          {
+            "type": "message",
+            "id": "msg_c0de0171000003",
+            "role": "developer",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "You are a coding agent in /work/example. Use the shell tool to run commands. (synthetic base instructions, Codex 0.171.0)"
+              }
+            ]
+          },
+          {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "List the files."
+              }
+            ]
+          }
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "name": "shell",
+            "description": "Runs a shell command and returns its output.",
+            "strict": false,
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "command": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "workdir": {
+                  "type": "string"
+                },
+                "timeout_ms": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "command"
+              ],
+              "additionalProperties": false
+            }
+          }
+        ],
+        "tool_choice": "auto",
+        "parallel_tool_calls": false,
+        "reasoning": {
+          "effort": "high",
+          "summary": "auto"
+        },
+        "store": true,
+        "stream": true,
+        "include": [
+          "reasoning.encrypted_content"
+        ],
+        "prompt_cache_key": "0d0c0de0-0171-4000-8000-0000000000c3"
+      },
+      "model": null,
+      "expect": {
+        "status": 400,
+        "error_code": "unsupported_parameter",
+        "error_param": "store"
+      }
+    },
+    {
+      "name": "chained",
+      "headers": {
+        "x-client-request-id": "0d0c0de0-0171-4000-8000-0000000000c5"
+      },
+      "body": {
+        "model": "local-scripted-off",
+        "input": [
+          {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "And the tests?"
+              }
+            ]
+          }
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "name": "shell",
+            "description": "Runs a shell command and returns its output.",
+            "strict": false,
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "command": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "workdir": {
+                  "type": "string"
+                },
+                "timeout_ms": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "command"
+              ],
+              "additionalProperties": false
+            }
+          }
+        ],
+        "tool_choice": "auto",
+        "parallel_tool_calls": false,
+        "reasoning": {
+          "effort": "high",
+          "summary": "auto"
+        },
+        "store": false,
+        "stream": true,
+        "include": [
+          "reasoning.encrypted_content"
+        ],
+        "previous_response_id": "resp_c0de0171000003"
+      },
+      "model": null,
+      "expect": {
+        "status": 400,
+        "error_code": "unsupported_parameter",
+        "error_param": "previous_response_id"
+      }
+    }
+  ]
+}
