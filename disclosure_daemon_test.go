@@ -1,6 +1,6 @@
 //go:build !js && !ios && !android && !sdk_mobile_bind && !sidecar_http && !ios_extension
 
-// The daemon's disclosure methods (disclosure_daemon.go; CTRUST-M11-01, CTRUST-M12-01) on backends a test sets: the
+// The daemon's disclosure methods (disclosure_daemon.go; CTRUST-M11-01, CTRUST-M12-01, CTRUST-M12-02) on backends a test sets: the
 // list's policy_unavailable as its reply's code, never an empty list; the acts as Confirm methods, refused unconfirmed
 // and to a caller under a harness process or one the daemon cannot name, before their backends run; a version not the
 // current one, or a policy with nothing to act on, as the reply's refusal; params read strictly; and every reply past
@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"sync"
 	"testing"
@@ -28,6 +29,8 @@ type testDisclosureDaemonWorld struct {
 	underHarness bool
 	acks         []*ComputeDisclosureAckArgs
 	opens        []string
+	networkAcks  []*ComputeNetworkDisclosureAckArgs
+	removals     []*ComputeNetworkDisclosureRemoveArgs
 }
 
 func newTestDisclosureDaemonWorld() *testDisclosureDaemonWorld {
@@ -54,6 +57,24 @@ func newTestDisclosureDaemonWorld() *testDisclosureDaemonWorld {
 				return world.actErr
 			}
 			world.opens = append(world.opens, id)
+			return nil
+		},
+		AckNetwork: func(ctx context.Context, sidecar *Sidecar, args *ComputeNetworkDisclosureAckArgs) error {
+			world.stateLock.Lock()
+			defer world.stateLock.Unlock()
+			if world.actErr != nil {
+				return world.actErr
+			}
+			world.networkAcks = append(world.networkAcks, args)
+			return nil
+		},
+		RemoveNetwork: func(ctx context.Context, sidecar *Sidecar, args *ComputeNetworkDisclosureRemoveArgs) error {
+			world.stateLock.Lock()
+			defer world.stateLock.Unlock()
+			if world.actErr != nil {
+				return world.actErr
+			}
+			world.removals = append(world.removals, args)
 			return nil
 		},
 		UnderHarness: func(ctx context.Context, call *DaemonCall) bool {
@@ -171,6 +192,72 @@ func TestDaemonComputeDisclosureMethods(t *testing.T) {
 		}
 		if _, err := method.Handler(t.Context(), &DaemonCall{Params: json.RawMessage(act), Confirmed: true, Sidecar: &Sidecar{}}); !errors.Is(err, ErrDisclosureAckRefused) {
 			t.Errorf("a caller with no pid: %v", err)
+		}
+	}
+}
+
+// The network's acknowledgment and its removal are Confirm methods on the call's network, refused unconfirmed and under
+// a harness before their backends run, their params read strictly; the act reaches its backend as the person's
+// confirmed act with the version, locale and revision shown; a text not the current version's, or a policy with nothing
+// to act on, is the reply's code; and a refusal naming who can, as a Member's device gets, stands as the call's error.
+func TestDaemonComputeNetworkDisclosureMethods(t *testing.T) {
+	world := newTestDisclosureDaemonWorld()
+	for _, name := range []string{DaemonMethodComputeDisclosureAckNetwork, DaemonMethodComputeDisclosureRemoveNetwork} {
+		if method := world.methods[name]; method == nil || !method.Confirm || !method.Network {
+			t.Errorf("%s: %+v", name, method)
+		}
+	}
+	act := `{"id":"inference:engy","version":2,"locale":"de","revision":3}`
+	remove := `{"id":"inference:engy"}`
+	for name, params := range map[string]string{DaemonMethodComputeDisclosureAckNetwork: act, DaemonMethodComputeDisclosureRemoveNetwork: remove} {
+		if _, err := world.call(t, name, params, false); !errors.Is(err, ErrDisclosureAckRefused) {
+			t.Errorf("%s unconfirmed: %v", name, err)
+		}
+		world.underHarness = true
+		if _, err := world.call(t, name, params, true); !errors.Is(err, ErrDisclosureAckRefused) {
+			t.Errorf("%s under a harness: %v", name, err)
+		}
+		world.underHarness = false
+		if _, err := world.call(t, name, `{"id":"inference:engy","origin":1}`, true); err == nil {
+			t.Errorf("%s with an unknown param", name)
+		}
+	}
+	if len(world.networkAcks) != 0 || len(world.removals) != 0 {
+		t.Fatalf("a refused act reached its backend: %v %v", world.networkAcks, world.removals)
+	}
+
+	reply, err := world.call(t, DaemonMethodComputeDisclosureAckNetwork, act, true)
+	if err != nil || len(world.networkAcks) != 1 {
+		t.Fatalf("the act: %+v, %v", reply, err)
+	}
+	if args := world.networkAcks[0]; args.Id != "inference:engy" || args.Version != 2 || args.Locale != "de" || args.Revision != 3 ||
+		args.Origin != SidecarActConfirmed || args.HarnessAncestor {
+		t.Fatalf("the act's args %+v", args)
+	}
+	if actReply, ok := reply.(*DaemonComputeDisclosureActReply); !ok || actReply.Refusal != "" || actReply.Version != 2 {
+		t.Fatalf("the reply %+v", reply)
+	}
+	if _, err := world.call(t, DaemonMethodComputeDisclosureRemoveNetwork, remove, true); err != nil || len(world.removals) != 1 ||
+		world.removals[0].Id != "inference:engy" || world.removals[0].Origin != SidecarActConfirmed {
+		t.Fatalf("the removal: %v, %+v", err, world.removals)
+	}
+
+	for actErr, code := range map[error]string{
+		ErrDisclosureChanged:                  ComputeDisclosureCodeChanged,
+		ErrComputeDisclosurePolicyUnavailable: ComputeDisclosureCodePolicyUnavailable,
+		ErrComputeDisclosureNotCarried:        ComputeDisclosureCodeRequired,
+	} {
+		world.actErr = actErr
+		reply, err := world.call(t, DaemonMethodComputeDisclosureAckNetwork, act, true)
+		actReply, ok := reply.(*DaemonComputeDisclosureActReply)
+		if err != nil || !ok || actReply.Refusal != code {
+			t.Errorf("at %v: %+v, %v", actErr, reply, err)
+		}
+	}
+	world.actErr = fmt.Errorf("%w: this device's member is no Owner or Admin", ErrNetworkDisclosureRefused)
+	for name, params := range map[string]string{DaemonMethodComputeDisclosureAckNetwork: act, DaemonMethodComputeDisclosureRemoveNetwork: remove} {
+		if _, err := world.call(t, name, params, true); !errors.Is(err, ErrNetworkDisclosureRefused) {
+			t.Errorf("%s by a Member's device: %v", name, err)
 		}
 	}
 }

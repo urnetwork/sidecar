@@ -24,6 +24,14 @@ message ComputePolicyTicket {
   int64 not_after_ms = 5;
 }
 message ComputePolicyTicketFile { bytes ticket = 1; bytes signature = 2; }
+// sidecar/protocol/compute_disclosure.proto
+// DESIGN-COMPUTE.md §2.8's network acknowledgment, which the design gives as a field list without numbers: numbered in
+// the order written, then the signing device and the AuthPin it signed at, the plan's proposal for "when it signed"
+// (CTRUST-M12-02).
+message DisclosureAck {
+  bytes network_id = 1; string disclosure_id = 2; uint32 version = 3; string locale = 4; uint32 revision = 5;
+  bytes member_id = 6; bytes sidecar_id = 7; AuthPin auth_pin = 8;
+}
 // sidecar/protocol/harness.proto
 // DESIGN-COMPUTE.md §7.10's and §12.5's attach origin, which the design gives as a field list without numbers: numbered
 // in the order written (HARN-M14-01), the device target HARN-M14-11 gives it joining after them.
