@@ -770,15 +770,21 @@ func (self *computeSearchFixture) setPolicy(policy *sidecar.ComputePolicy) {
 // clause: its token.
 func (self *computeSearchFixture) addNetwork(label string) (sidecar.Id, string) {
 	networkId := testComputeId("network-" + label)
-	clientId := testComputeId("client-" + label)
-	sidecarId := testComputeId("sidecar-" + label)
-	memberId := testComputeId("member-" + label)
 	self.authState.load(networkId, 0)
-	self.authState.admit(&ComputeCaller{NetworkId: networkId, ClientId: clientId, SidecarId: sidecarId, MemberId: memberId, Consented: true})
 	self.gates.AddServiceNetworks(sidecar.ServiceGateCompute, connect.Id(networkId))
 	self.abuse.Set(connect.Id(networkId), sidecar.AbuseStandingStandard, true)
 	self.ledger.fund(networkId, 10*model.ComputeCreditNanoUsd)
 	self.ledger.setClause(networkId, true)
+	_, token := self.addDevice(networkId, label)
+	return networkId, token
+}
+
+// One more admitted member device in networkId, a loaded network: its sidecar and token.
+func (self *computeSearchFixture) addDevice(networkId sidecar.Id, label string) (sidecar.Id, string) {
+	clientId := testComputeId("client-" + label)
+	sidecarId := testComputeId("sidecar-" + label)
+	memberId := testComputeId("member-" + label)
+	self.authState.admit(&ComputeCaller{NetworkId: networkId, ClientId: clientId, SidecarId: sidecarId, MemberId: memberId, Consented: true})
 	connectNetworkId, connectClientId := connect.Id(networkId), connect.Id(clientId)
 	connectSidecarId, connectMemberId := connect.Id(sidecarId), connect.Id(memberId)
 	token := self.authenticator.Issue(&sidecar.Principal{
@@ -791,7 +797,7 @@ func (self *computeSearchFixture) addNetwork(label string) (sidecar.Id, string) 
 		IssuedAt:    self.clock.Now(),
 		ExpiresAt:   self.clock.Now().Add(24 * time.Hour),
 	})
-	return networkId, token
+	return sidecarId, token
 }
 
 // A request id from a label, the first 16 bytes of its SHA-256, so labels longer than an id stay apart.

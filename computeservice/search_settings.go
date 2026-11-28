@@ -38,6 +38,11 @@ type ComputeSearchSettings struct {
 	NetworkRateCount    int
 	NetworkRateInterval time.Duration
 	NetworkBurstCount   int
+	// A network's searches a UTC day where its compute block sets no day_max: 2,000, the block's search object's
+	// default (§21.9), which the broker applies to the field a block leaves unset (§16.4, §16.5). A block's own day_max
+	// replaces it, and §9.11's search cap bounds either, so a cap a review raises past 2,000 still holds a network that
+	// set none at 2,000. Must be positive.
+	DefaultDayMaxCount int
 	// The payer's global rate (§21.9, §21.5): at most GlobalWindowCount searches each GlobalWindow across all networks
 	// on {cmps}, each network active in the window, or in the window before it, given an equal share of it before any
 	// takes more. "Set from G-SRCH-parallel's test": 10 a second is the draft's figure until that load test (§21.11)
@@ -157,6 +162,7 @@ func DefaultComputeSearchSettings() *ComputeSearchSettings {
 		NetworkRateCount:     2,
 		NetworkRateInterval:  1 * time.Second,
 		NetworkBurstCount:    20,
+		DefaultDayMaxCount:   2_000,
 		GlobalWindow:         1 * time.Second,
 		GlobalWindowCount:    10,
 		NetworkRateKeyTtl:    48 * time.Hour,
@@ -240,6 +246,8 @@ func (self *ComputeSearchSettings) Validate() error {
 		return fmt.Errorf("compute search: the sealed payee's bound and the ticket's size are positive")
 	case self.NetworkRateCount <= 0 || self.NetworkRateInterval < time.Millisecond || self.NetworkBurstCount <= 0:
 		return fmt.Errorf("compute search: a network's rate and burst are positive")
+	case self.DefaultDayMaxCount <= 0:
+		return fmt.Errorf("compute search: the default day_max is positive")
 	case self.GlobalWindowCount <= 0 || self.GlobalWindow < time.Millisecond:
 		return fmt.Errorf("compute search: the global rate is positive")
 	case self.NetworkRateKeyTtl < 24*time.Hour || self.LimiterKeyTtl < self.GlobalWindow*2:

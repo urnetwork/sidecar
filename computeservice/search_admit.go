@@ -18,20 +18,23 @@
 //     terms' web search clause (BAL-M13-03, read through ComputeSearchLedger)
 //  6. the request id and attempt claimed in {cmpa} for a fresh 32-byte ticket. One already admitted is a retry: the
 //     signer is asked again with its ticket, the sealed payee the retry sent and the admission's own amount and minute,
-//     and re-signs to the same bytes, so a retry neither holds nor signs anew; one in flight answers capacity
+//     and re-signs to the same bytes, so a retry neither holds nor signs anew; one in flight answers capacity. A retry
+//     names its admission's amount, device and agent, else it is none and answers invalid
 //  7. the hold, by the ledger's search script on {cmp_<network_id>} under D-BAL-14's key, its row committed before the
 //     answer admits: insufficient_quota for the balance (grace, suspended, below zero, promotional credit paying none,
 //     §9.9, §9.11), a budget (§16.4, §16.5) or open holds, capacity where the ledger cannot take it
-//  8. the limits' second script (search_limits.go): the network's rate and its day under day_max, never above the
-//     search cap, then the payer's global rate with each active network's equal share; a refusal releases the hold,
-//     rate_limited with a retry time
-//  9. the ticket admitted in {cmpa}, the request's outcome counts added at once to {cmpo}'s hour across all networks
-//     (a total past the network's searches today is dropped whole), and the sign request relayed to searchsigner over
-//     mTLS: the ticket, the amount, the minute and the sealed payee, unread
-//  10. the signer's answer: the sealed authorization, relayed unread; or its refusal, which releases the hold and drops
-//     the ticket, payee_refused also keeping the returned payee as a sanctions record with the network, sidecar and
-//     time, suspending the network's search until reviewed and paging; a signer unreachable answers capacity, the hold
-//     released
+//  8. the limits' second script (search_limits.go): the network's rate and its day under day_max (DefaultDayMaxCount
+//     where the policy sets none), never above the search cap, then the payer's global rate with each active network's
+//     equal share; a refusal releases the hold, rate_limited with a retry time
+//  9. the ticket admitted in {cmpa}, and the sign request relayed to searchsigner over mTLS: the ticket, the amount,
+//     the minute and the sealed payee, unread
+//  10. the signer's answer: the sealed authorization, relayed unread, and the request's outcome counts added at once to
+//     {cmpo}'s hour across all networks (a total past the network's searches today is dropped whole); or its refusal,
+//     which releases the hold and drops the ticket, payee_refused also keeping the returned payee as a sanctions
+//     record with the network, sidecar and time, suspending the network's search until reviewed and paging; a signer
+//     unreachable answers capacity, the hold released. Outcomes count only beside an authorization, since the device
+//     marks them reported only on one (websearch_client.go): a refused request's come again with its next, and a
+//     retry's were counted with the authorization it repeats
 //
 // The broker never sees a payee, a nonce, a query, a mode or a result: the sealed payee and the sealed authorization
 // pass through as bytes. No line is written per authorization (the route is NoLog): urnetwork_compute_search_
@@ -422,8 +425,10 @@ func computeSearchSignRequest(ticket []byte, record *computeSearchTicketRecord, 
 }
 
 // A retry of an admission that stands (step 6): the signer asked again with its ticket, its amount and minute and the
-// sealed payee the retry sent. Nothing is held, released or dropped: the first admission's authorization stands.
-func (self *ComputeSearchAdmission) retry(ctx context.Context, claim *computeSearchClaim, parsed *computeSearchParsed, clock *computeSearchClock) (*protocol.ComputeSearchAuthorizeResponse, *ComputeRefusal) {
+// sealed payee the retry sent. Nothing is held, released or dropped: the first admission's authorization stands. A
+// request naming another amount, another of the network's devices or another agent under the same request id and
+// attempt is no retry of it, and is refused before the signer is asked.
+func (self *ComputeSearchAdmission) retry(ctx context.Context, caller *ComputeCaller, claim *computeSearchClaim, parsed *computeSearchParsed, clock *computeSearchClock) (*protocol.ComputeSearchAuthorizeResponse, *ComputeRefusal) {
 	switch claim.record.state {
 	case computeSearchTicketAdmitted:
 	case computeSearchTicketPending:
@@ -432,7 +437,9 @@ func (self *ComputeSearchAdmission) retry(ctx context.Context, claim *computeSea
 		// reported: its authorization is final, and the signer holds its ticket no more
 		return nil, self.capacity(ComputeSearchCapacityReasonInFlight)
 	}
-	if claim.record.amount != parsed.amount {
+	sameAgent := claim.record.agentId == nil && parsed.agentId == nil ||
+		claim.record.agentId != nil && parsed.agentId != nil && *claim.record.agentId == *parsed.agentId
+	if claim.record.amount != parsed.amount || claim.record.sidecarId != caller.SidecarId || !sameAgent {
 		return nil, &ComputeRefusal{Code: ComputeRefusalInvalid, Reason: ComputeSearchInvalidReasonRetry}
 	}
 	if self.signer == nil {
@@ -503,7 +510,7 @@ func (self *ComputeSearchAdmission) authorize(request *ComputeRequest, body *pro
 		if claim.record == nil {
 			return nil, self.capacity(ComputeSearchCapacityReasonInFlight)
 		}
-		return self.retry(ctx, claim, parsed, clock)
+		return self.retry(ctx, caller, claim, parsed, clock)
 	}
 	ticket := claim.ticket
 	dropClaim := func() {
@@ -565,22 +572,12 @@ func (self *ComputeSearchAdmission) authorize(request *ComputeRequest, body *pro
 		return nil, limits.refusal
 	}
 
-	// step 9: admitted, the outcomes counted, the ticket to the signer
+	// step 9: admitted, the ticket to the signer
 	admitted, err := self.tickets.admit(ctx, ticket, record, self.engine.clock.Now())
 	if err != nil || !admitted {
 		releaseHold()
 		dropClaim()
 		return nil, self.capacity(ComputeSearchCapacityReasonAdmissions)
-	}
-	if outcomes := body.GetOutcomes(); outcomes != nil {
-		if computeSearchOutcomesTotal(outcomes) <= limits.dayCount {
-			if err := self.outcomes.add(ctx, outcomes, now); err != nil {
-				self.engine.alarm("search_outcomes", "a web search's outcome counts were not added")
-			}
-		} else {
-			// more outcomes than the network's searches today: a modified client's counts, dropped whole
-			self.engine.alarm("search_outcomes_dropped", "a web search's outcome counts passed the network's searches today")
-		}
 	}
 	dropTicket := func() {
 		releaseHold()
@@ -601,9 +598,19 @@ func (self *ComputeSearchAdmission) authorize(request *ComputeRequest, body *pro
 		return nil, self.capacity(ComputeSearchCapacityReasonSigner)
 	}
 
-	// step 10: the signer's answer
+	// step 10: the signer's answer, and with an authorization the request's outcomes
 	if response.GetRefusal() == protocol.SearchSignRefusal_SEARCH_SIGN_REFUSAL_UNSPECIFIED && 0 < len(response.GetSealedAuthorization()) {
 		self.authorizations.Add(1, computeSearchAuthorizationAuthorized)
+		if outcomes := body.GetOutcomes(); outcomes != nil {
+			if computeSearchOutcomesTotal(outcomes) <= limits.dayCount {
+				if err := self.outcomes.add(ctx, outcomes, now); err != nil {
+					self.engine.alarm("search_outcomes", "a web search's outcome counts were not added")
+				}
+			} else {
+				// more outcomes than the network's searches today: a modified client's counts, dropped whole
+				self.engine.alarm("search_outcomes_dropped", "a web search's outcome counts passed the network's searches today")
+			}
+		}
 		return &protocol.ComputeSearchAuthorizeResponse{SealedAuthorization: response.GetSealedAuthorization()}, nil
 	}
 	dropTicket()

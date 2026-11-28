@@ -4,8 +4,9 @@
 //
 //	{cmpr_<network_id>}  the network's rate, 2 searches a second with bursts of 20, by GCRA (tat, the theoretical
 //	                     arrival time in ms); its searches this UTC day (d, the day since the epoch, and c, its
-//	                     count) against its limit, day_max where its policy sets one, never above §9.11's search cap,
-//	                     which the broker passes in; and the global window it last searched in (w) with its count
+//	                     count) against its limit, day_max where its policy sets one and 2,000 where it sets none,
+//	                     never above §9.11's search cap, which the broker passes in; and the global window it last
+//	                     searched in (w) with its count
 //	                     there (wc), which {cmps}'s equal share reads. Refused: day, with the next UTC midnight;
 //	                     rate, with the GCRA's wait. A key found absent is rebuilt from the day's search rows
 //	                     (§9.7's lost cache), the script answering absent and the broker asking again with the day's
@@ -406,7 +407,8 @@ const (
 )
 
 // Takes one search of networkId's limits at clock: its rate and day under the day's limit (dayMax where the policy
-// sets one, never above the search cap), then the payer's global rate, refunding the first where the second refuses.
+// sets one, else DefaultDayMaxCount, never above the search cap), then the payer's global rate, refunding the first
+// where the second refuses.
 // An absent rate key is rebuilt from the day's search rows and asked once more.
 func (self *computeSearchLimits) take(ctx context.Context, networkId sidecar.Id, clock *computeSearchClock, dayMax uint32) (*computeSearchLimitsAnswer, error) {
 	limit, err := self.dayLimit(ctx, networkId, dayMax, clock.now)
@@ -455,17 +457,18 @@ func (self *computeSearchLimits) take(ctx context.Context, networkId sidecar.Id,
 	return &computeSearchLimitsAnswer{refusal: &ComputeRefusal{Code: ComputeRefusalRateLimited, Reason: ComputeSearchRateLimitedReasonGlobal, RetryAfter: clock.nextWindow.Sub(clock.now)}}, nil
 }
 
-// The day's limit for networkId: the policy's day_max where it sets one (dayMax, 0 for none), never above the search
-// cap the ledger gives.
+// The day's limit for networkId: the policy's day_max where it sets one (dayMax, 0 for none), else DefaultDayMaxCount,
+// never above the search cap the ledger gives.
 func (self *computeSearchLimits) dayLimit(ctx context.Context, networkId sidecar.Id, dayMax uint32, now time.Time) (int64, error) {
 	searchCap, err := self.searchCap(ctx, networkId, now)
 	if err != nil {
 		return 0, err
 	}
-	if 0 < dayMax && int64(dayMax) < searchCap {
-		return int64(dayMax), nil
+	limit := int64(self.settings.DefaultDayMaxCount)
+	if 0 < dayMax {
+		limit = int64(dayMax)
 	}
-	return searchCap, nil
+	return min(limit, searchCap), nil
 }
 
 // networkId's search cap, from the cache while it is fresh, else the ledger's.

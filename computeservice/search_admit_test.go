@@ -146,6 +146,16 @@ func TestSearchAdmitRefusals(t *testing.T) {
 			fixture.setAcl(fixture.networkId, &fakeComputeSearchAcl{rows: &protocol.AclComputeRows{SearchEnabled: true, SearchDayMax: 2000}, allowed: true})
 			fixture.ledger.setCap(fixture.networkId, 1)
 		}},
+		// a block that sets no day_max takes the block's default, though a review raised the search cap past it
+		{name: "the default day_max under a raised search cap", before: 1, code: ComputeRefusalRateLimited, reason: ComputeSearchRateLimitedReasonDay, settings: func(settings *ComputeSearchSettings) {
+			settings.DefaultDayMaxCount = 1
+		}, setup: func(fixture *computeSearchFixture) {
+			fixture.setAcl(fixture.networkId, &fakeComputeSearchAcl{rows: &protocol.AclComputeRows{SearchEnabled: true}, allowed: true})
+			fixture.ledger.setCap(fixture.networkId, 5000)
+		}},
+		{name: "the default day_max with no block", before: 1, code: ComputeRefusalRateLimited, reason: ComputeSearchRateLimitedReasonDay, settings: func(settings *ComputeSearchSettings) {
+			settings.DefaultDayMaxCount = 1
+		}},
 		{name: "the network's rate", before: 20, code: ComputeRefusalRateLimited, reason: ComputeSearchRateLimitedReasonRate, settings: func(settings *ComputeSearchSettings) {
 			settings.GlobalWindowCount = 1000
 		}},
@@ -250,7 +260,8 @@ func TestSearchAdmitAttempts(t *testing.T) {
 }
 
 // A retry of an admitted request id and attempt gets the same sealed bytes from one ticket, with no second hold; one
-// with another amount is refused, and the first admission stands.
+// with another amount, from another of the network's devices or naming another agent is refused before the signer is
+// asked, and the first admission stands.
 func TestSearchAdmitRetrySameAttempt(t *testing.T) {
 	fixture := newComputeSearchFixture(t, nil)
 	request := fixture.request(testSearchRequestId("retry"), 1)
@@ -276,8 +287,22 @@ func TestSearchAdmitRetrySameAttempt(t *testing.T) {
 	moved.Amount = 9_000
 	recorder, _ := fixture.authorize(moved)
 	requireComputeSearchRefusal(t, recorder, ComputeRefusalInvalid, ComputeSearchInvalidReasonRetry)
+	_, otherToken := fixture.addDevice(fixture.networkId, "retry's other device")
+	recorder, _ = fixture.authorizeAs(otherToken, fixture.request(testSearchRequestId("retry"), 1))
+	requireComputeSearchRefusal(t, recorder, ComputeRefusalInvalid, ComputeSearchInvalidReasonRetry)
+	agented := fixture.request(testSearchRequestId("retry"), 1)
+	agentId := testComputeId("retry's agent")
+	agented.AgentId = agentId[:]
+	recorder, _ = fixture.authorize(agented)
+	requireComputeSearchRefusal(t, recorder, ComputeRefusalInvalid, ComputeSearchInvalidReasonRetry)
+	if signs := fixture.signer.signList(); len(signs) != 2 {
+		t.Fatalf("a refused retry reached the signer: %d sign requests", len(signs))
+	}
 	if open := fixture.ledger.openCount(); open != 1 {
 		t.Fatal("a refused retry released the first admission")
+	}
+	if _, again := fixture.authorize(request); again == nil || !bytes.Equal(again.GetSealedAuthorization(), first.GetSealedAuthorization()) {
+		t.Fatal("the admission's own retry did not stand after the refused ones")
 	}
 }
 
@@ -428,6 +453,47 @@ func TestSearchAdmitOutcomesHourlyOnly(t *testing.T) {
 	}
 	if fixture.metrics.Value("urnetwork_compute_search_outcomes_total", "ok") != 2 ||
 		fixture.metrics.Value("urnetwork_compute_search_outcomes_total", "provider_error") != 0 {
+		t.Fatal("the outcomes' counter does not match {cmpo}")
+	}
+}
+
+// Outcome counts reach {cmpo} only beside an authorization, since the device marks them reported only on one
+// (websearch_client.go): a request the signer refused counts nothing, and the next, carrying the same counts again,
+// counts them once.
+func TestSearchAdmitOutcomesCountedWithAnswer(t *testing.T) {
+	fixture := newComputeSearchFixture(t, nil)
+	cmpo := func() map[string][]byte {
+		t.Helper()
+		fields, err := fixture.redis.HashGetAll(fixture.ctx, ComputeSearchOutcomesRedisKey())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return fields
+	}
+	fixture.signer.set(func(signer *fakeSearchSigner) {
+		signer.refusal = protocol.SearchSignRefusal_SEARCH_SIGN_REFUSAL_RATE_LIMITED
+	})
+	refused := fixture.request(testSearchRequestId("outcomes refused"), 1)
+	refused.Outcomes = &protocol.SearchOutcomes{Refused: 1}
+	recorder, _ := fixture.authorize(refused)
+	requireComputeSearchRefusal(t, recorder, ComputeRefusalRateLimited, "signer_rate")
+	if fields := cmpo(); len(fields) != 0 {
+		t.Fatalf("a refused request's outcomes reached {cmpo}: %v", fields)
+	}
+	fixture.signer.set(func(signer *fakeSearchSigner) {
+		signer.refusal = protocol.SearchSignRefusal_SEARCH_SIGN_REFUSAL_UNSPECIFIED
+	})
+	answered := fixture.request(testSearchRequestId("outcomes answered"), 1)
+	answered.Outcomes = &protocol.SearchOutcomes{Refused: 1}
+	if recorder, _ := fixture.authorize(answered); recorder.Code != http.StatusOK {
+		t.Fatalf("answered %d %s", recorder.Code, recorder.Body.String())
+	}
+	hour := DefaultComputeSearchSettings().outcomeHourAt(fixture.clock.Now())
+	fields := cmpo()
+	if len(fields) != 1 || string(fields[computeSearchOutcomeField(hour, model.ComputeSearchOutcomeRefused)]) != "1" {
+		t.Fatalf("{cmpo} holds %v", fields)
+	}
+	if fixture.metrics.Value("urnetwork_compute_search_outcomes_total", "refused") != 1 {
 		t.Fatal("the outcomes' counter does not match {cmpo}")
 	}
 }
