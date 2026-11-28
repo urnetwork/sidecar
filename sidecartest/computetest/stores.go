@@ -20,6 +20,9 @@
 // notification, a renewal credited once by its order id, four plan changes in a sitting, a consumable consumed within
 // three days, a chargeback). Nothing sleeps: each fake reads the injected clock.
 //
+// A request for what a market does not build answers 501 with a named code, never a store's 404 that BAL's code would
+// read as the object gone, and is kept for a test to assert none was made (FakeStoreNotBuiltCode, NotBuiltRequests).
+//
 // The fakes speak only HTTP on loopback. The App Store's test root goes into server's pinned roots through its own
 // test seam (api/handlers/apple_root_store.go), never a production root; no production build trusts any key here.
 //
@@ -60,6 +63,20 @@ const (
 	FakeMarketStripe   = "stripe"
 	FakeMarketAppStore = "app_store"
 	FakeMarketPlay     = "play"
+)
+
+// What a market answers a request it does not serve. A fake fails a call it was not scripted for with a named error,
+// never a default answer, and a store's own 404 would be one: BAL's code reads a 404 as the object gone (server's
+// computeStripeGone, and computePlayGone with Play's 400 and 410), so an unbuilt route would pass for a subscription
+// already canceled. Each market answers 501 in its own error shape naming this code, a status none of BAL's clients
+// retries (Stripe's carries Stripe-Should-Retry false, which stripe-go honors before its retry on 5xx), and keeps the
+// request for a test to assert none was made (NotBuiltRequests). A served route's own miss, such as an unknown
+// customer or purchase token, is still that store's 404. Identifiers.
+const (
+	// Stripe's error code, and the start of the App Store's errorMessage and of Play's message.
+	FakeStoreNotBuiltCode = "computetest_not_built"
+	// The App Store's errorCode, in Apple's form of the status then an index.
+	FakeAppStoreNotBuiltErrorCode = 5010000
 )
 
 // The three markets' settings (QD-702).
@@ -368,6 +385,42 @@ func (self *FakeStoreNotifications) DeliverPendingReversed(ctx context.Context) 
 		statuses = append(statuses, status)
 	}
 	return statuses, nil
+}
+
+// The requests one market did not serve (see FakeStoreNotBuiltCode), each "<method> <path>", with what a served route
+// does not build after it, in arrival order. Safe for concurrent use.
+type fakeStoreNotBuilt struct {
+	// the market as its message names it
+	market string
+
+	stateLock sync.Mutex
+	requests  []string
+}
+
+func newFakeStoreNotBuilt(market string) *fakeStoreNotBuilt {
+	return &fakeStoreNotBuilt{market: market}
+}
+
+// Keeps request, and answers the message its 501 carries: the code, the market and what was asked. detail names what
+// a served route does not build (a mode, a method), empty where the route itself is not served.
+func (self *fakeStoreNotBuilt) record(request *http.Request, detail string) string {
+	asked := request.Method + " " + request.URL.Path
+	if detail != "" {
+		asked += " (" + detail + ")"
+	}
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.requests = append(self.requests, asked)
+	}()
+	return FakeStoreNotBuiltCode + ": the fake " + self.market + " serves no " + asked
+}
+
+// The requests kept, oldest first.
+func (self *fakeStoreNotBuilt) list() []string {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return slices.Clone(self.requests)
 }
 
 // An HTTP status and a JSON body, as each market answers.

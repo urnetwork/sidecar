@@ -19,8 +19,10 @@
 // (WebhookSecret): t=<unix>,v1=<hex HMAC-SHA256 of "<t>.<body>">, timestamped by the signature clock at delivery, as
 // Stripe signs each attempt afresh.
 //
-// Not built (the draft's gaps): subscriptions and invoices (the monthly plan's Checkout in subscription mode), Stripe
-// Tax's amounts (no tax is added), and the Radar and 3-D Secure outcomes beyond a card's own behavior.
+// Not built (the draft's gaps): subscriptions and invoices (the monthly plan's Checkout in subscription mode, and
+// /v1/subscriptions), Stripe Tax's amounts (no tax is added), and the Radar and 3-D Secure outcomes beyond a card's own
+// behavior. A request for what it does not build answers 501 computetest_not_built, never a 404 BAL's code would read
+// as the object gone, and is kept in NotBuiltRequests (FakeStoreNotBuiltCode).
 //
 // Safe for concurrent use: one lock guards the state; deliveries and the server's I/O run outside it.
 
@@ -217,6 +219,7 @@ type FakeStripe struct {
 	webhookSecret  string
 	server         *httptest.Server
 	events         *FakeStoreNotifications
+	notBuilt       *fakeStoreNotBuilt
 
 	stateLock        sync.Mutex
 	idCount          uint64
@@ -241,6 +244,7 @@ func newFakeStripe(settings *FakeStoresSettings, seed string, clock sidecar.Cloc
 		apiKey:           "sk_test_" + hex.EncodeToString(fakeBytes(seed, "stripe api key", 24)),
 		webhookSecret:    "whsec_" + hex.EncodeToString(fakeBytes(seed, "stripe webhook secret", 24)),
 		events:           newFakeStoreNotifications(settings, clock),
+		notBuilt:         newFakeStoreNotBuilt("Stripe"),
 		keyIdempotents:   map[string]*fakeStripeIdempotent{},
 		requestPathCount: map[string]int{},
 	}
@@ -266,7 +270,8 @@ func newFakeStripe(settings *FakeStoresSettings, seed string, clock sidecar.Cloc
 		mux.HandleFunc(pattern, self.wrap(pattern, serve))
 	}
 	mux.HandleFunc("/", func(writer http.ResponseWriter, request *http.Request) {
-		writeFakeStoreJson(writer, http.StatusNotFound, fakeStripeErrorBody("invalid_request_error", "resource_missing", "", "Unrecognized request URL ("+request.Method+").", nil))
+		// never Stripe's 404 for an unknown url, which BAL's code reads as the object gone
+		self.writeNotBuilt(writer, request, "")
 	})
 	self.server = newFakeStoreServer(mux)
 	return self, nil
@@ -351,6 +356,27 @@ type fakeStripeErrorAnswer struct {
 	body []byte
 }
 
+// A served route's answer to what it does not build, such as a Checkout Session in subscription mode: wrap writes it
+// through writeNotBuilt and keeps it under no Idempotency-Key, so a retry under the key is answered the same way.
+type fakeStripeNotBuiltAnswer struct {
+	// what the route does not build, beside its method and path
+	detail string
+}
+
+// Answers request, which the fake does not serve, 501 computetest_not_built, and keeps it (FakeStoreNotBuiltCode).
+func (self *FakeStripe) writeNotBuilt(writer http.ResponseWriter, request *http.Request, detail string) {
+	message := self.notBuilt.record(request, detail)
+	// stripe-go retries every 5xx but one that says not to
+	writer.Header().Set("Stripe-Should-Retry", "false")
+	writeFakeStoreJson(writer, http.StatusNotImplemented, fakeStripeErrorBody("api_error", FakeStoreNotBuiltCode, "", message, nil))
+}
+
+// The requests the fake did not serve, each "<method> <path>" with what it does not build where a served route
+// refused it, oldest first: a test asserts none was made.
+func (self *FakeStripe) NotBuiltRequests() []string {
+	return self.notBuilt.list()
+}
+
 // A route's handler, behind the API key, the body's bound and Idempotency-Key.
 func (self *FakeStripe) wrap(pattern string, serve func(writer http.ResponseWriter, request *http.Request, form url.Values) (int, any)) http.HandlerFunc {
 	return func(writer http.ResponseWriter, request *http.Request) {
@@ -396,6 +422,10 @@ func (self *FakeStripe) wrap(pattern string, serve func(writer http.ResponseWrit
 			}
 		}
 		status, answer := serve(writer, request, form)
+		if notBuilt, ok := answer.(*fakeStripeNotBuiltAnswer); ok {
+			self.writeNotBuilt(writer, request, notBuilt.detail)
+			return
+		}
 		var answerBody []byte
 		switch typed := answer.(type) {
 		case *fakeStripeErrorAnswer:
@@ -607,7 +637,8 @@ func (self *FakeStripe) renderSession(session *fakeStripeSession) map[string]any
 func (self *FakeStripe) serveSessionCreate(writer http.ResponseWriter, request *http.Request, form url.Values) (int, any) {
 	mode := form.Get("mode")
 	if mode != "payment" {
-		return fakeStripeInvalid("The fake makes payment-mode sessions alone.")
+		// subscription and setup modes are not built (see the file header), which is no fault of the request
+		return http.StatusNotImplemented, &fakeStripeNotBuiltAnswer{detail: "mode " + mode}
 	}
 	unitAmount, ok := fakeStripeInt(form, "line_items[0][price_data][unit_amount]")
 	quantity, quantityOk := fakeStripeInt(form, "line_items[0][quantity]")

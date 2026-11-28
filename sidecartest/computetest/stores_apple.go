@@ -159,6 +159,7 @@ type FakeAppStore struct {
 	issuerId      string
 	server        *httptest.Server
 	notifications *FakeStoreNotifications
+	notBuilt      *fakeStoreNotBuilt
 
 	stateLock    sync.Mutex
 	idCount      uint64
@@ -236,6 +237,7 @@ func newFakeAppStore(settings *FakeStoresSettings, seed string, clock sidecar.Cl
 		apiKeyId:      strings.ToUpper(fmt.Sprintf("%x", fakeBytes(seed, "apple api key id", 5))),
 		issuerId:      sidecarIdOf(fakeBytes(seed, "apple issuer id", 16)).String(),
 		notifications: newFakeStoreNotifications(settings, clock),
+		notBuilt:      newFakeStoreNotBuilt("App Store"),
 		renewals:      map[string]*fakeAppleRenewal{},
 	}
 	mux := http.NewServeMux()
@@ -243,7 +245,8 @@ func newFakeAppStore(settings *FakeStoresSettings, seed string, clock sidecar.Cl
 	mux.HandleFunc("GET /inApps/v2/history/{id}", self.authorized(self.serveHistory))
 	mux.HandleFunc("GET /inApps/v1/subscriptions/{id}", self.authorized(self.serveSubscriptions))
 	mux.HandleFunc("/", func(writer http.ResponseWriter, request *http.Request) {
-		writeFakeAppleError(writer, http.StatusNotFound, 4040000, "The fake App Store serves no such request.")
+		// never a 404, which reads as a transaction the store does not hold (FakeStoreNotBuiltCode)
+		writeFakeAppleError(writer, http.StatusNotImplemented, FakeAppStoreNotBuiltErrorCode, self.notBuilt.record(request, ""))
 	})
 	self.server = newFakeStoreServer(mux)
 	return self, nil
@@ -259,6 +262,12 @@ func sidecarIdOf(raw []byte) sidecar.Id {
 // Ends the server.
 func (self *FakeAppStore) Close() {
 	self.server.Close()
+}
+
+// The Server API requests the fake did not serve, each "<method> <path>", oldest first: a test asserts none was made
+// (FakeStoreNotBuiltCode).
+func (self *FakeAppStore) NotBuiltRequests() []string {
+	return self.notBuilt.list()
 }
 
 // The Server API's base URL, the production or the sandbox base a test points server at.

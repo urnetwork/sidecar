@@ -800,3 +800,122 @@ func TestFakeStoresReplayAndReorderNotifications(t *testing.T) {
 		t.Fatalf("finished: %v %v", err, stores.AppStore.Unfinished())
 	}
 }
+
+// A request for what a market does not build answers 501 naming computetest_not_built, never the 404 BAL's code reads
+// as the object gone (server's computeStripeGone, and computePlayGone's 400, 404 and 410), and is kept for a test to
+// assert none was made: Stripe's subscriptions and a subscription-mode Checkout, the latter sent again under its
+// Idempotency-Key and answered alike with Stripe-Should-Retry false, the App Store's refund lookup, and Play's revoke
+// and subscriptionsv2's cancel. A served route's own miss stays that store's 404.
+func TestFakeStoresAnswerUnbuiltRequestsNotBuilt(t *testing.T) {
+	stores, clock := newTestStores(t, "not built")
+	// one request: its status, its headers and its JSON
+	call := func(method string, target string, bearer string, form url.Values, idempotencyKey string) (int, http.Header, map[string]any) {
+		t.Helper()
+		var body io.Reader
+		if form != nil {
+			body = strings.NewReader(form.Encode())
+		}
+		request, err := http.NewRequest(method, target, body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Authorization", "Bearer "+bearer)
+		if form != nil {
+			request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		}
+		if idempotencyKey != "" {
+			request.Header.Set("Idempotency-Key", idempotencyKey)
+		}
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		answer := map[string]any{}
+		if err := json.NewDecoder(response.Body).Decode(&answer); err != nil {
+			t.Fatal(err)
+		}
+		return response.StatusCode, response.Header, answer
+	}
+
+	stripe := stores.Stripe
+	requireStripeNotBuilt := func(label string, status int, header http.Header, answer map[string]any) {
+		t.Helper()
+		inner, _ := answer["error"].(map[string]any)
+		if status != http.StatusNotImplemented || inner == nil || inner["code"] != FakeStoreNotBuiltCode || inner["type"] != "api_error" || header.Get("Stripe-Should-Retry") != "false" {
+			t.Fatalf("%s: answered %d %v, Stripe-Should-Retry %q", label, status, answer, header.Get("Stripe-Should-Retry"))
+		}
+	}
+	// stripe-go's Retrieve and Cancel of a subscription
+	for _, method := range []string{http.MethodGet, http.MethodDelete} {
+		status, header, answer := call(method, stripe.Url()+"/v1/subscriptions/sub_test_1", stripe.ApiKey(), nil, "")
+		requireStripeNotBuilt("a subscription's "+method, status, header, answer)
+	}
+	plan := url.Values{
+		"mode":                                           {"subscription"},
+		"line_items[0][price_data][currency]":            {"usd"},
+		"line_items[0][price_data][unit_amount]":         {"1000"},
+		"line_items[0][price_data][recurring][interval]": {"month"},
+		"line_items[0][quantity]":                        {"1"},
+	}
+	for range 2 {
+		status, header, answer := call(http.MethodPost, stripe.Url()+"/v1/checkout/sessions", stripe.ApiKey(), plan, "plan-session-1")
+		requireStripeNotBuilt("a subscription-mode session", status, header, answer)
+		if header.Get("Idempotent-Replayed") != "" {
+			t.Fatal("a not-built answer was kept under its Idempotency-Key")
+		}
+	}
+	status, _, answer := call(http.MethodGet, stripe.Url()+"/v1/customers/cus_test_unknown", stripe.ApiKey(), nil, "")
+	if inner, _ := answer["error"].(map[string]any); status != http.StatusNotFound || inner == nil || inner["code"] != "resource_missing" {
+		t.Fatalf("an unknown customer: answered %d %v", status, answer)
+	}
+	want := []string{
+		"GET /v1/subscriptions/sub_test_1",
+		"DELETE /v1/subscriptions/sub_test_1",
+		"POST /v1/checkout/sessions (mode subscription)",
+		"POST /v1/checkout/sessions (mode subscription)",
+	}
+	if got := stripe.NotBuiltRequests(); !slices.Equal(got, want) {
+		t.Fatalf("Stripe kept %q, want %q", got, want)
+	}
+
+	apple := stores.AppStore
+	bearer := testAppleBearer(t, apple, DefaultFakeAppStoreSettings().BundleId, clock.Now())
+	status, _, answer = call(http.MethodGet, apple.Url()+"/inApps/v2/refund/lookup/2000000000000001", bearer, nil, "")
+	if message, _ := answer["errorMessage"].(string); status != http.StatusNotImplemented || answer["errorCode"] != float64(FakeAppStoreNotBuiltErrorCode) || !strings.HasPrefix(message, FakeStoreNotBuiltCode+":") {
+		t.Fatalf("an unserved Server API request: answered %d %v", status, answer)
+	}
+	status, _, answer = call(http.MethodGet, apple.Url()+"/inApps/v1/transactions/2000000000000001", bearer, nil, "")
+	if status != http.StatusNotFound || answer["errorCode"] != float64(4040010) {
+		t.Fatalf("an unknown transaction: answered %d %v", status, answer)
+	}
+	if got := apple.NotBuiltRequests(); !slices.Equal(got, []string{"GET /inApps/v2/refund/lookup/2000000000000001"}) {
+		t.Fatalf("the App Store kept %q", got)
+	}
+
+	play := stores.Play
+	applicationPath := "/androidpublisher/v3/applications/" + DefaultFakePlaySettings().PackageName + "/"
+	requirePlayNotBuilt := func(label string, status int, answer map[string]any) {
+		t.Helper()
+		inner, _ := answer["error"].(map[string]any)
+		message, _ := inner["message"].(string)
+		if status != http.StatusNotImplemented || inner == nil || inner["status"] != "UNIMPLEMENTED" || !strings.HasPrefix(message, FakeStoreNotBuiltCode+":") {
+			t.Fatalf("%s: answered %d %v", label, status, answer)
+		}
+	}
+	status, _, answer = call(http.MethodPost, play.Url()+applicationPath+"purchases/subscriptions/compute.monthly.10/tokens/token-test-1:revoke", play.AccessToken(), nil, "")
+	requirePlayNotBuilt("a subscription's revoke", status, answer)
+	status, _, answer = call(http.MethodPost, play.Url()+applicationPath+"purchases/subscriptionsv2/tokens/token-test-1:cancel", play.AccessToken(), nil, "")
+	requirePlayNotBuilt("subscriptionsv2's cancel", status, answer)
+	status, answer = testPlayCall(t, play, http.MethodGet, "purchases/products/compute.pack.10/tokens/token-test-1")
+	if inner, _ := answer["error"].(map[string]any); status != http.StatusNotFound || inner == nil || inner["status"] != "NOT_FOUND" {
+		t.Fatalf("an unknown purchase token: answered %d %v", status, answer)
+	}
+	want = []string{
+		"POST " + applicationPath + "purchases/subscriptions/compute.monthly.10/tokens/token-test-1:revoke (method revoke)",
+		"POST " + applicationPath + "purchases/subscriptionsv2/tokens/token-test-1:cancel",
+	}
+	if got := play.NotBuiltRequests(); !slices.Equal(got, want) {
+		t.Fatalf("Play kept %q, want %q", got, want)
+	}
+}

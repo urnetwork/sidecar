@@ -140,6 +140,7 @@ type FakePlay struct {
 	googleKey     *ecdsa.PrivateKey
 	server        *httptest.Server
 	notifications *FakeStoreNotifications
+	notBuilt      *fakeStoreNotBuilt
 
 	stateLock     sync.Mutex
 	idCount       uint64
@@ -164,6 +165,7 @@ func newFakePlay(settings *FakeStoresSettings, seed string, clock sidecar.Clock)
 		accessToken:   "ya29.computetest-" + fmt.Sprintf("%x", fakeBytes(seed, "play access token", 16)),
 		googleKey:     googleKey,
 		notifications: newFakeStoreNotifications(settings, clock),
+		notBuilt:      newFakeStoreNotBuilt("Play"),
 		refunded:      map[string]bool{},
 		idTokens:      map[string]map[string]any{},
 	}
@@ -177,7 +179,7 @@ func newFakePlay(settings *FakeStoresSettings, seed string, clock sidecar.Clock)
 	mux.HandleFunc("POST "+base+"orders/{orderVerb}", self.authorized(self.serveOrderRefund))
 	mux.HandleFunc("GET /tokeninfo", self.serveTokenInfo)
 	mux.HandleFunc("/", func(writer http.ResponseWriter, request *http.Request) {
-		writeFakePlayError(writer, http.StatusNotFound, "NOT_FOUND", "The fake Play serves no such request.")
+		self.writeNotBuilt(writer, request, "")
 	})
 	self.server = newFakeStoreServer(mux)
 	return self, nil
@@ -213,6 +215,19 @@ func (self *FakePlay) ConsumeCount() int {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	return self.consumeCount
+}
+
+// Answers request, which the fake does not serve, 501 UNIMPLEMENTED naming computetest_not_built, and keeps it: never
+// a 400, 404 or 410, which BAL's code reads as the purchase gone (FakeStoreNotBuiltCode). detail names what a served
+// route does not build, such as a method.
+func (self *FakePlay) writeNotBuilt(writer http.ResponseWriter, request *http.Request, detail string) {
+	writeFakePlayError(writer, http.StatusNotImplemented, "UNIMPLEMENTED", self.notBuilt.record(request, detail))
+}
+
+// The requests the fake did not serve, each "<method> <path>" with what it does not build where a served route
+// refused it, oldest first: a test asserts none was made.
+func (self *FakePlay) NotBuiltRequests() []string {
+	return self.notBuilt.list()
 }
 
 // A Google API error.
@@ -428,7 +443,7 @@ func (self *FakePlay) serveProductGet(writer http.ResponseWriter, request *http.
 func (self *FakePlay) serveProductVerb(writer http.ResponseWriter, request *http.Request) {
 	token, verb, ok := strings.Cut(request.PathValue("tokenVerb"), ":")
 	if !ok || (verb != "consume" && verb != "acknowledge") {
-		writeFakePlayError(writer, http.StatusNotFound, "NOT_FOUND", "No such method.")
+		self.writeNotBuilt(writer, request, "method "+verb)
 		return
 	}
 	self.stateLock.Lock()
@@ -590,7 +605,8 @@ func (self *FakePlay) serveSubscriptionGet(writer http.ResponseWriter, request *
 func (self *FakePlay) serveSubscriptionVerb(writer http.ResponseWriter, request *http.Request) {
 	token, verb, ok := strings.Cut(request.PathValue("tokenVerb"), ":")
 	if !ok || verb != "acknowledge" {
-		writeFakePlayError(writer, http.StatusNotFound, "NOT_FOUND", "No such method.")
+		// :cancel, :defer, :refund and :revoke among them
+		self.writeNotBuilt(writer, request, "method "+verb)
 		return
 	}
 	self.stateLock.Lock()
@@ -685,7 +701,7 @@ func (self *FakePlay) serveVoided(writer http.ResponseWriter, request *http.Requ
 func (self *FakePlay) serveOrderRefund(writer http.ResponseWriter, request *http.Request) {
 	orderId, verb, ok := strings.Cut(request.PathValue("orderVerb"), ":")
 	if !ok || verb != "refund" {
-		writeFakePlayError(writer, http.StatusNotFound, "NOT_FOUND", "No such method.")
+		self.writeNotBuilt(writer, request, "method "+verb)
 		return
 	}
 	self.stateLock.Lock()
