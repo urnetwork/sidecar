@@ -78,6 +78,13 @@ type metadataListAddition struct {
 // INFER-M12-01 and SKILL-M11-01 published, with the sixteenth fold's (v74), and QD-1438's compute-3 and compute-5
 // words, which CARCH-M12-01 published, with the seventeenth fold's (v75). Each entry here waits for the next fold.
 var metadataListAdditions = []metadataListAddition{
+	{
+		// compute-plan-search-suspension-clear (QD-1374): a sanctions record's review, which clears a network's search
+		// suspension, its time and reference on compute_search_flag (SRCH-M13-08)
+		question: "compute-plan-search-suspension-clear",
+		block:    "a sanctions record for a payee the screen refused or an authorization settled by a sender other than the facilitator: network, sidecar, payee, transaction and time (§21.5);",
+		list:     "a sanctions record for a payee the screen refused or an authorization settled by a sender other than the facilitator: network, sidecar, payee, transaction and time (§21.5), and, once an operator reviews it, the review's time and reference (QD-1374);",
+	},
 }
 
 // §2.8's block with each addition in place, in order, and a finding for each that does not apply.

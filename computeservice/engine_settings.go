@@ -52,6 +52,9 @@ type ComputeEngineSettings struct {
 	// §17.2's controls (abuse_settings.go, CARCH-M12-01): the abuse hold's projection and the refused regions. nil:
 	// DefaultComputeAbuseSettings.
 	Abuse *ComputeAbuseSettings
+	// Web search's (search_settings.go, SRCH-M13-07): the admission's, the settlement's and the search jobs' limits.
+	// nil: DefaultComputeSearchSettings.
+	Search *ComputeSearchSettings
 }
 
 // The defaults.
@@ -76,6 +79,7 @@ func DefaultComputeEngineSettings() *ComputeEngineSettings {
 		Providers:               DefaultComputeProviderSettings(),
 		Broker:                  DefaultComputeBrokerSettings(),
 		Abuse:                   DefaultComputeAbuseSettings(),
+		Search:                  DefaultComputeSearchSettings(),
 	}
 }
 
@@ -118,6 +122,18 @@ func (self *ComputeEngineSettings) Validate() error {
 	if self.Abuse != nil {
 		if err := self.Abuse.Validate(); err != nil {
 			return fmt.Errorf("compute engine: %w", err)
+		}
+	}
+	if self.Search != nil {
+		if err := self.Search.Validate(); err != nil {
+			return fmt.Errorf("compute engine: %w", err)
+		}
+		ledger := DefaultComputeBrokerSettings().ledger()
+		if self.Broker != nil {
+			ledger = self.Broker.ledger()
+		}
+		if self.Search.webSearch().AuthorizationGrain != ledger.OpMinuteGrain {
+			return fmt.Errorf("compute engine: a search's minute is one grain at the signer and in the ledger")
 		}
 	}
 	return nil
