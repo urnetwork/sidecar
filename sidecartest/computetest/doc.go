@@ -33,11 +33,28 @@
 //     secp256k1 signatures made and recovered with decred's library and Keccak-256.
 //   - fake_https.go: the loopback HTTPS server the network fakes share, named .example hosts under a test authority
 //     drawn from the seed, reached through each fake's dialer and trusted by its pool alone.
+//   - broker.go, Broker: the broker in process, CSRV-M12-01's real engine (computeservice.ComputeEngine) on an
+//     httptest server over FakeRedis twice (the main instance and {cmpa}'s), FakeAuthenticator, FakeServiceGates and
+//     FakeAbuseGate on one clock, every handler the linked areas registered and not_built for the rest; test sidecars
+//     (AddNetwork, AddSidecar) mint audience-compute tokens; the same broker takes real stores from its caller on the
+//     local stack. broker_auth.go is FakeComputeAuthState, the newest verified state a test sets (networks, members,
+//     roles, tags, consent, the admission flags, revocations, the compute block and its budgets); broker_stores.go the
+//     tables' stand-ins the guard reads (compute_abuse_hold, compute_catalog_version, the region lookup);
+//     broker_testhooks.go plants a test's handlers and the stand-ins through computeservice's sidecar_testhooks seam,
+//     which the untagged build refuses (ErrBrokerPlantUnlinked).
+//   - stores.go, FakeStores: the three markets compute credit is bought in (§9.5), each an HTTP fake on loopback that
+//     BAL's server code talks to: stores_stripe.go's FakeStripe (Customers, Checkout Sessions, PaymentIntents on and
+//     off session, card fingerprints, Refunds, disputes, webhook events signed under a test endpoint secret),
+//     stores_apple.go's FakeAppStore (the Server API's lookups and history, Server Notifications V2, every object a JWS
+//     under a test root chain with Apple's policy extensions) and stores_play.go's FakePlay (the Android Publisher
+//     API's purchases, subscriptionsv2, voided purchases and order refunds, RTDN pushes under an id token its tokeninfo
+//     answers); each market's notifications wait until the test delivers them, once, twice, out of order or never.
 //
 // Its rules, as sidecartest's:
 //
-//   - It imports the root, computeservice and searchsigner, and sidecartest, its parent, and no server package; server
-//     imports it for T3, as it imports sidecartest.
+//   - It imports the root, computeservice and searchsigner, owner decision 594's model and controller, operator-core's
+//     interfaces, and sidecartest, its parent, and no server package; server imports it for T3, as it imports
+//     sidecartest.
 //   - A test that uses it is an external test package: an internal test of the root or of computeservice cannot import
 //     it without a cycle, so a root test that drives these fakes declares package sidecar_test.
 //   - What reaches past a format's public surface into a test's seam needs sidecar_testhooks, which no shipped build

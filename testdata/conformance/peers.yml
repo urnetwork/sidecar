@@ -1,7 +1,8 @@
 # §22.9's conformance ledger (D-TEST-7: "conformance peers are pinned and rerun per pin change";
 # R-TEST-7; TEST-M2-17). One entry per §22.9 row, each listing that row's peers with the version each is
 # pinned at, the task and test that run them, and every run recorded. check/conformance_test.go's
-# TestConformanceLedger reads this file against design/source/sections/22-TEST.md.
+# TestConformanceLedger reads this file against design/source/sections/22-TEST.md, and its compute section, at the
+# end, against DESIGN-COMPUTE.md's §18.
 #
 # rows        one per bold row of §22.9, in its order.
 #   row       the row's bold name, as §22.9 writes it.
@@ -296,4 +297,129 @@ rows:
         runs: []
       - peer: Chrome, Firefox and Safari through Playwright
         unpinned: "SEARCH-M10-41 pins the browsers and Playwright release it runs"
+        runs: []
+
+# DESIGN-COMPUTE.md §18's pinned peers (CTEST-M12-03; D-TEST-7 as §18 extends §22's gates): one entry per §18 row that
+# names a peer, with the same fields as §22.9's rows but for design, which quotes the row's own words for its peers,
+# each verbatim, so a change to them fails the check until someone reads it and updates the peers here. A milestone
+# is DESIGN-COMPUTE's M11 to M16, a part letter allowed. A transcript replay of a pinned release is no run of that
+# release: only a run of the peer itself is recorded, so a peer whose live run has not happened reads open.
+compute:
+  - row: The gateway
+    design:
+      - "Codex at the current and previous releases and Claude Code's, end to end"
+      - "Open Responses' conformance suite"
+      - "OpenCode and Aider smoke"
+    owners: [CTEST-M12-03, CTEST-M13-05]
+    milestone: M12a
+    tests: [TestConformanceReplaysCodexCurrent, TestConformanceReplaysCodexPrevious, TestConformanceLiveCodex]
+    peers:
+      - peer: Codex, the current release
+        pin: "0.171.0"
+        source: "openai/codex rust-v0.171.0, the latest stable release on 2026-11-23 (research_notes/Brave web search tool/hosted_search_in_harnesses.md); its transcripts are sidecartest/conformance/testdata/codex/0.171.0"
+        runs: []
+      - peer: Codex, the previous release
+        pin: "0.168.0"
+        source: "openai/codex rust-v0.168.0 (2026-11-13), the newest earlier release the research names (hosted_search_in_harnesses.md's #59033); its transcripts are sidecartest/conformance/testdata/codex/0.168.0"
+        runs: []
+      - peer: Claude Code
+        unpinned: "CTEST-M13-05 pins the Claude Code release its Messages transcripts are written from (2.1.330 was read for the design on 2026-11-23)"
+        runs: []
+      - peer: Open Responses' conformance suite
+        unpinned: "External: the compute rota runs the published suite against the gateway per release (§14.10) and pins the revision it ran"
+        runs: []
+      - peer: OpenCode, a smoke run under ur gateway run
+        unpinned: "External: the compute rota's per-release smoke (§14.10) pins the OpenCode release it ran"
+        runs: []
+      - peer: Aider, a smoke run under ur gateway run
+        unpinned: "External: the compute rota's per-release smoke (§14.10) pins the Aider release it ran"
+        runs: []
+
+  - row: SSH
+    design:
+      - "OpenSSH clients (8.5 and newer) with `KnownHostsCommand` and sftp"
+    owners: [SSH-M14-06]
+    milestone: M14
+    tests: []
+    peers:
+      - peer: OpenSSH 8.5, the oldest client §18 names
+        pin: "8.5"
+        source: "§18's SSH row: OpenSSH clients 8.5 and newer, KnownHostsCommand's first release"
+        runs: []
+      - peer: OpenSSH, the latest release
+        latest: true
+        runs: []
+
+  - row: git
+    design:
+      - "then stock git's `fsck` and `log` agree"
+    owners: [GIT-M13-02]
+    milestone: M13a
+    tests: []
+    peers:
+      - peer: stock git, the latest release
+        latest: true
+        runs: []
+
+  - row: The Harness
+    design:
+      - "event JSON goldens against Pi 1.5.0"
+      - "RPC interop with pinned `pig --mode rpc`"
+    owners: [HARN-M11-01, HARN-M14-07]
+    milestone: M11
+    tests: []
+    peers:
+      - peer: Pi
+        pin: "1.5.0"
+        source: "§18's Harness row: event JSON goldens against Pi 1.5.0"
+        runs: []
+      - peer: pig --mode rpc
+        unpinned: "HARN-M14-07 pins PiG's module version and hash (main at 40b509fb read for the design, Appendix E)"
+        runs: []
+
+  - row: The local engine
+    design:
+      - "loading LiteRT-LM's libraries and GPU plugin"
+    owners: [INFER-M11-04]
+    milestone: M11
+    tests: []
+    peers:
+      - peer: LiteRT-LM
+        unpinned: "INFER-M11-04 pins the LiteRT-LM release the release manifest's engine entries name (v0.19.1 at 097bd757 read for the design, Appendix E)"
+        runs: []
+
+  - row: Mail and calendar
+    design:
+      - "CalDAV against Radicale and Nextcloud in CI"
+    owners: [MAILCAL-M13-03]
+    milestone: M13a
+    tests: []
+    peers:
+      - peer: Radicale
+        unpinned: "External: MAILCAL's CI conformance run pins the Radicale release its container runs (§23.16)"
+        runs: []
+      - peer: Nextcloud
+        unpinned: "External: MAILCAL's CI conformance run pins the Nextcloud release its container runs (§23.16)"
+        runs: []
+
+  - row: Connected services
+    design:
+      - "and a Keycloak in CI"
+    owners: [CONN-M13-05]
+    milestone: M13b
+    tests: []
+    peers:
+      - peer: Keycloak
+        unpinned: "External: CONN's CI flow pins the Keycloak release its container runs (§25.17)"
+        runs: []
+
+  - row: Automatic approvals
+    design:
+      - "in each language Prompt Guard 2's card lists"
+    owners: [SAFE-M13-13]
+    milestone: M13a
+    tests: []
+    peers:
+      - peer: Llama Prompt Guard 2, 22M and 86M
+        unpinned: "SAFE-M13-13's bench pins the model revisions the release's signed manifest names, per model and release"
         runs: []

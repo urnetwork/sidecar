@@ -7,6 +7,12 @@
 // peer list the design has changed since the ledger was read against it, a pin that is no version,
 // and a pin that changed with no run recorded at it since. What has not run, or has no pin yet, is
 // reported open, never passed: the ledger records evidence, and a missing run is no evidence.
+//
+// DESIGN-COMPUTE.md's §18 names pinned peers too, in a table whose rows run on (CTEST-M12-03): the
+// ledger's compute section holds them, each entry naming its §18 row and quoting that row's words for
+// its peers. The rule fails on an entry naming a row §18 does not hold, and on a quote the row no longer
+// holds word for word, so a change to §18's peers fails until someone reads it and updates the ledger;
+// the rest of an entry is held as a §22.9 row's is, its milestone DESIGN-COMPUTE's M11 to M16.
 
 package check
 
@@ -25,10 +31,12 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// The ledger moves with the root module on a release branch; design/ stays at the top (§4.9).
+// The ledger moves with the root module on a release branch; design/ stays at the top (§4.9), and so
+// does DESIGN-COMPUTE.md.
 const (
 	conformanceLedgerPath  = "testdata/conformance/peers.yml"
 	conformanceSectionPath = "design/source/sections/22-TEST.md"
+	conformanceComputePath = "DESIGN-COMPUTE.md"
 )
 
 // What a run may report. open: the host lacked the peer, which is never a pass.
@@ -43,6 +51,9 @@ var conformanceOwnerPattern = regexp.MustCompile(`^[A-Z0-9]+-M[0-9]+-[0-9]{2}$`)
 
 var conformanceMilestonePattern = regexp.MustCompile(`^M([0-9]|10)$`)
 
+// DESIGN-COMPUTE's milestones, M11 to M16, M12's and M13's with their part (§19.1).
+var conformanceComputeMilestonePattern = regexp.MustCompile(`^M1[1-6][ab]?$`)
+
 var conformanceDayPattern = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}$`)
 
 // A pin or what a latest peer got: something with a digit in it, so "latest", "stable" and an empty
@@ -54,7 +65,19 @@ var conformanceAddressPattern = regexp.MustCompile(`^[0-9.]+$|:`)
 
 // The ledger as peers.yml holds it.
 type conformanceLedger struct {
-	Rows []*conformanceRow `yaml:"rows"`
+	Rows    []*conformanceRow        `yaml:"rows"`
+	Compute []*conformanceComputeRow `yaml:"compute"`
+}
+
+// One DESIGN-COMPUTE §18 row's pinned peers: the row's name, its own words for its peers quoted, and the
+// rest as a §22.9 row's.
+type conformanceComputeRow struct {
+	Row       string             `yaml:"row"`
+	Design    []string           `yaml:"design"`
+	Owners    []string           `yaml:"owners"`
+	Milestone string             `yaml:"milestone"`
+	Tests     []string           `yaml:"tests"`
+	Peers     []*conformancePeer `yaml:"peers"`
 }
 
 // One §22.9 row: its peers, who runs them, and the design text the ledger was read against.
@@ -161,6 +184,30 @@ func conformanceDesignRows(section []byte) ([]conformanceDesignRow, error) {
 	return rows, nil
 }
 
+// DESIGN-COMPUTE §18's table, each row's area and its tests' text, from "## 18." to the next section.
+func conformanceComputeRows(document []byte) (map[string]string, error) {
+	rows := map[string]string{}
+	inSection := false
+	for _, line := range strings.Split(string(document), "\n") {
+		if strings.HasPrefix(line, "## ") {
+			inSection = strings.HasPrefix(line, "## 18. ")
+			continue
+		}
+		if !inSection || !strings.HasPrefix(line, "| ") || strings.HasPrefix(line, "| Area |") {
+			continue
+		}
+		area, tests, found := strings.Cut(strings.TrimSuffix(strings.TrimPrefix(line, "| "), " |"), " | ")
+		if !found {
+			return nil, fmt.Errorf("DESIGN-COMPUTE §18's row %q has no tests column", line)
+		}
+		rows[area] = tests
+	}
+	if len(rows) == 0 {
+		return nil, errors.New("DESIGN-COMPUTE §18 holds no row")
+	}
+	return rows, nil
+}
+
 // What the rule found that fails, and what it reports open.
 type conformanceVerdict struct {
 	findings []string
@@ -217,15 +264,60 @@ func conformanceLedgerFindings(topDirectory string, moduleDirectory string) *con
 		if !designNames[row.Row] {
 			verdict.findings = append(verdict.findings, findingf("%s holds row %q, which §22.9 does not", conformanceLedgerPath, row.Row))
 		}
-		rowFindings, rowOpen := row.check()
+		rowFindings, rowOpen := row.check(conformanceMilestonePattern)
+		verdict.findings = append(verdict.findings, rowFindings...)
+		verdict.open = append(verdict.open, rowOpen...)
+	}
+	if len(ledger.Compute) == 0 {
+		return verdict
+	}
+	document, err := os.ReadFile(filepath.Join(topDirectory, conformanceComputePath))
+	if err != nil {
+		verdict.findings = append(verdict.findings, findingf("reading DESIGN-COMPUTE §18: %v", err))
+		return verdict
+	}
+	computeRows, err := conformanceComputeRows(document)
+	if err != nil {
+		verdict.findings = append(verdict.findings, findingf("%v", err))
+		return verdict
+	}
+	computeNames := map[string]bool{}
+	for _, computeRow := range ledger.Compute {
+		name := "DESIGN-COMPUTE §18's " + computeRow.Row
+		if computeNames[computeRow.Row] {
+			verdict.findings = append(verdict.findings, findingf("%s holds compute row %q twice", conformanceLedgerPath, computeRow.Row))
+			continue
+		}
+		computeNames[computeRow.Row] = true
+		tests, found := computeRows[computeRow.Row]
+		if !found {
+			verdict.findings = append(verdict.findings, findingf("%s holds compute row %q, which DESIGN-COMPUTE §18 does not", conformanceLedgerPath, computeRow.Row))
+		}
+		if len(computeRow.Design) == 0 {
+			verdict.findings = append(verdict.findings, findingf("%s quotes none of its row's words for its peers", name))
+		}
+		for _, quote := range computeRow.Design {
+			if found && !strings.Contains(tests, quote) {
+				verdict.findings = append(verdict.findings, findingf(
+					"%s row no longer says %q, which the ledger was read against: read the change and update its peers", name, quote))
+			}
+		}
+		row := &conformanceRow{
+			Row:       name,
+			Owners:    computeRow.Owners,
+			Milestone: computeRow.Milestone,
+			Tests:     computeRow.Tests,
+			Peers:     computeRow.Peers,
+		}
+		rowFindings, rowOpen := row.check(conformanceComputeMilestonePattern)
 		verdict.findings = append(verdict.findings, rowFindings...)
 		verdict.open = append(verdict.open, rowOpen...)
 	}
 	return verdict
 }
 
-// One row's own fields and its peers.
-func (self *conformanceRow) check() ([]string, []string) {
+// One row's own fields and its peers, its milestone one milestonePattern takes.
+func (self *conformanceRow) check(milestonePattern *regexp.Regexp) ([]string, []string) {
 	findings := []string{}
 	open := []string{}
 	if len(self.Owners) == 0 {
@@ -236,7 +328,7 @@ func (self *conformanceRow) check() ([]string, []string) {
 			findings = append(findings, findingf("%s's owner %q is no task id", self.Row, owner))
 		}
 	}
-	if !conformanceMilestonePattern.MatchString(self.Milestone) {
+	if !milestonePattern.MatchString(self.Milestone) {
 		findings = append(findings, findingf("%s's milestone %q is no milestone", self.Row, self.Milestone))
 	}
 	if len(self.Tests) == 0 {
@@ -351,6 +443,13 @@ func TestConformanceLedger(t *testing.T) {
 // checkout's unless one is given.
 func conformanceFixture(t *testing.T, section string, ledger string) string {
 	t.Helper()
+	return conformanceComputeFixture(t, section, ledger, "")
+}
+
+// conformanceFixture's, with DESIGN-COMPUTE.md given too: this checkout's where section is this checkout's and
+// compute is empty, none where both are planted.
+func conformanceComputeFixture(t *testing.T, section string, ledger string, compute string) string {
+	t.Helper()
 	directory := t.TempDir()
 	if section == "" {
 		repository, err := thisCheckout()
@@ -362,8 +461,19 @@ func conformanceFixture(t *testing.T, section string, ledger string) string {
 			t.Fatal(err)
 		}
 		section = string(data)
+		if compute == "" {
+			data, err := os.ReadFile(filepath.Join(repository.topDirectory, conformanceComputePath))
+			if err != nil {
+				t.Fatal(err)
+			}
+			compute = string(data)
+		}
 	}
-	for name, content := range map[string]string{conformanceSectionPath: section, conformanceLedgerPath: ledger} {
+	files := map[string]string{conformanceSectionPath: section, conformanceLedgerPath: ledger}
+	if compute != "" {
+		files[conformanceComputePath] = compute
+	}
+	for name, content := range files {
 		path := filepath.Join(directory, name)
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatal(err)
@@ -493,6 +603,79 @@ func TestConformanceLedgerReadsAnOpenRunAsOpen(t *testing.T) {
 	verdict := conformanceLedgerFindings(directory, directory)
 	wantFindings(t, verdict.findings)
 	wantFindings(t, verdict.open, "git: git 2.34: newest run (2026-11-09 on builder-mac) reads open", "git: go-git: unpinned")
+}
+
+// A §18 of two rows, the second the gateway's, so a planted compute ledger is small.
+const conformancePlantedComputeDocument = "## 17. Abuse\n\n" +
+	"## 18. Testing and verification\n\n" +
+	"| Area | Tests |\n|---|---|\n" +
+	"| SSH | OpenSSH clients (8.5 and newer) with `KnownHostsCommand` and sftp; a fuzzed server |\n" +
+	"| The gateway | Codex at the current and previous releases, end to end; OpenCode and Aider smoke |\n\n" +
+	"## 19. Phasing and milestones\n"
+
+// A compute section for it, the gateway's Codex pinned and run at its pin.
+const conformancePlantedComputeLedger = `compute:
+  - row: The gateway
+    design: ["Codex at the current and previous releases", "OpenCode and Aider smoke"]
+    owners: [CTEST-M12-03]
+    milestone: M12a
+    tests: [TestConformanceReplaysCodexCurrent]
+    peers:
+      - peer: Codex, the current release
+        pin: "0.171.0"
+        source: "the release notes"
+        runs:
+          - {at: 2026-11-27, host: builder-mac, pin: "0.171.0", result: pass, test: TestConformanceReplaysCodexCurrent, commit: abc123}
+      - peer: OpenCode
+        unpinned: "External"
+        runs: []
+`
+
+func TestConformanceLedgerPassesAPlantedComputeLedger(t *testing.T) {
+	directory := conformanceComputeFixture(t, conformancePlantedSection, plantedConformanceLedger("2.34.1", "2.34.1")+conformancePlantedComputeLedger, conformancePlantedComputeDocument)
+	verdict := conformanceLedgerFindings(directory, directory)
+	wantFindings(t, verdict.findings)
+	wantFindings(t, verdict.open, "git: go-git: unpinned", "DESIGN-COMPUTE §18's The gateway: OpenCode: unpinned")
+}
+
+// A §18 row whose words for its peers change fails until the ledger is read against them again.
+func TestConformanceLedgerFailsOnAComputeQuoteTheDesignDropped(t *testing.T) {
+	document := strings.Replace(conformancePlantedComputeDocument, "; OpenCode and Aider smoke", "; OpenCode, Aider and Goose smoke", 1)
+	directory := conformanceComputeFixture(t, conformancePlantedSection, plantedConformanceLedger("2.34.1", "2.34.1")+conformancePlantedComputeLedger, document)
+	wantFindings(t, conformanceLedgerFindings(directory, directory).findings,
+		`DESIGN-COMPUTE §18's The gateway row no longer says "OpenCode and Aider smoke"`)
+}
+
+// An entry naming a row §18 does not hold, and an entry whose milestone is no compute milestone, fail.
+func TestConformanceLedgerFailsOnAComputeRowTheDesignDoesNotHold(t *testing.T) {
+	ledger := strings.Replace(conformancePlantedComputeLedger, "row: The gateway", "row: The telnet gateway", 1)
+	ledger = strings.Replace(ledger, "milestone: M12a", "milestone: M10", 1)
+	directory := conformanceComputeFixture(t, conformancePlantedSection, plantedConformanceLedger("2.34.1", "2.34.1")+ledger, conformancePlantedComputeDocument)
+	wantFindings(t, conformanceLedgerFindings(directory, directory).findings,
+		`holds compute row "The telnet gateway", which DESIGN-COMPUTE §18 does not`,
+		`DESIGN-COMPUTE §18's The telnet gateway's milestone "M10" is no milestone`)
+}
+
+// This checkout's DESIGN-COMPUTE §18 parses, the gateway's row among its rows, and every compute entry of this
+// checkout's ledger names one of them.
+func TestConformanceComputeRowsParseSection18(t *testing.T) {
+	repository, err := thisCheckout()
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := os.ReadFile(filepath.Join(repository.topDirectory, conformanceComputePath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := conformanceComputeRows(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, area := range []string{"The gateway", "SSH", "git", "The Harness", "The local engine", "Mail and calendar", "Connected services", "Automatic approvals"} {
+		if rows[area] == "" {
+			t.Errorf("§18 has no %s row", area)
+		}
+	}
 }
 
 // The real §22.9 parses into its eleven rows, Postfix's own parentheses inside MTAs' list.

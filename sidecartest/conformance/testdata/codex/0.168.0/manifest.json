@@ -1,0 +1,23 @@
+{
+  "harness": "codex",
+  "version": "0.168.0",
+  "pin": "rust-v0.168.0",
+  "released": "2026-11-13",
+  "role": "previous",
+  "api": "responses",
+  "path": "/v1/responses",
+  "headers": {
+    "Content-Type": "application/json",
+    "Accept": "text/event-stream",
+    "originator": "codex_cli_rs",
+    "OpenAI-Beta": "responses=experimental",
+    "User-Agent": "codex_cli_rs/0.168.0 (Linux; x86_64) synthetic (codex-exec; 0.168.0)"
+  },
+  "session_header": "session-id",
+  "sources": [
+    "openai/codex rust-v0.168.0 (2026-11-13), the newest release before rust-v0.171.0 that hosted_search_in_harnesses.md names (#59033), with the request shape gateway_harness_compat.md reads at main 5f645d73; the fields the notes date to no release (client_metadata, request_country) are left out of this pin's requests",
+    "the Responses API's published schema (openai-python's response_create_params.py and response_stream_event.py) and Open Responses' 2026-04-24 revision"
+  ],
+  "read": "2026-11-23",
+  "recorded": "synthetic in every value: written from the sources' request shapes and the Responses API's published schema, never captured traffic"
+}
