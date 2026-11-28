@@ -100,6 +100,13 @@ type ComputeEngineDeps struct {
 	// What the provider adapters reach their providers with (§4.6): a test's pointed at a fake provider. nil: a
 	// client of the standard transport.
 	ProviderHttpClient *http.Client
+	// Web search's (SRCH-M13-07, SRCH-M13-08): the signer's mTLS client, nil reading it from the block's vault file
+	// through SecretFile, none where that does not read, so every search answers capacity; the ledger's search calls,
+	// nil taking BAL's over Env; and {cmpa}'s instance's persistence as the host reads it (CONFIG GET save and
+	// appendonly), nil leaving it unsure, so every search answers capacity.
+	SearchSigner          SearchSignerClient
+	SearchLedger          ComputeSearchLedger
+	AdmissionsPersistence func(ctx context.Context) (*ComputeRedisPersistence, error)
 	// The service log. nil writes it through Log.
 	ServiceLog ComputeServiceLog
 	// Lifecycle, alarms and, when ServiceLog is nil, the service log. nil discards.
@@ -114,6 +121,8 @@ type ComputeEngineDeps struct {
 	testCatalogStore computeCatalogVersionStore
 	// A test's abuse holds, in place of compute_abuse_hold over Env (abuse_hold.go).
 	testAbuseHoldStore computeAbuseHoldStore
+	// A test's web search seams (search_admit.go).
+	testSearch *computeSearchTestDeps
 }
 
 // The engine. See the file header.
@@ -139,6 +148,8 @@ type ComputeEngine struct {
 	providers *ComputeProviderRegistry
 	// the newest catalog versions it read (broker_catalog.go)
 	catalog *computeCatalogCache
+	// web search's admission, suspension and report loop (search_admit.go)
+	search *ComputeSearchAdmission
 
 	// requests in flight, hijacked tunnels and streams among them
 	inFlightCount *sidecar.MonitorValue[int]
@@ -209,6 +220,7 @@ func NewComputeEngine(ctx context.Context, host *sidecar.ServiceHost, settings *
 	}
 	self.providers = providers
 	self.catalog = newComputeCatalogCache(self)
+	self.search = newComputeSearchAdmission(self)
 	mux := http.NewServeMux()
 	for _, route := range self.routes {
 		mux.HandleFunc(route.Method+" "+route.Pattern, self.guard(route))

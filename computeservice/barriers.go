@@ -47,3 +47,22 @@ const (
 	BarrierComputeAbuseHoldFillBefore = "compute.abuse_hold.fill.before"
 	BarrierComputeAbuseHoldFillAfter  = "compute.abuse_hold.fill.after"
 )
+
+// Web search's steps (SRCH-M13-07, SRCH-M13-08), keyed by the search's operation key in sidecar.EvsKeyId's form, which
+// names no ticket, nonce or payee (D-BAL-14).
+const (
+	// Around an admission's claim of its request id and attempt in {cmpa}: of two admissions of one, the one that
+	// claims second meets the first's ticket there (search_tickets.go).
+	BarrierComputeSearchClaimBefore = "compute.search.claim.before"
+	BarrierComputeSearchClaimAfter  = "compute.search.claim.after"
+	// Around the ledger's hold, whose row's commit is the admission's liability: nothing reaches the signer before it.
+	BarrierComputeSearchHoldBefore = "compute.search.hold.before"
+	BarrierComputeSearchHoldAfter  = "compute.search.hold.after"
+	// Around the sign request's relay to searchsigner.
+	BarrierComputeSearchSignBefore = "compute.search.sign.before"
+	BarrierComputeSearchSignAfter  = "compute.search.sign.after"
+	// Around a report's answer, whose ledger move (the charge, or the release) is its linearization point: a report
+	// answered twice books one charge (search_settle.go).
+	BarrierComputeSearchAnswerBefore = "compute.search.answer.before"
+	BarrierComputeSearchAnswerAfter  = "compute.search.answer.after"
+)

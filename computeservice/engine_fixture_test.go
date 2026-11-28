@@ -2,8 +2,8 @@ package computeservice
 
 // The engine every computeservice test runs on (CSRV-M12-01): sidecartest's FakeRedis twice, the host's and the
 // admissions instance's, FakeAuthenticator, FakeServiceGates, FakeMetrics and FakeAbuseGate on one fake clock, a fake
-// auth state the test sets, a region lookup and an abuse hold store the test sets (CARCH-M12-01), a recording service
-// log, and the groups the test links. Each area's internal tests build on it: they plant their handlers through
+// auth state the test sets, a region lookup and an abuse hold store the test sets (CARCH-M12-01), web search's
+// sanctions records in memory, none standing (SRCH-M13-07), a recording service log, and the groups the test links. Each area's internal tests build on it: they plant their handlers through
 // computeFixtureOptions.handlers, by route name, so the guard runs in front of them as it does in a block, and set the
 // state rather than bypass a step. A fixture sharedWith another is a second broker instance on the first one's world:
 // its clock, its stores, its gates and its state.
@@ -277,6 +277,8 @@ type computeFixtureOptions struct {
 	// a second broker instance on this fixture's world: its clock, stores, gates, auth state, region lookup and
 	// abuse holds, and its network and sidecar
 	sharedWith *computeFixture
+	// an area's own deps beyond the fixture's, its seams set on deps before the engine is built
+	editDeps func(deps *ComputeEngineDeps)
 }
 
 // One engine and the world it reads, with one admitted member device in one loaded network whose gate is open and
@@ -295,6 +297,7 @@ type computeFixture struct {
 	abuse           *sidecartest.FakeAbuseGate
 	regions         *fakeComputeRegionLookup
 	abuseHolds      *fakeComputeAbuseHoldStore
+	searchFlags     *fakeComputeSearchFlagStore
 	serviceLog      *recordingComputeServiceLog
 	host            *sidecar.ServiceHost
 	engine          *ComputeEngine
@@ -330,6 +333,7 @@ func newComputeFixture(t testing.TB, options *computeFixtureOptions) *computeFix
 			abuse:           shared.abuse,
 			regions:         shared.regions,
 			abuseHolds:      shared.abuseHolds,
+			searchFlags:     shared.searchFlags,
 			serviceLog:      &recordingComputeServiceLog{},
 			groups:          maps.Clone(shared.groups),
 			networkId:       shared.networkId,
@@ -355,6 +359,7 @@ func newComputeFixture(t testing.TB, options *computeFixtureOptions) *computeFix
 			abuse:           sidecartest.NewFakeAbuseGate(),
 			regions:         newFakeComputeRegionLookup(),
 			abuseHolds:      newFakeComputeAbuseHoldStore(),
+			searchFlags:     newFakeComputeSearchFlagStore(),
 			serviceLog:      &recordingComputeServiceLog{},
 			groups: map[ComputeMigrationGroup]bool{
 				ComputeMigrationGroupC1: true,
@@ -409,6 +414,10 @@ func newComputeFixture(t testing.TB, options *computeFixtureOptions) *computeFix
 		testAdmissionChecks: options.admissionChecks,
 		testCatalogStore:    options.catalogStore,
 		testAbuseHoldStore:  self.abuseHolds,
+		testSearch:          &computeSearchTestDeps{flags: self.searchFlags},
+	}
+	if options.editDeps != nil {
+		options.editDeps(deps)
 	}
 	if deps.testHandlers == nil {
 		// no test hands the registry over by accident: an empty map serves every route unbuilt

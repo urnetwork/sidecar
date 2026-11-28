@@ -7,8 +7,9 @@
 // The codes are evs's not_found, unauthenticated, scope and unavailable; §16.6's upgrade_required; this plan's
 // not_built, idempotency_key_required and invalid, which the design does not name; and the areas' own: capacity, held,
 // insufficient_quota, tee_unverified, disclosure_required, catalog_stale, rate_limited and suspended, §17.2's
-// region_refused (451, CARCH-M12-01, which the design names no code for), and kind 21's approval_refused and spent
-// (§16.6's gate: refused writing nothing, and 409 SPENT; BAL-M12-16). The route bodies
+// region_refused (451, CARCH-M12-01, which the design names no code for), kind 21's approval_refused and spent
+// (§16.6's gate: refused writing nothing, and 409 SPENT; BAL-M12-16), and web search's search_off and payee_refused
+// (§21.5, 403 each; SRCH-M13-07). The route bodies
 // are protobuf (QD-1246); a refusal is JSON, so a client reads it before it knows which message a route answers with.
 
 package computeservice
@@ -66,6 +67,12 @@ const (
 	ComputeRefusalApprovalRefused ComputeRefusalCode = "approval_refused"
 	// Every use of the approval is taken (§16.6's gate step 2, 409 SPENT).
 	ComputeRefusalSpent ComputeRefusalCode = "spent"
+	// Web search is off for the caller (§21.5, §21.9), its reason naming the fix: the web search clause, the
+	// network's policy, the compute:search rule, a review of a sanctions record, or no search line before
+	// G-SRCH-parallel (search_flag.go).
+	ComputeRefusalSearchOff ComputeRefusalCode = "search_off"
+	// searchsigner's screen refused the payee the device relayed (§21.5): nothing was signed or paid.
+	ComputeRefusalPayeeRefused ComputeRefusalCode = "payee_refused"
 )
 
 // Each code's status.
@@ -89,6 +96,8 @@ var computeRefusalStatuses = map[ComputeRefusalCode]int{
 	ComputeRefusalRegionRefused:          http.StatusUnavailableForLegalReasons,
 	ComputeRefusalApprovalRefused:        http.StatusForbidden,
 	ComputeRefusalSpent:                  http.StatusConflict,
+	ComputeRefusalSearchOff:              http.StatusForbidden,
+	ComputeRefusalPayeeRefused:           http.StatusForbidden,
 }
 
 // The status a code answers with, false for a code the table does not have.
